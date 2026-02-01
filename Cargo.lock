@@ -135,6 +135,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "api-gateway"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bcrypt",
+ "bollard",
+ "chrono",
+ "cookie",
+ "dotenvy",
+ "entity",
+ "futures-util",
+ "http 1.4.0",
+ "hyper 1.8.1",
+ "hyper-util",
+ "image",
+ "jsonwebtoken",
+ "migration",
+ "qrcode",
+ "rand 0.8.5",
+ "reqwest",
+ "rsa",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "shared",
+ "sysinfo",
+ "thiserror 1.0.69",
+ "tokio",
+ "totp-rs",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "utoipa",
+ "utoipa-swagger-ui",
+ "uuid",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -826,49 +869,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
-name = "control-plane"
-version = "0.2.2"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64 0.22.1",
- "bcrypt",
- "bollard",
- "chrono",
- "cookie",
- "dotenvy",
- "entity",
- "futures-util",
- "http 1.4.0",
- "hyper 1.8.1",
- "hyper-util",
- "image",
- "jsonwebtoken",
- "migration",
- "qrcode",
- "rand 0.8.5",
- "reqwest",
- "rsa",
- "sea-orm",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "shared",
- "sysinfo",
- "thiserror 1.0.69",
- "tokio",
- "totp-rs",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "utoipa",
- "utoipa-swagger-ui",
- "uuid",
-]
-
-[[package]]
 name = "cookie"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1216,6 +1216,16 @@ dependencies = [
  "rayon-core",
  "smallvec",
  "zune-inflate",
+]
+
+[[package]]
+name = "failover-controller"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3088,6 +3098,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "registry"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "shared",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "rend"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3352,6 +3374,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "scheduler"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "schemars"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3380,6 +3412,16 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sdn-controller"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "sea-bae"
@@ -4694,6 +4736,18 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "volume-manager"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "shared",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "walkdir"

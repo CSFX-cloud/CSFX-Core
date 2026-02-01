@@ -19,7 +19,7 @@ services:
     networks:
       - csf-network
 
-  # API Gateway (old backend)
+  # API Gateway
   api-gateway:
     build:
       context: .
@@ -37,9 +37,6 @@ services:
         condition: service_healthy
     volumes:
       - ./control-plane/api-gateway:/app/control-plane/api-gateway
-      - ./backend:/app/backend
-      - ./entity:/app/entity
-      - ./migration:/app/migration
       - ./shared:/app/shared
       - ./Cargo.toml:/app/Cargo.toml
       - ./Cargo.lock:/app/Cargo.lock
@@ -57,9 +54,13 @@ services:
       dockerfile: control-plane/scheduler/Dockerfile.dev
     container_name: csf-scheduler-dev
     environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
       RUST_LOG: debug
     depends_on:
-      - api-gateway
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
     volumes:
       - ./control-plane/scheduler:/app/control-plane/scheduler
       - ./shared:/app/shared
@@ -79,9 +80,13 @@ services:
       dockerfile: control-plane/failover-controller/Dockerfile.dev
     container_name: csf-failover-controller-dev
     environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
       RUST_LOG: debug
     depends_on:
-      - api-gateway
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
     volumes:
       - ./control-plane/failover-controller:/app/control-plane/failover-controller
       - ./shared:/app/shared
@@ -101,9 +106,13 @@ services:
       dockerfile: control-plane/sdn-controller/Dockerfile.dev
     container_name: csf-sdn-controller-dev
     environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
       RUST_LOG: debug
     depends_on:
-      - api-gateway
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
     volumes:
       - ./control-plane/sdn-controller:/app/control-plane/sdn-controller
       - ./shared:/app/shared
@@ -123,9 +132,13 @@ services:
       dockerfile: control-plane/volume-manager/Dockerfile.dev
     container_name: csf-volume-manager-dev
     environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
       RUST_LOG: debug
     depends_on:
-      - api-gateway
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
     volumes:
       - ./control-plane/volume-manager:/app/control-plane/volume-manager
       - ./shared:/app/shared
@@ -145,9 +158,13 @@ services:
       dockerfile: control-plane/registry/Dockerfile.dev
     container_name: csf-registry-dev
     environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
       RUST_LOG: debug
     depends_on:
-      - api-gateway
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
     volumes:
       - ./control-plane/registry:/app/control-plane/registry
       - ./shared:/app/shared

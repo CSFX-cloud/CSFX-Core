@@ -65,29 +65,6 @@ sysinfo = { workspace = true }
 bollard = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
-rsa = { version = "0.9", features = ["sha2"] }
-rand = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.0", features = ["v4", "serde"] }
-base64 = "0.22"
-sha1 = "0.10"
-sha2 = "0.10"
-thiserror = "1.0"
-async-trait = "0.1"
-utoipa = { version = "4.2", features = ["axum_extras"] }
-utoipa-swagger-ui = { version = "6.0", features = ["axum"] }
-cookie = { version = "0.18.1", features = ["percent-encode"] }
-hyper = "1.5"
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
-http = "1.1"
-totp-rs = { version = "5.6", features = ["qr", "otpauth"] }
-qrcode = "0.14"
-image = "0.25"
-sysinfo = "0.32"
-anyhow = "1.0"
-bollard = "0.17"
-futures-util = "0.3"
-reqwest = { version = "0.11", features = ["json"] }
 
 [features]
 default = []

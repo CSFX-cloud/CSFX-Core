@@ -16,9 +16,6 @@ devenv.local.nix
 
 finance.db
 
-/backend/db/
-/backend/target/
-
 # Agent test directories
 /agent/test-agent*/
 /agent/test-p2p/

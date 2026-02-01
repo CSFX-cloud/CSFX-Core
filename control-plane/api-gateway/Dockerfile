@@ -1,4 +1,4 @@
-# Multi-stage build for FinanceVault Backend (with embedded frontend proxy)
+# Multi-stage build for API Gateway
 
 ###################
 # Chef Stage - Prepare Recipe
@@ -20,9 +20,9 @@ COPY entity/src ./entity/src
 RUN cargo chef prepare --recipe-path recipe.json
 
 ###################
-# Backend Build Stage
+# API Gateway Build Stage
 ###################
-FROM chef AS backend-builder
+FROM chef AS api-gateway-builder
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -52,7 +52,7 @@ COPY migration/src ./migration/src
 COPY entity/src ./entity/src
 # Fix: Update timestamps to force rebuild, otherwise cargo might skip building if host files are older than dummy files
 RUN touch src/main.rs migration/src/lib.rs entity/src/lib.rs
-RUN cargo build --release
+RUN cargo build --release --bin api-gateway
 
 ###################
 # Final Runtime Stage
@@ -72,10 +72,10 @@ RUN apt-get update && apt-get install -y \
 # Create data directory for SQLite
 RUN mkdir -p /data
 
-# Copy backend binary from builder
-COPY --from=backend-builder /usr/src/app/target/release/backend /app/backend
+# Copy api-gateway binary from builder
+COPY --from=api-gateway-builder /usr/src/app/target/release/api-gateway /app/api-gateway
 
-# Expose backend port
+# Expose api-gateway port
 EXPOSE 8000
 
 # Set environment variables
@@ -86,5 +86,5 @@ ENV RUST_LOG=info
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/api/system/health || exit 1
 
-# Start backend
-CMD ["./backend"]
+# Start API Gateway
+CMD ["./api-gateway"]

@@ -13,12 +13,23 @@ RUN apt-get update && apt-get install -y \
 # Copy workspace configuration
 COPY Cargo.toml Cargo.lock ./
 
+# Copy manifests for workspace members
+COPY cli/Cargo.toml ./cli/
+COPY entity/Cargo.toml ./entity/
+COPY control-plane/api-gateway/Cargo.toml ./control-plane/api-gateway/
+COPY control-plane/scheduler/Cargo.toml ./control-plane/scheduler/
+COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-controller/
+COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
+COPY control-plane/volume-manager/Cargo.toml ./control-plane/volume-manager/
+COPY control-plane/registry/Cargo.toml ./control-plane/registry/
+
 # Copy service and dependencies
 COPY agent/ ./agent/
 COPY shared/ ./shared/
+COPY migration/ ./migration/
 
 # Pre-build dependencies (this layer will be cached)
-RUN cargo build --workspace
+RUN cargo build --bin agent
 
 # Default command (can be overridden in docker-compose)
 CMD ["cargo", "watch", "-x", "run --bin agent"]

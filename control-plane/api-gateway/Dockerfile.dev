@@ -14,15 +14,23 @@ RUN apt-get update && apt-get install -y \
 # Copy workspace configuration
 COPY Cargo.toml Cargo.lock ./
 
-# Copy backend and dependencies
-COPY backend/ ./backend/
+# Copy manifests for workspace members
+COPY agent/Cargo.toml ./agent/
+COPY cli/Cargo.toml ./cli/
+COPY control-plane/scheduler/Cargo.toml ./control-plane/scheduler/
+COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-controller/
+COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
+COPY control-plane/volume-manager/Cargo.toml ./control-plane/volume-manager/
+COPY control-plane/registry/Cargo.toml ./control-plane/registry/
+
+# Copy control-plane and dependencies
 COPY control-plane/api-gateway/ ./control-plane/api-gateway/
-COPY entity/ ./entity/
-COPY migration/ ./migration/
 COPY shared/ ./shared/
+COPY migration/ ./migration/
+COPY entity/ ./entity/
 
 # Pre-build dependencies
-RUN cargo build --workspace
+RUN cargo build --bin api-gateway
 
 # Expose port
 EXPOSE 8000

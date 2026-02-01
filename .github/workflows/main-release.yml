@@ -19,9 +19,9 @@ jobs:
     uses: ./.github/workflows/release.yml
     secrets: inherit
 
-  # Step 2: Build Backend Docker Images (Parallel by Architecture)
-  build-backend-docker:
-    name: Build Backend ${{ matrix.arch }}
+  # Step 2: Build API Gateway Docker Images (Parallel by Architecture)
+  build-api-gateway-docker:
+    name: Build API Gateway ${{ matrix.arch }}
     strategy:
       matrix:
         include:
@@ -66,22 +66,22 @@ jobs:
         run: |
           VERSION="${{ needs.release.outputs.new_release_version }}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building backend version: $VERSION for ${{ matrix.arch }}"
+          echo "Building api-gateway version: $VERSION for ${{ matrix.arch }}"
 
-      - name: Build and push Backend Docker image by digest
+      - name: Build and push API Gateway Docker image by digest
         id: build
         uses: docker/build-push-action@v5
         with:
-          context: ./backend
-          file: ./backend/Dockerfile
+          context: ./control-plane/api-gateway
+          file: ./control-plane/api-gateway/Dockerfile
           push: true
-          outputs: type=registry,name=ghcr.io/${{ steps.repo.outputs.image_name }}-backend,push-by-digest=true
+          outputs: type=registry,name=ghcr.io/${{ steps.repo.outputs.image_name }}-api-gateway,push-by-digest=true
           cache-from: |
-            type=gha,scope=backend-${{ matrix.arch }}
-            type=registry,ref=ghcr.io/${{ steps.repo.outputs.image_name }}-backend:buildcache-${{ matrix.arch }}
+            type=gha,scope=api-gateway-${{ matrix.arch }}
+            type=registry,ref=ghcr.io/${{ steps.repo.outputs.image_name }}-api-gateway:buildcache-${{ matrix.arch }}
           cache-to: |
-            type=gha,mode=max,scope=backend-${{ matrix.arch }}
-            type=registry,ref=ghcr.io/${{ steps.repo.outputs.image_name }}-backend:buildcache-${{ matrix.arch }},mode=max
+            type=gha,mode=max,scope=api-gateway-${{ matrix.arch }}
+            type=registry,ref=ghcr.io/${{ steps.repo.outputs.image_name }}-api-gateway:buildcache-${{ matrix.arch }},mode=max
           platforms: ${{ matrix.platform }}
           provenance: false
 
@@ -94,16 +94,16 @@ jobs:
       - name: Upload digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-backend-${{ matrix.arch }}
+          name: digests-api-gateway-${{ matrix.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
-  # Step 3: Create Backend Multi-Arch Manifest
-  merge-backend-manifest:
-    name: Create Backend Multi-Arch Manifest
+  # Step 3: Create API Gateway Multi-Arch Manifest
+  merge-api-gateway-manifest:
+    name: Create API Gateway Multi-Arch Manifest
     runs-on: ubuntu-latest
-    needs: [build-backend-docker, release]
+    needs: [build-api-gateway-docker, release]
     permissions:
       contents: read
       packages: write
@@ -112,7 +112,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: digests-backend-*
+          pattern: digests-api-gateway-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
@@ -200,7 +200,7 @@ jobs:
   summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [release, build-backend-docker, build-frontend-docker]
+    needs: [release, build-api-gateway-docker, build-frontend-docker]
     if: always()
     steps:
       - name: Generate Summary

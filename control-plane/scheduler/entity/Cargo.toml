@@ -1,0 +1,13 @@
+[package]
+name = "entity"
+version = "0.1.0"
+edition = "2021"
+license = "SEE LICENSE IN LICENSE"
+
+[dependencies]
+sea-orm = { version = "1.1.0", features = [ "sqlx-sqlite", "runtime-tokio-rustls", "macros" ] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+utoipa = { version = "4.2", features = ["uuid", "chrono"] }
