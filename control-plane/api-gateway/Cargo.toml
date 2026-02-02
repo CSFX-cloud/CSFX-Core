@@ -12,7 +12,7 @@ path = "src/main.rs"
 # Internal dependencies
 entity = { path = "../shared/entity" }
 migration = { path = "../shared/migration" }
-shared = { path = "../../shared" }
+shared = { path = "../shared/shared" }
 
 # Async runtime
 tokio = { workspace = true }

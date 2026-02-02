@@ -10,7 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Internal dependencies
-shared = { path = "../shared" }
+shared = { path = "../control-plane/shared/shared" }
 
 # Async runtime
 tokio = { workspace = true }

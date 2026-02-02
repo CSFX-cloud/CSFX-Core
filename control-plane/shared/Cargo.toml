@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "entity",
     "migration",
+    "shared",
 ]
 
 [workspace.package]

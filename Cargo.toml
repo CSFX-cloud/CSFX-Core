@@ -11,7 +11,7 @@ members = [
     "control-plane/registry",
     "control-plane/shared/entity",
     "control-plane/shared/migration",
-    "shared",
+    "control-plane/shared/shared",
 ]
 
 [workspace.package]
