@@ -9,8 +9,8 @@ members = [
     "control-plane/sdn-controller",
     "control-plane/volume-manager",
     "control-plane/registry",
-    "entity",
-    "migration",
+    "control-plane/shared/entity",
+    "control-plane/shared/migration",
     "shared",
 ]
 

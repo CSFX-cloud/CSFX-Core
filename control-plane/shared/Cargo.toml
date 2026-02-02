@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "entity",
+    "migration",
+]
+
+[workspace.package]
+version = "0.2.2"
+edition = "2021"
+authors = ["CS-Foundry"]
+license = "SEE LICENSE IN LICENSE"
+repository = "https://github.com/CS-Foundry/CSF-Core"

@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 # Internal dependencies
-migration = { path = "../migration" }
+migration = { path = "../control-plane/shared/migration" }
 
 # Database
 sea-orm = { workspace = true }
