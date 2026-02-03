@@ -2,6 +2,24 @@
 
 All notable changes to CSF-Core will be documented in this file.
 
+## [0.1.13](https://github.com/CS-Foundry/CSF-Core/compare/v0.1.12...v0.1.13) (2026-02-03)
+
+
+### Bug Fixes
+
+* docker container on nix ([2aca464](https://github.com/CS-Foundry/CSF-Core/commit/2aca464388c5efb0acf330ac9de332b0da925b89))
+* docker start ([a247b64](https://github.com/CS-Foundry/CSF-Core/commit/a247b6453b18ac9c26138e37285047885e7ad3e4))
+* erros ([15623c3](https://github.com/CS-Foundry/CSF-Core/commit/15623c34830ff30d88b0d8cf844dec77dcd77245))
+* merge errors ([3d808ae](https://github.com/CS-Foundry/CSF-Core/commit/3d808aed9b35da3f2f86aaa3f79a946256d899ea))
+* new structure project ([5280c7e](https://github.com/CS-Foundry/CSF-Core/commit/5280c7e562c9191c420353285a1e646657782a94))
+* removed old scripts ([dc19cb5](https://github.com/CS-Foundry/CSF-Core/commit/dc19cb582571cf3515effb8ba122f23536e31a3a))
+* rm enity folder in every project ([dbd5178](https://github.com/CS-Foundry/CSF-Core/commit/dbd51781b76cb6bd793a361ba39ad40f8bb4f9dd))
+* securtity issue fix sha-1 to sha-256 ([4252495](https://github.com/CS-Foundry/CSF-Core/commit/42524951a5d53c7fe48de02abb7cec99d7ee0550))
+* shared folder ([bc7ce08](https://github.com/CS-Foundry/CSF-Core/commit/bc7ce08c1399119c835e3120c03372672a6d0631))
+* shared folder ([752f4df](https://github.com/CS-Foundry/CSF-Core/commit/752f4df9fd771d6a7380b9bc949378856ffefa78))
+* structure porject fix ([8d40d6a](https://github.com/CS-Foundry/CSF-Core/commit/8d40d6aa329ed175a41e38dcbf4c6aae1c55bd86))
+* structure project ([d2d83f1](https://github.com/CS-Foundry/CSF-Core/commit/d2d83f1bb0f6a1a27ace1213d98d7bac2879a949))
+
 ## [0.1.12](https://github.com/CS-Foundry/CSF-Core/compare/v0.1.11...v0.1.12) (2026-01-25)
 
 
