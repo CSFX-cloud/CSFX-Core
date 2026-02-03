@@ -1,0 +1,71 @@
+[package]
+name = "api-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "api-gateway"
+path = "src/main.rs"
+
+[dependencies]
+# Internal dependencies
+entity = { path = "../shared/entity" }
+migration = { path = "../shared/migration" }
+shared = { path = "../shared/shared" }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Database
+sea-orm = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower-http = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Security
+jsonwebtoken = { workspace = true }
+bcrypt = { workspace = true }
+rsa = { workspace = true }
+totp-rs = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# OpenAPI
+utoipa = { workspace = true }
+utoipa-swagger-ui = { workspace = true }
+
+# Other
+rand = { workspace = true }
+base64 = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+cookie = { workspace = true }
+qrcode = { workspace = true }
+image = { workspace = true }
+sysinfo = { workspace = true }
+bollard = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true }
+
+[features]
+default = []
+vendored-openssl = []

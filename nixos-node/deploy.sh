@@ -50,17 +50,5 @@ echo "✅ Deployment complete!"
 echo ""
 echo "📝 Next steps:"
 echo "  - Test Docker: ssh $TARGET_HOST 'docker --version'"
-echo "  - Run test script: ssh $TARGET_HOST 'sudo /root/test-docker.sh'"
-echo "  - Check nginx: curl http://192.168.1.36:8080"
-nixos-version
-echo ""
-echo "Running containers:"
-docker ps
-EOF
-
-echo ""
-echo "🎉 Deployment completed successfully!"
-echo ""
-echo "Test the deployment:"
-echo "  curl http://192.168.1.36:8080"
-echo "  ssh ${SERVER_HOST} ./test-docker.sh"
+echo "  - Run test script: ssh $TARGET_HOST 'sudo /root/test-csf-backend.sh'"
+echo "  - Check backend: curl http://192.168.1.36:8000/health"

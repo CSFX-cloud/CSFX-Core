@@ -8,7 +8,6 @@
   import { Switch } from '$lib/components/ui/switch';
   import { Label } from '$lib/components/ui/label';
   import { updateStore } from '$lib/stores/updates';
-  import { updateInProgress, updateVersion } from '$lib/stores/update';
   import {
     Download,
     RefreshCw,
@@ -61,15 +60,12 @@
     try {
       const response = await updateStore.installUpdate(version);
 
-      // Trigger update screen
-      updateVersion.set(version);
-      updateInProgress.set(true);
-
       message = response.message;
       messageType = 'success';
     } catch (error) {
       message = error instanceof Error ? error.message : 'Unbekannter Fehler';
       messageType = 'error';
+    } finally {
       isInstalling = false;
     }
   }

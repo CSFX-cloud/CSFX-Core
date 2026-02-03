@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = [
+    "agent",
+    "cli",
+    "control-plane/api-gateway",
+    "control-plane/scheduler",
+    "control-plane/failover-controller",
+    "control-plane/sdn-controller",
+    "control-plane/volume-manager",
+    "control-plane/registry",
+    "control-plane/shared/entity",
+    "control-plane/shared/migration",
+    "control-plane/shared/shared",
+]
+
+[workspace.package]
+version = "0.2.2"
+edition = "2021"
+authors = ["CS-Foundry"]
+license = "SEE LICENSE IN LICENSE"
+repository = "https://github.com/CS-Foundry/CSF-Core"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# Database
+sea-orm = { version = "1.1.0", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros"] }
+sea-orm-migration = { version = "1.1.0", features = ["runtime-tokio-rustls", "sqlx-postgres"] }
+
+# Web framework
+axum = "0.7.5"
+tower-http = { version = "0.5.2", features = ["cors", "trace"] }
+hyper = "1.5"
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+http = "1.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.145"
+
+# Logging & Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Security
+jsonwebtoken = "9.3.0"
+bcrypt = "0.15"
+rsa = { version = "0.9", features = ["sha2"] }
+totp-rs = { version = "5.6", features = ["qr", "otpauth"] }
+
+# Utilities
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+anyhow = "1.0"
+thiserror = "1.0"
+
+# OpenAPI
+utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "6.0", features = ["axum"] }
+
+# Other
+rand = "0.8"
+base64 = "0.22"
+sha1 = "0.10"
+sha2 = "0.10"
+cookie = { version = "0.18.1", features = ["percent-encode"] }
+qrcode = "0.14"
+image = "0.25"
+sysinfo = "0.32"
+bollard = "0.17"
+futures-util = "0.3"
+reqwest = { version = "0.11", features = ["json"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

@@ -1,0 +1,34 @@
+# Development Dockerfile for CLI
+FROM rust:latest
+
+WORKDIR /app
+
+# Install development dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace configuration
+COPY Cargo.toml Cargo.lock ./
+
+# Copy manifests for workspace members
+COPY agent/Cargo.toml ./agent/
+COPY entity/Cargo.toml ./entity/
+COPY control-plane/api-gateway/Cargo.toml ./control-plane/api-gateway/
+COPY control-plane/scheduler/Cargo.toml ./control-plane/scheduler/
+COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-controller/
+COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
+COPY control-plane/volume-manager/Cargo.toml ./control-plane/volume-manager/
+COPY control-plane/registry/Cargo.toml ./control-plane/registry/
+
+# Copy service and dependencies
+COPY cli/ ./cli/
+COPY shared/ ./shared/
+COPY migration/ ./migration/
+
+# Pre-build dependencies (this layer will be cached)
+RUN cargo build --bin csf
+
+# Default command (can be overridden in docker-compose)
+CMD ["cargo", "run", "--bin", "csf"]

@@ -1,0 +1,38 @@
+# Development Dockerfile for SDN Controller
+FROM rust:latest
+
+WORKDIR /app
+
+# Install development dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && cargo install cargo-watch --version 7.8.0 --locked \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace configuration
+COPY Cargo.toml Cargo.lock ./
+
+# Copy manifests for workspace members
+COPY agent/Cargo.toml ./agent/
+COPY cli/Cargo.toml ./cli/
+COPY control-plane/api-gateway/Cargo.toml ./control-plane/api-gateway/
+COPY control-plane/scheduler/Cargo.toml ./control-plane/scheduler/
+COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-controller/
+COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
+COPY control-plane/volume-manager/Cargo.toml ./control-plane/volume-manager/
+COPY control-plane/registry/Cargo.toml ./control-plane/registry/
+COPY shared/Cargo.toml ./shared/
+COPY entity/Cargo.toml ./entity/
+COPY migration/Cargo.toml ./migration/
+
+# Copy service and dependencies
+COPY control-plane/sdn-controller/ ./control-plane/sdn-controller/
+COPY shared/ ./shared/
+COPY entity/ ./entity/
+COPY migration/ ./migration/
+
+# Pre-build dependencies
+RUN cargo build --bin sdn-controller
+
+CMD ["cargo", "watch", "-x", "run --bin sdn-controller"]

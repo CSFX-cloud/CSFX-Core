@@ -1,11 +1,11 @@
 [package]
-name = "agent"
+name = "cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "agent"
+name = "csf"
 path = "src/main.rs"
 
 [dependencies]

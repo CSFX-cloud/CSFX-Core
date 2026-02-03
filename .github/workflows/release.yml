@@ -55,8 +55,8 @@ jobs:
           # Check if a release was published
           if grep -q "Published release" semantic-release-output.log; then
             echo "new_release_published=true" >> $GITHUB_OUTPUT
-            # Extract full version from the log (including beta, alpha, rc tags)
-            VERSION=$(grep "Published release" semantic-release-output.log | sed -n 's/.*Published release \([0-9.]*\(-[a-zA-Z0-9.]*\)\?\).*/\1/p')
+            # Extract version from the log
+            VERSION=$(grep "Published release" semantic-release-output.log | sed -n 's/.*Published release \([0-9.]*\).*/\1/p')
             echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
             echo "✅ New release published: $VERSION"
           else

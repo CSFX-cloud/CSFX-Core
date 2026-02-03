@@ -1,5 +1,0 @@
-.git
-.gitignore
-target/
-finance.db
-finance.db-journal

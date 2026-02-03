@@ -48,7 +48,10 @@ export class AuthService {
 
   static encryptPassword(password: string, publicKey: string): string {
     const publicKeyObj = forge.pki.publicKeyFromPem(publicKey);
-    const encrypted = publicKeyObj.encrypt(password, 'RSA-OAEP');
+    // Use RSA-OAEP with SHA-256 for encryption
+    const encrypted = publicKeyObj.encrypt(password, 'RSA-OAEP', {
+      md: forge.md.sha256.create()
+    });
     return forge.util.encode64(encrypted);
   }
 

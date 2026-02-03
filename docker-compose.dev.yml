@@ -1,33 +1,14 @@
-version: '3.8'
-
 services:
-  frontend-dev:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.dev
-    ports:
-      - "3000:3000"
-    env_file:
-      - .env
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    environment:
-      - NODE_ENV=development
-      - JWT_SECRET=${JWT_SECRET}
-      - PUBLIC_API_BASE_URL=http://localhost:8000/api
-    command: sh -c "npm install && JWT_SECRET=${JWT_SECRET} npm run dev -- --host 0.0.0.0 --port 3000"
-    depends_on:
-      - backend-dev
-
+  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
+    container_name: csf-postgres-dev
+    environment:
+      POSTGRES_USER: csf_user
+      POSTGRES_PASSWORD: csf_password
+      POSTGRES_DB: csf_core
     ports:
       - "5432:5432"
-    environment:
-      - POSTGRES_USER=csf_user
-      - POSTGRES_PASSWORD=csf_password
-      - POSTGRES_DB=csf_core
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -35,30 +16,259 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - csf-network
 
-  backend-dev:
-    env_file:
-      - .env
+  # API Gateway
+  api-gateway:
     build:
-      context: ./backend
-      dockerfile: Dockerfile.dev
+      context: .
+      dockerfile: control-plane/api-gateway/Dockerfile.dev
+    container_name: csf-api-gateway-dev
+    environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      RUST_LOG: debug
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
+      RSA_KEY_SIZE: "2048"
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/usr/src/app
-      - cargo_registry:/usr/local/cargo/registry
-      - cargo_target:/usr/src/app/target
-    environment:
-      - DATABASE_URL=postgres://csf_user:csf_password@postgres:5432/csf_core
-      - CARGO_HOME=/usr/local/cargo
-      - JWT_SECRET=${JWT_SECRET}
-      - RUST_LOG=debug
-    command: cargo watch -x run
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ./control-plane/api-gateway:/app/control-plane/api-gateway
+      - ./shared:/app/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_api_gateway:/app/target
+    networks:
+      - csf-network
+    command: cargo watch -x "run --bin api-gateway"
+    restart: unless-stopped
+
+  # Scheduler Service
+  scheduler:
+    build:
+      context: .
+      dockerfile: control-plane/scheduler/Dockerfile.dev
+    container_name: csf-scheduler-dev
+    environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      RUST_LOG: debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+    volumes:
+      - ./control-plane/scheduler:/app/control-plane/scheduler
+      - ./shared:/app/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_scheduler:/app/target
+    networks:
+      - csf-network
+    command: cargo watch -x "run --bin scheduler"
+    restart: unless-stopped
+
+  # Failover Controller Service
+  failover-controller:
+    build:
+      context: .
+      dockerfile: control-plane/failover-controller/Dockerfile.dev
+    container_name: csf-failover-controller-dev
+    environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      RUST_LOG: debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+    volumes:
+      - ./control-plane/failover-controller:/app/control-plane/failover-controller
+      - ./shared:/app/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_failover:/app/target
+    networks:
+      - csf-network
+    command: cargo watch -x "run --bin failover-controller"
+    restart: unless-stopped
+
+  # SDN Controller Service
+  sdn-controller:
+    build:
+      context: .
+      dockerfile: control-plane/sdn-controller/Dockerfile.dev
+    container_name: csf-sdn-controller-dev
+    environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      RUST_LOG: debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+    volumes:
+      - ./control-plane/sdn-controller:/app/control-plane/sdn-controller
+      - ./shared:/app/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_sdn:/app/target
+    networks:
+      - csf-network
+    command: cargo watch -x "run --bin sdn-controller"
+    restart: unless-stopped
+
+  # Volume Manager Service
+  volume-manager:
+    build:
+      context: .
+      dockerfile: control-plane/volume-manager/Dockerfile.dev
+    container_name: csf-volume-manager-dev
+    environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      RUST_LOG: debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+    volumes:
+      - ./control-plane/volume-manager:/app/control-plane/volume-manager
+      - ./shared:/app/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_volume:/app/target
+    networks:
+      - csf-network
+    command: cargo watch -x "run --bin volume-manager"
+    restart: unless-stopped
+
+  # Registry Service
+  registry:
+    build:
+      context: .
+      dockerfile: control-plane/registry/Dockerfile.dev
+    container_name: csf-registry-dev
+    environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      RUST_LOG: debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api-gateway:
+        condition: service_started
+    volumes:
+      - ./control-plane/registry:/app/control-plane/registry
+      - ./shared:/app/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_registry:/app/target
+    networks:
+      - csf-network
+    command: cargo watch -x "run --bin registry"
+    restart: unless-stopped
+
+  # Agent
+  agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile.dev
+    container_name: csf-agent-dev
+    environment:
+      CONTROL_PLANE_URL: http://api-gateway:8000
+      RUST_LOG: debug
+    depends_on:
+      - api-gateway
+    volumes:
+      - ./agent:/app/agent
+      - ./shared:/app/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_agent:/app/target
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - csf-network
+    command: cargo watch -x "run --bin agent"
+    restart: unless-stopped
+
+  # CLI (runs once for testing)
+  cli:
+    build:
+      context: .
+      dockerfile: cli/Dockerfile.dev
+    container_name: csf-cli-dev
+    environment:
+      CONTROL_PLANE_URL: http://api-gateway:8000
+      RUST_LOG: info
+    depends_on:
+      - api-gateway
+    volumes:
+      - ./cli:/app/cli
+      - ./shared:/app/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_cli:/app/target
+    networks:
+      - csf-network
+    command: cargo run --bin csf
+    profiles:
+      - tools
+
+  # Frontend Development Server
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: csf-frontend-dev
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret}
+      PUBLIC_API_BASE_URL: http://localhost:8000/api
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: sh -c "npm install && JWT_SECRET=${JWT_SECRET} npm run dev -- --host 0.0.0.0 --port 3000"
+    depends_on:
+      - api-gateway
+    networks:
+      - csf-network
 
 volumes:
-  cargo_registry:
-  cargo_target:
   postgres_data:
+    driver: local
+  cargo_cache:
+    driver: local
+  cargo_target_api_gateway:
+    driver: local
+  cargo_target_scheduler:
+    driver: local
+  cargo_target_failover:
+    driver: local
+  cargo_target_sdn:
+    driver: local
+  cargo_target_volume:
+    driver: local
+  cargo_target_registry:
+    driver: local
+  cargo_target_agent:
+    driver: local
+  cargo_target_cli:
+    driver: local
+
+networks:
+  csf-network:
+    driver: bridge
+

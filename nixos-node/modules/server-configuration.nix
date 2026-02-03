@@ -44,6 +44,7 @@
         80    # HTTP
         443   # HTTPS
         8080  # Docker nginx test
+        8000  # CSF-Core Backend
       ];
     };
   };
@@ -159,21 +160,23 @@
 
       # Create docker-compose.yml for CSF-Core Backend
       cat > /etc/csf-core/docker-compose.yml <<'EOF'
+version: '3.8'
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: csf-postgres
-    ports:
-      - "5432:5432"
     environment:
-      - POSTGRES_USER=csf_user
-      - POSTGRES_PASSWORD=csf_password
-      - POSTGRES_DB=csf_core
+      POSTGRES_USER: csf
+      POSTGRES_PASSWORD: csfpassword
+      POSTGRES_DB: csf_core
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U csf_user -d csf_core"]
+      test: ["CMD-SHELL", "pg_isready -U csf -d csf_core"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -184,23 +187,17 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgres://csf_user:csf_password@postgres:5432/csf_core
-      - JWT_SECRET=changeme_generate_secure_secret
-      - RUST_LOG=info
-    restart: unless-stopped
+      - RUST_LOG=debug
+      - DATABASE_URL=postgres://csf:csfpassword@postgres:5432/csf_core
+      - JWT_SECRET=supersecretkey_change_me_in_production
+      - FRONTEND_URL=http://localhost:3000
     depends_on:
       postgres:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+    restart: unless-stopped
 
 volumes:
   postgres_data:
-    driver: local
 EOF
 
       # Create test script
@@ -230,7 +227,7 @@ echo "Testing backend API:"
 curl -s http://localhost:8000/health || echo "Backend not responding"
 echo ""
 echo "Testing database connection:"
-docker exec csf-postgres pg_isready -U csf_user -d csf_core || echo "Database not ready"
+docker exec csf-postgres pg_isready -U csf -d csf_core || echo "Database not ready"
 echo ""
 echo "=== Test Complete ==="
 EOF

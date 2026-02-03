@@ -31,7 +31,10 @@ export const actions = {
       // Import node-forge for server-side encryption
       const forge = await import('node-forge');
       const publicKeyObj = forge.default.pki.publicKeyFromPem(public_key);
-      const encrypted = publicKeyObj.encrypt(password as string, 'RSA-OAEP');
+      // Use RSA-OAEP with SHA-256 for encryption
+      const encrypted = publicKeyObj.encrypt(password as string, 'RSA-OAEP', {
+        md: forge.default.md.sha256.create()
+      });
       const encryptedPassword = forge.default.util.encode64(encrypted);
 
       // Login request
