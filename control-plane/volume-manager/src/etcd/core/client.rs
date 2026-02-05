@@ -1,7 +1,184 @@
-// etcd Client Management
-//
-// Hier kommt rein:
-// - EtcdClient struct mit Verbindungsdetails
-// - Connection pooling
-// - Retry-Logik für failed connections
-// - Konfiguration für etcd endpoints (mehrere für HA)
+use super::{EtcdConfig, EtcdError};
+use etcd_client::{Client, ConnectOptions, GetOptions, PutOptions};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
+
+/// etcd Client mit Connection Management
+#[derive(Clone)]
+pub struct EtcdClient {
+    config: Arc<EtcdConfig>,
+    client: Arc<RwLock<Option<Client>>>,
+}
+
+impl EtcdClient {
+    /// Erstellt neuen etcd Client
+    pub fn new(config: EtcdConfig) -> Self {
+        Self {
+            config: Arc::new(config),
+            client: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Verbindet mit etcd
+    pub async fn connect(&self) -> Result<(), EtcdError> {
+        info!("🔌 Connecting to etcd: {:?}", self.config.endpoints);
+
+        let mut options = ConnectOptions::new()
+            .with_connect_timeout(self.config.connect_timeout)
+            .with_timeout(self.config.request_timeout)
+            .with_keep_alive(
+                self.config.keepalive_interval,
+                self.config.keepalive_timeout,
+            );
+
+        // Auth falls vorhanden
+        if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
+            options = options.with_user(username, password);
+        }
+
+        let client = Client::connect(&self.config.endpoints, Some(options))
+            .await
+            .map_err(|e| EtcdError::Connection(e.to_string()))?;
+
+        *self.client.write().await = Some(client);
+        info!("✅ Connected to etcd successfully");
+        Ok(())
+    }
+
+    /// Holt etcd client oder reconnect
+    async fn get_client(&self) -> Result<Client, EtcdError> {
+        let read_guard = self.client.read().await;
+        if let Some(client) = read_guard.as_ref() {
+            return Ok(client.clone());
+        }
+        drop(read_guard);
+
+        // Reconnect
+        warn!("⚠️  No active connection, reconnecting...");
+        self.connect().await?;
+
+        self.client
+            .read()
+            .await
+            .as_ref()
+            .ok_or_else(|| EtcdError::Connection("Failed to establish connection".to_string()))
+            .cloned()
+    }
+
+    /// Setzt einen Key-Value
+    pub async fn put(&self, key: &str, value: Vec<u8>) -> Result<(), EtcdError> {
+        let full_key = self.config.prefixed_key(key);
+        debug!("📝 PUT {}", full_key);
+
+        let mut client = self.get_client().await?;
+        client
+            .put(full_key, value, None)
+            .await
+            .map_err(|e| EtcdError::StateOperation(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Holt einen Wert
+    pub async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, EtcdError> {
+        let full_key = self.config.prefixed_key(key);
+        debug!("📖 GET {}", full_key);
+
+        let mut client = self.get_client().await?;
+        let resp = client
+            .get(full_key, None)
+            .await
+            .map_err(|e| EtcdError::StateOperation(e.to_string()))?;
+
+        Ok(resp.kvs().first().map(|kv| kv.value().to_vec()))
+    }
+
+    /// Löscht einen Key
+    pub async fn delete(&self, key: &str) -> Result<(), EtcdError> {
+        let full_key = self.config.prefixed_key(key);
+        debug!("🗑️  DELETE {}", full_key);
+
+        let mut client = self.get_client().await?;
+        client
+            .delete(full_key, None)
+            .await
+            .map_err(|e| EtcdError::StateOperation(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Listet alle Keys mit Prefix
+    pub async fn list(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, EtcdError> {
+        let full_prefix = self.config.prefixed_key(prefix);
+        debug!("📋 LIST {}", full_prefix);
+
+        let mut client = self.get_client().await?;
+        let options = GetOptions::new().with_prefix();
+        let resp = client
+            .get(full_prefix.clone(), Some(options))
+            .await
+            .map_err(|e| EtcdError::StateOperation(e.to_string()))?;
+
+        let results = resp
+            .kvs()
+            .iter()
+            .map(|kv| {
+                let key = String::from_utf8_lossy(kv.key()).to_string();
+                let key = key
+                    .trim_start_matches(&self.config.namespace)
+                    .trim_start_matches('/')
+                    .to_string();
+                (key, kv.value().to_vec())
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Erstellt einen Lease (für TTL)
+    pub async fn grant_lease(&self, ttl: i64) -> Result<i64, EtcdError> {
+        debug!("⏰ GRANT LEASE ttl={}", ttl);
+
+        let mut client = self.get_client().await?;
+        let resp = client
+            .lease_grant(ttl, None)
+            .await
+            .map_err(|e| EtcdError::Client(e))?;
+
+        Ok(resp.id())
+    }
+
+    /// Erneuert einen Lease
+    pub async fn keep_alive(&self, lease_id: i64) -> Result<(), EtcdError> {
+        let mut client = self.get_client().await?;
+        let (mut keeper, _stream) = client
+            .lease_keep_alive(lease_id)
+            .await
+            .map_err(|e| EtcdError::Client(e))?;
+
+        keeper
+            .keep_alive()
+            .await
+            .map_err(|e| EtcdError::Client(e))?;
+        Ok(())
+    }
+
+    /// Widerruft einen Lease
+    pub async fn revoke_lease(&self, lease_id: i64) -> Result<(), EtcdError> {
+        debug!("❌ REVOKE LEASE {}", lease_id);
+
+        let mut client = self.get_client().await?;
+        client
+            .lease_revoke(lease_id)
+            .await
+            .map_err(|e| EtcdError::Client(e))?;
+
+        Ok(())
+    }
+
+    /// Holt Config
+    pub fn config(&self) -> &EtcdConfig {
+        &self.config
+    }
+}

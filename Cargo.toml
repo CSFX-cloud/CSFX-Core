@@ -62,6 +62,9 @@ thiserror = "1.0"
 utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "6.0", features = ["axum"] }
 
+# etcd
+etcd-client = "0.14"
+
 # Other
 rand = "0.8"
 base64 = "0.22"
