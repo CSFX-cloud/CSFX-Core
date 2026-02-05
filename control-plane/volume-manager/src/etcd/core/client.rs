@@ -80,6 +80,26 @@ impl EtcdClient {
         Ok(())
     }
 
+    /// Setzt einen Key-Value mit Lease
+    pub async fn put_with_lease(
+        &self,
+        key: &str,
+        value: Vec<u8>,
+        lease_id: i64,
+    ) -> Result<(), EtcdError> {
+        let full_key = self.config.prefixed_key(key);
+        debug!("📝 PUT {} (Lease: {})", full_key, lease_id);
+
+        let mut client = self.get_client().await?;
+        let options = etcd_client::PutOptions::new().with_lease(lease_id);
+        client
+            .put(full_key, value, Some(options))
+            .await
+            .map_err(|e| EtcdError::StateOperation(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Holt einen Wert
     pub async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, EtcdError> {
         let full_key = self.config.prefixed_key(key);
@@ -94,6 +114,40 @@ impl EtcdClient {
         Ok(resp.kvs().first().map(|kv| kv.value().to_vec()))
     }
 
+    /// Holt einen Wert mit Lease-Info
+    pub async fn get_with_lease(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, EtcdError> {
+        let full_key = self.config.prefixed_key(key);
+        debug!("📖 GET {} (with lease)", full_key);
+
+        let mut client = self.get_client().await?;
+        let resp = client
+            .get(full_key, None)
+            .await
+            .map_err(|e| EtcdError::StateOperation(e.to_string()))?;
+
+        Ok(resp
+            .kvs()
+            .first()
+            .map(|kv| (kv.value().to_vec(), kv.lease())))
+    }
+
+    /// Prüft ob ein Lease noch gültig ist
+    pub async fn lease_time_to_live(&self, lease_id: i64) -> Result<Option<i64>, EtcdError> {
+        debug!("⏱️  LEASE TTL {}", lease_id);
+
+        let mut client = self.get_client().await?;
+        match client.lease_time_to_live(lease_id, None).await {
+            Ok(resp) => {
+                if resp.ttl() > 0 {
+                    Ok(Some(resp.ttl()))
+                } else {
+                    Ok(None) // Lease expired
+                }
+            }
+            Err(_) => Ok(None), // Lease doesn't exist anymore
+        }
+    }
+
     /// Löscht einen Key
     pub async fn delete(&self, key: &str) -> Result<(), EtcdError> {
         let full_key = self.config.prefixed_key(key);
@@ -106,6 +160,40 @@ impl EtcdClient {
             .map_err(|e| EtcdError::StateOperation(e.to_string()))?;
 
         Ok(())
+    }
+
+    /// Versucht einen Key mit Lease zu setzen, nur wenn er nicht existiert (atomare CAS-Operation)
+    /// Gibt true zurück wenn erfolgreich, false wenn Key bereits existiert
+    pub async fn try_acquire_with_lease(
+        &self,
+        key: &str,
+        value: Vec<u8>,
+        lease_id: i64,
+    ) -> Result<bool, EtcdError> {
+        let full_key = self.config.prefixed_key(key);
+        debug!("🔒 TRY_ACQUIRE {} (Lease: {})", full_key, lease_id);
+
+        let mut client = self.get_client().await?;
+
+        // Transaction: Setze Key NUR wenn er nicht existiert (Version = 0)
+        use etcd_client::{Compare, CompareOp, TxnOp, TxnOpResponse};
+
+        let put_options = PutOptions::new().with_lease(lease_id);
+        let compare = Compare::version(full_key.clone(), CompareOp::Equal, 0);
+        let put = TxnOp::put(full_key, value, Some(put_options));
+        let get = TxnOp::get("", None); // Dummy operation für else branch
+
+        let txn_resp = client
+            .txn()
+            .when([compare])
+            .and_then([put])
+            .or_else([get])
+            .commit()
+            .await
+            .map_err(|e| EtcdError::Client(e))?;
+
+        // Wenn succeeded = true, war die Transaction erfolgreich (Key nicht vorhanden)
+        Ok(txn_resp.succeeded())
     }
 
     /// Listet alle Keys mit Prefix

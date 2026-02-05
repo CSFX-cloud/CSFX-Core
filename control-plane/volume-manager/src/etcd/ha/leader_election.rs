@@ -30,91 +30,87 @@ impl LeaderElection {
 
     /// Startet Leader Election Campaign
     pub async fn campaign(&self) -> Result<(), EtcdError> {
-        info!("🎯 Campaign for leadership: {}", self.node_id);
+        // Bin ich bereits Leader?
+        if self.is_leader() {
+            return Ok(()); // Bereits Leader, nichts zu tun
+        }
+
+        info!("🗳️  Attempting to become leader: {}", self.node_id);
+
+        // Prüfe ob bereits Leader aktiv ist
+        match self.client.get_with_lease(&self.election_key).await? {
+            Some((current_leader_bytes, lease_id)) => {
+                let current_leader = String::from_utf8_lossy(&current_leader_bytes);
+
+                // Prüfe ob der Lease noch gültig ist
+                if lease_id > 0 {
+                    match self.client.lease_time_to_live(lease_id).await? {
+                        Some(ttl) => {
+                            // Lease ist noch gültig, respektiere den aktuellen Leader
+                            info!(
+                                "👑 Leader bereits vorhanden: {} (Lease: {}, TTL: {}s)",
+                                current_leader, lease_id, ttl
+                            );
+                            return Ok(());
+                        }
+                        None => {
+                            // Lease ist abgelaufen oder existiert nicht mehr!
+                            warn!(
+                                "⚠️  Alter Leader {} hat abgelaufenen Lease {}, übernehme Führung",
+                                current_leader, lease_id
+                            );
+                            // Lösche den alten Key
+                            if let Err(e) = self.client.delete(&self.election_key).await {
+                                warn!("⚠️  Failed to delete old leader key: {}", e);
+                            }
+                        }
+                    }
+                } else {
+                    // Kein Lease, der alte Eintrag ist ungültig
+                    warn!(
+                        "⚠️  Alter Leader {} ohne gültigen Lease gefunden, übernehme Führung",
+                        current_leader
+                    );
+                    // Lösche den alten Key
+                    if let Err(e) = self.client.delete(&self.election_key).await {
+                        warn!("⚠️  Failed to delete old leader key: {}", e);
+                    }
+                }
+            }
+            None => {
+                // Kein Leader vorhanden
+                info!("🎯 Kein Leader gefunden, starte Campaign: {}", self.node_id);
+            }
+        }
 
         // Lease erstellen
         let lease_id = self.client.grant_lease(self.ttl).await?;
         *self.lease_id.write().await = Some(lease_id);
 
-        // Versuche Leader zu werden
+        // Versuche Leader zu werden mit atomarer CAS-Operation
         let value = self.node_id.as_bytes().to_vec();
-
-        // Versuche atomisch Leader zu werden (nur wenn Key nicht existiert)
-        match self.client.get(&self.election_key).await? {
-            None => {
-                // Kein Leader vorhanden, wir werden Leader
-                self.client.put(&self.election_key, value).await?;
+        match self.client.try_acquire_with_lease(&self.election_key, value, lease_id).await? {
+            true => {
+                // Erfolgreich! Wir sind jetzt Leader
                 self.is_leader.store(true, Ordering::SeqCst);
-                info!("👑 Became LEADER: {}", self.node_id);
+                info!("✅ Erfolgreich zum Leader gewählt! (Lease: {})", lease_id);
+                info!("🎉 Bin jetzt Leader!");
 
                 // Starte Lease Renewal
                 self.start_lease_renewal().await;
             }
-            Some(current_leader) => {
-                let leader = String::from_utf8_lossy(&current_leader);
-                info!("👥 Current leader is: {}", leader);
+            false => {
+                // Ein anderer Node war schneller
+                warn!("⚠️  Ein anderer Node wurde Leader (Race Condition)");
+                
+                // Revoke unseren Lease da wir ihn nicht brauchen
+                if let Err(e) = self.client.revoke_lease(lease_id).await {
+                    warn!("⚠️  Failed to revoke unused lease: {}", e);
+                }
+                *self.lease_id.write().await = None;
                 self.is_leader.store(false, Ordering::SeqCst);
             }
         }
-
-        Ok(())
-    }
-
-    /// Gibt Leadership auf
-    pub async fn resign(&self) -> Result<(), EtcdError> {
-        if !self.is_leader() {
-            return Ok(());
-        }
-
-        info!("👋 Resigning from leadership: {}", self.node_id);
-
-        // Lösche Election Key
-        self.client.delete(&self.election_key).await?;
-
-        // Revoke Lease
-        if let Some(lease_id) = *self.lease_id.read().await {
-            self.client.revoke_lease(lease_id).await?;
-        }
-
-        self.is_leader.store(false, Ordering::SeqCst);
-        *self.lease_id.write().await = None;
-
-        info!("✅ Resigned from leadership");
-        Ok(())
-    }
-
-    /// Prüft ob dieser Node Leader ist
-    pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::SeqCst)
-    }
-
-    /// Holt aktuellen Leader
-    pub async fn get_leader(&self) -> Result<Option<String>, EtcdError> {
-        match self.client.get(&self.election_key).await? {
-            Some(data) => Ok(Some(String::from_utf8_lossy(&data).to_string())),
-            None => Ok(None),
-        }
-    }
-
-    /// Startet automatische Lease Renewal
-    async fn start_lease_renewal(&self) {
-        let client = self.client.clone();
-        let lease_id = self.lease_id.clone();
-        let is_leader = self.is_leader.clone();
-        let node_id = self.node_id.clone();
-
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
-
-            while is_leader.load(Ordering::SeqCst) {
-                interval.tick().await;
-
-                let current_lease = *lease_id.read().await;
-                if let Some(lid) = current_lease {
-                    match client.keep_alive(lid).await {
-                        Ok(_) => {
-                            // Lease erfolgreich erneuert
-                        }
                         Err(e) => {
                             error!("❌ Lease renewal failed: {}", e);
                             is_leader.store(false, Ordering::SeqCst);

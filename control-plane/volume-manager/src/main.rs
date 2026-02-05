@@ -77,9 +77,19 @@ async fn main() -> anyhow::Result<()> {
     let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
     let mut health_check_interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
     let mut operations_interval = tokio::time::interval(tokio::time::Duration::from_secs(35));
+    let mut election_interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
 
     loop {
         tokio::select! {
+            // Leader Election Loop: Versuche regelmäßig Leader zu werden
+            _ = election_interval.tick() => {
+                if !leader_election.is_leader() {
+                    if let Err(e) = leader_election.campaign().await {
+                        error!("❌ Campaign failed: {}", e);
+                    }
+                }
+            }
+
             // Heartbeat: Aktualisiere Node Status
             _ = heartbeat_interval.tick() => {
                 if let Err(e) = state_manager.update_node_heartbeat(&node_id).await {

@@ -56,9 +56,9 @@ check_etcdctl() {
 show_etcd_status() {
     header "etcd Cluster Status"
     if check_etcdctl; then
-        ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 member list
+        etcdctl --endpoints=localhost:2379 member list
         echo ""
-        ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 endpoint health
+        etcdctl --endpoints=localhost:2379 endpoint health
     fi
 }
 
@@ -67,10 +67,10 @@ show_nodes() {
     header "Registrierte Nodes"
     if check_etcdctl; then
         echo "Nodes im Cluster:"
-        ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix --keys-only | grep -v "^$" || echo "Keine Nodes gefunden"
+        etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix --keys-only | grep -v "^$" || echo "Keine Nodes gefunden"
         echo ""
         echo "Node Details:"
-        ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix | grep -v "^$" | jq '.' 2>/dev/null || ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix
+        etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix | grep -v "^$" | jq '.' 2>/dev/null || etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix
     fi
 }
 
@@ -79,11 +79,16 @@ show_leader() {
     header "Leader Election Status"
     if check_etcdctl; then
         echo "Aktueller Leader:"
-        LEADER=$(ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null || echo "Kein Leader")
-        echo -e "${COLOR_GREEN}👑 $LEADER${COLOR_RESET}"
-        echo ""
-        echo "Election Key Details:"
-        ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader || echo "Kein Leader gewählt"
+        LEADER_JSON=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/leader/volume-manager --print-value-only 2>/dev/null)
+        if [ -n "$LEADER_JSON" ]; then
+            LEADER=$(echo "$LEADER_JSON" | jq -r '.leader_id' 2>/dev/null || echo "Kein Leader")
+            echo -e "${COLOR_GREEN}👑 $LEADER${COLOR_RESET}"
+            echo ""
+            echo "Leader Details:"
+            echo "$LEADER_JSON" | jq '.'
+        else
+            echo "Kein Leader gewählt"
+        fi
     fi
 }
 
@@ -92,10 +97,10 @@ show_volumes() {
     header "Volume States"
     if check_etcdctl; then
         echo "Volumes im Cluster:"
-        ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/volumes/ --prefix --keys-only | grep -v "^$" || echo "Keine Volumes gefunden"
+        etcdctl --endpoints=localhost:2379 get /csf/volume-manager/volumes/ --prefix --keys-only | grep -v "^$" || echo "Keine Volumes gefunden"
         echo ""
         echo "Volume Details:"
-        ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/volumes/ --prefix | grep -v "^$" | jq '.' 2>/dev/null || echo "Keine Volumes"
+        etcdctl --endpoints=localhost:2379 get /csf/volume-manager/volumes/ --prefix | grep -v "^$" | jq '.' 2>/dev/null || echo "Keine Volumes"
     fi
 }
 
@@ -149,13 +154,14 @@ monitor() {
         
         # Leader
         if check_etcdctl; then
-            LEADER=$(ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null || echo "Kein Leader")
+            LEADER_JSON=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/leader/volume-manager --print-value-only 2>/dev/null)
+            LEADER=$(echo "$LEADER_JSON" | jq -r '.leader_id' 2>/dev/null || echo "Kein Leader")
             echo -e "${COLOR_YELLOW}👑 Aktueller Leader:${COLOR_RESET} ${COLOR_GREEN}$LEADER${COLOR_RESET}"
             echo ""
             
             # Nodes
             echo -e "${COLOR_YELLOW}🖥️  Registrierte Nodes:${COLOR_RESET}"
-            ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix 2>/dev/null | \
+            etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix 2>/dev/null | \
                 jq -r 'select(.node_id != null) | "  \(.node_id): \(.status) (\(.role))"' 2>/dev/null || echo "  Keine Nodes"
             echo ""
         fi
@@ -180,9 +186,16 @@ test_failover() {
     
     info "2. Stoppe aktuellen Leader"
     if check_etcdctl; then
-        LEADER=$(ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null)
-        if [ -n "$LEADER" ] && [ "$LEADER" != "Kein Leader" ]; then
-            stop_node "$LEADER"
+        LEADER_JSON=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/leader/volume-manager --print-value-only 2>/dev/null)
+        LEADER=$(echo "$LEADER_JSON" | jq -r '.leader_id' 2>/dev/null)
+        if [ -n "$LEADER" ] && [ "$LEADER" != "Kein Leader" ] && [ "$LEADER" != "null" ]; then
+            # Leader ID ist der Node-Name, aber Container Name könnte anders sein
+            CONTAINER_NAME=$(docker ps --filter "name=$LEADER" --format "{{.Names}}" | head -n1)
+            if [ -n "$CONTAINER_NAME" ]; then
+                stop_node "$CONTAINER_NAME"
+            else
+                stop_node "$LEADER"
+            fi
         else
             warning "Kein Leader gefunden, stoppe volume-manager-1"
             stop_node "volume-manager-1"
@@ -258,7 +271,7 @@ clean_etcd() {
     header "Cleanup etcd Daten"
     if check_etcdctl; then
         log "Lösche alle Keys unter /csf/volume-manager/..."
-        ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csf/volume-manager/ --prefix 2>/dev/null || true
+        etcdctl --endpoints=localhost:2379 del /csf/volume-manager/ --prefix 2>/dev/null || true
         success "etcd Daten gelöscht"
         
         warning "Bitte starte die Volume Manager Container neu:"
