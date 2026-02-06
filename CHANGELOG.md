@@ -2,6 +2,19 @@
 
 All notable changes to CSF-Core will be documented in this file.
 
+# [0.2.0](https://github.com/CS-Foundry/CSF-Core/compare/v0.1.13...v0.2.0) (2026-02-06)
+
+
+### Bug Fixes
+
+* leader election ([28871eb](https://github.com/CS-Foundry/CSF-Core/commit/28871eb6b9fc98ee7a6792e618834baaf374f706))
+* leader select ([e5d8867](https://github.com/CS-Foundry/CSF-Core/commit/e5d88678b3378da846b18ea045d179a57651a47f))
+
+
+### Features
+
+* setup for etcd cluster ([af2db8d](https://github.com/CS-Foundry/CSF-Core/commit/af2db8d3777fa0090a646b3a122984f38df248bd))
+
 ## [0.1.13](https://github.com/CS-Foundry/CSF-Core/compare/v0.1.12...v0.1.13) (2026-02-03)
 
 
