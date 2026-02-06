@@ -56,9 +56,10 @@ services:
 
   # Volume Manager Node 1
   volume-manager-1:
+    image: volume-manager:test
     build:
       context: ../..
-      dockerfile: control-plane/volume-manager/Dockerfile.dev
+      dockerfile: control-plane/volume-manager/Dockerfile.test
     container_name: volume-manager-1
     environment:
       - RUST_LOG=debug
@@ -77,9 +78,10 @@ services:
 
   # Volume Manager Node 2
   volume-manager-2:
+    image: volume-manager:test
     build:
       context: ../..
-      dockerfile: control-plane/volume-manager/Dockerfile.dev
+      dockerfile: control-plane/volume-manager/Dockerfile.test
     container_name: volume-manager-2
     environment:
       - RUST_LOG=debug
@@ -98,9 +100,10 @@ services:
 
   # Volume Manager Node 3
   volume-manager-3:
+    image: volume-manager:test
     build:
       context: ../..
-      dockerfile: control-plane/volume-manager/Dockerfile.dev
+      dockerfile: control-plane/volume-manager/Dockerfile.test
     container_name: volume-manager-3
     environment:
       - RUST_LOG=debug

@@ -89,7 +89,11 @@ impl LeaderElection {
 
         // Versuche Leader zu werden mit atomarer CAS-Operation
         let value = self.node_id.as_bytes().to_vec();
-        match self.client.try_acquire_with_lease(&self.election_key, value, lease_id).await? {
+        match self
+            .client
+            .try_acquire_with_lease(&self.election_key, value, lease_id)
+            .await?
+        {
             true => {
                 // Erfolgreich! Wir sind jetzt Leader
                 self.is_leader.store(true, Ordering::SeqCst);
@@ -102,7 +106,7 @@ impl LeaderElection {
             false => {
                 // Ein anderer Node war schneller
                 warn!("⚠️  Ein anderer Node wurde Leader (Race Condition)");
-                
+
                 // Revoke unseren Lease da wir ihn nicht brauchen
                 if let Err(e) = self.client.revoke_lease(lease_id).await {
                     warn!("⚠️  Failed to revoke unused lease: {}", e);
@@ -111,6 +115,26 @@ impl LeaderElection {
                 self.is_leader.store(false, Ordering::SeqCst);
             }
         }
+
+        Ok(())
+    }
+
+    /// Startet Lease Renewal im Hintergrund
+    async fn start_lease_renewal(&self) {
+        let client = Arc::clone(&self.client);
+        let lease_id = Arc::clone(&self.lease_id);
+        let is_leader = Arc::clone(&self.is_leader);
+        let node_id = self.node_id.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+                if let Some(lid) = *lease_id.read().await {
+                    match client.keep_alive(lid).await {
+                        Ok(_) => {
+                            // Lease erfolgreich erneuert
+                        }
                         Err(e) => {
                             error!("❌ Lease renewal failed: {}", e);
                             is_leader.store(false, Ordering::SeqCst);
@@ -135,6 +159,43 @@ impl LeaderElection {
 
         // Hier würde ein Watch implementiert werden
         // Für jetzt vereinfacht
+        Ok(())
+    }
+
+    /// Prüft ob dieser Node Leader ist
+    pub fn is_leader(&self) -> bool {
+        self.is_leader.load(Ordering::SeqCst)
+    }
+
+    /// Gibt den aktuellen Leader zurück
+    pub async fn get_leader(&self) -> Result<Option<String>, EtcdError> {
+        match self.client.get(&self.election_key).await? {
+            Some(value) => {
+                let leader = String::from_utf8_lossy(&value).to_string();
+                Ok(Some(leader))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Gibt auf Leadership auf (nur wenn wir Leader sind)
+    pub async fn resign(&self) -> Result<(), EtcdError> {
+        if !self.is_leader() {
+            return Ok(()); // Nicht Leader, nichts zu tun
+        }
+
+        info!("👋 Resigning from leadership: {}", self.node_id);
+
+        // Revoke Lease
+        if let Some(lid) = *self.lease_id.read().await {
+            self.client.revoke_lease(lid).await?;
+        }
+
+        // Update State
+        self.is_leader.store(false, Ordering::SeqCst);
+        *self.lease_id.write().await = None;
+
+        info!("✅ Successfully resigned from leadership");
         Ok(())
     }
 }

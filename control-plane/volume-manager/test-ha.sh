@@ -79,13 +79,20 @@ show_leader() {
     header "Leader Election Status"
     if check_etcdctl; then
         echo "Aktueller Leader:"
-        LEADER_JSON=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/leader/volume-manager --print-value-only 2>/dev/null)
-        if [ -n "$LEADER_JSON" ]; then
-            LEADER=$(echo "$LEADER_JSON" | jq -r '.leader_id' 2>/dev/null || echo "Kein Leader")
+        # Der Leader wird direkt als String unter /csf/volume-manager/election/leader gespeichert
+        LEADER=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null)
+        if [ -n "$LEADER" ]; then
             echo -e "${COLOR_GREEN}👑 $LEADER${COLOR_RESET}"
+            
+            # Zeige zusätzliche Node-Details
             echo ""
-            echo "Leader Details:"
-            echo "$LEADER_JSON" | jq '.'
+            echo "Node Details:"
+            NODE_DATA=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/$LEADER --print-value-only 2>/dev/null)
+            if [ -n "$NODE_DATA" ]; then
+                echo "$NODE_DATA" | jq '.'
+            else
+                echo "  Node-Daten nicht verfügbar"
+            fi
         else
             echo "Kein Leader gewählt"
         fi
@@ -154,9 +161,12 @@ monitor() {
         
         # Leader
         if check_etcdctl; then
-            LEADER_JSON=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/leader/volume-manager --print-value-only 2>/dev/null)
-            LEADER=$(echo "$LEADER_JSON" | jq -r '.leader_id' 2>/dev/null || echo "Kein Leader")
-            echo -e "${COLOR_YELLOW}👑 Aktueller Leader:${COLOR_RESET} ${COLOR_GREEN}$LEADER${COLOR_RESET}"
+            LEADER=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null)
+            if [ -n "$LEADER" ]; then
+                echo -e "${COLOR_YELLOW}👑 Aktueller Leader:${COLOR_RESET} ${COLOR_GREEN}$LEADER${COLOR_RESET}"
+            else
+                echo -e "${COLOR_YELLOW}👑 Aktueller Leader:${COLOR_RESET} ${COLOR_RED}Kein Leader${COLOR_RESET}"
+            fi
             echo ""
             
             # Nodes
@@ -186,9 +196,8 @@ test_failover() {
     
     info "2. Stoppe aktuellen Leader"
     if check_etcdctl; then
-        LEADER_JSON=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/leader/volume-manager --print-value-only 2>/dev/null)
-        LEADER=$(echo "$LEADER_JSON" | jq -r '.leader_id' 2>/dev/null)
-        if [ -n "$LEADER" ] && [ "$LEADER" != "Kein Leader" ] && [ "$LEADER" != "null" ]; then
+        LEADER=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null)
+        if [ -n "$LEADER" ]; then
             # Leader ID ist der Node-Name, aber Container Name könnte anders sein
             CONTAINER_NAME=$(docker ps --filter "name=$LEADER" --format "{{.Names}}" | head -n1)
             if [ -n "$CONTAINER_NAME" ]; then

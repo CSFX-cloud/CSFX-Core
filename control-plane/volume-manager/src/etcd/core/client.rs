@@ -176,21 +176,16 @@ impl EtcdClient {
         let mut client = self.get_client().await?;
 
         // Transaction: Setze Key NUR wenn er nicht existiert (Version = 0)
-        use etcd_client::{Compare, CompareOp, TxnOp, TxnOpResponse};
+        use etcd_client::{Compare, CompareOp, Txn, TxnOp};
 
         let put_options = PutOptions::new().with_lease(lease_id);
         let compare = Compare::version(full_key.clone(), CompareOp::Equal, 0);
-        let put = TxnOp::put(full_key, value, Some(put_options));
-        let get = TxnOp::get("", None); // Dummy operation für else branch
+        let put = TxnOp::put(full_key.clone(), value, Some(put_options));
+        let get = TxnOp::get(full_key.clone(), None);
 
-        let txn_resp = client
-            .txn()
-            .when([compare])
-            .and_then([put])
-            .or_else([get])
-            .commit()
-            .await
-            .map_err(|e| EtcdError::Client(e))?;
+        let txn = Txn::new().when([compare]).and_then([put]).or_else([get]);
+
+        let txn_resp = client.txn(txn).await.map_err(|e| EtcdError::Client(e))?;
 
         // Wenn succeeded = true, war die Transaction erfolgreich (Key nicht vorhanden)
         Ok(txn_resp.succeeded())
