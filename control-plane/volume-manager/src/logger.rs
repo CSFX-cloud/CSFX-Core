@@ -52,3 +52,64 @@ pub fn log_message(level: LogLevel, module: &str, location: &str, description: &
         }
     }
 }
+
+/// Makros für einfaches Logging mit automatischem Ort (Dateiname:Zeile)
+#[macro_export]
+macro_rules! log_trace {
+    ($module:expr, $desc:expr) => {
+        $crate::logger::log_message(
+            $crate::logger::LogLevel::Trace,
+            $module,
+            concat!(file!(), ":", line!()),
+            $desc,
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! log_debug {
+    ($module:expr, $desc:expr) => {
+        $crate::logger::log_message(
+            $crate::logger::LogLevel::Debug,
+            $module,
+            concat!(file!(), ":", line!()),
+            $desc,
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! log_info {
+    ($module:expr, $desc:expr) => {
+        $crate::logger::log_message(
+            $crate::logger::LogLevel::Info,
+            $module,
+            concat!(file!(), ":", line!()),
+            $desc,
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! log_warn {
+    ($module:expr, $desc:expr) => {
+        $crate::logger::log_message(
+            $crate::logger::LogLevel::Warn,
+            $module,
+            concat!(file!(), ":", line!()),
+            $desc,
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! log_error {
+    ($module:expr, $desc:expr) => {
+        $crate::logger::log_message(
+            $crate::logger::LogLevel::Error,
+            $module,
+            concat!(file!(), ":", line!()),
+            $desc,
+        )
+    };
+}

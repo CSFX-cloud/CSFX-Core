@@ -20,7 +20,10 @@ async fn main() -> anyhow::Result<()> {
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     if leader_election.is_leader() {
-        info!("Node is leader, creating demo volumes...");
+        log_info!(
+            "main",
+            "Node is leader, initializing volume management tasks"
+        );
 
         // Erstelle Demo-Volumes
         for i in 1..=3 {
@@ -33,18 +36,21 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await
             {
-                Ok(vol) => info!(
-                    "   Successfully created volume: {} ({} GB)",
-                    vol.name, vol.size_gb
+                Ok(vol) => log_info!(
+                    "main",
+                    &format!(
+                        "Successfully created volume: {} ({} GB)",
+                        vol.name, vol.size_gb
+                    )
                 ),
-                Err(e) => error!("   Failed to create volume: {}", e),
+                Err(e) => log_error!("main", &format!("Failed to create volume: {}", e)),
             }
         }
     } else {
-        info!("Node is follower, waiting for leader");
+        log_info!("main", "Node is follower, waiting for leader");
     }
 
-    info!("Volume Manager initialized successfully");
+    log_info!("main", "Volume Manager initialized successfully");
 
     // Hauptschleife
     let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
@@ -58,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
             _ = election_interval.tick() => {
                 if !leader_election.is_leader() {
                     if let Err(e) = leader_election.campaign().await {
-                        error!("Leader election campaign failed: {}", e);
+                        log_error!("main", &format!("Leader election campaign failed: {}", e));
                     }
                 }
             }
@@ -66,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
             // Heartbeat: Aktualisiere Node Status
             _ = heartbeat_interval.tick() => {
                 if let Err(e) = state_manager.update_node_heartbeat(&node_id).await {
-                    error!("Failed to update node heartbeat: {}", e);
+                    log_error!("main", &format!("Failed to update node heartbeat: {}", e));
                 }
 
                 // Aktualisiere Rolle basierend auf Leadership
@@ -77,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
                 };
 
                 if let Err(e) = state_manager.set_node_role(&node_id, role).await {
-                    error!("Failed to update node role: {}", e);
+                    log_error!("main", &format!("Failed to update node role: {}", e));
                 }
             }
 
@@ -88,10 +94,7 @@ async fn main() -> anyhow::Result<()> {
                         let summary = health_checker.get_cluster_summary(nodes.clone()).await;
 
                         if summary.unhealthy_nodes > 0 {
-                            warn!(
-                                "Detected {} unhealthy nodes",
-                                summary.unhealthy_nodes
-                            );
+                            log_warn!("main", &format!("Detected {} unhealthy nodes", summary.unhealthy_nodes));
 
                             // Nur Leader führt Failover durch
                             if leader_election.is_leader() {
@@ -99,35 +102,35 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                     }
-                    Err(e) => error!("Failed to list nodes: {}", e),
+                    Err(e) => log_error!("main", &format!("Failed to list nodes: {}", e)),
                 }
             }
 
             // Volume Operations: Nur Leader führt diese aus
             _ = operations_interval.tick() => {
                 if leader_election.is_leader() {
-                    info!("[LEADER] Managing storage volumes...");
+                    log_info!("main", "[LEADER] Managing storage volumes...");
 
                     // Liste alle Volumes
                     match state_manager.list_volumes().await {
                         Ok(volumes) => {
-                            info!("   Total volumes: {}", volumes.len());
+                            log_info!("main", &format!("Total volumes: {}", volumes.len()));
                             for vol in volumes.iter().take(3) {
-                                info!("      - {} ({:?})", vol.name, vol.status);
+                                log_info!("main", &format!("- {} ({:?})", vol.name, vol.status));
                             }
                         }
-                        Err(e) => error!("Failed to list volumes: {}", e),
+                        Err(e) => log_error!("main", &format!("Failed to list volumes: {}", e)),
                     }
 
-                    info!("   - Monitoring Ceph cluster health");
-                    info!("   - Processing snapshot requests");
-                    info!("   - Verifying encryption status");
+                    log_info!("main", "- Monitoring Ceph cluster health");
+                    log_info!("main", "- Processing snapshot requests");
+                    log_info!("main", "- Verifying encryption status");
                 } else {
-                    info!("[FOLLOWER] Standby mode - waiting for leader instructions");
+                    log_info!("main", "[FOLLOWER] Standby mode - waiting for leader instructions");
 
                     // Follower kann Leader abfragen
                     if let Ok(Some(leader)) = leader_election.get_leader().await {
-                        info!("   Current leader: {}", leader);
+                        log_info!("main", &format!("Current leader: {}", leader));
                     }
                 }
             }
@@ -140,24 +143,30 @@ async fn perform_failover(
     state_manager: &Arc<StateManager>,
     health_statuses: &[etcd::ha::NodeHealthStatus],
 ) {
-    info!("Initiating failover procedure...");
+    log_info!("main", "Initiating failover procedure...");
 
     for status in health_statuses {
         if !status.is_healthy {
-            warn!("Node {} is unhealthy, marking as offline", status.node_id);
+            log_warn!(
+                "main",
+                &format!("Node {} is unhealthy, marking as offline", status.node_id)
+            );
 
             if let Err(e) = state_manager.mark_node_offline(&status.node_id).await {
-                error!("Failed to mark node {} as offline: {}", status.node_id, e);
+                log_error!(
+                    "main",
+                    &format!("Failed to mark node {} as offline: {}", status.node_id, e)
+                );
             }
 
             // Hier würde man Volumes von diesem Node migrieren
-            info!(
-                "   Initiating volume migration from node {}",
-                status.node_id
+            log_info!(
+                "main",
+                &format!("Initiating volume migration from node {}", status.node_id)
             );
             // TODO: Implementiere Volume Migration
         }
     }
 
-    info!("Failover procedure completed successfully");
+    log_info!("main", "Failover procedure completed successfully");
 }
