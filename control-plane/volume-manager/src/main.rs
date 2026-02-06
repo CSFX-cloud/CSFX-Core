@@ -1,50 +1,47 @@
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-mod etcd;
+use etcd::state::NodeRole;
+use etcd::StateManager;
 
-use etcd::state::{NodeRole, NodeStatus};
-use etcd::{EtcdClient, EtcdConfig, HealthChecker, LeaderElection, StateManager};
+mod etcd;
+mod logger;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logger
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_thread_ids(true)
-        .with_level(true)
-        .init();
+    let init_data = etcd::init::init_cluster().await?;
+    let etcd_client = init_data.etcd_client;
+    let state_manager = init_data.state_manager;
+    let health_checker = init_data.health_checker;
+    let leader_election = init_data.leader_election;
+    let node_id = init_data.node_id;
 
-    info!("💾 Volume Manager Service starting...");
+    // Erstelle Test-Volumes wenn Leader (nach kurzer Wartezeit)
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-    // Lade etcd Konfiguration
-    let etcd_config = EtcdConfig::from_env();
-    let etcd_client = Arc::new(EtcdClient::new(etcd_config));
+    if leader_election.is_leader() {
+        info!("I am the LEADER - creating demo volumes...");
 
-    // Verbinde mit etcd
-    info!("🔌 Connecting to etcd...");
-    etcd_client.connect().await?;
-    info!("✅ Connected to etcd cluster");
+        // Erstelle Demo-Volumes
+        for i in 1..=3 {
+            match state_manager
+                .create_volume(
+                    format!("demo-volume-{}", i),
+                    100 + (i * 50),
+                    "rbd".to_string(),
+                    i % 2 == 0, // Jedes zweite Volume verschlüsselt
+                )
+                .await
+            {
+                Ok(vol) => info!("   ✅ Created: {} ({}GB)", vol.name, vol.size_gb),
+                Err(e) => error!("   ❌ Failed to create volume: {}", e),
+            }
+        }
+    } else {
+        info!("I am a FOLLOWER - waiting for leader");
+    }
 
-    // Initialisiere Komponenten
-    let state_manager = Arc::new(StateManager::new(etcd_client.clone()));
-    let health_checker = Arc::new(HealthChecker::new(etcd_client.clone()));
-
-    // Node ID generieren (in Produktion aus Hostname/Config)
-    let node_id = std::env::var("NODE_ID")
-        .unwrap_or_else(|_| format!("volume-manager-{}", uuid::Uuid::new_v4()));
-    let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string());
-    let ip_address = std::env::var("NODE_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
-
-    // Registriere diesen Node
-    info!("🖥️  Registering node: {}", node_id);
-    state_manager
-        .register_node(node_id.clone(), hostname, ip_address)
-        .await?;
-
-    // Leader Election starten
-    let leader_election = Arc::new(LeaderElection::new(etcd_client.clone(), node_id.clone()));
-    leader_election.campaign().await?;
+    info!("Volume Manager initialized");
 
     // Erstelle Test-Volumes wenn Leader (nach kurzer Wartezeit)
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;

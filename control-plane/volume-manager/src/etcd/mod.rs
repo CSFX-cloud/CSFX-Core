@@ -5,9 +5,11 @@
 // 📦 state/   - State Management (storage, manager, types)
 // 📦 ha/      - High Availability (leader election, health)
 // 📦 sync/    - Synchronisation (locks, watchers)
+// 📦 init/    - Initialisierung
 
 pub mod core;
 pub mod ha;
+pub mod init;
 pub mod state;
 pub mod sync;
 
