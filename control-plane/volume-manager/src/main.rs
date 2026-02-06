@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tracing::{error, info, warn};
 
 use etcd::state::NodeRole;
 use etcd::StateManager;

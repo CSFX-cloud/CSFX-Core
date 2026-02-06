@@ -1,8 +1,8 @@
 use super::{EtcdConfig, EtcdError};
+use crate::{log_info, log_warn};
 use etcd_client::{Client, ConnectOptions, GetOptions, PutOptions};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
 
 /// etcd Client mit Connection Management
 #[derive(Clone)]
@@ -22,7 +22,7 @@ impl EtcdClient {
 
     /// Verbindet mit etcd
     pub async fn connect(&self) -> Result<(), EtcdError> {
-        info!("🔌 Connecting to etcd: {:?}", self.config.endpoints);
+        log_info!("etcd::client", "Connecting to etcd cluster...");
 
         let mut options = ConnectOptions::new()
             .with_connect_timeout(self.config.connect_timeout)
@@ -42,7 +42,7 @@ impl EtcdClient {
             .map_err(|e| EtcdError::Connection(e.to_string()))?;
 
         *self.client.write().await = Some(client);
-        info!("✅ Connected to etcd successfully");
+        log_info!("etcd::client", "Successfully connected to etcd cluster");
         Ok(())
     }
 
@@ -55,7 +55,10 @@ impl EtcdClient {
         drop(read_guard);
 
         // Reconnect
-        warn!("⚠️  No active connection, reconnecting...");
+        log_warn!(
+            "etcd::client",
+            "No active etcd connection, attempting to reconnect..."
+        );
         self.connect().await?;
 
         self.client
@@ -69,7 +72,6 @@ impl EtcdClient {
     /// Setzt einen Key-Value
     pub async fn put(&self, key: &str, value: Vec<u8>) -> Result<(), EtcdError> {
         let full_key = self.config.prefixed_key(key);
-        debug!("📝 PUT {}", full_key);
 
         let mut client = self.get_client().await?;
         client
@@ -88,7 +90,6 @@ impl EtcdClient {
         lease_id: i64,
     ) -> Result<(), EtcdError> {
         let full_key = self.config.prefixed_key(key);
-        debug!("📝 PUT {} (Lease: {})", full_key, lease_id);
 
         let mut client = self.get_client().await?;
         let options = etcd_client::PutOptions::new().with_lease(lease_id);
@@ -103,7 +104,6 @@ impl EtcdClient {
     /// Holt einen Wert
     pub async fn get(&self, key: &str) -> Result<Option<Vec<u8>>, EtcdError> {
         let full_key = self.config.prefixed_key(key);
-        debug!("📖 GET {}", full_key);
 
         let mut client = self.get_client().await?;
         let resp = client
@@ -117,7 +117,6 @@ impl EtcdClient {
     /// Holt einen Wert mit Lease-Info
     pub async fn get_with_lease(&self, key: &str) -> Result<Option<(Vec<u8>, i64)>, EtcdError> {
         let full_key = self.config.prefixed_key(key);
-        debug!("📖 GET {} (with lease)", full_key);
 
         let mut client = self.get_client().await?;
         let resp = client
@@ -133,8 +132,6 @@ impl EtcdClient {
 
     /// Prüft ob ein Lease noch gültig ist
     pub async fn lease_time_to_live(&self, lease_id: i64) -> Result<Option<i64>, EtcdError> {
-        debug!("⏱️  LEASE TTL {}", lease_id);
-
         let mut client = self.get_client().await?;
         match client.lease_time_to_live(lease_id, None).await {
             Ok(resp) => {
@@ -151,7 +148,6 @@ impl EtcdClient {
     /// Löscht einen Key
     pub async fn delete(&self, key: &str) -> Result<(), EtcdError> {
         let full_key = self.config.prefixed_key(key);
-        debug!("🗑️  DELETE {}", full_key);
 
         let mut client = self.get_client().await?;
         client
@@ -171,7 +167,6 @@ impl EtcdClient {
         lease_id: i64,
     ) -> Result<bool, EtcdError> {
         let full_key = self.config.prefixed_key(key);
-        debug!("🔒 TRY_ACQUIRE {} (Lease: {})", full_key, lease_id);
 
         let mut client = self.get_client().await?;
 
@@ -194,7 +189,6 @@ impl EtcdClient {
     /// Listet alle Keys mit Prefix
     pub async fn list(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, EtcdError> {
         let full_prefix = self.config.prefixed_key(prefix);
-        debug!("📋 LIST {}", full_prefix);
 
         let mut client = self.get_client().await?;
         let options = GetOptions::new().with_prefix();
@@ -221,8 +215,6 @@ impl EtcdClient {
 
     /// Erstellt einen Lease (für TTL)
     pub async fn grant_lease(&self, ttl: i64) -> Result<i64, EtcdError> {
-        debug!("⏰ GRANT LEASE ttl={}", ttl);
-
         let mut client = self.get_client().await?;
         let resp = client
             .lease_grant(ttl, None)
@@ -249,8 +241,6 @@ impl EtcdClient {
 
     /// Widerruft einen Lease
     pub async fn revoke_lease(&self, lease_id: i64) -> Result<(), EtcdError> {
-        debug!("❌ REVOKE LEASE {}", lease_id);
-
         let mut client = self.get_client().await?;
         client
             .lease_revoke(lease_id)

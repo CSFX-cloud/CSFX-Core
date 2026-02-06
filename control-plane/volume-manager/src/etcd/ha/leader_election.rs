@@ -1,9 +1,9 @@
 use crate::etcd::core::{EtcdClient, EtcdError};
+use crate::{log_error, log_info, log_warn};
 use etcd_client::EventType;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
 
 /// Leader Election mit etcd
 pub struct LeaderElection {
@@ -35,7 +35,10 @@ impl LeaderElection {
             return Ok(()); // Bereits Leader, nichts zu tun
         }
 
-        info!("🗳️  Attempting to become leader: {}", self.node_id);
+        log_info!(
+            "etcd::ha::leader_election",
+            &format!("Attempting to become leader: {}", self.node_id)
+        );
 
         // Prüfe ob bereits Leader aktiv ist
         match self.client.get_with_lease(&self.election_key).await? {
@@ -47,39 +50,57 @@ impl LeaderElection {
                     match self.client.lease_time_to_live(lease_id).await? {
                         Some(ttl) => {
                             // Lease ist noch gültig, respektiere den aktuellen Leader
-                            info!(
-                                "👑 Leader bereits vorhanden: {} (Lease: {}, TTL: {}s)",
-                                current_leader, lease_id, ttl
+                            log_info!(
+                                "etcd::ha::leader_election",
+                                &format!(
+                                    "Leader already exists: {} (Lease: {}, TTL: {}s)",
+                                    current_leader, lease_id, ttl
+                                )
                             );
                             return Ok(());
                         }
                         None => {
                             // Lease ist abgelaufen oder existiert nicht mehr!
-                            warn!(
-                                "⚠️  Alter Leader {} hat abgelaufenen Lease {}, übernehme Führung",
-                                current_leader, lease_id
+                            log_warn!(
+                                "etcd::ha::leader_election",
+                                &format!(
+                                    "Old leader {} has expired lease {}, taking over leadership",
+                                    current_leader, lease_id
+                                )
                             );
                             // Lösche den alten Key
                             if let Err(e) = self.client.delete(&self.election_key).await {
-                                warn!("⚠️  Failed to delete old leader key: {}", e);
+                                log_warn!(
+                                    "etcd::ha::leader_election",
+                                    &format!("Failed to delete old leader key: {}", e)
+                                );
                             }
                         }
                     }
                 } else {
                     // Kein Lease, der alte Eintrag ist ungültig
-                    warn!(
-                        "⚠️  Alter Leader {} ohne gültigen Lease gefunden, übernehme Führung",
-                        current_leader
+                    log_warn!(
+                        "etcd::ha::leader_election",
+                        &format!(
+                            "Old leader {} found without valid lease, taking over leadership",
+                            current_leader
+                        )
                     );
                     // Lösche den alten Key
                     if let Err(e) = self.client.delete(&self.election_key).await {
-                        warn!("⚠️  Failed to delete old leader key: {}", e);
+                        log_warn!(
+                            "etcd::ha::leader_election",
+                            &format!("Failed to delete old leader key: {}", e)
+                        );
                     }
                 }
             }
             None => {
                 // Kein Leader vorhanden
-                info!("🎯 Kein Leader gefunden, starte Campaign: {}", self.node_id);
+                log_info!(
+                    "etcd::ha::leader_election",
+                    &format!("No leader found, starting campaign: {}", self.node_id)
+                );
             }
         }
 
@@ -97,19 +118,27 @@ impl LeaderElection {
             true => {
                 // Erfolgreich! Wir sind jetzt Leader
                 self.is_leader.store(true, Ordering::SeqCst);
-                info!("✅ Erfolgreich zum Leader gewählt! (Lease: {})", lease_id);
-                info!("🎉 Bin jetzt Leader!");
+                log_info!(
+                    "etcd::ha::leader_election",
+                    &format!("Successfully elected as leader! (Lease: {})", lease_id)
+                );
 
                 // Starte Lease Renewal
                 self.start_lease_renewal().await;
             }
             false => {
                 // Ein anderer Node war schneller
-                warn!("⚠️  Ein anderer Node wurde Leader (Race Condition)");
+                log_warn!(
+                    "etcd::ha::leader_election",
+                    "Another node became leader (race condition)"
+                );
 
                 // Revoke unseren Lease da wir ihn nicht brauchen
                 if let Err(e) = self.client.revoke_lease(lease_id).await {
-                    warn!("⚠️  Failed to revoke unused lease: {}", e);
+                    log_warn!(
+                        "etcd::ha::leader_election",
+                        &format!("Failed to revoke unused lease: {}", e)
+                    );
                 }
                 *self.lease_id.write().await = None;
                 self.is_leader.store(false, Ordering::SeqCst);
@@ -136,9 +165,15 @@ impl LeaderElection {
                             // Lease erfolgreich erneuert
                         }
                         Err(e) => {
-                            error!("❌ Lease renewal failed: {}", e);
+                            log_error!(
+                                "etcd::ha::leader_election",
+                                &format!("Lease renewal failed: {}", e)
+                            );
                             is_leader.store(false, Ordering::SeqCst);
-                            warn!("⚠️  Lost leadership due to lease failure: {}", node_id);
+                            log_warn!(
+                                "etcd::ha::leader_election",
+                                &format!("Lost leadership due to lease failure: {}", node_id)
+                            );
                             break;
                         }
                     }
@@ -155,7 +190,10 @@ impl LeaderElection {
         F: FnMut(Option<String>) + Send + 'static,
     {
         let key = self.client.config().prefixed_key(&self.election_key);
-        info!("👀 Watching leadership changes on: {}", key);
+        log_info!(
+            "etcd::ha::leader_election",
+            &format!("Watching leadership changes on: {}", key)
+        );
 
         // Hier würde ein Watch implementiert werden
         // Für jetzt vereinfacht
@@ -184,7 +222,10 @@ impl LeaderElection {
             return Ok(()); // Nicht Leader, nichts zu tun
         }
 
-        info!("👋 Resigning from leadership: {}", self.node_id);
+        log_info!(
+            "etcd::ha::leader_election",
+            &format!("Resigning from leadership: {}", self.node_id)
+        );
 
         // Revoke Lease
         if let Some(lid) = *self.lease_id.read().await {
@@ -195,7 +236,10 @@ impl LeaderElection {
         self.is_leader.store(false, Ordering::SeqCst);
         *self.lease_id.write().await = None;
 
-        info!("✅ Successfully resigned from leadership");
+        log_info!(
+            "etcd::ha::leader_election",
+            "Successfully resigned from leadership"
+        );
         Ok(())
     }
 }

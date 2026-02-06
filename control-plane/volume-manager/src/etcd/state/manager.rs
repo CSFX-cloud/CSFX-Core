@@ -1,7 +1,7 @@
 use super::{storage::StateStorage, types::*};
 use crate::etcd::core::{EtcdClient, EtcdError};
+use crate::{log_info, log_warn};
 use std::sync::Arc;
-use tracing::{info, warn};
 use uuid::Uuid;
 
 /// High-level State Manager
@@ -26,7 +26,7 @@ impl StateManager {
         encrypted: bool,
     ) -> Result<VolumeState, EtcdError> {
         let volume = VolumeState::new(name, size_gb, pool, encrypted);
-        info!("📦 Creating volume: {} ({})", volume.name, volume.id);
+        log_info!("etcd::state::manager", &format!("Creating volume: {} ({})", volume.name, volume.id));
         self.storage.save_volume(&volume).await?;
         Ok(volume)
     }
@@ -45,7 +45,7 @@ impl StateManager {
 
         volume.update_status(status);
         self.storage.save_volume(&volume).await?;
-        info!("✅ Updated volume {} status to {:?}", id, volume.status);
+        log_info!("etcd::state::manager", &format!("Updated volume {} status to {:?}", id, volume.status));
         Ok(())
     }
 
@@ -61,7 +61,7 @@ impl StateManager {
 
     /// Löscht Volume
     pub async fn delete_volume(&self, id: Uuid) -> Result<(), EtcdError> {
-        info!("🗑️  Deleting volume: {}", id);
+        log_info!("etcd::state::manager", &format!("Deleting volume: {}", id));
         self.storage.delete_volume(id).await
     }
 
@@ -84,7 +84,7 @@ impl StateManager {
             volumes: Vec::new(),
         };
 
-        info!("🖥️  Registering node: {}", node_id);
+        log_info!("etcd::state::manager", &format!("Registering node: {}", node_id));
         self.storage.save_node(&node).await?;
         Ok(node)
     }
@@ -110,7 +110,7 @@ impl StateManager {
             .await?
             .ok_or_else(|| EtcdError::StateOperation(format!("Node {} not found", node_id)))?;
 
-        warn!("⚠️  Marking node {} as offline", node_id);
+        log_warn!("etcd::state::manager", &format!("Marking node {} as offline", node_id));
         node.status = NodeStatus::Offline;
         self.storage.save_node(&node).await
     }
@@ -125,7 +125,7 @@ impl StateManager {
 
         node.role = role;
         self.storage.save_node(&node).await?;
-        info!("👑 Set node {} role to {:?}", node_id, node.role);
+        log_info!("etcd::state::manager", &format!("Set node {} role to {:?}", node_id, node.role));
         Ok(())
     }
 
@@ -161,7 +161,7 @@ impl StateManager {
             created_at: chrono::Utc::now(),
         };
 
-        info!("📸 Creating snapshot: {} for volume {}", name, volume_id);
+        log_info!("etcd::state::manager", &format!("Creating snapshot: {} for volume {}", name, volume_id));
         self.storage.save_snapshot(&snapshot).await?;
         Ok(snapshot)
     }

@@ -1,9 +1,9 @@
 use super::types::*;
 use crate::etcd::core::{EtcdClient, EtcdError};
+use crate::log_error;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
-use tracing::{debug, error};
 use uuid::Uuid;
 
 /// State Storage Layer - abstrahiert etcd operations
@@ -17,20 +17,13 @@ impl StateStorage {
     }
 
     /// Speichert generischen State
-    async fn put_state<T: Serialize>(
-        &self,
-        key: &str,
-        state: &T,
-    ) -> Result<(), EtcdError> {
+    async fn put_state<T: Serialize>(&self, key: &str, state: &T) -> Result<(), EtcdError> {
         let data = serde_json::to_vec(state)?;
         self.client.put(key, data).await
     }
 
     /// Liest generischen State
-    async fn get_state<T: DeserializeOwned>(
-        &self,
-        key: &str,
-    ) -> Result<Option<T>, EtcdError> {
+    async fn get_state<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, EtcdError> {
         match self.client.get(key).await? {
             Some(data) => {
                 let state = serde_json::from_slice(&data)?;
@@ -46,17 +39,17 @@ impl StateStorage {
     }
 
     /// Listet States mit Prefix
-    async fn list_states<T: DeserializeOwned>(
-        &self,
-        prefix: &str,
-    ) -> Result<Vec<T>, EtcdError> {
+    async fn list_states<T: DeserializeOwned>(&self, prefix: &str) -> Result<Vec<T>, EtcdError> {
         let entries = self.client.list(prefix).await?;
         let mut states = Vec::new();
 
         for (_key, data) in entries {
             match serde_json::from_slice(&data) {
                 Ok(state) => states.push(state),
-                Err(e) => error!("Failed to deserialize state: {}", e),
+                Err(e) => log_error!(
+                    "etcd::state::storage",
+                    &format!("Failed to deserialize state: {}", e)
+                ),
             }
         }
 
@@ -67,7 +60,6 @@ impl StateStorage {
 
     pub async fn save_volume(&self, volume: &VolumeState) -> Result<(), EtcdError> {
         let key = format!("volumes/{}", volume.id);
-        debug!("💾 Saving volume state: {}", key);
         self.put_state(&key, volume).await
     }
 
@@ -78,7 +70,6 @@ impl StateStorage {
 
     pub async fn delete_volume(&self, id: Uuid) -> Result<(), EtcdError> {
         let key = format!("volumes/{}", id);
-        debug!("🗑️  Deleting volume state: {}", key);
         self.delete_state(&key).await
     }
 
@@ -90,7 +81,6 @@ impl StateStorage {
 
     pub async fn save_node(&self, node: &NodeState) -> Result<(), EtcdError> {
         let key = format!("nodes/{}", node.node_id);
-        debug!("💾 Saving node state: {}", key);
         self.put_state(&key, node).await
     }
 
@@ -101,7 +91,6 @@ impl StateStorage {
 
     pub async fn delete_node(&self, node_id: &str) -> Result<(), EtcdError> {
         let key = format!("nodes/{}", node_id);
-        debug!("🗑️  Deleting node state: {}", key);
         self.delete_state(&key).await
     }
 
@@ -113,7 +102,6 @@ impl StateStorage {
 
     pub async fn save_snapshot(&self, snapshot: &SnapshotState) -> Result<(), EtcdError> {
         let key = format!("snapshots/{}", snapshot.id);
-        debug!("💾 Saving snapshot state: {}", key);
         self.put_state(&key, snapshot).await
     }
 
@@ -124,7 +112,6 @@ impl StateStorage {
 
     pub async fn delete_snapshot(&self, id: Uuid) -> Result<(), EtcdError> {
         let key = format!("snapshots/{}", id);
-        debug!("🗑️  Deleting snapshot state: {}", key);
         self.delete_state(&key).await
     }
 

@@ -1,7 +1,8 @@
 use super::{EtcdClient, EtcdConfig, HealthChecker, LeaderElection, StateManager};
+use crate::log_info;
 use crate::logger;
 use std::sync::Arc;
-use tracing::info;
+use uuid;
 
 pub struct InitData {
     pub etcd_client: Arc<EtcdClient>,
@@ -18,7 +19,7 @@ pub async fn init_cluster() -> anyhow::Result<InitData> {
     let etcd_client = Arc::new(EtcdClient::new(etcd_config));
 
     etcd_client.connect().await?;
-    info!("Connected to etcd cluster");
+    log_info!("etcd::init", "Connected to etcd cluster");
 
     let state_manager = Arc::new(StateManager::new(etcd_client.clone()));
     let health_checker = Arc::new(HealthChecker::new(etcd_client.clone()));
@@ -28,7 +29,10 @@ pub async fn init_cluster() -> anyhow::Result<InitData> {
     let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string());
     let ip_address = std::env::var("NODE_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
 
-    info!("Registering node with ID: {}", node_id);
+    log_info!(
+        "etcd::init",
+        &format!("Registering node with ID: {}", node_id)
+    );
     state_manager
         .register_node(node_id.clone(), hostname, ip_address)
         .await?;

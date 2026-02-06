@@ -1,8 +1,8 @@
 use crate::etcd::core::{EtcdClient, EtcdError};
 use crate::etcd::state::{NodeState, NodeStatus};
+use crate::{log_info, log_warn};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{info, warn};
 
 /// Health Checker für Cluster Nodes
 pub struct HealthChecker {
@@ -40,11 +40,7 @@ impl HealthChecker {
         let is_healthy = time_since_heartbeat < self.timeout;
 
         if !is_healthy {
-            warn!(
-                "⚠️  Node {} is unhealthy ({}s since last heartbeat)",
-                node.node_id,
-                time_since_heartbeat.as_secs()
-            );
+            log_warn!("etcd::ha::health", &format!("Node {} is unhealthy ({}s since last heartbeat)", node.node_id, time_since_heartbeat.as_secs()));
         }
 
         NodeHealthStatus {
@@ -73,7 +69,7 @@ impl HealthChecker {
         let healthy = health_statuses.iter().filter(|s| s.is_healthy).count();
         let unhealthy = total - healthy;
 
-        info!("🏥 Cluster Health: {}/{} nodes healthy", healthy, total);
+        log_info!("etcd::ha::health", &format!("Cluster Health: {}/{} nodes healthy", healthy, total));
 
         ClusterHealthSummary {
             total_nodes: total,

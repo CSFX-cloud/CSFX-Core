@@ -1,6 +1,6 @@
 use crate::etcd::core::{EtcdClient, EtcdError};
+use crate::log_info;
 use std::sync::Arc;
-use tracing::{debug, error, info};
 
 /// State Watcher für etcd Events
 pub struct StateWatcher {
@@ -13,16 +13,15 @@ impl StateWatcher {
     }
 
     /// Beobachtet einen Key-Prefix für Änderungen
-    pub async fn watch_prefix<F>(
-        &self,
-        prefix: &str,
-        mut callback: F,
-    ) -> Result<(), EtcdError>
+    pub async fn watch_prefix<F>(&self, prefix: &str, mut callback: F) -> Result<(), EtcdError>
     where
         F: FnMut(WatchEvent) + Send + 'static,
     {
         let full_prefix = self.client.config().prefixed_key(prefix);
-        info!("👀 Starting watch on: {}", full_prefix);
+        log_info!(
+            "etcd::sync::watcher",
+            &format!("Starting watch on: {}", full_prefix)
+        );
 
         // Watch implementierung würde hier kommen
         // In etcd-client würde man WatchOptions mit prefix verwenden
@@ -37,7 +36,10 @@ impl StateWatcher {
         F: FnMut(WatchEvent) + Send + 'static,
     {
         let full_key = self.client.config().prefixed_key(key);
-        info!("👀 Starting watch on key: {}", full_key);
+        log_info!(
+            "etcd::sync::watcher",
+            &format!("Starting watch on key: {}", full_key)
+        );
 
         // Watch implementierung
         Ok(())
@@ -45,7 +47,7 @@ impl StateWatcher {
 
     /// Stoppt alle Watches
     pub async fn stop_all(&self) -> Result<(), EtcdError> {
-        info!("🛑 Stopping all watches");
+        log_info!("etcd::sync::watcher", "Stopping all watches");
         Ok(())
     }
 }

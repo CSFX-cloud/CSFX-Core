@@ -1,6 +1,6 @@
 use crate::etcd::core::{EtcdClient, EtcdError};
+use crate::{log_info, log_warn};
 use std::sync::Arc;
-use tracing::{debug, info, warn};
 
 /// Distributed Lock mit etcd
 pub struct DistributedLock {
@@ -24,11 +24,8 @@ impl DistributedLock {
 
     /// Versucht Lock zu erwerben
     pub async fn acquire(&mut self) -> Result<bool, EtcdError> {
-        debug!("🔒 Trying to acquire lock: {}", self.lock_key);
-
         // Prüfe ob Lock bereits existiert
         if let Some(_) = self.client.get(&self.lock_key).await? {
-            debug!("⏳ Lock already held by another process");
             return Ok(false);
         }
 
@@ -40,7 +37,10 @@ impl DistributedLock {
         let value = format!("locked-{}", chrono::Utc::now().timestamp());
         self.client.put(&self.lock_key, value.into_bytes()).await?;
 
-        info!("✅ Lock acquired: {}", self.lock_key);
+        log_info!(
+            "etcd::sync::lock",
+            &format!("Lock acquired: {}", self.lock_key)
+        );
         Ok(true)
     }
 
@@ -56,15 +56,14 @@ impl DistributedLock {
             }
 
             if attempt < max_retries {
-                debug!(
-                    "⏰ Lock acquisition attempt {}/{}, retrying in {}ms",
-                    attempt, max_retries, retry_interval_ms
-                );
                 tokio::time::sleep(tokio::time::Duration::from_millis(retry_interval_ms)).await;
             }
         }
 
-        warn!("❌ Failed to acquire lock after {} attempts", max_retries);
+        log_warn!(
+            "etcd::sync::lock",
+            &format!("Failed to acquire lock after {} attempts", max_retries)
+        );
         Ok(false)
     }
 
@@ -73,8 +72,6 @@ impl DistributedLock {
         if self.lease_id.is_none() {
             return Ok(());
         }
-
-        debug!("🔓 Releasing lock: {}", self.lock_key);
 
         // Lösche Lock Key
         self.client.delete(&self.lock_key).await?;
@@ -85,18 +82,22 @@ impl DistributedLock {
         }
 
         self.lease_id = None;
-        info!("✅ Lock released: {}", self.lock_key);
+        log_info!(
+            "etcd::sync::lock",
+            &format!("Lock released: {}", self.lock_key)
+        );
         Ok(())
     }
 
     /// Erneuert Lock Lease
     pub async fn refresh(&self) -> Result<(), EtcdError> {
         if let Some(lease_id) = self.lease_id {
-            debug!("🔄 Refreshing lock lease: {}", self.lock_key);
             self.client.keep_alive(lease_id).await?;
             Ok(())
         } else {
-            Err(EtcdError::LockFailed("No active lease to refresh".to_string()))
+            Err(EtcdError::LockFailed(
+                "No active lease to refresh".to_string(),
+            ))
         }
     }
 }
@@ -105,7 +106,10 @@ impl DistributedLock {
 impl Drop for DistributedLock {
     fn drop(&mut self) {
         if self.lease_id.is_some() {
-            warn!("⚠️  Lock dropped without explicit release: {}", self.lock_key);
+            log_warn!(
+                "etcd::sync::lock",
+                &format!("Lock dropped without explicit release: {}", self.lock_key)
+            );
         }
     }
 }
