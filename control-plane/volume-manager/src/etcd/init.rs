@@ -28,7 +28,7 @@ pub async fn init_cluster() -> anyhow::Result<InitData> {
     let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "localhost".to_string());
     let ip_address = std::env::var("NODE_IP").unwrap_or_else(|_| "127.0.0.1".to_string());
 
-    info!("🖥️  Registering node: {}", node_id);
+    info!("Registering node with ID: {}", node_id);
     state_manager
         .register_node(node_id.clone(), hostname, ip_address)
         .await?;
