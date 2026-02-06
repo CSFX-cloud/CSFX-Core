@@ -1,19 +1,20 @@
-# Development Dockerfile for Volume Manager
-FROM rust:latest
+# Test-Dockerfile für Volume Manager (Multi-Stage Build mit rust:latest)
+# Stage 1: Build
+FROM rust:latest AS builder
 
 WORKDIR /app
 
-# Install development dependencies
+# Installiere Build-Abhängigkeiten
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
-    && cargo install cargo-watch --version 7.8.0 --locked \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy workspace configuration
+# Kopiere Workspace-Konfiguration
 COPY Cargo.toml Cargo.lock ./
 
-# Copy manifests for workspace members
+# Kopiere alle Workspace-Member Manifests
 COPY agent/Cargo.toml ./agent/
 COPY cli/Cargo.toml ./cli/
 COPY control-plane/api-gateway/Cargo.toml ./control-plane/api-gateway/
@@ -26,11 +27,29 @@ COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
 COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
 COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
 
-# Copy service and dependencies
+# Kopiere Source-Code
 COPY control-plane/volume-manager/ ./control-plane/volume-manager/
 COPY control-plane/shared/ ./control-plane/shared/
 
-# Pre-build dependencies
-RUN cargo build -p volume-manager
+# Baue das Binary im Release-Modus
+RUN cargo build --release -p volume-manager
 
-CMD ["cargo", "run", "-p", "volume-manager"]
+# Stage 2: Runtime
+FROM debian:bookworm-slim
+
+# Installiere notwendige Laufzeit-Abhängigkeiten
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Kopiere das gebaute Binary aus der Builder-Stage
+COPY --from=builder /app/target/release/volume-manager /app/volume-manager
+
+# Stelle sicher, dass das Binary ausführbar ist
+RUN chmod +x /app/volume-manager
+
+# Starte das Binary
+CMD ["/app/volume-manager"]

@@ -1,0 +1,128 @@
+services:
+  # etcd Cluster (3 Nodes für HA)
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.13
+    container_name: etcd1
+    environment:
+      - ETCD_NAME=etcd1
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd1:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd1:2379
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-test
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    networks:
+      - csf-test
+
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.13
+    container_name: etcd2
+    environment:
+      - ETCD_NAME=etcd2
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd2:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd2:2379
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-test
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+    ports:
+      - "2479:2379"
+      - "2480:2380"
+    networks:
+      - csf-test
+
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.13
+    container_name: etcd3
+    environment:
+      - ETCD_NAME=etcd3
+      - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd3:2380
+      - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
+      - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
+      - ETCD_ADVERTISE_CLIENT_URLS=http://etcd3:2379
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-test
+      - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - ETCD_INITIAL_CLUSTER_STATE=new
+    ports:
+      - "2579:2379"
+      - "2580:2380"
+    networks:
+      - csf-test
+
+  # Volume Manager Node 1
+  volume-manager-1:
+    image: volume-manager:test
+    build:
+      context: ../..
+      dockerfile: control-plane/volume-manager/Dockerfile.test
+    container_name: volume-manager-1
+    environment:
+      - RUST_LOG=debug
+      - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - NODE_ID=volume-manager-1
+      - HOSTNAME=volume-manager-1
+      - NODE_IP=172.20.0.11
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    networks:
+      csf-test:
+        ipv4_address: 172.20.0.11
+    restart: unless-stopped
+
+  # Volume Manager Node 2
+  volume-manager-2:
+    image: volume-manager:test
+    build:
+      context: ../..
+      dockerfile: control-plane/volume-manager/Dockerfile.test
+    container_name: volume-manager-2
+    environment:
+      - RUST_LOG=debug
+      - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - NODE_ID=volume-manager-2
+      - HOSTNAME=volume-manager-2
+      - NODE_IP=172.20.0.12
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    networks:
+      csf-test:
+        ipv4_address: 172.20.0.12
+    restart: unless-stopped
+
+  # Volume Manager Node 3
+  volume-manager-3:
+    image: volume-manager:test
+    build:
+      context: ../..
+      dockerfile: control-plane/volume-manager/Dockerfile.test
+    container_name: volume-manager-3
+    environment:
+      - RUST_LOG=info
+      - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+      - NODE_ID=volume-manager-3
+      - HOSTNAME=volume-manager-3
+      - NODE_IP=172.20.0.13
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    networks:
+      csf-test:
+        ipv4_address: 172.20.0.13
+    restart: unless-stopped
+
+networks:
+  csf-test:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
