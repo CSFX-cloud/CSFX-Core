@@ -3,17 +3,63 @@ use std::sync::Arc;
 use etcd::state::NodeRole;
 use etcd::StateManager;
 
+mod ceph;
 mod etcd;
 mod logger;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialisiere etcd Cluster
     let init_data = etcd::init::init_cluster().await?;
-    let etcd_client = init_data.etcd_client;
+    let _etcd_client = init_data.etcd_client;
     let state_manager = init_data.state_manager;
     let health_checker = init_data.health_checker;
     let leader_election = init_data.leader_election;
     let node_id = init_data.node_id;
+
+    // Initialisiere Ceph Storage (nur Leader)
+    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+
+    let _ceph_manager = if leader_election.is_leader() {
+        log_info!("main", "Node is leader, initializing Ceph storage");
+
+        match ceph::init::init_ceph().await {
+            Ok(manager) => {
+                log_info!("main", "Ceph storage initialized successfully");
+
+                // Erstelle PostgreSQL Volumes
+                match ceph::init::create_postgres_volumes(&manager, 3).await {
+                    Ok(volumes) => {
+                        log_info!(
+                            "main",
+                            &format!("Created PostgreSQL volumes: {:?}", volumes)
+                        );
+                    }
+                    Err(e) => {
+                        log_error!(
+                            "main",
+                            &format!("Failed to create PostgreSQL volumes: {}", e)
+                        );
+                    }
+                }
+
+                Some(manager)
+            }
+            Err(e) => {
+                log_warn!(
+                    "main",
+                    &format!(
+                        "Ceph initialization failed (continuing without Ceph): {}",
+                        e
+                    )
+                );
+                None
+            }
+        }
+    } else {
+        log_info!("main", "Node is follower, skipping Ceph initialization");
+        None
+    };
 
     // Erstelle Test-Volumes wenn Leader (nach kurzer Wartezeit)
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
