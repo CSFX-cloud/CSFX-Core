@@ -198,7 +198,7 @@ postgres1:
 Siehe [haproxy.cfg](haproxy.cfg):
 
 - Port 5432: PostgreSQL Load Balancing
-- Port 7000: Stats Dashboard
+- Port 8000: Stats Dashboard
 - Health Checks alle 3 Sekunden
 
 ## 📁 Datei-Struktur

@@ -17,17 +17,41 @@ log_warn() {
 
 log_info "Starting CSF-Core HA setup with Ceph storage..."
 
-# Start Services
-log_info "Starting services..."
-docker-compose -f docker-compose.ceph.yml up -d
+# Initialize Ceph configuration without auth
+log_info "Initializing Ceph configuration..."
+chmod +x ./init-ceph-config.sh
+./init-ceph-config.sh
 
-# Wait for Ceph Monitors
-log_info "Waiting for Ceph monitors to start (30s)..."
+# Clean up old containers if any
+log_info "Cleaning up old containers..."
+docker-compose -f docker-compose.ceph.yml down -v 2>/dev/null || true
+
+# Start etcd first
+log_info "Starting etcd cluster..."
+docker-compose -f docker-compose.ceph.yml up -d etcd1 etcd2 etcd3
+
+log_info "Waiting for etcd to be ready (10s)..."
+sleep 10
+
+# Start Ceph Monitors
+log_info "Starting Ceph monitors..."
+docker-compose -f docker-compose.ceph.yml up -d ceph-mon1 ceph-mon2 ceph-mon3
+
+# Wait for Monitors to create keyrings
+log_info "Waiting for Ceph monitors to initialize and create keyrings (40s)..."
+sleep 40
+
+# Check if monitors are ready
+log_info "Checking Ceph monitor status..."
+docker exec ceph-mon1 ceph mon stat || log_warn "Monitors not fully ready yet"
+
+# Now start OSDs (they will retry until keyrings are available)
+log_info "Starting Ceph OSDs..."
+docker-compose -f docker-compose.ceph.yml up -d ceph-osd1 ceph-osd2 ceph-osd3
+
+# Wait for OSDs to join
+log_info "Waiting for OSDs to join the cluster (30s)..."
 sleep 30
-
-# Wait for Ceph OSDs
-log_info "Waiting for Ceph OSDs to start (20s)..."
-sleep 20
 
 # Check Ceph Health
 log_info "Checking Ceph health..."
@@ -64,9 +88,27 @@ docker exec ceph-mon1 ceph osd pool application enable csf-metadata rbd || true
 log_info "Ceph Pools:"
 docker exec ceph-mon1 ceph osd pool ls
 
+# Start Volume Managers
+log_info "Starting Volume Managers..."
+docker-compose -f docker-compose.ceph.yml up -d volume-manager-1 volume-manager-2 volume-manager-3
+
+log_info "Waiting for Volume Managers to initialize (10s)..."
+sleep 10
+
+# Start PostgreSQL instances
+log_info "Starting PostgreSQL instances..."
+docker-compose -f docker-compose.ceph.yml up -d postgres1 postgres2 postgres3
+
 # Wait for PostgreSQL
 log_info "Waiting for PostgreSQL instances (20s)..."
 sleep 20
+
+# Start HAProxy
+log_info "Starting HAProxy..."
+docker-compose -f docker-compose.ceph.yml up -d postgres-haproxy
+
+log_info "Waiting for HAProxy to be ready (5s)..."
+sleep 5
 
 # Check PostgreSQL
 log_info "Checking PostgreSQL instances..."
@@ -86,6 +128,6 @@ log_info "Setup complete!"
 log_info ""
 log_info "Next steps:"
 log_info "1. Run './test-ha-failover.sh' to test failover scenarios"
-log_info "2. Access HAProxy stats: http://localhost:7000"
+log_info "2. Access HAProxy stats: http://localhost:8000"
 log_info "3. Connect to PostgreSQL: psql -h localhost -p 5432 -U csf -d csf_core"
 log_info "4. Check Ceph: docker exec ceph-mon1 ceph status"

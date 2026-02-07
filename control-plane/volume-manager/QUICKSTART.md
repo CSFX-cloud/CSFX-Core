@@ -56,7 +56,7 @@ Wähle Option 8 für alle Tests automatisch.
 | Service       | URL/Command                         | Beschreibung                  |
 | ------------- | ----------------------------------- | ----------------------------- |
 | PostgreSQL    | `localhost:5432`                    | Haupt-Datenbank (via HAProxy) |
-| HAProxy Stats | `http://localhost:7000`             | Load Balancer Dashboard       |
+| HAProxy Stats | `http://localhost:8000`             | Load Balancer Dashboard       |
 | Ceph Status   | `docker exec ceph-mon1 ceph status` | Storage Cluster Info          |
 
 ## 🧪 Failover Demo
@@ -209,7 +209,7 @@ Siehe [CEPH_HA_README.md](CEPH_HA_README.md) für:
 
 ## 💡 Tipps
 
-1. **HAProxy Stats** unter http://localhost:7000 zeigt Live-Status
+1. **HAProxy Stats** unter http://localhost:8000 zeigt Live-Status
 2. **Ceph Dashboard** kann mit `ceph mgr module enable dashboard` aktiviert werden
 3. **PostgreSQL Replikation** ist derzeit standalone - für Produktion Streaming Replication aktivieren
 4. **Backups** über `docker exec ceph-mon1 rbd snap create csf-postgres/postgres-node-1@backup1`

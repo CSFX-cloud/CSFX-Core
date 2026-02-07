@@ -132,7 +132,7 @@ docker exec ceph-mon1 rbd create csf-volumes/my-volume --size 5G
 
 ### HAProxy Stats
 
-Öffne im Browser: http://localhost:7000
+Öffne im Browser: http://localhost:8000
 
 Hier siehst du:
 

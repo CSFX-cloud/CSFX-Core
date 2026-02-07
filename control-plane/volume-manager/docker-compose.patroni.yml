@@ -2,10 +2,9 @@ version: '3.8'
 
 services:
   # ========================================
-  # CEPH CLUSTER (3 MONs + 3 OSDs)
+  # CEPH CLUSTER (3 MONs + 3 OSDs + 3 MGRs)
   # ========================================
   
-  # Ceph Monitor 1
   ceph-mon1:
     image: ceph/daemon:latest-pacific
     container_name: ceph-mon1
@@ -36,7 +35,6 @@ services:
       start_period: 90s
     restart: unless-stopped
 
-  # Ceph Monitor 2
   ceph-mon2:
     image: ceph/daemon:latest-pacific
     container_name: ceph-mon2
@@ -69,7 +67,6 @@ services:
     depends_on:
       - ceph-mon1
 
-  # Ceph Monitor 3
   ceph-mon3:
     image: ceph/daemon:latest-pacific
     container_name: ceph-mon3
@@ -101,9 +98,7 @@ services:
     restart: unless-stopped
     depends_on:
       - ceph-mon1
-      - ceph-mon2
 
-  # Ceph OSD 1
   ceph-osd1:
     image: ceph/daemon:latest-pacific
     container_name: ceph-osd1
@@ -130,7 +125,6 @@ services:
       - ceph-mon2
       - ceph-mon3
 
-  # Ceph OSD 2
   ceph-osd2:
     image: ceph/daemon:latest-pacific
     container_name: ceph-osd2
@@ -157,7 +151,6 @@ services:
       - ceph-mon2
       - ceph-mon3
 
-  # Ceph OSD 3
   ceph-osd3:
     image: ceph/daemon:latest-pacific
     container_name: ceph-osd3
@@ -185,179 +178,332 @@ services:
       - ceph-mon3
 
   # ========================================
-  # ETCD CLUSTER (für State Management)
+  # ETCD CLUSTER (für State & Patroni)
   # ========================================
   
   etcd1:
     image: quay.io/coreos/etcd:v3.5.13
     container_name: etcd1
+    hostname: etcd1
     environment:
       - ETCD_NAME=etcd1
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd1:2380
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
       - ETCD_ADVERTISE_CLIENT_URLS=http://etcd1:2379
-      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-test
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csf
       - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
     ports:
       - "2379:2379"
       - "2380:2380"
     networks:
-      - csf-test
+      csf-test:
+        ipv4_address: 172.20.0.11
+    volumes:
+      - etcd1-data:/etcd-data
+    restart: unless-stopped
 
   etcd2:
     image: quay.io/coreos/etcd:v3.5.13
     container_name: etcd2
+    hostname: etcd2
     environment:
       - ETCD_NAME=etcd2
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd2:2380
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
       - ETCD_ADVERTISE_CLIENT_URLS=http://etcd2:2379
-      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-test
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csf
       - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
     ports:
       - "2479:2379"
       - "2480:2380"
     networks:
-      - csf-test
+      csf-test:
+        ipv4_address: 172.20.0.12
+    volumes:
+      - etcd2-data:/etcd-data
+    restart: unless-stopped
 
   etcd3:
     image: quay.io/coreos/etcd:v3.5.13
     container_name: etcd3
+    hostname: etcd3
     environment:
       - ETCD_NAME=etcd3
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd3:2380
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
       - ETCD_ADVERTISE_CLIENT_URLS=http://etcd3:2379
-      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-test
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csf
       - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
     ports:
       - "2579:2379"
       - "2580:2380"
     networks:
-      - csf-test
+      csf-test:
+        ipv4_address: 172.20.0.13
+    volumes:
+      - etcd3-data:/etcd-data
+    restart: unless-stopped
 
   # ========================================
-  # POSTGRESQL HA (3 Nodes mit Ceph RBD)
+  # PATRONI POSTGRESQL HA CLUSTER
   # ========================================
   
-  postgres1:
-    image: postgres:16-alpine
-    container_name: postgres1
-    hostname: postgres1
+  patroni1:
+    image: patroni/patroni:3.2.2
+    container_name: patroni1
+    hostname: patroni1
     environment:
+      - PATRONI_NAME=patroni1
+      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
+      - PATRONI_ETCD3_PROTOCOL=http
+      
+      # PostgreSQL Configuration
+      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_POSTGRESQL_LISTEN=0.0.0.0:5432
+      - PATRONI_POSTGRESQL_CONNECT_ADDRESS=patroni1:5432
+      
+      # Replication
+      - PATRONI_REPLICATION_USERNAME=replicator
+      - PATRONI_REPLICATION_PASSWORD=replpass
+      
+      # Superuser
+      - PATRONI_SUPERUSER_USERNAME=postgres
+      - PATRONI_SUPERUSER_PASSWORD=postgrespass
+      
+      # Application User
+      - PATRONI_POSTGRESQL_PGPASS=/tmp/pgpass
       - POSTGRES_USER=csf
       - POSTGRES_PASSWORD=csfpassword
       - POSTGRES_DB=csf_core
-      - PGDATA=/var/lib/postgresql/data/pgdata
+      
+      # REST API
+      - PATRONI_RESTAPI_LISTEN=0.0.0.0:8008
+      - PATRONI_RESTAPI_CONNECT_ADDRESS=patroni1:8008
+      
+      # Bootstrap
+      - PATRONI_BOOTSTRAP_DCS_TTL=30
+      - PATRONI_BOOTSTRAP_DCS_LOOP_WAIT=10
+      - PATRONI_BOOTSTRAP_DCS_RETRY_TIMEOUT=10
+      - PATRONI_BOOTSTRAP_METHOD=initdb
+      
+      # PostgreSQL parameters
+      - PATRONI_POSTGRESQL_PARAMETERS_MAX_CONNECTIONS=100
+      - PATRONI_POSTGRESQL_PARAMETERS_MAX_WAL_SENDERS=10
+      - PATRONI_POSTGRESQL_PARAMETERS_WAL_LEVEL=replica
+      - PATRONI_POSTGRESQL_PARAMETERS_HOT_STANDBY=on
+      - PATRONI_POSTGRESQL_PARAMETERS_WAL_KEEP_SIZE=128MB
+      - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_MODE=on
+      - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_COMMAND=/bin/true
+      
     volumes:
-      - postgres1-data:/var/lib/postgresql/data
+      - patroni1-data:/var/lib/postgresql/data
     networks:
       csf-test:
         ipv4_address: 172.20.0.41
+    ports:
+      - "5441:5432"
+      - "8008:8008"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U csf -d csf_core"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
       - ceph-osd1
       - ceph-osd2
       - ceph-osd3
+    restart: unless-stopped
 
-  postgres2:
-    image: postgres:16-alpine
-    container_name: postgres2
-    hostname: postgres2
+  patroni2:
+    image: patroni/patroni:3.2.2
+    container_name: patroni2
+    hostname: patroni2
     environment:
+      - PATRONI_NAME=patroni2
+      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
+      - PATRONI_ETCD3_PROTOCOL=http
+      
+      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_POSTGRESQL_LISTEN=0.0.0.0:5432
+      - PATRONI_POSTGRESQL_CONNECT_ADDRESS=patroni2:5432
+      
+      - PATRONI_REPLICATION_USERNAME=replicator
+      - PATRONI_REPLICATION_PASSWORD=replpass
+      
+      - PATRONI_SUPERUSER_USERNAME=postgres
+      - PATRONI_SUPERUSER_PASSWORD=postgrespass
+      
+      - PATRONI_POSTGRESQL_PGPASS=/tmp/pgpass
       - POSTGRES_USER=csf
       - POSTGRES_PASSWORD=csfpassword
       - POSTGRES_DB=csf_core
-      - PGDATA=/var/lib/postgresql/data/pgdata
+      
+      - PATRONI_RESTAPI_LISTEN=0.0.0.0:8008
+      - PATRONI_RESTAPI_CONNECT_ADDRESS=patroni2:8008
+      
+      - PATRONI_BOOTSTRAP_DCS_TTL=30
+      - PATRONI_BOOTSTRAP_DCS_LOOP_WAIT=10
+      - PATRONI_BOOTSTRAP_DCS_RETRY_TIMEOUT=10
+      - PATRONI_BOOTSTRAP_METHOD=initdb
+      
+      - PATRONI_POSTGRESQL_PARAMETERS_MAX_CONNECTIONS=100
+      - PATRONI_POSTGRESQL_PARAMETERS_MAX_WAL_SENDERS=10
+      - PATRONI_POSTGRESQL_PARAMETERS_WAL_LEVEL=replica
+      - PATRONI_POSTGRESQL_PARAMETERS_HOT_STANDBY=on
+      - PATRONI_POSTGRESQL_PARAMETERS_WAL_KEEP_SIZE=128MB
+      - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_MODE=on
+      - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_COMMAND=/bin/true
+      
     volumes:
-      - postgres2-data:/var/lib/postgresql/data
+      - patroni2-data:/var/lib/postgresql/data
     networks:
       csf-test:
         ipv4_address: 172.20.0.42
+    ports:
+      - "5442:5432"
+      - "8009:8008"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U csf -d csf_core"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
       - ceph-osd1
       - ceph-osd2
       - ceph-osd3
+    restart: unless-stopped
 
-  postgres3:
-    image: postgres:16-alpine
-    container_name: postgres3
-    hostname: postgres3
+  patroni3:
+    image: patroni/patroni:3.2.2
+    container_name: patroni3
+    hostname: patroni3
     environment:
+      - PATRONI_NAME=patroni3
+      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
+      - PATRONI_ETCD3_PROTOCOL=http
+      
+      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_POSTGRESQL_LISTEN=0.0.0.0:5432
+      - PATRONI_POSTGRESQL_CONNECT_ADDRESS=patroni3:5432
+      
+      - PATRONI_REPLICATION_USERNAME=replicator
+      - PATRONI_REPLICATION_PASSWORD=replpass
+      
+      - PATRONI_SUPERUSER_USERNAME=postgres
+      - PATRONI_SUPERUSER_PASSWORD=postgrespass
+      
+      - PATRONI_POSTGRESQL_PGPASS=/tmp/pgpass
       - POSTGRES_USER=csf
       - POSTGRES_PASSWORD=csfpassword
       - POSTGRES_DB=csf_core
-      - PGDATA=/var/lib/postgresql/data/pgdata
+      
+      - PATRONI_RESTAPI_LISTEN=0.0.0.0:8008
+      - PATRONI_RESTAPI_CONNECT_ADDRESS=patroni3:8008
+      
+      - PATRONI_BOOTSTRAP_DCS_TTL=30
+      - PATRONI_BOOTSTRAP_DCS_LOOP_WAIT=10
+      - PATRONI_BOOTSTRAP_DCS_RETRY_TIMEOUT=10
+      - PATRONI_BOOTSTRAP_METHOD=initdb
+      
+      - PATRONI_POSTGRESQL_PARAMETERS_MAX_CONNECTIONS=100
+      - PATRONI_POSTGRESQL_PARAMETERS_MAX_WAL_SENDERS=10
+      - PATRONI_POSTGRESQL_PARAMETERS_WAL_LEVEL=replica
+      - PATRONI_POSTGRESQL_PARAMETERS_HOT_STANDBY=on
+      - PATRONI_POSTGRESQL_PARAMETERS_WAL_KEEP_SIZE=128MB
+      - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_MODE=on
+      - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_COMMAND=/bin/true
+      
     volumes:
-      - postgres3-data:/var/lib/postgresql/data
+      - patroni3-data:/var/lib/postgresql/data
     networks:
       csf-test:
         ipv4_address: 172.20.0.43
+    ports:
+      - "5443:5432"
+      - "8010:8008"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U csf -d csf_core"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8008/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
       - ceph-osd1
       - ceph-osd2
       - ceph-osd3
+    restart: unless-stopped
 
-  # HAProxy für PostgreSQL Load Balancing
+  # ========================================
+  # HAPROXY (Smart Routing: Primary/Replica)
+  # ========================================
+  
   postgres-haproxy:
     image: haproxy:2.8-alpine
     container_name: postgres-haproxy
     volumes:
-      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./haproxy-patroni.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     ports:
-      - "5432:5432"
-      - "8000:7000"  # Stats (geändert von 7000 auf 8000)
+      - "5432:5432"   # Write Port (Primary)
+      - "5433:5433"   # Read Port (Replicas)
+      - "8000:8000"   # HAProxy Stats
     networks:
       csf-test:
         ipv4_address: 172.20.0.40
     depends_on:
-      - postgres1
-      - postgres2
-      - postgres3
+      - patroni1
+      - patroni2
+      - patroni3
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8000/stats || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 
   # ========================================
-  # VOLUME MANAGER (3 Nodes mit Ceph Integration)
+  # VOLUME MANAGER (mit Patroni-Integration)
   # ========================================
   
   volume-manager-1:
-    image: volume-manager:test
+    image: volume-manager:patroni
     build:
       context: ../..
       dockerfile: control-plane/volume-manager/Dockerfile.test
     container_name: volume-manager-1
+    hostname: volume-manager-1
     environment:
       - RUST_LOG=debug
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
-      - NODE_ID=volume-manager-1
-      - HOSTNAME=volume-manager-1
-      - NODE_IP=172.20.0.11
+      - NODE_ID=vm-1
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789
-      - CEPH_CLIENT_NAME=admin
-      - CEPH_DEFAULT_POOL=csf-volumes
+      - CEPH_DEFAULT_POOL=csf-data
       - CEPH_PG_NUM=128
-      - CEPH_REPLICATION=3
-    volumes:
-      - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
+      - CEPH_DEFAULT_REPLICATION=3
+      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_NODES=patroni1:8008,patroni2:8008,patroni3:8008
+    networks:
+      csf-test:
+        ipv4_address: 172.20.0.51
     depends_on:
       - etcd1
       - etcd2
@@ -365,34 +511,31 @@ services:
       - ceph-mon1
       - ceph-mon2
       - ceph-mon3
-    networks:
-      csf-test:
-        ipv4_address: 172.20.0.11
-    cap_add:
-      - SYS_ADMIN
-    # devices:
-    #   - /dev/rbd0  # Nicht nötig für lokale Tests, RBD wird dynamisch erstellt
+      - patroni1
+      - patroni2
+      - patroni3
     restart: unless-stopped
 
   volume-manager-2:
-    image: volume-manager:test
+    image: volume-manager:patroni
     build:
       context: ../..
       dockerfile: control-plane/volume-manager/Dockerfile.test
     container_name: volume-manager-2
+    hostname: volume-manager-2
     environment:
       - RUST_LOG=debug
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
-      - NODE_ID=volume-manager-2
-      - HOSTNAME=volume-manager-2
-      - NODE_IP=172.20.0.12
+      - NODE_ID=vm-2
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789
-      - CEPH_CLIENT_NAME=admin
-      - CEPH_DEFAULT_POOL=csf-volumes
+      - CEPH_DEFAULT_POOL=csf-data
       - CEPH_PG_NUM=128
-      - CEPH_REPLICATION=3
-    volumes:
-      - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
+      - CEPH_DEFAULT_REPLICATION=3
+      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_NODES=patroni1:8008,patroni2:8008,patroni3:8008
+    networks:
+      csf-test:
+        ipv4_address: 172.20.0.52
     depends_on:
       - etcd1
       - etcd2
@@ -400,34 +543,31 @@ services:
       - ceph-mon1
       - ceph-mon2
       - ceph-mon3
-    networks:
-      csf-test:
-        ipv4_address: 172.20.0.12
-    cap_add:
-      - SYS_ADMIN
-    # devices:
-    #   - /dev/rbd0  # Nicht nötig für lokale Tests, RBD wird dynamisch erstellt
+      - patroni1
+      - patroni2
+      - patroni3
     restart: unless-stopped
 
   volume-manager-3:
-    image: volume-manager:test
+    image: volume-manager:patroni
     build:
       context: ../..
       dockerfile: control-plane/volume-manager/Dockerfile.test
     container_name: volume-manager-3
+    hostname: volume-manager-3
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=debug
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
-      - NODE_ID=volume-manager-3
-      - HOSTNAME=volume-manager-3
-      - NODE_IP=172.20.0.13
+      - NODE_ID=vm-3
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789
-      - CEPH_CLIENT_NAME=admin
-      - CEPH_DEFAULT_POOL=csf-volumes
+      - CEPH_DEFAULT_POOL=csf-data
       - CEPH_PG_NUM=128
-      - CEPH_REPLICATION=3
-    volumes:
-      - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
+      - CEPH_DEFAULT_REPLICATION=3
+      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_NODES=patroni1:8008,patroni2:8008,patroni3:8008
+    networks:
+      csf-test:
+        ipv4_address: 172.20.0.53
     depends_on:
       - etcd1
       - etcd2
@@ -435,13 +575,9 @@ services:
       - ceph-mon1
       - ceph-mon2
       - ceph-mon3
-    networks:
-      csf-test:
-        ipv4_address: 172.20.0.13
-    cap_add:
-      - SYS_ADMIN
-    # devices:
-    #   - /dev/rbd0  # Nicht nötig für lokale Tests, RBD wird dynamisch erstellt
+      - patroni1
+      - patroni2
+      - patroni3
     restart: unless-stopped
 
 networks:
@@ -452,7 +588,7 @@ networks:
         - subnet: 172.20.0.0/16
 
 volumes:
-  # Ceph Volumes
+  # Ceph
   ceph-mon1-data:
   ceph-mon2-data:
   ceph-mon3-data:
@@ -460,7 +596,12 @@ volumes:
   ceph-osd2-data:
   ceph-osd3-data:
   
-  # PostgreSQL Volumes (später durch Ceph RBD ersetzt)
-  postgres1-data:
-  postgres2-data:
-  postgres3-data:
+  # etcd
+  etcd1-data:
+  etcd2-data:
+  etcd3-data:
+  
+  # Patroni PostgreSQL
+  patroni1-data:
+  patroni2-data:
+  patroni3-data:
