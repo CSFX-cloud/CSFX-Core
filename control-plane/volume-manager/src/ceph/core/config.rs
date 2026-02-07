@@ -13,7 +13,9 @@ pub struct CephConfig {
 
 impl CephConfig {
     pub fn from_env() -> anyhow::Result<Self> {
-        Ok(Self {
+        crate::log_debug!("ceph_config", "Loading Ceph configuration from environment");
+
+        let config = Self {
             mon_hosts: env::var("CEPH_MON_HOSTS")
                 .unwrap_or_else(|_| "ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789".to_string())
                 .split(',')
@@ -31,7 +33,19 @@ impl CephConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3),
-        })
+        };
+
+        crate::log_info!(
+            "ceph_config",
+            &format!(
+                "Loaded config: monitors={}, client={}, pool={}",
+                config.mon_hosts.len(),
+                config.client_name,
+                config.default_pool
+            )
+        );
+
+        Ok(config)
     }
 
     pub fn mon_initial_members(&self) -> String {

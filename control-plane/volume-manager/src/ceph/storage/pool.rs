@@ -92,12 +92,20 @@ impl PoolManager {
 
     /// Listet alle Pools auf
     pub async fn list_pools(&self) -> Result<Vec<String>> {
+        crate::log_debug!("pool_manager", "Listing all Ceph pools");
+        
         let cmd = CephCommand::new("osd")
             .arg("pool")
             .arg("ls");
 
         let output = self.client.execute(cmd).await?;
         let pools: Vec<String> = serde_json::from_str(&output)?;
+        
+        crate::log_debug!(
+            "pool_manager",
+            &format!("Found {} pools: {}", pools.len(), pools.join(", "))
+        );
+        
         Ok(pools)
     }
 

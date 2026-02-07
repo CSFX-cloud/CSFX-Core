@@ -16,6 +16,12 @@ impl CephClient {
 
     /// Führt ein Ceph-Kommando aus
     pub async fn execute(&self, cmd: CephCommand) -> Result<String> {
+        let cmd_vec = cmd.to_vec();
+        crate::log_debug!(
+            "ceph_client",
+            &format!("Executing ceph command: {}", cmd_vec.join(" "))
+        );
+
         let mut command = AsyncCommand::new("ceph");
 
         // Monitoring hosts hinzufügen
@@ -32,7 +38,7 @@ impl CephClient {
             .arg(format!("client.{}", self.config.client_name));
 
         // Das eigentliche Kommando
-        for arg in cmd.to_vec() {
+        for arg in cmd_vec {
             command.arg(arg);
         }
 
@@ -46,6 +52,7 @@ impl CephClient {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            crate::log_error!("ceph_client", &format!("Ceph command failed: {}", stderr));
             return Err(anyhow!("Ceph command failed: {}", stderr));
         }
 
@@ -54,6 +61,8 @@ impl CephClient {
 
     /// Prüft Cluster-Health
     pub async fn health_status(&self) -> Result<CephClusterHealth> {
+        crate::log_debug!("ceph_client", "Checking cluster health status");
+
         let cmd = CephCommand::new("status");
         let output = self.execute(cmd).await?;
 
@@ -68,6 +77,11 @@ impl CephClient {
             "HEALTH_WARN" => HealthStatus::Warn,
             _ => HealthStatus::Error,
         };
+
+        crate::log_debug!(
+            "ceph_client",
+            &format!("Cluster health status: {:?}", health)
+        );
 
         // Extrahiere Monitor-Info
         let mons = if let Some(mon_map) = status["monmap"]["mons"].as_array() {
@@ -133,23 +147,32 @@ impl CephClient {
 
     /// Wartet bis Cluster verfügbar ist
     pub async fn wait_for_cluster(&self, max_attempts: u32) -> Result<()> {
+        crate::log_info!(
+            "ceph_client",
+            &format!("Waiting for Ceph cluster (max {} attempts)", max_attempts)
+        );
+
         for attempt in 1..=max_attempts {
-            crate::log_info!(
+            crate::log_debug!(
                 "ceph_client",
                 &format!(
-                    "Waiting for Ceph cluster... (attempt {}/{})",
+                    "Cluster availability check: attempt {}/{}",
                     attempt, max_attempts
                 )
             );
 
             if self.is_available().await {
-                crate::log_info!("ceph_client", "Ceph cluster is available");
+                crate::log_info!("ceph_client", "Ceph cluster is available and ready");
                 return Ok(());
             }
 
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
 
+        crate::log_error!(
+            "ceph_client",
+            &format!("Ceph cluster not available after {} attempts", max_attempts)
+        );
         Err(anyhow!(
             "Ceph cluster not available after {} attempts",
             max_attempts

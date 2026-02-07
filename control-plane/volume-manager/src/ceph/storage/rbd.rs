@@ -65,6 +65,11 @@ impl RbdManager {
 
     /// Listet alle RBD Images in einem Pool
     pub async fn list_images(&self, pool: &str) -> Result<Vec<RbdImage>> {
+        crate::log_debug!(
+            "rbd_manager",
+            &format!("Listing RBD images in pool: {}", pool)
+        );
+        
         let cmd = CephCommand::new("rbd")
             .arg("ls")
             .arg("-l")
@@ -73,6 +78,7 @@ impl RbdManager {
         let output = self.client.execute(cmd).await?;
         
         if output.trim().is_empty() || output.trim() == "[]" {
+            crate::log_debug!("rbd_manager", &format!("No images found in pool: {}", pool));
             return Ok(Vec::new());
         }
 
@@ -94,6 +100,11 @@ impl RbdManager {
                 })
             })
             .collect();
+        
+        crate::log_debug!(
+            "rbd_manager",
+            &format!("Found {} images in pool: {}", result.len(), pool)
+        );
 
         Ok(result)
     }
@@ -214,7 +225,17 @@ impl RbdManager {
             .arg("/etc/ceph/luks-passphrase");
 
         // Ignoriere Fehler falls Encryption nicht verfügbar
-        let _ = self.client.execute(cmd).await;
+        match self.client.execute(cmd).await {
+            Ok(_) => {
+                crate::log_info!("rbd_manager", "Encryption enabled successfully");
+            }
+            Err(e) => {
+                crate::log_warn!(
+                    "rbd_manager",
+                    &format!("Encryption not available or failed: {}", e)
+                );
+            }
+        }
 
         Ok(())
     }

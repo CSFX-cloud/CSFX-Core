@@ -15,6 +15,10 @@ pub async fn init_ceph() -> Result<CephManager> {
 
     // Konfiguration laden
     let config = CephConfig::from_env()?;
+    crate::log_debug!(
+        "ceph_init",
+        &format!("Using {} monitor hosts", config.mon_hosts.len())
+    );
 
     // Client erstellen
     let client = CephClient::new(config.clone());
@@ -66,6 +70,10 @@ pub async fn init_ceph() -> Result<CephManager> {
     ];
 
     for pool in pools {
+        crate::log_debug!(
+            "ceph_init",
+            &format!("Ensuring pool '{}' exists", pool.name)
+        );
         if let Err(e) = pool_manager.ensure_pool(&pool).await {
             crate::log_warn!(
                 "ceph_init",
