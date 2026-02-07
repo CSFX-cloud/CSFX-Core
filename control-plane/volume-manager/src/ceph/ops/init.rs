@@ -1,8 +1,6 @@
-use super::client::CephClient;
-use super::config::CephConfig;
-use super::pool::{PoolManager};
-use super::rbd::RbdManager;
-use super::types::CephPool;
+use crate::ceph::core::{CephClient, CephConfig};
+use crate::ceph::storage::types::CephPool;
+use crate::ceph::storage::{PoolManager, RbdManager};
 use anyhow::Result;
 
 pub struct CephManager {
@@ -32,7 +30,11 @@ pub async fn init_ceph() -> Result<CephManager> {
     );
     crate::log_info!(
         "ceph_init",
-        &format!("Monitors: {}, OSDs: {}", health.mons.len(), health.osds.len())
+        &format!(
+            "Monitors: {}, OSDs: {}",
+            health.mons.len(),
+            health.osds.len()
+        )
     );
 
     // Pool Manager erstellen
@@ -85,10 +87,7 @@ pub async fn init_ceph() -> Result<CephManager> {
 }
 
 /// Erstellt PostgreSQL Volumes auf dem Ceph-Cluster
-pub async fn create_postgres_volumes(
-    ceph: &CephManager,
-    node_count: u32,
-) -> Result<Vec<String>> {
+pub async fn create_postgres_volumes(ceph: &CephManager, node_count: u32) -> Result<Vec<String>> {
     crate::log_info!(
         "ceph_init",
         &format!("Creating PostgreSQL volumes for {} nodes", node_count)
@@ -98,20 +97,21 @@ pub async fn create_postgres_volumes(
 
     for i in 1..=node_count {
         let volume_name = format!("postgres-node-{}", i);
-        
-        let volume = super::types::CephVolume {
+
+        let volume = crate::ceph::storage::types::CephVolume {
             name: volume_name.clone(),
             pool: "csf-postgres".to_string(),
             size_mb: 10240, // 10 GB
-            features: vec![
-                "layering".to_string(),
-                "exclusive-lock".to_string(),
-            ],
+            features: vec!["layering".to_string(), "exclusive-lock".to_string()],
             encrypted: false,
         };
 
         // Erstelle Volume falls nicht vorhanden
-        if !ceph.rbd_manager.image_exists(&volume.pool, &volume.name).await? {
+        if !ceph
+            .rbd_manager
+            .image_exists(&volume.pool, &volume.name)
+            .await?
+        {
             ceph.rbd_manager.create_image(&volume).await?;
             volumes.push(volume_name);
         } else {

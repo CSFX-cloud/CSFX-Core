@@ -23,12 +23,12 @@ async fn main() -> anyhow::Result<()> {
     let _ceph_manager = if leader_election.is_leader() {
         log_info!("main", "Node is leader, initializing Ceph storage");
 
-        match ceph::init::init_ceph().await {
+        match ceph::ops::init_ceph().await {
             Ok(manager) => {
                 log_info!("main", "Ceph storage initialized successfully");
 
                 // Erstelle PostgreSQL Volumes
-                match ceph::init::create_postgres_volumes(&manager, 3).await {
+                match ceph::ops::create_postgres_volumes(&manager, 3).await {
                     Ok(volumes) => {
                         log_info!(
                             "main",

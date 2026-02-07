@@ -1,4 +1,4 @@
-use super::client::CephClient;
+use crate::ceph::core::CephClient;
 use super::types::*;
 use anyhow::{Context, Result};
 use serde_json::Value;

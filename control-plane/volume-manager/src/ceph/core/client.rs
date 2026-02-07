@@ -1,5 +1,5 @@
 use super::config::CephConfig;
-use super::types::*;
+use crate::ceph::storage::types::*;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use tokio::process::Command as AsyncCommand;
