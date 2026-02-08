@@ -62,15 +62,29 @@ test_write() {
     local port=$1
     local test_data="failover_test_$(date +%s)"
     
-    docker exec patroni1 psql -U csf -d csf_core -c \
+    # Ermittle aktuellen Primary
+    local primary=$(get_primary)
+    echo "Writing to primary: $primary"
+    
+    if [ "$primary" == "none" ]; then
+         echo -e "${RED}❌ No primary found!${NC}"
+         return 1
+    fi
+
+    # Bestimme Replica
+    local replica=""
+    if [ "$primary" == "patroni1" ]; then replica="patroni2"; 
+    else replica="patroni1"; fi
+
+    docker exec $primary psql -U csf -d csf_core -c \
         "CREATE TABLE IF NOT EXISTS failover_test (id SERIAL PRIMARY KEY, data TEXT, created_at TIMESTAMP DEFAULT NOW());" &>/dev/null
     
-    docker exec patroni1 psql -U csf -d csf_core -c \
+    docker exec $primary psql -U csf -d csf_core -c \
         "INSERT INTO failover_test (data) VALUES ('$test_data');" &>/dev/null
     
     # Verify on replica
     sleep 2
-    local result=$(docker exec patroni2 psql -U csf -d csf_core -t -c \
+    local result=$(docker exec $replica psql -U csf -d csf_core -t -c \
         "SELECT data FROM failover_test WHERE data='$test_data';" 2>/dev/null | xargs)
     
     if [ "$result" == "$test_data" ]; then

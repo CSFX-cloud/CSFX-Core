@@ -1,6 +1,5 @@
 use crate::etcd::core::{EtcdClient, EtcdError};
 use crate::{log_error, log_info, log_warn};
-use etcd_client::EventType;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -185,7 +184,7 @@ impl LeaderElection {
     }
 
     /// Wartet auf Leadership Changes (Watch)
-    pub async fn watch_leadership<F>(&self, mut callback: F) -> Result<(), EtcdError>
+    pub async fn watch_leadership<F>(&self, callback: F) -> Result<(), EtcdError>
     where
         F: FnMut(Option<String>) + Send + 'static,
     {

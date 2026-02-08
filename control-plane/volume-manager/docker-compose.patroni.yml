@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # ========================================
   # CEPH CLUSTER (3 MONs + 3 OSDs + 3 MGRs)
@@ -187,6 +185,7 @@ services:
     hostname: etcd1
     environment:
       - ETCD_NAME=etcd1
+      - ETCD_ENABLE_V2=true
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd1:2380
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
@@ -210,6 +209,7 @@ services:
     hostname: etcd2
     environment:
       - ETCD_NAME=etcd2
+      - ETCD_ENABLE_V2=true
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd2:2380
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
@@ -232,6 +232,7 @@ services:
     container_name: etcd3
     hostname: etcd3
     environment:
+      - ETCD_ENABLE_V2=true
       - ETCD_NAME=etcd3
       - ETCD_INITIAL_ADVERTISE_PEER_URLS=http://etcd3:2380
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
@@ -255,17 +256,18 @@ services:
   # ========================================
   
   patroni1:
-    image: patroni/patroni:3.2.2
+    image: ghcr.io/zalando/spilo-15:3.0-p1
     container_name: patroni1
     hostname: patroni1
     environment:
       - PATRONI_NAME=patroni1
+      - ETCD_HOST=etcd1:2379
       - PATRONI_SCOPE=postgres-csf
       - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
       - PATRONI_ETCD3_PROTOCOL=http
       
       # PostgreSQL Configuration
-      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_POSTGRESQL_DATA_DIR=/home/postgres/pgdata
       - PATRONI_POSTGRESQL_LISTEN=0.0.0.0:5432
       - PATRONI_POSTGRESQL_CONNECT_ADDRESS=patroni1:5432
       
@@ -303,7 +305,7 @@ services:
       - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_COMMAND=/bin/true
       
     volumes:
-      - patroni1-data:/var/lib/postgresql/data
+      - patroni1-data:/home/postgres/pgdata
     networks:
       csf-test:
         ipv4_address: 172.20.0.41
@@ -326,16 +328,17 @@ services:
     restart: unless-stopped
 
   patroni2:
-    image: patroni/patroni:3.2.2
+    image: ghcr.io/zalando/spilo-15:3.0-p1
     container_name: patroni2
     hostname: patroni2
     environment:
+      - ETCD_HOST=etcd1:2379
       - PATRONI_NAME=patroni2
       - PATRONI_SCOPE=postgres-csf
       - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
       - PATRONI_ETCD3_PROTOCOL=http
       
-      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_POSTGRESQL_DATA_DIR=/home/postgres/pgdata
       - PATRONI_POSTGRESQL_LISTEN=0.0.0.0:5432
       - PATRONI_POSTGRESQL_CONNECT_ADDRESS=patroni2:5432
       
@@ -367,7 +370,7 @@ services:
       - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_COMMAND=/bin/true
       
     volumes:
-      - patroni2-data:/var/lib/postgresql/data
+      - patroni2-data:/home/postgres/pgdata
     networks:
       csf-test:
         ipv4_address: 172.20.0.42
@@ -390,16 +393,17 @@ services:
     restart: unless-stopped
 
   patroni3:
-    image: patroni/patroni:3.2.2
+    image: ghcr.io/zalando/spilo-15:3.0-p1
     container_name: patroni3
     hostname: patroni3
     environment:
+      - ETCD_HOST=etcd1:2379
       - PATRONI_NAME=patroni3
       - PATRONI_SCOPE=postgres-csf
       - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
       - PATRONI_ETCD3_PROTOCOL=http
       
-      - PATRONI_POSTGRESQL_DATA_DIR=/var/lib/postgresql/data
+      - PATRONI_POSTGRESQL_DATA_DIR=/home/postgres/pgdata
       - PATRONI_POSTGRESQL_LISTEN=0.0.0.0:5432
       - PATRONI_POSTGRESQL_CONNECT_ADDRESS=patroni3:5432
       
@@ -431,7 +435,7 @@ services:
       - PATRONI_POSTGRESQL_PARAMETERS_ARCHIVE_COMMAND=/bin/true
       
     volumes:
-      - patroni3-data:/var/lib/postgresql/data
+      - patroni3-data:/home/postgres/pgdata
     networks:
       csf-test:
         ipv4_address: 172.20.0.43
@@ -492,7 +496,7 @@ services:
     container_name: volume-manager-1
     hostname: volume-manager-1
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
       - NODE_ID=vm-1
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789
@@ -524,7 +528,7 @@ services:
     container_name: volume-manager-2
     hostname: volume-manager-2
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
       - NODE_ID=vm-2
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789
@@ -556,7 +560,7 @@ services:
     container_name: volume-manager-3
     hostname: volume-manager-3
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
       - NODE_ID=vm-3
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789

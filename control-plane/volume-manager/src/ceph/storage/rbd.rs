@@ -1,5 +1,5 @@
-use crate::ceph::core::CephClient;
 use super::types::*;
+use crate::ceph::core::CephClient;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
@@ -30,7 +30,9 @@ impl RbdManager {
             cmd = cmd.arg("--image-feature").arg(volume.features.join(","));
         }
 
-        self.client.execute(cmd).await
+        self.client
+            .execute(cmd)
+            .await
             .context("Failed to create RBD image")?;
 
         // Verschlüsselung aktivieren falls gewünscht
@@ -40,7 +42,10 @@ impl RbdManager {
 
         crate::log_info!(
             "rbd_manager",
-            &format!("RBD image '{}/{}' created successfully", volume.pool, volume.name)
+            &format!(
+                "RBD image '{}/{}' created successfully",
+                volume.pool, volume.name
+            )
         );
 
         Ok(())
@@ -57,7 +62,9 @@ impl RbdManager {
             .arg("rm")
             .arg(format!("{}/{}", pool, name));
 
-        self.client.execute(cmd).await
+        self.client
+            .execute(cmd)
+            .await
             .context("Failed to delete RBD image")?;
 
         Ok(())
@@ -69,22 +76,19 @@ impl RbdManager {
             "rbd_manager",
             &format!("Listing RBD images in pool: {}", pool)
         );
-        
-        let cmd = CephCommand::new("rbd")
-            .arg("ls")
-            .arg("-l")
-            .arg(pool);
+
+        let cmd = CephCommand::new("rbd").arg("ls").arg("-l").arg(pool);
 
         let output = self.client.execute(cmd).await?;
-        
+
         if output.trim().is_empty() || output.trim() == "[]" {
             crate::log_debug!("rbd_manager", &format!("No images found in pool: {}", pool));
             return Ok(Vec::new());
         }
 
         let images: Vec<Value> = serde_json::from_str(&output)?;
-        
-        let result = images
+
+        let result: Vec<RbdImage> = images
             .into_iter()
             .filter_map(|img| {
                 Some(RbdImage {
@@ -100,7 +104,7 @@ impl RbdManager {
                 })
             })
             .collect();
-        
+
         crate::log_debug!(
             "rbd_manager",
             &format!("Found {} images in pool: {}", result.len(), pool)
@@ -121,7 +125,9 @@ impl RbdManager {
             .arg("create")
             .arg(format!("{}/{}@{}", pool, image, snapshot));
 
-        self.client.execute(cmd).await
+        self.client
+            .execute(cmd)
+            .await
             .context("Failed to create snapshot")?;
 
         Ok(())
@@ -139,7 +145,9 @@ impl RbdManager {
             .arg("rm")
             .arg(format!("{}/{}@{}", pool, image, snapshot));
 
-        self.client.execute(cmd).await
+        self.client
+            .execute(cmd)
+            .await
             .context("Failed to delete snapshot")?;
 
         Ok(())
@@ -149,7 +157,10 @@ impl RbdManager {
     pub async fn resize_image(&self, pool: &str, name: &str, new_size_mb: u64) -> Result<()> {
         crate::log_info!(
             "rbd_manager",
-            &format!("Resizing RBD image: {}/{} to {} MB", pool, name, new_size_mb)
+            &format!(
+                "Resizing RBD image: {}/{} to {} MB",
+                pool, name, new_size_mb
+            )
         );
 
         let cmd = CephCommand::new("rbd")
@@ -158,7 +169,9 @@ impl RbdManager {
             .arg("--size")
             .arg(new_size_mb.to_string());
 
-        self.client.execute(cmd).await
+        self.client
+            .execute(cmd)
+            .await
             .context("Failed to resize RBD image")?;
 
         Ok(())
@@ -175,31 +188,28 @@ impl RbdManager {
             .arg("map")
             .arg(format!("{}/{}", pool, image));
 
-        let output = self.client.execute(cmd).await
+        let output = self
+            .client
+            .execute(cmd)
+            .await
             .context("Failed to map RBD device")?;
 
         let device = output.trim().trim_matches('"').to_string();
-        
-        crate::log_info!(
-            "rbd_manager",
-            &format!("RBD device mapped to: {}", device)
-        );
+
+        crate::log_info!("rbd_manager", &format!("RBD device mapped to: {}", device));
 
         Ok(device)
     }
 
     /// Unmaps ein RBD Device
     pub async fn unmap_device(&self, device: &str) -> Result<()> {
-        crate::log_info!(
-            "rbd_manager",
-            &format!("Unmapping RBD device: {}", device)
-        );
+        crate::log_info!("rbd_manager", &format!("Unmapping RBD device: {}", device));
 
-        let cmd = CephCommand::new("rbd")
-            .arg("unmap")
-            .arg(device);
+        let cmd = CephCommand::new("rbd").arg("unmap").arg(device);
 
-        self.client.execute(cmd).await
+        self.client
+            .execute(cmd)
+            .await
             .context("Failed to unmap RBD device")?;
 
         Ok(())
@@ -215,7 +225,7 @@ impl RbdManager {
         // Dies ist ein Platzhalter - tatsächliche LUKS-Verschlüsselung
         // würde auf dem gemappten Block Device erfolgen
         // Hier könnten wir rbd encryption format aufrufen
-        
+
         let cmd = CephCommand::new("rbd")
             .arg("encryption")
             .arg("format")
