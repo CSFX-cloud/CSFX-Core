@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = patroni_monitor.wait_for_cluster_ready(120).await {
         log_warn!("main", &format!("Patroni cluster not ready: {}", e));
     } else {
-        log_info!("main", "✅ Patroni cluster is ready and healthy");
+        log_info!("main", "Patroni cluster is ready and healthy");
     }
 
     // Starte Patroni Monitoring Loop (in eigenem Task)
@@ -129,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
 
     log_info!(
         "main",
-        "✅ Volume Manager with Patroni HA initialized successfully"
+        "Volume Manager with Patroni HA initialized successfully"
     );
 
     // Hauptschleife
@@ -192,12 +192,12 @@ async fn main() -> anyhow::Result<()> {
                 if leader_election.is_leader() {
                     match patroni_monitor.get_primary().await {
                         Ok(Some(primary)) => {
-                            log_info!("main", &format!("👑 PostgreSQL Primary: {}", primary.name));
+                            log_info!("main", &format!("PostgreSQL Primary: {}", primary.name));
 
                             // Prüfe Replicas
                             match patroni_monitor.get_replicas().await {
                                 Ok(replicas) => {
-                                    log_info!("main", &format!("🔄 PostgreSQL Replicas: {}", replicas.len()));
+                                    log_info!("main", &format!("PostgreSQL Replicas: {}", replicas.len()));
                                     for replica in replicas {
                                         let lag_info = if let Some(lag) = replica.lag {
                                             format!(" (Lag: {}KB)", lag / 1024)
@@ -211,7 +211,7 @@ async fn main() -> anyhow::Result<()> {
                             }
                         }
                         Ok(None) => {
-                            log_error!("main", "⚠️  NO PRIMARY FOUND! Patroni failover in progress?");
+                            log_error!("main", "NO PRIMARY FOUND! Patroni failover in progress?");
                         }
                         Err(e) => {
                             log_error!("main", &format!("Failed to get primary: {}", e));
@@ -220,7 +220,7 @@ async fn main() -> anyhow::Result<()> {
 
                     // Prüfe ob Cluster healthy ist
                     if !patroni_monitor.is_cluster_healthy().await {
-                        log_warn!("main", "⚠️  Patroni cluster is not healthy!");
+                        log_warn!("main", "Patroni cluster is not healthy!");
 
                         // Hier könnte man zusätzliche Recovery-Aktionen triggern
                         if let Some(ceph) = &ceph_manager {
@@ -241,7 +241,7 @@ async fn main() -> anyhow::Result<()> {
             // Volume Operations: Nur Leader führt diese aus
             _ = operations_interval.tick() => {
                 if leader_election.is_leader() {
-                    log_info!("main", "[LEADER] Managing storage volumes...");
+                    log_info!("main", "Managing storage volumes...");
 
                     // Liste alle Volumes
                     match state_manager.list_volumes().await {
@@ -258,7 +258,7 @@ async fn main() -> anyhow::Result<()> {
                     log_info!("main", "- Processing snapshot requests");
                     log_info!("main", "- Verifying encryption status");
                 } else {
-                    log_info!("main", "[FOLLOWER] Standby mode - waiting for leader instructions");
+                    log_info!("main", "Standby mode - waiting for leader instructions");
 
                     // Follower kann Leader abfragen
                     if let Ok(Some(leader)) = leader_election.get_leader().await {
@@ -276,7 +276,7 @@ async fn perform_failover(
     health_statuses: &[etcd::ha::NodeHealthStatus],
     ceph_manager: &Option<Arc<ceph::ops::CephManager>>,
 ) {
-    log_info!("main", "🚨 Initiating failover procedure...");
+    log_info!("main", "Initiating failover procedure...");
 
     for status in health_statuses {
         if !status.is_healthy {
@@ -361,7 +361,7 @@ async fn perform_failover(
         }
     }
 
-    log_info!("main", "✅ Failover procedure completed");
+    log_info!("main", "Failover procedure completed");
     log_info!(
         "main",
         "Note: PostgreSQL failover is handled automatically by Patroni"

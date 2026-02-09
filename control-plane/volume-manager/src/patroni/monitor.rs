@@ -32,12 +32,12 @@ impl PatroniMonitor {
             match self.check_cluster_health().await {
                 Ok(status) => {
                     self.log_cluster_status(&status);
-                    
+
                     // Prüfe auf Probleme
                     if status.leader.is_none() {
                         crate::log_error!(
                             "patroni_monitor",
-                            "⚠️  NO PRIMARY LEADER! Cluster in failover mode!"
+                            "NO PRIMARY LEADER! Cluster in failover mode!"
                         );
                     }
 
@@ -50,7 +50,7 @@ impl PatroniMonitor {
                     if unhealthy_count > 0 {
                         crate::log_warn!(
                             "patroni_monitor",
-                            &format!("⚠️  {} nodes unhealthy", unhealthy_count)
+                            &format!("{} nodes unhealthy", unhealthy_count)
                         );
                     }
                 }
@@ -82,21 +82,6 @@ impl PatroniMonitor {
         );
 
         for member in &cluster.members {
-            let role_icon = match member.role {
-                PostgresNodeRole::Primary => "👑",
-                PostgresNodeRole::Replica => "🔄",
-                PostgresNodeRole::Standby => "⏸️",
-                PostgresNodeRole::Unknown => "❓",
-            };
-
-            let state_icon = match member.state {
-                PatroniState::Running => "✅",
-                PatroniState::Starting => "🔄",
-                PatroniState::Stopped => "⏹️",
-                PatroniState::Failed => "❌",
-                PatroniState::Unknown => "❓",
-            };
-
             let lag_info = if let Some(lag) = member.lag {
                 if lag > 1024 * 1024 {
                     // > 1MB lag
@@ -112,10 +97,7 @@ impl PatroniMonitor {
 
             crate::log_debug!(
                 "patroni_monitor",
-                &format!(
-                    "  {} {} {:?} - {:?}{}",
-                    role_icon, state_icon, member.name, member.state, lag_info
-                )
+                &format!(" {} {:?}{}", member.name, member.state, lag_info)
             );
         }
     }
@@ -124,7 +106,10 @@ impl PatroniMonitor {
     pub async fn wait_for_cluster_ready(&self, timeout_secs: u64) -> Result<()> {
         crate::log_info!(
             "patroni_monitor",
-            &format!("Waiting for cluster to be ready (timeout: {}s)", timeout_secs)
+            &format!(
+                "Waiting for cluster to be ready (timeout: {}s)",
+                timeout_secs
+            )
         );
 
         let start = std::time::Instant::now();
@@ -148,7 +133,7 @@ impl PatroniMonitor {
                         crate::log_info!(
                             "patroni_monitor",
                             &format!(
-                                "✅ Cluster ready! Primary={:?}, Running members={}",
+                                "Cluster ready! Primary={:?}, Running members={}",
                                 cluster.leader, running_members
                             )
                         );
@@ -164,10 +149,7 @@ impl PatroniMonitor {
                     );
                 }
                 Err(e) => {
-                    crate::log_debug!(
-                        "patroni_monitor",
-                        &format!("Cluster check failed: {}", e)
-                    );
+                    crate::log_debug!("patroni_monitor", &format!("Cluster check failed: {}", e));
                 }
             }
 

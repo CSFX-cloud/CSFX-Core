@@ -92,6 +92,14 @@ impl PatroniClient {
             .await
             .context("Failed to parse health response")?;
 
+        crate::log_debug!(
+            "patroni",
+            &format!(
+                "Fetched health from {}: role={}, state={}",
+                node_url, health.role, health.state
+            )
+        );
+
         Ok(health)
     }
 
@@ -101,7 +109,13 @@ impl PatroniClient {
 
         let response = self.client.get(&url).send().await?;
 
-        Ok(response.status().is_success())
+        let is_primary = response.status().is_success();
+        crate::log_debug!(
+            "patroni",
+            &format!("Node {} is primary: {}", node_url, is_primary)
+        );
+
+        Ok(is_primary)
     }
 
     /// Prüft ob ein Node ein Replica ist
@@ -110,28 +124,49 @@ impl PatroniClient {
 
         let response = self.client.get(&url).send().await?;
 
-        Ok(response.status().is_success())
+        let is_replica = response.status().is_success();
+        crate::log_debug!(
+            "patroni",
+            &format!("Node {} is replica: {}", node_url, is_replica)
+        );
+
+        Ok(is_replica)
     }
 
     /// Findet die aktuelle Primary Node
     pub async fn find_primary(&self) -> Result<Option<PatroniNode>> {
         let cluster = self.get_cluster_status().await?;
 
-        Ok(cluster
+        let primary = cluster
             .members
             .into_iter()
-            .find(|m| m.role == PostgresNodeRole::Primary))
+            .find(|m| m.role == PostgresNodeRole::Primary);
+
+        if let Some(ref p) = primary {
+            crate::log_info!("patroni", &format!("Found primary node: {}", p.name));
+        } else {
+            crate::log_warn!("patroni", "No primary node found in cluster");
+        }
+
+        Ok(primary)
     }
 
     /// Holt alle Replica Nodes
     pub async fn find_replicas(&self) -> Result<Vec<PatroniNode>> {
         let cluster = self.get_cluster_status().await?;
 
-        Ok(cluster
+        let replicas: Vec<PatroniNode> = cluster
             .members
             .into_iter()
             .filter(|m| m.role == PostgresNodeRole::Replica)
-            .collect())
+            .collect();
+
+        crate::log_info!(
+            "patroni",
+            &format!("Found {} replica nodes", replicas.len())
+        );
+
+        Ok(replicas)
     }
 
     /// Triggert ein manuelles Failover (NUR FÜR TESTING!)
