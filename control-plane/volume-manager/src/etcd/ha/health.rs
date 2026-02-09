@@ -1,4 +1,4 @@
-use crate::etcd::core::{EtcdClient, EtcdError};
+use crate::etcd::core::EtcdClient;
 use crate::etcd::state::{NodeState, NodeStatus};
 use crate::{log_info, log_warn};
 use std::sync::Arc;

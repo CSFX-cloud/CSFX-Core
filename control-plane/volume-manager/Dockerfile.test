@@ -1,6 +1,6 @@
-# Test-Dockerfile für Volume Manager (Multi-Stage Build mit rust:latest)
+# Test-Dockerfile für Volume Manager
 # Stage 1: Build
-FROM rust:latest AS builder
+FROM --platform=linux/arm64 rust:bookworm AS builder
 
 WORKDIR /app
 
@@ -35,12 +35,13 @@ COPY control-plane/shared/ ./control-plane/shared/
 RUN cargo build --release -p volume-manager
 
 # Stage 2: Runtime
-FROM debian:bookworm-slim
+FROM --platform=linux/arm64 debian:bookworm-slim
 
 # Installiere notwendige Laufzeit-Abhängigkeiten
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -53,3 +54,4 @@ RUN chmod +x /app/volume-manager
 
 # Starte das Binary
 CMD ["/app/volume-manager"]
+

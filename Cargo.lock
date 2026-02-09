@@ -4943,6 +4943,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "etcd-client",
+ "reqwest",
  "serde",
  "serde_json",
  "shared",
