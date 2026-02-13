@@ -1,4 +1,4 @@
-# Development Dockerfile for Registry
+# Development Dockerfile for Registry Service
 FROM rust:latest
 
 WORKDIR /app
@@ -7,6 +7,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    curl \
     && cargo install cargo-watch --version 7.8.0 --locked \
     && rm -rf /var/lib/apt/lists/*
 
@@ -22,17 +23,19 @@ COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-contr
 COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
 COPY control-plane/volume-manager/Cargo.toml ./control-plane/volume-manager/
 COPY control-plane/registry/Cargo.toml ./control-plane/registry/
-COPY shared/Cargo.toml ./shared/
-COPY entity/Cargo.toml ./entity/
-COPY migration/Cargo.toml ./migration/
+COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
+COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
+COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
 
 # Copy service and dependencies
 COPY control-plane/registry/ ./control-plane/registry/
-COPY shared/ ./shared/
-COPY entity/ ./entity/
-COPY migration/ ./migration/
+COPY control-plane/shared/ ./control-plane/shared/
 
 # Pre-build dependencies
-RUN cargo build --bin registry
+RUN cargo build -p registry
 
-CMD ["cargo", "watch", "-x", "run --bin registry"]
+# Expose registry port
+EXPOSE 8001
+
+CMD ["cargo", "run", "-p", "registry"]
+
