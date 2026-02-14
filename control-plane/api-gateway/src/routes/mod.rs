@@ -13,6 +13,7 @@ pub mod agents;
 pub mod expenses;
 pub mod marketplace;
 pub mod organizations;
+pub mod registry;
 pub mod resource_groups;
 pub mod resources;
 pub mod subscriptions;
@@ -58,6 +59,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(expenses::expenses_routes())
         .merge(marketplace::marketplace_routes())
         .merge(organizations::routes())
+        .merge(registry::registry_routes())
         .merge(resource_groups::resource_groups_routes())
         .merge(resources::resources_routes())
         .merge(subscriptions::subscriptions_routes())

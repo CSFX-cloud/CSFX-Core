@@ -11,6 +11,7 @@ mod init;
 mod rbac_service;
 mod routes;
 mod self_monitor;
+mod service_client;
 mod system_collector;
 mod utils;
 
@@ -67,6 +68,7 @@ pub struct ApiDoc;
 pub struct AppState {
     pub db_conn: DbConn,
     pub docker: Option<docker_service::DockerService>,
+    pub service_client: service_client::ServiceClient,
 }
 
 impl Default for AppState {
@@ -129,6 +131,7 @@ async fn main() {
     let state = AppState {
         db_conn: db_conn.clone(),
         docker,
+        service_client: service_client::ServiceClient::new(),
     };
 
     // Start self-monitoring service

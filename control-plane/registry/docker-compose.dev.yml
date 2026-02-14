@@ -1,6 +1,4 @@
 # Docker Compose für Registry Development & Testing
-version: '3.8'
-
 services:
   registry:
     build:
