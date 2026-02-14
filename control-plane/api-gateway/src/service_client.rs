@@ -49,9 +49,18 @@ impl ServiceClient {
             }
         };
 
-        // Add custom headers
+        // Add custom headers (filter out conflicting headers)
         if let Some(headers) = headers {
             for (key, value) in headers {
+                // Skip headers that should not be forwarded or will be set automatically
+                let key_lower = key.to_lowercase();
+                if key_lower == "content-length"
+                    || key_lower == "host"
+                    || key_lower == "content-type"
+                    || key_lower == "transfer-encoding"
+                {
+                    continue;
+                }
                 request = request.header(key, value);
             }
         }

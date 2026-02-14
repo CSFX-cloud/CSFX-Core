@@ -2,7 +2,7 @@ use axum::{
     body::Body,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json, Response},
+    response::{IntoResponse, Json},
     routing::{get, post},
     Router,
 };
@@ -24,11 +24,7 @@ pub async fn create_token(
 
     let header_map: Vec<(String, String)> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|val| (k.to_string(), val.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
         .collect();
 
     match state
@@ -41,8 +37,16 @@ pub async fn create_token(
         )
         .await
     {
-        Ok((status, Some(response_body))) => Ok((status, Json(response_body)).into_response()),
-        Ok((status, None)) => Ok((status, Body::empty()).into_response()),
+        Ok((status, Some(response_body))) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Json(response_body)).into_response())
+        }
+        Ok((status, None)) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Body::empty()).into_response())
+        }
         Err(e) => {
             tracing::error!("Failed to forward request to registry: {}", e);
             Err((
@@ -63,20 +67,29 @@ pub async fn list_tokens(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map: Vec<(String, String)> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|val| (k.to_string(), val.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
         .collect();
 
     match state
         .service_client
-        .forward_to_registry(reqwest::Method::GET, "/admin/tokens", None, Some(header_map))
+        .forward_to_registry(
+            reqwest::Method::GET,
+            "/admin/tokens",
+            None,
+            Some(header_map),
+        )
         .await
     {
-        Ok((status, Some(response_body))) => Ok((status, Json(response_body)).into_response()),
-        Ok((status, None)) => Ok((status, Body::empty()).into_response()),
+        Ok((status, Some(response_body))) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Json(response_body)).into_response())
+        }
+        Ok((status, None)) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Body::empty()).into_response())
+        }
         Err(e) => {
             tracing::error!("Failed to forward request to registry: {}", e);
             Err((
@@ -104,11 +117,7 @@ pub async fn register_agent(
 
     let header_map: Vec<(String, String)> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|val| (k.to_string(), val.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
         .collect();
 
     match state
@@ -121,8 +130,16 @@ pub async fn register_agent(
         )
         .await
     {
-        Ok((status, Some(response_body))) => Ok((status, Json(response_body)).into_response()),
-        Ok((status, None)) => Ok((status, Body::empty()).into_response()),
+        Ok((status, Some(response_body))) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Json(response_body)).into_response())
+        }
+        Ok((status, None)) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Body::empty()).into_response())
+        }
         Err(e) => {
             tracing::error!("Failed to forward request to registry: {}", e);
             Err((
@@ -151,11 +168,7 @@ pub async fn agent_heartbeat(
 
     let header_map: Vec<(String, String)> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|val| (k.to_string(), val.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
         .collect();
 
     match state
@@ -168,8 +181,16 @@ pub async fn agent_heartbeat(
         )
         .await
     {
-        Ok((status, Some(response_body))) => Ok((status, Json(response_body)).into_response()),
-        Ok((status, None)) => Ok((status, Body::empty()).into_response()),
+        Ok((status, Some(response_body))) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Json(response_body)).into_response())
+        }
+        Ok((status, None)) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Body::empty()).into_response())
+        }
         Err(e) => {
             tracing::error!("Failed to forward request to registry: {}", e);
             Err((
@@ -190,20 +211,29 @@ pub async fn list_agents_admin(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map: Vec<(String, String)> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|val| (k.to_string(), val.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
         .collect();
 
     match state
         .service_client
-        .forward_to_registry(reqwest::Method::GET, "/admin/agents", None, Some(header_map))
+        .forward_to_registry(
+            reqwest::Method::GET,
+            "/admin/agents",
+            None,
+            Some(header_map),
+        )
         .await
     {
-        Ok((status, Some(response_body))) => Ok((status, Json(response_body)).into_response()),
-        Ok((status, None)) => Ok((status, Body::empty()).into_response()),
+        Ok((status, Some(response_body))) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Json(response_body)).into_response())
+        }
+        Ok((status, None)) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Body::empty()).into_response())
+        }
         Err(e) => {
             tracing::error!("Failed to forward request to registry: {}", e);
             Err((
@@ -224,11 +254,7 @@ pub async fn get_statistics(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map: Vec<(String, String)> = headers
         .iter()
-        .filter_map(|(k, v)| {
-            v.to_str()
-                .ok()
-                .map(|val| (k.to_string(), val.to_string()))
-        })
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
         .collect();
 
     match state
@@ -241,8 +267,16 @@ pub async fn get_statistics(
         )
         .await
     {
-        Ok((status, Some(response_body))) => Ok((status, Json(response_body)).into_response()),
-        Ok((status, None)) => Ok((status, Body::empty()).into_response()),
+        Ok((status, Some(response_body))) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Json(response_body)).into_response())
+        }
+        Ok((status, None)) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Body::empty()).into_response())
+        }
         Err(e) => {
             tracing::error!("Failed to forward request to registry: {}", e);
             Err((
