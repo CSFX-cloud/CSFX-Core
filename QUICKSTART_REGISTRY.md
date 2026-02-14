@@ -48,11 +48,13 @@ docker-compose -f docker-compose.registry.yml logs -f registry
 Nach dem Start:
 
 1. **Migration ausführen** (einmalig):
+
 ```bash
 docker exec csf-api-gateway-registry cargo run --bin migration
 ```
 
 2. **Health Checks**:
+
 ```bash
 # API Gateway
 curl http://localhost:8000/health
@@ -65,6 +67,7 @@ curl http://localhost:8001/health
 ```
 
 3. **Token erstellen**:
+
 ```bash
 curl -X POST http://localhost:8000/api/registry/admin/tokens \
   -H "Content-Type: application/json" \
@@ -76,6 +79,7 @@ curl -X POST http://localhost:8000/api/registry/admin/tokens \
 ```
 
 4. **Agent registrieren**:
+
 ```bash
 curl -X POST http://localhost:8000/api/registry/agents/register \
   -H "Content-Type: application/json" \
@@ -93,12 +97,14 @@ curl -X POST http://localhost:8000/api/registry/agents/register \
 ## Troubleshooting
 
 ### Services neu bauen
+
 ```bash
 docker-compose -f docker-compose.registry.yml build --no-cache
 docker-compose -f docker-compose.registry.yml up
 ```
 
 ### In Container einsteigen
+
 ```bash
 # API Gateway
 docker exec -it csf-api-gateway-registry /bin/sh
@@ -111,6 +117,7 @@ docker exec -it csf-postgres-registry psql -U csf_user -d csf_core
 ```
 
 ### Datenbank zurücksetzen
+
 ```bash
 docker-compose -f docker-compose.registry.yml down -v
 docker-compose -f docker-compose.registry.yml up
@@ -127,11 +134,11 @@ RUST_LOG=debug
 
 ## Ports
 
-| Service      | Port | Zugriff                      |
-|--------------|------|------------------------------|
-| PostgreSQL   | 5432 | `localhost:5432`             |
-| API Gateway  | 8000 | `http://localhost:8000`      |
-| Registry     | 8001 | `http://localhost:8001` (intern) |
+| Service     | Port | Zugriff                          |
+| ----------- | ---- | -------------------------------- |
+| PostgreSQL  | 5432 | `localhost:5432`                 |
+| API Gateway | 8000 | `http://localhost:8000`          |
+| Registry    | 8001 | `http://localhost:8001` (intern) |
 
 ## Weitere Infos
 

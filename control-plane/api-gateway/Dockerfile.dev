@@ -22,17 +22,50 @@ COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-contr
 COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
 COPY control-plane/volume-manager/Cargo.toml ./control-plane/volume-manager/
 COPY control-plane/registry/Cargo.toml ./control-plane/registry/
+COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
+COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
+COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
 
-# Copy control-plane and dependencies
+# Create dummy main.rs for workspace members to build dependencies
+RUN mkdir -p agent/src cli/src \
+    control-plane/scheduler/src \
+    control-plane/failover-controller/src \
+    control-plane/sdn-controller/src \
+    control-plane/volume-manager/src \
+    control-plane/registry/src \
+    control-plane/shared/entity/src \
+    control-plane/shared/migration/src \
+    control-plane/shared/shared/src \
+    && echo "fn main() {}" > agent/src/main.rs \
+    && echo "fn main() {}" > cli/src/main.rs \
+    && echo "fn main() {}" > control-plane/scheduler/src/main.rs \
+    && echo "fn main() {}" > control-plane/failover-controller/src/main.rs \
+    && echo "fn main() {}" > control-plane/sdn-controller/src/main.rs \
+    && echo "fn main() {}" > control-plane/volume-manager/src/main.rs \
+    && echo "fn main() {}" > control-plane/registry/src/main.rs \
+    && echo "// lib" > control-plane/shared/entity/src/lib.rs \
+    && echo "// lib" > control-plane/shared/migration/src/lib.rs \
+    && echo "// lib" > control-plane/shared/shared/src/lib.rs
+
+# Copy shared dependencies first for caching
+COPY control-plane/shared/ ./control-plane/shared/
+
+# Build dependencies (this layer will be cached)
+RUN cargo build -p api-gateway || true
+
+# Remove dummy files
+RUN rm -rf agent/src cli/src \
+    control-plane/scheduler/src \
+    control-plane/failover-controller/src \
+    control-plane/sdn-controller/src \
+    control-plane/volume-manager/src \
+    control-plane/registry/src \
+    control-plane/api-gateway/src
+
+# Copy actual source code
 COPY control-plane/api-gateway/ ./control-plane/api-gateway/
-COPY shared/ ./shared/
-COPY migration/ ./migration/
-COPY entity/ ./entity/
-
-# Pre-build dependencies
-RUN cargo build --bin api-gateway
 
 # Expose port
 EXPOSE 8000
 
-CMD ["cargo", "watch", "-x", "run --bin api-gateway"]
+CMD ["cargo", "watch", "-x", "run -p api-gateway"]

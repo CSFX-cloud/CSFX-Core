@@ -7,6 +7,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    libpq-dev \
     curl \
     && cargo install cargo-watch --version 7.8.0 --locked \
     && rm -rf /var/lib/apt/lists/*
@@ -27,15 +28,47 @@ COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
 COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
 COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
 
-# Copy service and dependencies
-COPY control-plane/registry/ ./control-plane/registry/
+# Create dummy main.rs for workspace members to build dependencies
+RUN mkdir -p agent/src cli/src \
+    control-plane/api-gateway/src \
+    control-plane/scheduler/src \
+    control-plane/failover-controller/src \
+    control-plane/sdn-controller/src \
+    control-plane/volume-manager/src \
+    control-plane/shared/entity/src \
+    control-plane/shared/migration/src \
+    control-plane/shared/shared/src \
+    && echo "fn main() {}" > agent/src/main.rs \
+    && echo "fn main() {}" > cli/src/main.rs \
+    && echo "fn main() {}" > control-plane/api-gateway/src/main.rs \
+    && echo "fn main() {}" > control-plane/scheduler/src/main.rs \
+    && echo "fn main() {}" > control-plane/failover-controller/src/main.rs \
+    && echo "fn main() {}" > control-plane/sdn-controller/src/main.rs \
+    && echo "fn main() {}" > control-plane/volume-manager/src/main.rs \
+    && echo "// lib" > control-plane/shared/entity/src/lib.rs \
+    && echo "// lib" > control-plane/shared/migration/src/lib.rs \
+    && echo "// lib" > control-plane/shared/shared/src/lib.rs
+
+# Copy shared dependencies first for caching
 COPY control-plane/shared/ ./control-plane/shared/
 
-# Pre-build dependencies
-RUN cargo build -p registry
+# Build dependencies (this layer will be cached)
+RUN cargo build -p registry || true
+
+# Remove dummy files
+RUN rm -rf agent/src cli/src \
+    control-plane/api-gateway/src \
+    control-plane/scheduler/src \
+    control-plane/failover-controller/src \
+    control-plane/sdn-controller/src \
+    control-plane/volume-manager/src \
+    control-plane/registry/src
+
+# Copy actual service source code
+COPY control-plane/registry/ ./control-plane/registry/
 
 # Expose registry port
 EXPOSE 8001
 
-CMD ["cargo", "run", "-p", "registry"]
+CMD ["cargo", "watch", "-x", "run -p registry"]
 

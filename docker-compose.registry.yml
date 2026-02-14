@@ -45,7 +45,7 @@ services:
       - cargo_target_api_gateway:/app/target
     networks:
       - csf-network
-    command: cargo watch -x "run --bin api-gateway"
+    command: cargo watch -x "run -p api-gateway"
     restart: unless-stopped
 
   # Registry Service
@@ -74,7 +74,7 @@ services:
       - cargo_target_registry:/app/target
     networks:
       - csf-network
-    command: cargo watch -x "run --bin registry"
+    command: cargo watch -x "run -p registry"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
