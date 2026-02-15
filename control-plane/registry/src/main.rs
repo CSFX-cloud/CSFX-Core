@@ -71,8 +71,14 @@ async fn main() -> anyhow::Result<()> {
     log_info!("main", &format!("Registry listening on {}", addr));
     log_info!("main", "Endpoints:");
     log_info!("main", "   - GET  /health");
-    log_info!("main", "   - POST /admin/tokens");
+    log_info!("main", "=== PRE-REGISTRATION (NEW) ===");
+    log_info!("main", "   - POST /admin/agents/pre-register");
+    log_info!("main", "   - GET  /admin/agents/pending");
+    log_info!("main", "   - POST /admin/agents/pending/:agent_id");
+    log_info!("main", "=== TOKEN MANAGEMENT (DEPRECATED) ===");
+    log_info!("main", "   - POST /admin/tokens (DEPRECATED)");
     log_info!("main", "   - GET  /admin/tokens");
+    log_info!("main", "=== AGENT MANAGEMENT ===");
     log_info!("main", "   - POST /agents/register");
     log_info!("main", "   - POST /agents/:id/heartbeat");
     log_info!("main", "   - GET  /admin/agents");

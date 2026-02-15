@@ -6,33 +6,48 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// Registration Token - einmalig verwendbar für Agent-Registrierung
+/// Jetzt agent-spezifisch: Token ist an einen Pre-Registered Agent gebunden
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistrationToken {
     pub id: Uuid,
     pub token: String,
+    pub agent_id: Uuid, // Token ist an spezifischen Agent gebunden
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub used: bool,
     pub used_at: Option<DateTime<Utc>>,
     pub created_by: String,
     pub description: Option<String>,
+    // Expected values für Validierung
+    pub expected_name: String,
+    pub expected_hostname: String,
 }
 
 impl RegistrationToken {
-    pub fn new(description: Option<String>, created_by: String, ttl_hours: i64) -> Self {
+    pub fn new(
+        agent_id: Uuid,
+        expected_name: String,
+        expected_hostname: String,
+        description: Option<String>,
+        created_by: String,
+        ttl_hours: i64,
+    ) -> Self {
         let id = Uuid::new_v4();
-        let token = format!("reg_{}", Uuid::new_v4().simple());
+        let token = format!("reg_{}_{}", agent_id.simple(), Uuid::new_v4().simple());
         let now = Utc::now();
 
         Self {
             id,
             token,
+            agent_id,
             created_at: now,
             expires_at: now + chrono::Duration::hours(ttl_hours),
             used: false,
             used_at: None,
             created_by,
             description,
+            expected_name,
+            expected_hostname,
         }
     }
 
@@ -58,22 +73,32 @@ impl TokenManager {
         }
     }
 
-    /// Erstellt einen neuen Registration Token
+    /// Erstellt einen neuen agent-spezifischen Registration Token
     pub async fn create_token(
         &self,
+        agent_id: Uuid,
+        expected_name: String,
+        expected_hostname: String,
         description: Option<String>,
         created_by: String,
         ttl_hours: i64,
     ) -> RegistrationToken {
-        let token = RegistrationToken::new(description, created_by, ttl_hours);
+        let token = RegistrationToken::new(
+            agent_id,
+            expected_name.clone(),
+            expected_hostname.clone(),
+            description,
+            created_by,
+            ttl_hours,
+        );
         let mut tokens = self.tokens.write().await;
         tokens.insert(token.token.clone(), token.clone());
 
         crate::log_info!(
             "token_manager",
             &format!(
-                "✅ Created registration token: {} (expires in {}h)",
-                token.id, ttl_hours
+                "✅ Created registration token for agent {} '{}@{}' (expires in {}h)",
+                agent_id, expected_name, expected_hostname, ttl_hours
             )
         );
 
@@ -81,20 +106,27 @@ impl TokenManager {
     }
 
     /// Validiert einen Token und markiert ihn als verwendet
-    pub async fn validate_and_consume_token(&self, token_str: &str) -> Result<Uuid, String> {
+    /// Gibt die Token-Daten zurück für weitere Validierung
+    pub async fn validate_and_consume_token(
+        &self,
+        token_str: &str,
+    ) -> Result<RegistrationToken, String> {
         let mut tokens = self.tokens.write().await;
 
         if let Some(token) = tokens.get_mut(token_str) {
             if token.is_valid() {
-                let token_id = token.id;
+                let token_copy = token.clone();
                 token.mark_used();
 
                 crate::log_info!(
                     "token_manager",
-                    &format!("✅ Token validated and consumed: {}", token_id)
+                    &format!(
+                        "✅ Token validated and consumed: {} for agent {}",
+                        token_copy.id, token_copy.agent_id
+                    )
                 );
 
-                Ok(token_id)
+                Ok(token_copy)
             } else {
                 let reason = if token.used {
                     "already used"
@@ -161,23 +193,41 @@ mod tests {
     #[tokio::test]
     async fn test_token_creation() {
         let manager = TokenManager::new();
+        let agent_id = Uuid::new_v4();
         let token = manager
-            .create_token(Some("Test token".to_string()), "admin".to_string(), 24)
+            .create_token(
+                agent_id,
+                "test-agent".to_string(),
+                "test-host".to_string(),
+                Some("Test token".to_string()),
+                "admin".to_string(),
+                24,
+            )
             .await;
 
         assert!(!token.used);
         assert!(token.is_valid());
+        assert_eq!(token.agent_id, agent_id);
     }
 
     #[tokio::test]
     async fn test_token_validation() {
         let manager = TokenManager::new();
+        let agent_id = Uuid::new_v4();
         let token = manager
-            .create_token(Some("Test token".to_string()), "admin".to_string(), 24)
+            .create_token(
+                agent_id,
+                "test-agent".to_string(),
+                "test-host".to_string(),
+                Some("Test token".to_string()),
+                "admin".to_string(),
+                24,
+            )
             .await;
 
         let result = manager.validate_and_consume_token(&token.token).await;
         assert!(result.is_ok());
+        assert_eq!(result.unwrap().agent_id, agent_id);
 
         // Second attempt should fail
         let result2 = manager.validate_and_consume_token(&token.token).await;

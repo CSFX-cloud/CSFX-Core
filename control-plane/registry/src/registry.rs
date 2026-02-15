@@ -5,6 +5,21 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+/// Pre-Registrierter Agent - wartet auf erste Verbindung
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreRegisteredAgent {
+    pub id: Uuid,
+    pub name: String,
+    pub hostname: String,
+    pub expected_os_type: Option<String>,
+    pub expected_architecture: Option<String>,
+    pub tags: Option<HashMap<String, String>>,
+    pub created_at: DateTime<Utc>,
+    pub created_by: String,
+    pub registration_token: String, // Token für Registrierung
+    pub token_expires_at: DateTime<Utc>,
+}
+
 /// Registrierter Agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredAgent {
@@ -29,52 +44,135 @@ pub enum AgentStatus {
     Degraded,
 }
 
-impl ToString for AgentStatus {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for AgentStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AgentStatus::Online => "online".to_string(),
-            AgentStatus::Offline => "offline".to_string(),
-            AgentStatus::Degraded => "degraded".to_string(),
+            AgentStatus::Online => write!(f, "online"),
+            AgentStatus::Offline => write!(f, "offline"),
+            AgentStatus::Degraded => write!(f, "degraded"),
         }
     }
+}
+
+/// Parameter für Agent Pre-Registration
+#[derive(Debug, Clone)]
+pub struct PreRegisterParams {
+    pub name: String,
+    pub hostname: String,
+    pub expected_os_type: Option<String>,
+    pub expected_architecture: Option<String>,
+    pub tags: Option<HashMap<String, String>>,
+    pub created_by: String,
+    pub registration_token: String,
+    pub token_expires_at: DateTime<Utc>,
+}
+
+/// Parameter für Agent Registrierung
+#[derive(Debug, Clone)]
+pub struct RegisterAgentParams {
+    pub agent_id: Uuid, // Von Pre-Registration übernommen
+    pub name: String,
+    pub hostname: String,
+    pub os_type: String,
+    pub os_version: String,
+    pub architecture: String,
+    pub agent_version: String,
+    pub tags: Option<HashMap<String, String>>,
 }
 
 /// Agent Registry Manager
 pub struct AgentRegistry {
     agents: Arc<RwLock<HashMap<Uuid, RegisteredAgent>>>,
+    pre_registered: Arc<RwLock<HashMap<Uuid, PreRegisteredAgent>>>,
 }
 
 impl AgentRegistry {
     pub fn new() -> Self {
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
+            pre_registered: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Registriert einen neuen Agent
+    /// Pre-Registriert einen Agent (Admin-Vorgang)
+    pub async fn pre_register_agent(&self, params: PreRegisterParams) -> PreRegisteredAgent {
+        let pre_agent = PreRegisteredAgent {
+            id: Uuid::new_v4(),
+            name: params.name.clone(),
+            hostname: params.hostname.clone(),
+            expected_os_type: params.expected_os_type,
+            expected_architecture: params.expected_architecture,
+            tags: params.tags,
+            created_at: Utc::now(),
+            created_by: params.created_by,
+            registration_token: params.registration_token.clone(),
+            token_expires_at: params.token_expires_at,
+        };
+
+        let mut pre_registered = self.pre_registered.write().await;
+        pre_registered.insert(pre_agent.id, pre_agent.clone());
+
+        crate::log_info!(
+            "agent_registry",
+            &format!(
+                "📝 Pre-registered agent: {} '{}@{}' (ID: {})",
+                params.name, params.name, params.hostname, pre_agent.id
+            )
+        );
+
+        pre_agent
+    }
+
+    /// Holt einen pre-registrierten Agent nach ID
+    pub async fn get_pre_registered_agent(&self, agent_id: Uuid) -> Option<PreRegisteredAgent> {
+        let pre_registered = self.pre_registered.read().await;
+        pre_registered.get(&agent_id).cloned()
+    }
+
+    /// Listet alle pre-registrierten Agents auf (pending)
+    pub async fn list_pending_agents(&self) -> Vec<PreRegisteredAgent> {
+        let pre_registered = self.pre_registered.read().await;
+        pre_registered.values().cloned().collect()
+    }
+
+    /// Löscht einen pre-registrierten Agent
+    pub async fn delete_pre_registered_agent(&self, agent_id: Uuid) -> Result<(), String> {
+        let mut pre_registered = self.pre_registered.write().await;
+
+        if pre_registered.remove(&agent_id).is_some() {
+            crate::log_info!(
+                "agent_registry",
+                &format!("🗑️  Deleted pre-registered agent: {}", agent_id)
+            );
+            Ok(())
+        } else {
+            Err("Pre-registered agent not found".to_string())
+        }
+    }
+
+    /// Registriert einen neuen Agent (mit Pre-Registration Validierung)
     pub async fn register_agent(
         &self,
-        name: String,
-        hostname: String,
-        os_type: String,
-        os_version: String,
-        architecture: String,
-        agent_version: String,
-        tags: Option<HashMap<String, String>>,
-    ) -> RegisteredAgent {
+        params: RegisterAgentParams,
+    ) -> Result<RegisteredAgent, String> {
+        // Entferne aus Pre-Registration
+        let mut pre_registered = self.pre_registered.write().await;
+        pre_registered.remove(&params.agent_id);
+        drop(pre_registered); // Release lock
+
         let agent = RegisteredAgent {
-            id: Uuid::new_v4(),
-            name: name.clone(),
-            hostname,
+            id: params.agent_id,
+            name: params.name.clone(),
+            hostname: params.hostname,
             ip_address: None,
-            os_type,
-            os_version,
-            architecture,
-            agent_version,
+            os_type: params.os_type,
+            os_version: params.os_version,
+            architecture: params.architecture,
+            agent_version: params.agent_version,
             status: AgentStatus::Online,
             registered_at: Utc::now(),
             last_heartbeat: Some(Utc::now()),
-            tags,
+            tags: params.tags,
         };
 
         let mut agents = self.agents.write().await;
@@ -82,10 +180,10 @@ impl AgentRegistry {
 
         crate::log_info!(
             "agent_registry",
-            &format!("✅ Registered new agent: {} ({})", name, agent.id)
+            &format!("✅ Registered new agent: {} ({})", params.name, agent.id)
         );
 
-        agent
+        Ok(agent)
     }
 
     /// Updated den Heartbeat eines Agents
@@ -219,36 +317,43 @@ mod tests {
     #[tokio::test]
     async fn test_agent_registration() {
         let registry = AgentRegistry::new();
+        let agent_id = Uuid::new_v4();
         let agent = registry
-            .register_agent(
-                "test-agent".to_string(),
-                "test-host".to_string(),
-                "linux".to_string(),
-                "Ubuntu 22.04".to_string(),
-                "x86_64".to_string(),
-                "1.0.0".to_string(),
-                None,
-            )
-            .await;
+            .register_agent(RegisterAgentParams {
+                agent_id,
+                name: "test-agent".to_string(),
+                hostname: "test-host".to_string(),
+                os_type: "linux".to_string(),
+                os_version: "Ubuntu 22.04".to_string(),
+                architecture: "x86_64".to_string(),
+                agent_version: "1.0.0".to_string(),
+                tags: None,
+            })
+            .await
+            .unwrap();
 
         assert_eq!(agent.name, "test-agent");
         assert_eq!(agent.status, AgentStatus::Online);
+        assert_eq!(agent.id, agent_id);
     }
 
     #[tokio::test]
     async fn test_agent_heartbeat() {
         let registry = AgentRegistry::new();
+        let agent_id = Uuid::new_v4();
         let agent = registry
-            .register_agent(
-                "test-agent".to_string(),
-                "test-host".to_string(),
-                "linux".to_string(),
-                "Ubuntu 22.04".to_string(),
-                "x86_64".to_string(),
-                "1.0.0".to_string(),
-                None,
-            )
-            .await;
+            .register_agent(RegisterAgentParams {
+                agent_id,
+                name: "test-agent".to_string(),
+                hostname: "test-host".to_string(),
+                os_type: "linux".to_string(),
+                os_version: "Ubuntu 22.04".to_string(),
+                architecture: "x86_64".to_string(),
+                agent_version: "1.0.0".to_string(),
+                tags: None,
+            })
+            .await
+            .unwrap();
 
         let result = registry.update_heartbeat(agent.id).await;
         assert!(result.is_ok());
