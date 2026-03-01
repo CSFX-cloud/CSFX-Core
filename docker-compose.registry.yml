@@ -1,5 +1,20 @@
+x-rust-common: &rust-common
+  build:
+    context: .
+    dockerfile: control-plane/Dockerfile.dev.shared
+    cache_from:
+      - type=registry,ref=csf-core-rust-base:latest
+  volumes:
+    - ./control-plane/shared:/app/control-plane/shared
+    - ./Cargo.toml:/app/Cargo.toml
+    - ./Cargo.lock:/app/Cargo.lock
+    - cargo_cache:/usr/local/cargo/registry
+    - cargo_git:/usr/local/cargo/git
+  networks:
+    - csf-network
+  restart: unless-stopped
+
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     container_name: csf-postgres-registry
@@ -19,11 +34,8 @@ services:
     networks:
       - csf-network
 
-  # API Gateway
   api-gateway:
-    build:
-      context: .
-      dockerfile: control-plane/api-gateway/Dockerfile.dev
+    <<: *rust-common
     container_name: csf-api-gateway-registry
     environment:
       DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
@@ -42,17 +54,12 @@ services:
       - ./Cargo.toml:/app/Cargo.toml
       - ./Cargo.lock:/app/Cargo.lock
       - cargo_cache:/usr/local/cargo/registry
+      - cargo_git:/usr/local/cargo/git
       - cargo_target_api_gateway:/app/target
-    networks:
-      - csf-network
     command: cargo watch -x "run -p api-gateway"
-    restart: unless-stopped
 
-  # Registry Service
   registry:
-    build:
-      context: .
-      dockerfile: control-plane/registry/Dockerfile.dev
+    <<: *rust-common
     container_name: csf-registry-service
     environment:
       DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
@@ -71,11 +78,9 @@ services:
       - ./Cargo.toml:/app/Cargo.toml
       - ./Cargo.lock:/app/Cargo.lock
       - cargo_cache:/usr/local/cargo/registry
+      - cargo_git:/usr/local/cargo/git
       - cargo_target_registry:/app/target
-    networks:
-      - csf-network
     command: cargo watch -x "run -p registry"
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
@@ -86,6 +91,8 @@ volumes:
   postgres_data:
     driver: local
   cargo_cache:
+    driver: local
+  cargo_git:
     driver: local
   cargo_target_api_gateway:
     driver: local
