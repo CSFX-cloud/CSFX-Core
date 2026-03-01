@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
 
-use crate::AppState;
+use crate::{auth::middleware::AuthenticatedUser, AppState};
 
 // ==================== Request/Response Schemas for OpenAPI ====================
 
@@ -114,6 +114,7 @@ pub struct ErrorResponse {
     )
 )]
 pub async fn pre_register_agent(
+    AuthenticatedUser(_claims): AuthenticatedUser,
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
@@ -176,6 +177,7 @@ pub async fn pre_register_agent(
     )
 )]
 pub async fn list_pending_agents(
+    AuthenticatedUser(_claims): AuthenticatedUser,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -235,6 +237,7 @@ pub async fn list_pending_agents(
     )
 )]
 pub async fn delete_pending_agent(
+    AuthenticatedUser(_claims): AuthenticatedUser,
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
     headers: HeaderMap,
@@ -292,6 +295,7 @@ pub async fn delete_pending_agent(
     )
 )]
 pub async fn create_token(
+    AuthenticatedUser(_claims): AuthenticatedUser,
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
@@ -354,6 +358,7 @@ pub async fn create_token(
     )
 )]
 pub async fn list_tokens(
+    AuthenticatedUser(_claims): AuthenticatedUser,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -541,6 +546,7 @@ pub async fn agent_heartbeat(
     )
 )]
 pub async fn list_agents_admin(
+    AuthenticatedUser(_claims): AuthenticatedUser,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -596,6 +602,7 @@ pub async fn list_agents_admin(
     )
 )]
 pub async fn get_statistics(
+    AuthenticatedUser(_claims): AuthenticatedUser,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
