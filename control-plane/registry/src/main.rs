@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 mod api_keys;
+mod db;
 mod logger;
 mod registry;
 mod server;
@@ -18,15 +19,23 @@ async fn main() -> anyhow::Result<()> {
     log_info!("main", "CSF Registry Service starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
+    // Establish database connection
+    log_info!("main", "Connecting to database...");
+    let db_conn = shared::establish_connection()
+        .await
+        .expect("Failed to connect to database");
+    log_info!("main", "Database connection established");
+
     // Initialize managers
-    let token_manager = Arc::new(tokens::TokenManager::new());
-    let api_key_manager = Arc::new(api_keys::ApiKeyManager::new());
-    let agent_registry = Arc::new(registry::AgentRegistry::new());
+    let token_manager = Arc::new(tokens::TokenManager::new(db_conn.clone()));
+    let api_key_manager = Arc::new(api_keys::ApiKeyManager::new(db_conn.clone()));
+    let agent_registry = Arc::new(registry::AgentRegistry::new(db_conn.clone()));
 
     log_info!("main", "Managers initialized");
 
     // Create application state
     let state = server::AppState {
+        db: db_conn.clone(),
         token_manager: token_manager.clone(),
         api_key_manager: api_key_manager.clone(),
         agent_registry: agent_registry.clone(),

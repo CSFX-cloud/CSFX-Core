@@ -34,3 +34,5 @@ nixos/result-*
 .nix-profile
 
 keys/
+
+claude.md

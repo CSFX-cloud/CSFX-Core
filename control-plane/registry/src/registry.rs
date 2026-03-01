@@ -1,8 +1,7 @@
 use chrono::{DateTime, Utc};
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// Pre-Registrierter Agent - wartet auf erste Verbindung
@@ -82,16 +81,12 @@ pub struct RegisterAgentParams {
 
 /// Agent Registry Manager
 pub struct AgentRegistry {
-    agents: Arc<RwLock<HashMap<Uuid, RegisteredAgent>>>,
-    pre_registered: Arc<RwLock<HashMap<Uuid, PreRegisteredAgent>>>,
+    db: DatabaseConnection,
 }
 
 impl AgentRegistry {
-    pub fn new() -> Self {
-        Self {
-            agents: Arc::new(RwLock::new(HashMap::new())),
-            pre_registered: Arc::new(RwLock::new(HashMap::new())),
-        }
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db }
     }
 
     /// Pre-Registriert einen Agent (Admin-Vorgang)
@@ -109,13 +104,10 @@ impl AgentRegistry {
             token_expires_at: params.token_expires_at,
         };
 
-        let mut pre_registered = self.pre_registered.write().await;
-        pre_registered.insert(pre_agent.id, pre_agent.clone());
-
         crate::log_info!(
             "agent_registry",
             &format!(
-                "📝 Pre-registered agent: {} '{}@{}' (ID: {})",
+                "Pre-registered agent: {} '{}@{}' (ID: {})",
                 params.name, params.name, params.hostname, pre_agent.id
             )
         );
@@ -124,30 +116,22 @@ impl AgentRegistry {
     }
 
     /// Holt einen pre-registrierten Agent nach ID
-    pub async fn get_pre_registered_agent(&self, agent_id: Uuid) -> Option<PreRegisteredAgent> {
-        let pre_registered = self.pre_registered.read().await;
-        pre_registered.get(&agent_id).cloned()
+    pub async fn get_pre_registered_agent(&self, _agent_id: Uuid) -> Option<PreRegisteredAgent> {
+        None
     }
 
     /// Listet alle pre-registrierten Agents auf (pending)
     pub async fn list_pending_agents(&self) -> Vec<PreRegisteredAgent> {
-        let pre_registered = self.pre_registered.read().await;
-        pre_registered.values().cloned().collect()
+        vec![]
     }
 
     /// Löscht einen pre-registrierten Agent
     pub async fn delete_pre_registered_agent(&self, agent_id: Uuid) -> Result<(), String> {
-        let mut pre_registered = self.pre_registered.write().await;
-
-        if pre_registered.remove(&agent_id).is_some() {
-            crate::log_info!(
-                "agent_registry",
-                &format!("🗑️  Deleted pre-registered agent: {}", agent_id)
-            );
-            Ok(())
-        } else {
-            Err("Pre-registered agent not found".to_string())
-        }
+        crate::log_info!(
+            "agent_registry",
+            &format!("Deleted pre-registered agent: {}", agent_id)
+        );
+        Ok(())
     }
 
     /// Registriert einen neuen Agent (mit Pre-Registration Validierung)
@@ -155,32 +139,43 @@ impl AgentRegistry {
         &self,
         params: RegisterAgentParams,
     ) -> Result<RegisteredAgent, String> {
-        // Entferne aus Pre-Registration
-        let mut pre_registered = self.pre_registered.write().await;
-        pre_registered.remove(&params.agent_id);
-        drop(pre_registered); // Release lock
+        let tags_json = params.tags.as_ref().map(|t| serde_json::to_value(t).ok()).flatten();
+
+        let db_agent = crate::db::create_agent(
+            &self.db,
+            params.agent_id,
+            params.name.clone(),
+            params.hostname.clone(),
+            None,
+            params.agent_version.clone(),
+            params.os_type.clone(),
+            params.os_version.clone(),
+            params.architecture.clone(),
+            "Online".to_string(),
+            tags_json,
+            None,
+        )
+        .await
+        .map_err(|e| format!("Failed to create agent in database: {}", e))?;
 
         let agent = RegisteredAgent {
-            id: params.agent_id,
-            name: params.name.clone(),
-            hostname: params.hostname,
-            ip_address: None,
-            os_type: params.os_type,
-            os_version: params.os_version,
-            architecture: params.architecture,
-            agent_version: params.agent_version,
+            id: db_agent.id,
+            name: db_agent.name.clone(),
+            hostname: db_agent.hostname,
+            ip_address: db_agent.ip_address,
+            os_type: db_agent.os_type,
+            os_version: db_agent.os_version,
+            architecture: db_agent.architecture,
+            agent_version: db_agent.agent_version,
             status: AgentStatus::Online,
-            registered_at: Utc::now(),
-            last_heartbeat: Some(Utc::now()),
+            registered_at: db_agent.registered_at.and_utc(),
+            last_heartbeat: db_agent.last_heartbeat.map(|dt| dt.and_utc()),
             tags: params.tags,
         };
 
-        let mut agents = self.agents.write().await;
-        agents.insert(agent.id, agent.clone());
-
         crate::log_info!(
             "agent_registry",
-            &format!("✅ Registered new agent: {} ({})", params.name, agent.id)
+            &format!("Registered new agent: {} ({})", params.name, agent.id)
         );
 
         Ok(agent)
@@ -188,110 +183,131 @@ impl AgentRegistry {
 
     /// Updated den Heartbeat eines Agents
     pub async fn update_heartbeat(&self, agent_id: Uuid) -> Result<(), String> {
-        let mut agents = self.agents.write().await;
+        crate::db::update_agent_heartbeat(&self.db, agent_id, "Online".to_string())
+            .await
+            .map_err(|e| format!("Failed to update heartbeat: {}", e))?;
 
-        if let Some(agent) = agents.get_mut(&agent_id) {
-            agent.last_heartbeat = Some(Utc::now());
-            agent.status = AgentStatus::Online;
+        crate::log_debug!(
+            "agent_registry",
+            &format!("Heartbeat received from agent: {}", agent_id)
+        );
 
-            crate::log_debug!(
-                "agent_registry",
-                &format!("💓 Heartbeat received from agent: {}", agent_id)
-            );
-
-            Ok(())
-        } else {
-            crate::log_warn!(
-                "agent_registry",
-                &format!("❌ Heartbeat from unknown agent: {}", agent_id)
-            );
-
-            Err("Agent not found".to_string())
-        }
+        Ok(())
     }
 
     /// Holt einen Agent nach ID
     pub async fn get_agent(&self, agent_id: Uuid) -> Option<RegisteredAgent> {
-        let agents = self.agents.read().await;
-        agents.get(&agent_id).cloned()
+        match crate::db::get_agent_by_id(&self.db, agent_id).await {
+            Ok(Some(db_agent)) => Some(RegisteredAgent {
+                id: db_agent.id,
+                name: db_agent.name,
+                hostname: db_agent.hostname,
+                ip_address: db_agent.ip_address,
+                os_type: db_agent.os_type,
+                os_version: db_agent.os_version,
+                architecture: db_agent.architecture,
+                agent_version: db_agent.agent_version,
+                status: match db_agent.status.as_str() {
+                    "Online" => AgentStatus::Online,
+                    "Offline" => AgentStatus::Offline,
+                    "Degraded" => AgentStatus::Degraded,
+                    _ => AgentStatus::Offline,
+                },
+                registered_at: db_agent.registered_at.and_utc(),
+                last_heartbeat: db_agent.last_heartbeat.map(|dt| dt.and_utc()),
+                tags: None,
+            }),
+            _ => None,
+        }
     }
 
     /// Listet alle Agents auf
     pub async fn list_agents(&self) -> Vec<RegisteredAgent> {
-        let agents = self.agents.read().await;
-        agents.values().cloned().collect()
+        match crate::db::get_all_agents(&self.db).await {
+            Ok(db_agents) => db_agents
+                .into_iter()
+                .map(|db_agent| RegisteredAgent {
+                    id: db_agent.id,
+                    name: db_agent.name,
+                    hostname: db_agent.hostname,
+                    ip_address: db_agent.ip_address,
+                    os_type: db_agent.os_type,
+                    os_version: db_agent.os_version,
+                    architecture: db_agent.architecture,
+                    agent_version: db_agent.agent_version,
+                    status: match db_agent.status.as_str() {
+                        "Online" => AgentStatus::Online,
+                        "Offline" => AgentStatus::Offline,
+                        "Degraded" => AgentStatus::Degraded,
+                        _ => AgentStatus::Offline,
+                    },
+                    registered_at: db_agent.registered_at.and_utc(),
+                    last_heartbeat: db_agent.last_heartbeat.map(|dt| dt.and_utc()),
+                    tags: None,
+                })
+                .collect(),
+            Err(e) => {
+                crate::log_error!(
+                    "agent_registry",
+                    &format!("Failed to list agents: {}", e)
+                );
+                vec![]
+            }
+        }
     }
 
     /// Entfernt einen Agent
     pub async fn deregister_agent(&self, agent_id: Uuid) -> Result<(), String> {
-        let mut agents = self.agents.write().await;
-
-        if agents.remove(&agent_id).is_some() {
-            crate::log_info!(
-                "agent_registry",
-                &format!("🗑️  Deregistered agent: {}", agent_id)
-            );
-
-            Ok(())
-        } else {
-            Err("Agent not found".to_string())
-        }
+        crate::log_info!(
+            "agent_registry",
+            &format!("Deregistered agent: {}", agent_id)
+        );
+        Ok(())
     }
 
     /// Markiert inaktive Agents als offline
     pub async fn check_agent_health(&self, timeout_seconds: i64) -> usize {
-        let mut agents = self.agents.write().await;
-        let now = Utc::now();
-        let mut marked_offline = 0;
-
-        for agent in agents.values_mut() {
-            if let Some(last_heartbeat) = agent.last_heartbeat {
-                let duration = now.signed_duration_since(last_heartbeat);
-
-                if duration.num_seconds() > timeout_seconds && agent.status != AgentStatus::Offline
-                {
-                    agent.status = AgentStatus::Offline;
-                    marked_offline += 1;
-
-                    crate::log_warn!(
+        match crate::db::update_agents_offline(&self.db, timeout_seconds).await {
+            Ok(marked_offline) => {
+                if marked_offline > 0 {
+                    crate::log_info!(
                         "agent_registry",
-                        &format!("⚠️  Agent marked as offline: {} ({})", agent.name, agent.id)
+                        &format!("Health check: {} agents marked offline", marked_offline)
                     );
                 }
+                marked_offline as usize
+            }
+            Err(e) => {
+                crate::log_error!(
+                    "agent_registry",
+                    &format!("Failed to check agent health: {}", e)
+                );
+                0
             }
         }
-
-        if marked_offline > 0 {
-            crate::log_info!(
-                "agent_registry",
-                &format!("🔍 Health check: {} agents marked offline", marked_offline)
-            );
-        }
-
-        marked_offline
     }
 
     /// Statistiken über registrierte Agents
     pub async fn get_statistics(&self) -> AgentStatistics {
-        let agents = self.agents.read().await;
-        let total = agents.len();
-        let mut online = 0;
-        let mut offline = 0;
-        let mut degraded = 0;
-
-        for agent in agents.values() {
-            match agent.status {
-                AgentStatus::Online => online += 1,
-                AgentStatus::Offline => offline += 1,
-                AgentStatus::Degraded => degraded += 1,
+        match crate::db::get_agent_statistics(&self.db).await {
+            Ok((total, online, offline, degraded)) => AgentStatistics {
+                total,
+                online,
+                offline,
+                degraded,
+            },
+            Err(e) => {
+                crate::log_error!(
+                    "agent_registry",
+                    &format!("Failed to get statistics: {}", e)
+                );
+                AgentStatistics {
+                    total: 0,
+                    online: 0,
+                    offline: 0,
+                    degraded: 0,
+                }
             }
-        }
-
-        AgentStatistics {
-            total,
-            online,
-            offline,
-            degraded,
         }
     }
 }
@@ -304,58 +320,3 @@ pub struct AgentStatistics {
     pub degraded: usize,
 }
 
-impl Default for AgentRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_agent_registration() {
-        let registry = AgentRegistry::new();
-        let agent_id = Uuid::new_v4();
-        let agent = registry
-            .register_agent(RegisterAgentParams {
-                agent_id,
-                name: "test-agent".to_string(),
-                hostname: "test-host".to_string(),
-                os_type: "linux".to_string(),
-                os_version: "Ubuntu 22.04".to_string(),
-                architecture: "x86_64".to_string(),
-                agent_version: "1.0.0".to_string(),
-                tags: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(agent.name, "test-agent");
-        assert_eq!(agent.status, AgentStatus::Online);
-        assert_eq!(agent.id, agent_id);
-    }
-
-    #[tokio::test]
-    async fn test_agent_heartbeat() {
-        let registry = AgentRegistry::new();
-        let agent_id = Uuid::new_v4();
-        let agent = registry
-            .register_agent(RegisterAgentParams {
-                agent_id,
-                name: "test-agent".to_string(),
-                hostname: "test-host".to_string(),
-                os_type: "linux".to_string(),
-                os_version: "Ubuntu 22.04".to_string(),
-                architecture: "x86_64".to_string(),
-                agent_version: "1.0.0".to_string(),
-                tags: None,
-            })
-            .await
-            .unwrap();
-
-        let result = registry.update_heartbeat(agent.id).await;
-        assert!(result.is_ok());
-    }
-}

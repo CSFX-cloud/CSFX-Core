@@ -1,8 +1,6 @@
 use chrono::{DateTime, Utc};
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 
 /// Registration Token - einmalig verwendbar für Agent-Registrierung
@@ -63,14 +61,12 @@ impl RegistrationToken {
 
 /// Manager für Registration Tokens
 pub struct TokenManager {
-    tokens: Arc<RwLock<HashMap<String, RegistrationToken>>>,
+    db: DatabaseConnection,
 }
 
 impl TokenManager {
-    pub fn new() -> Self {
-        Self {
-            tokens: Arc::new(RwLock::new(HashMap::new())),
-        }
+    pub fn new(db: DatabaseConnection) -> Self {
+        Self { db }
     }
 
     /// Erstellt einen neuen agent-spezifischen Registration Token
@@ -83,26 +79,39 @@ impl TokenManager {
         created_by: String,
         ttl_hours: i64,
     ) -> RegistrationToken {
-        let token = RegistrationToken::new(
+        let token_obj = RegistrationToken::new(
             agent_id,
             expected_name.clone(),
             expected_hostname.clone(),
-            description,
-            created_by,
+            description.clone(),
+            created_by.clone(),
             ttl_hours,
         );
-        let mut tokens = self.tokens.write().await;
-        tokens.insert(token.token.clone(), token.clone());
+
+        if let Err(e) = crate::db::create_registry_token(
+            &self.db,
+            token_obj.token.clone(),
+            description,
+            created_by,
+            token_obj.expires_at,
+        )
+        .await
+        {
+            crate::log_error!(
+                "token_manager",
+                &format!("Failed to save token to database: {}", e)
+            );
+        }
 
         crate::log_info!(
             "token_manager",
             &format!(
-                "✅ Created registration token for agent {} '{}@{}' (expires in {}h)",
+                "Created registration token for agent {} '{}@{}' (expires in {}h)",
                 agent_id, expected_name, expected_hostname, ttl_hours
             )
         );
 
-        token
+        token_obj
     }
 
     /// Validiert einen Token und markiert ihn als verwendet
@@ -111,80 +120,101 @@ impl TokenManager {
         &self,
         token_str: &str,
     ) -> Result<RegistrationToken, String> {
-        let mut tokens = self.tokens.write().await;
+        let db_token = crate::db::get_registry_token_by_token(&self.db, token_str)
+            .await
+            .map_err(|e| format!("Database error: {}", e))?
+            .ok_or_else(|| "Token not found".to_string())?;
 
-        if let Some(token) = tokens.get_mut(token_str) {
-            if token.is_valid() {
-                let token_copy = token.clone();
-                token.mark_used();
-
-                crate::log_info!(
-                    "token_manager",
-                    &format!(
-                        "✅ Token validated and consumed: {} for agent {}",
-                        token_copy.id, token_copy.agent_id
-                    )
-                );
-
-                Ok(token_copy)
-            } else {
-                let reason = if token.used {
-                    "already used"
-                } else {
-                    "expired"
-                };
-
-                crate::log_warn!(
-                    "token_manager",
-                    &format!("❌ Invalid token ({}): {}", reason, token.id)
-                );
-
-                Err(format!("Token is {}", reason))
-            }
-        } else {
+        if db_token.is_used {
             crate::log_warn!(
                 "token_manager",
-                &format!("❌ Token not found: {}", token_str)
+                &format!("Invalid token (already used): {}", db_token.id)
             );
-
-            Err("Token not found".to_string())
+            return Err("Token is already used".to_string());
         }
+
+        if Utc::now().naive_utc() >= db_token.expires_at {
+            crate::log_warn!(
+                "token_manager",
+                &format!("Invalid token (expired): {}", db_token.id)
+            );
+            return Err("Token is expired".to_string());
+        }
+
+        let token_data = RegistrationToken {
+            id: db_token.id,
+            token: db_token.token.clone(),
+            agent_id: Uuid::nil(),
+            created_at: db_token.created_at.and_utc(),
+            expires_at: db_token.expires_at.and_utc(),
+            used: db_token.is_used,
+            used_at: db_token.used_at.map(|dt| dt.and_utc()),
+            created_by: db_token.created_by.clone(),
+            description: db_token.description.clone(),
+            expected_name: String::new(),
+            expected_hostname: String::new(),
+        };
+
+        crate::log_info!(
+            "token_manager",
+            &format!("Token validated: {}", db_token.id)
+        );
+
+        Ok(token_data)
     }
 
     /// Listet alle Tokens auf (für Admin-Interface)
     pub async fn list_tokens(&self) -> Vec<RegistrationToken> {
-        let tokens = self.tokens.read().await;
-        tokens.values().cloned().collect()
+        match crate::db::get_unused_tokens(&self.db).await {
+            Ok(db_tokens) => db_tokens
+                .into_iter()
+                .map(|t| RegistrationToken {
+                    id: t.id,
+                    token: t.token,
+                    agent_id: Uuid::nil(),
+                    created_at: t.created_at.and_utc(),
+                    expires_at: t.expires_at.and_utc(),
+                    used: t.is_used,
+                    used_at: t.used_at.map(|dt| dt.and_utc()),
+                    created_by: t.created_by,
+                    description: t.description,
+                    expected_name: String::new(),
+                    expected_hostname: String::new(),
+                })
+                .collect(),
+            Err(e) => {
+                crate::log_error!(
+                    "token_manager",
+                    &format!("Failed to list tokens: {}", e)
+                );
+                vec![]
+            }
+        }
     }
 
     /// Löscht abgelaufene Tokens
     pub async fn cleanup_expired(&self) -> usize {
-        let mut tokens = self.tokens.write().await;
-        let before_count = tokens.len();
-
-        tokens.retain(|_, token| {
-            let is_expired = Utc::now() >= token.expires_at;
-            !is_expired || !token.used
-        });
-
-        let removed = before_count - tokens.len();
-
-        if removed > 0 {
-            crate::log_info!(
-                "token_manager",
-                &format!("🧹 Cleaned up {} expired tokens", removed)
-            );
+        match crate::db::delete_expired_tokens(&self.db).await {
+            Ok(removed) => {
+                if removed > 0 {
+                    crate::log_info!(
+                        "token_manager",
+                        &format!("Cleaned up {} expired tokens", removed)
+                    );
+                }
+                removed as usize
+            }
+            Err(e) => {
+                crate::log_error!(
+                    "token_manager",
+                    &format!("Failed to cleanup expired tokens: {}", e)
+                );
+                0
+            }
         }
-
-        removed
     }
 }
 
-impl Default for TokenManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -6,12 +6,14 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub db: DatabaseConnection,
     pub token_manager: Arc<TokenManager>,
     pub api_key_manager: Arc<ApiKeyManager>,
     pub agent_registry: Arc<AgentRegistry>,
