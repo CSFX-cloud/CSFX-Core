@@ -2,6 +2,29 @@
 
 All notable changes to CSF-Core will be documented in this file.
 
+# [0.3.0](https://github.com/CS-Foundry/CSF-Core/compare/v0.2.0...v0.3.0) (2026-03-03)
+
+
+### Bug Fixes
+
+* api gateway and regisrty ([68a9671](https://github.com/CS-Foundry/CSF-Core/commit/68a96718290e13b308a2f4e9512e10da1d8a7cc7))
+* auth probelm ([80ef776](https://github.com/CS-Foundry/CSF-Core/commit/80ef776441ffd6b20ae1d451500e2b38e1b4d770))
+* compile errors ([6cfe5ae](https://github.com/CS-Foundry/CSF-Core/commit/6cfe5aedb51effa4152975ede9438391948a5241))
+* docker compose ([8fd8be6](https://github.com/CS-Foundry/CSF-Core/commit/8fd8be64d461b2679f4aa23aec807e92a9b4b820))
+* docker long build ([2372614](https://github.com/CS-Foundry/CSF-Core/commit/2372614b0f8a6a10ab2997d657cad211e8e53b98))
+* ha for postgres with patroni ([078de22](https://github.com/CS-Foundry/CSF-Core/commit/078de2230c5fc93871bf0c1bd64e5933ce5ea7a4))
+* reverse proxy on registry routet through api gateway ([6e2ce4f](https://github.com/CS-Foundry/CSF-Core/commit/6e2ce4fa34f145cf4cad3d966de33bc4fef13491))
+* securtiy issues on agent registration ([228a81f](https://github.com/CS-Foundry/CSF-Core/commit/228a81f818b5a0519ac026ba71790fe713431010))
+
+
+### Features
+
+* added ha with patroni on postgres ([e6f6037](https://github.com/CS-Foundry/CSF-Core/commit/e6f603718c26cf52d283391bfd3e510fbd2c9763))
+* ground setup ceph storage ([1ad3e67](https://github.com/CS-Foundry/CSF-Core/commit/1ad3e67a1d032af910b64b9a98ae649aff3b6620))
+* new connection to db and refactor ([063bc84](https://github.com/CS-Foundry/CSF-Core/commit/063bc842d07926aa7bba3441a781bd9df5100f0a))
+* pre reg agent for zero trust ([85bd67a](https://github.com/CS-Foundry/CSF-Core/commit/85bd67af18bc070a2db463a1e44651c2562885b4))
+* setup ground struc agent ([eeb12eb](https://github.com/CS-Foundry/CSF-Core/commit/eeb12eb7fbb7b00874158ec08386650502133864))
+
 # [0.2.0](https://github.com/CS-Foundry/CSF-Core/compare/v0.1.13...v0.2.0) (2026-02-06)
 
 
