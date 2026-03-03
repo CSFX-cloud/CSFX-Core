@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Pre-Registrierter Agent - wartet auf erste Verbindung
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreRegisteredAgent {
     pub id: Uuid,
@@ -15,11 +14,10 @@ pub struct PreRegisteredAgent {
     pub tags: Option<HashMap<String, String>>,
     pub created_at: DateTime<Utc>,
     pub created_by: String,
-    pub registration_token: String, // Token für Registrierung
+    pub registration_token: String,
     pub token_expires_at: DateTime<Utc>,
 }
 
-/// Registrierter Agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisteredAgent {
     pub id: Uuid,
@@ -53,7 +51,6 @@ impl std::fmt::Display for AgentStatus {
     }
 }
 
-/// Parameter für Agent Pre-Registration
 #[derive(Debug, Clone)]
 pub struct PreRegisterParams {
     pub name: String,
@@ -64,12 +61,12 @@ pub struct PreRegisterParams {
     pub created_by: String,
     pub registration_token: String,
     pub token_expires_at: DateTime<Utc>,
+    pub agent_id: Uuid,
 }
 
-/// Parameter für Agent Registrierung
 #[derive(Debug, Clone)]
 pub struct RegisterAgentParams {
-    pub agent_id: Uuid, // Von Pre-Registration übernommen
+    pub agent_id: Uuid,
     pub name: String,
     pub hostname: String,
     pub os_type: String,
@@ -79,7 +76,6 @@ pub struct RegisterAgentParams {
     pub tags: Option<HashMap<String, String>>,
 }
 
-/// Agent Registry Manager
 pub struct AgentRegistry {
     db: DatabaseConnection,
 }
@@ -89,10 +85,9 @@ impl AgentRegistry {
         Self { db }
     }
 
-    /// Pre-Registriert einen Agent (Admin-Vorgang)
     pub async fn pre_register_agent(&self, params: PreRegisterParams) -> PreRegisteredAgent {
         let pre_agent = PreRegisteredAgent {
-            id: Uuid::new_v4(),
+            id: params.agent_id,
             name: params.name.clone(),
             hostname: params.hostname.clone(),
             expected_os_type: params.expected_os_type,
@@ -100,46 +95,73 @@ impl AgentRegistry {
             tags: params.tags,
             created_at: Utc::now(),
             created_by: params.created_by,
-            registration_token: params.registration_token.clone(),
+            registration_token: params.registration_token,
             token_expires_at: params.token_expires_at,
         };
 
         crate::log_info!(
             "agent_registry",
             &format!(
-                "Pre-registered agent: {} '{}@{}' (ID: {})",
-                params.name, params.name, params.hostname, pre_agent.id
+                "Pre-registered agent: '{}@{}' id={}",
+                params.name, params.hostname, params.agent_id
             )
         );
 
         pre_agent
     }
 
-    /// Holt einen pre-registrierten Agent nach ID
-    pub async fn get_pre_registered_agent(&self, _agent_id: Uuid) -> Option<PreRegisteredAgent> {
-        None
-    }
-
-    /// Listet alle pre-registrierten Agents auf (pending)
     pub async fn list_pending_agents(&self) -> Vec<PreRegisteredAgent> {
-        vec![]
+        match crate::db::get_unused_tokens(&self.db).await {
+            Ok(tokens) => tokens
+                .into_iter()
+                .filter_map(|t| {
+                    let agent_id = t.agent_id?;
+                    Some(PreRegisteredAgent {
+                        id: agent_id,
+                        name: t.expected_name.clone(),
+                        hostname: t.expected_hostname.clone(),
+                        expected_os_type: None,
+                        expected_architecture: None,
+                        tags: None,
+                        created_at: t.created_at.and_utc(),
+                        created_by: t.created_by,
+                        registration_token: t.token,
+                        token_expires_at: t.expires_at.and_utc(),
+                    })
+                })
+                .collect(),
+            Err(e) => {
+                crate::log_error!(
+                    "agent_registry",
+                    &format!("Failed to list pending agents: {}", e)
+                );
+                vec![]
+            }
+        }
     }
 
-    /// Löscht einen pre-registrierten Agent
     pub async fn delete_pre_registered_agent(&self, agent_id: Uuid) -> Result<(), String> {
-        crate::log_info!(
-            "agent_registry",
-            &format!("Deleted pre-registered agent: {}", agent_id)
-        );
-        Ok(())
+        match crate::db::delete_pending_token_by_agent(&self.db, agent_id).await {
+            Ok(0) => Err(format!("No pending registration found for agent: {}", agent_id)),
+            Ok(_) => {
+                crate::log_info!(
+                    "agent_registry",
+                    &format!("Deleted pending registration for agent: {}", agent_id)
+                );
+                Ok(())
+            }
+            Err(e) => Err(format!("Failed to delete pending registration: {}", e)),
+        }
     }
 
-    /// Registriert einen neuen Agent (mit Pre-Registration Validierung)
     pub async fn register_agent(
         &self,
         params: RegisterAgentParams,
     ) -> Result<RegisteredAgent, String> {
-        let tags_json = params.tags.as_ref().map(|t| serde_json::to_value(t).ok()).flatten();
+        let tags_json = params
+            .tags
+            .as_ref()
+            .and_then(|t| serde_json::to_value(t).ok());
 
         let db_agent = crate::db::create_agent(
             &self.db,
@@ -175,13 +197,12 @@ impl AgentRegistry {
 
         crate::log_info!(
             "agent_registry",
-            &format!("Registered new agent: {} ({})", params.name, agent.id)
+            &format!("Registered new agent: {} id={}", params.name, agent.id)
         );
 
         Ok(agent)
     }
 
-    /// Updated den Heartbeat eines Agents
     pub async fn update_heartbeat(&self, agent_id: Uuid) -> Result<(), String> {
         crate::db::update_agent_heartbeat(&self.db, agent_id, "Online".to_string())
             .await
@@ -189,13 +210,12 @@ impl AgentRegistry {
 
         crate::log_debug!(
             "agent_registry",
-            &format!("Heartbeat received from agent: {}", agent_id)
+            &format!("Heartbeat received agent={}", agent_id)
         );
 
         Ok(())
     }
 
-    /// Holt einen Agent nach ID
     pub async fn get_agent(&self, agent_id: Uuid) -> Option<RegisteredAgent> {
         match crate::db::get_agent_by_id(&self.db, agent_id).await {
             Ok(Some(db_agent)) => Some(RegisteredAgent {
@@ -221,7 +241,6 @@ impl AgentRegistry {
         }
     }
 
-    /// Listet alle Agents auf
     pub async fn list_agents(&self) -> Vec<RegisteredAgent> {
         match crate::db::get_all_agents(&self.db).await {
             Ok(db_agents) => db_agents
@@ -256,16 +275,19 @@ impl AgentRegistry {
         }
     }
 
-    /// Entfernt einen Agent
     pub async fn deregister_agent(&self, agent_id: Uuid) -> Result<(), String> {
+        crate::db::delete_agent(&self.db, agent_id)
+            .await
+            .map_err(|e| format!("Failed to delete agent: {}", e))?;
+
         crate::log_info!(
             "agent_registry",
             &format!("Deregistered agent: {}", agent_id)
         );
+
         Ok(())
     }
 
-    /// Markiert inaktive Agents als offline
     pub async fn check_agent_health(&self, timeout_seconds: i64) -> usize {
         match crate::db::update_agents_offline(&self.db, timeout_seconds).await {
             Ok(marked_offline) => {
@@ -287,7 +309,6 @@ impl AgentRegistry {
         }
     }
 
-    /// Statistiken über registrierte Agents
     pub async fn get_statistics(&self) -> AgentStatistics {
         match crate::db::get_agent_statistics(&self.db).await {
             Ok((total, online, offline, degraded)) => AgentStatistics {
@@ -319,4 +340,3 @@ pub struct AgentStatistics {
     pub offline: usize,
     pub degraded: usize,
 }
-

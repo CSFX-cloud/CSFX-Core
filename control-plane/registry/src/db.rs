@@ -3,11 +3,21 @@ use entity::{agent_api_keys, agents, registry_tokens};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
 };
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
+pub fn hash_key(key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
 
 pub async fn create_registry_token(
     db: &DatabaseConnection,
+    agent_id: Uuid,
     token: String,
+    expected_name: String,
+    expected_hostname: String,
     description: Option<String>,
     created_by: String,
     expires_at: chrono::DateTime<chrono::Utc>,
@@ -15,6 +25,9 @@ pub async fn create_registry_token(
     let token_model = registry_tokens::ActiveModel {
         id: Set(Uuid::new_v4()),
         token: Set(token),
+        agent_id: Set(Some(agent_id)),
+        expected_name: Set(expected_name),
+        expected_hostname: Set(expected_hostname),
         description: Set(description),
         created_by: Set(created_by),
         created_at: Set(chrono::Utc::now().naive_utc()),
@@ -123,13 +136,6 @@ pub async fn get_all_agents(db: &DatabaseConnection) -> Result<Vec<agents::Model
     Ok(agents::Entity::find().all(db).await?)
 }
 
-pub async fn get_healthy_nodes(db: &DatabaseConnection) -> Result<Vec<agents::Model>> {
-    Ok(agents::Entity::find()
-        .filter(agents::Column::Status.eq("Online"))
-        .all(db)
-        .await?)
-}
-
 pub async fn update_agent_heartbeat(
     db: &DatabaseConnection,
     agent_id: Uuid,
@@ -177,18 +183,9 @@ pub async fn get_agent_statistics(
 ) -> Result<(usize, usize, usize, usize)> {
     let all_agents = get_all_agents(db).await?;
     let total = all_agents.len();
-    let online = all_agents
-        .iter()
-        .filter(|a| a.status == "Online")
-        .count();
-    let offline = all_agents
-        .iter()
-        .filter(|a| a.status == "Offline")
-        .count();
-    let degraded = all_agents
-        .iter()
-        .filter(|a| a.status == "Degraded")
-        .count();
+    let online = all_agents.iter().filter(|a| a.status == "Online").count();
+    let offline = all_agents.iter().filter(|a| a.status == "Offline").count();
+    let degraded = all_agents.iter().filter(|a| a.status == "Degraded").count();
 
     Ok((total, online, offline, degraded))
 }
@@ -196,12 +193,12 @@ pub async fn get_agent_statistics(
 pub async fn create_api_key(
     db: &DatabaseConnection,
     agent_id: Uuid,
-    api_key: String,
+    key_hash: String,
 ) -> Result<agent_api_keys::Model> {
     let api_key_model = agent_api_keys::ActiveModel {
         id: Set(Uuid::new_v4()),
         agent_id: Set(agent_id),
-        api_key: Set(api_key),
+        key_hash: Set(key_hash),
         created_at: Set(chrono::Utc::now().naive_utc()),
         last_used_at: Set(None),
         is_active: Set(true),
@@ -214,8 +211,10 @@ pub async fn get_agent_by_api_key(
     db: &DatabaseConnection,
     api_key: &str,
 ) -> Result<Option<agents::Model>> {
+    let key_hash = hash_key(api_key);
+
     let key = agent_api_keys::Entity::find()
-        .filter(agent_api_keys::Column::ApiKey.eq(api_key))
+        .filter(agent_api_keys::Column::KeyHash.eq(key_hash))
         .filter(agent_api_keys::Column::IsActive.eq(true))
         .one(db)
         .await?;
@@ -229,4 +228,39 @@ pub async fn get_agent_by_api_key(
     } else {
         Ok(None)
     }
+}
+
+pub async fn revoke_api_key_by_agent(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+) -> Result<u64> {
+    let result = agent_api_keys::Entity::update_many()
+        .col_expr(
+            agent_api_keys::Column::IsActive,
+            sea_orm::sea_query::Expr::value(false),
+        )
+        .filter(agent_api_keys::Column::AgentId.eq(agent_id))
+        .filter(agent_api_keys::Column::IsActive.eq(true))
+        .exec(db)
+        .await?;
+
+    Ok(result.rows_affected)
+}
+
+pub async fn delete_pending_token_by_agent(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+) -> Result<u64> {
+    let result = registry_tokens::Entity::delete_many()
+        .filter(registry_tokens::Column::AgentId.eq(agent_id))
+        .filter(registry_tokens::Column::IsUsed.eq(false))
+        .exec(db)
+        .await?;
+
+    Ok(result.rows_affected)
+}
+
+pub async fn delete_agent(db: &DatabaseConnection, agent_id: Uuid) -> Result<()> {
+    agents::Entity::delete_by_id(agent_id).exec(db).await?;
+    Ok(())
 }

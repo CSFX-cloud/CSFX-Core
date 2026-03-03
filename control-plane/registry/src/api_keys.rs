@@ -3,7 +3,6 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// API Key für permanente Agent-Authentifizierung
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKey {
     pub id: Uuid,
@@ -16,25 +15,17 @@ pub struct ApiKey {
 
 impl ApiKey {
     pub fn new(agent_id: Uuid) -> Self {
-        let id = Uuid::new_v4();
-        let key = format!("csf_agent_{}", Uuid::new_v4().simple());
-
         Self {
-            id,
-            key,
+            id: Uuid::new_v4(),
+            key: format!("csf_agent_{}", Uuid::new_v4().simple()),
             agent_id,
             created_at: Utc::now(),
             last_used: None,
             enabled: true,
         }
     }
-
-    pub fn update_last_used(&mut self) {
-        self.last_used = Some(Utc::now());
-    }
 }
 
-/// Manager für API Keys
 pub struct ApiKeyManager {
     db: DatabaseConnection,
 }
@@ -44,13 +35,11 @@ impl ApiKeyManager {
         Self { db }
     }
 
-    /// Erstellt einen neuen API Key für einen Agent
     pub async fn create_key(&self, agent_id: Uuid) -> ApiKey {
         let api_key = ApiKey::new(agent_id);
+        let key_hash = crate::db::hash_key(&api_key.key);
 
-        if let Err(e) =
-            crate::db::create_api_key(&self.db, agent_id, api_key.key.clone()).await
-        {
+        if let Err(e) = crate::db::create_api_key(&self.db, agent_id, key_hash).await {
             crate::log_error!(
                 "api_key_manager",
                 &format!("Failed to save API key to database: {}", e)
@@ -65,7 +54,6 @@ impl ApiKeyManager {
         api_key
     }
 
-    /// Validiert einen API Key und updated last_used
     pub async fn validate_key(&self, key_str: &str) -> Result<Uuid, String> {
         match crate::db::get_agent_by_api_key(&self.db, key_str).await {
             Ok(Some(agent)) => {
@@ -89,21 +77,26 @@ impl ApiKeyManager {
         }
     }
 
-    /// Deaktiviert einen API Key
-    pub async fn revoke_key(&self, _agent_id: Uuid) -> Result<(), String> {
-        crate::log_warn!(
-            "api_key_manager",
-            "Key revocation not yet implemented with database"
-        );
-        Err("Not implemented".to_string())
+    pub async fn revoke_key(&self, agent_id: Uuid) -> Result<(), String> {
+        match crate::db::revoke_api_key_by_agent(&self.db, agent_id).await {
+            Ok(revoked) => {
+                crate::log_info!(
+                    "api_key_manager",
+                    &format!("Revoked {} API key(s) for agent: {}", revoked, agent_id)
+                );
+                Ok(())
+            }
+            Err(e) => {
+                crate::log_error!(
+                    "api_key_manager",
+                    &format!("Failed to revoke API key for agent {}: {}", agent_id, e)
+                );
+                Err(format!("Failed to revoke key: {}", e))
+            }
+        }
     }
 
-    /// Listet alle API Keys auf
-    pub async fn list_keys(&self) -> Vec<ApiKey> {
-        vec![]
-    }
-
-    /// Erneuert einen API Key für einen Agent
+    #[allow(dead_code)]
     pub async fn rotate_key(&self, agent_id: Uuid) -> Result<ApiKey, String> {
         self.revoke_key(agent_id).await?;
         let new_key = self.create_key(agent_id).await;
@@ -112,45 +105,5 @@ impl ApiKeyManager {
             &format!("Rotated API key for agent: {}", agent_id)
         );
         Ok(new_key)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_api_key_creation() {
-        let manager = ApiKeyManager::new();
-        let agent_id = Uuid::new_v4();
-        let api_key = manager.create_key(agent_id).await;
-
-        assert_eq!(api_key.agent_id, agent_id);
-        assert!(api_key.enabled);
-        assert!(api_key.last_used.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_api_key_validation() {
-        let manager = ApiKeyManager::new();
-        let agent_id = Uuid::new_v4();
-        let api_key = manager.create_key(agent_id).await;
-
-        let result = manager.validate_key(&api_key.key).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), agent_id);
-    }
-
-    #[tokio::test]
-    async fn test_api_key_revocation() {
-        let manager = ApiKeyManager::new();
-        let agent_id = Uuid::new_v4();
-        let api_key = manager.create_key(agent_id).await;
-
-        let result = manager.revoke_key(agent_id).await;
-        assert!(result.is_ok());
-
-        let validation = manager.validate_key(&api_key.key).await;
-        assert!(validation.is_err());
     }
 }

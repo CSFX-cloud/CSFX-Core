@@ -12,6 +12,7 @@ mod m20251216_190000_add_agents_and_metrics;
 mod m20251228_120000_add_resource_groups;
 mod m20251228_140000_add_docker_resources;
 mod m20260214_100000_add_registry_tables;
+mod m20260303_000000_registry_security;
 
 pub struct Migrator;
 
@@ -31,6 +32,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20251228_120000_add_resource_groups::Migration),
             Box::new(m20251228_140000_add_docker_resources::Migration),
             Box::new(m20260214_100000_add_registry_tables::Migration),
+            Box::new(m20260303_000000_registry_security::Migration),
         ]
     }
 }
