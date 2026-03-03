@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "agent",
-    "cli",
     "control-plane/api-gateway",
     "control-plane/scheduler",
     "control-plane/failover-controller",

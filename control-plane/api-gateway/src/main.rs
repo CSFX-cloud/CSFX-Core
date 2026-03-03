@@ -11,10 +11,15 @@ mod init;
 mod rbac_service;
 mod routes;
 mod self_monitor;
+mod service_client;
 mod system_collector;
 mod utils;
 
 use routes::expenses::{CreateExpenseRequest, UpdateExpenseRequest};
+use routes::registry::{
+    AgentStatistics, ErrorResponse as RegistryErrorResponse, HeartbeatRequest,
+    PreRegisterAgentRequest, PreRegisterAgentResponse, RegisterAgentRequest, RegisterAgentResponse,
+};
 use routes::users::{
     AuthResponse, LoginRequest, PublicKeyResponse, RegisterRequest, UserProfileResponse,
 };
@@ -22,39 +27,70 @@ use routes::users::{
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        // User & Authentication
         routes::users::register_user,
         routes::users::login_user,
         routes::users::logout_user,
         routes::users::get_public_key,
         routes::users::get_user_profile,
+        // Expenses
         routes::expenses::get_expenses,
         routes::expenses::get_expense,
-        routes::expenses::create_expense
+        routes::expenses::create_expense,
+        // Registry - Admin
+        routes::registry::pre_register_agent,
+        routes::registry::list_pending_agents,
+        routes::registry::delete_pending_agent,
+        routes::registry::list_tokens,
+        routes::registry::list_agents_admin,
+        routes::registry::get_statistics,
+        // Registry - Agent
+        routes::registry::register_agent,
+        routes::registry::agent_heartbeat,
+        // Registry - Health
+        routes::registry::registry_health,
+        // Registry - Deprecated
+        routes::registry::create_token,
     ),
     components(
         schemas(
+            // User schemas
             RegisterRequest,
             LoginRequest,
             AuthResponse,
             PublicKeyResponse,
             UserProfileResponse,
+            // Expense schemas
             CreateExpenseRequest,
             UpdateExpenseRequest,
-            entity::expenses::Model
+            entity::expenses::Model,
+            // Registry schemas
+            PreRegisterAgentRequest,
+            PreRegisterAgentResponse,
+            RegisterAgentRequest,
+            RegisterAgentResponse,
+            HeartbeatRequest,
+            AgentStatistics,
+            RegistryErrorResponse,
         )
     ),
     tags(
         (name = "Authentication", description = "User authentication endpoints"),
         (name = "Encryption", description = "RSA encryption endpoints"),
-        (name = "Expenses", description = "Expense management endpoints")
+        (name = "Expenses", description = "Expense management endpoints"),
+        (name = "Registry - Admin", description = "Registry administration endpoints (Pre-Registration workflow)"),
+        (name = "Registry - Agent", description = "Agent registration and heartbeat endpoints"),
+        (name = "Registry - Health", description = "Registry service health check"),
+        (name = "Registry - Admin (Deprecated)", description = "Deprecated token-based registration"),
     ),
+    modifiers(&SecurityAddon),
     info(
-        title = "FinanceVault API",
+        title = "CSF Control Plane API",
         version = "0.1.0",
-        description = "A secure financial vault API with RSA encryption and JWT authentication",
+        description = "CS-Foundry Control Plane API with agent registry, Zero Trust security, and pre-registration workflow",
         contact(
-            name = "FinanceVault Team",
-            email = "support@financevault.com"
+            name = "CS-Foundry Team",
+            email = "support@cs-foundry.com"
         )
     ),
     servers(
@@ -63,10 +99,36 @@ use routes::users::{
 )]
 pub struct ApiDoc;
 
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "bearer_auth",
+                utoipa::openapi::security::SecurityScheme::Http(
+                    utoipa::openapi::security::Http::new(
+                        utoipa::openapi::security::HttpAuthScheme::Bearer,
+                    ),
+                ),
+            );
+            components.add_security_scheme(
+                "api_key",
+                utoipa::openapi::security::SecurityScheme::ApiKey(
+                    utoipa::openapi::security::ApiKey::Header(
+                        utoipa::openapi::security::ApiKeyValue::new("X-API-Key"),
+                    ),
+                ),
+            );
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db_conn: DbConn,
     pub docker: Option<docker_service::DockerService>,
+    pub service_client: service_client::ServiceClient,
 }
 
 impl Default for AppState {
@@ -129,6 +191,7 @@ async fn main() {
     let state = AppState {
         db_conn: db_conn.clone(),
         docker,
+        service_client: service_client::ServiceClient::new(),
     };
 
     // Start self-monitoring service

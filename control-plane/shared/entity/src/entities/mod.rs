@@ -1,3 +1,4 @@
+pub mod agent_api_keys;
 pub mod agent_metrics;
 pub mod agents;
 pub mod config;
@@ -8,6 +9,7 @@ pub mod key;
 pub mod marketplace_templates;
 pub mod organization;
 pub mod permission;
+pub mod registry_tokens;
 pub mod resource_groups;
 pub mod role;
 pub mod role_permission;
@@ -15,6 +17,7 @@ pub mod subscription;
 pub mod user;
 pub mod user_organization;
 
+pub use agent_api_keys::Entity as AgentApiKeys;
 pub use agent_metrics::Entity as AgentMetrics;
 pub use agents::Entity as Agents;
 pub use config::Entity as Config;
@@ -25,6 +28,7 @@ pub use key::Entity as Key;
 pub use marketplace_templates::Entity as MarketplaceTemplates;
 pub use organization::Entity as Organization;
 pub use permission::Entity as Permission;
+pub use registry_tokens::Entity as RegistryTokens;
 pub use resource_groups::Entity as ResourceGroups;
 pub use role::Entity as Role;
 pub use role_permission::Entity as RolePermission;

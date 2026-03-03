@@ -1,21 +1,24 @@
-# Development Dockerfile for Registry Service
-FROM rust:latest
+FROM rust:1.88-slim-bookworm AS base
 
 WORKDIR /app
 
-# Install development dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     libpq-dev \
     curl \
-    && cargo install cargo-watch --version 7.8.0 --locked \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy workspace configuration
+FROM base AS cargo-tools
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-watch --version 7.8.0 --locked
+
+FROM base AS dependencies
+
 COPY Cargo.toml Cargo.lock ./
 
-# Copy manifests for workspace members
 COPY agent/Cargo.toml ./agent/
 COPY cli/Cargo.toml ./cli/
 COPY control-plane/api-gateway/Cargo.toml ./control-plane/api-gateway/
@@ -28,13 +31,13 @@ COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
 COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
 COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
 
-# Create dummy main.rs for workspace members to build dependencies
 RUN mkdir -p agent/src cli/src \
     control-plane/api-gateway/src \
     control-plane/scheduler/src \
     control-plane/failover-controller/src \
     control-plane/sdn-controller/src \
     control-plane/volume-manager/src \
+    control-plane/registry/src \
     control-plane/shared/entity/src \
     control-plane/shared/migration/src \
     control-plane/shared/shared/src \
@@ -45,30 +48,20 @@ RUN mkdir -p agent/src cli/src \
     && echo "fn main() {}" > control-plane/failover-controller/src/main.rs \
     && echo "fn main() {}" > control-plane/sdn-controller/src/main.rs \
     && echo "fn main() {}" > control-plane/volume-manager/src/main.rs \
-    && echo "// lib" > control-plane/shared/entity/src/lib.rs \
-    && echo "// lib" > control-plane/shared/migration/src/lib.rs \
-    && echo "// lib" > control-plane/shared/shared/src/lib.rs
+    && echo "fn main() {}" > control-plane/registry/src/main.rs \
+    && echo "pub fn lib() {}" > control-plane/shared/entity/src/lib.rs \
+    && echo "pub fn lib() {}" > control-plane/shared/migration/src/lib.rs \
+    && echo "pub fn lib() {}" > control-plane/shared/shared/src/lib.rs
 
-# Copy shared dependencies first for caching
 COPY control-plane/shared/ ./control-plane/shared/
 
-# Build dependencies (this layer will be cached)
-RUN cargo build -p registry || true
+RUN rm -rf /usr/local/cargo/registry/src/* /usr/local/cargo/registry/cache/* && \
+    cargo fetch
 
-# Remove dummy files
-RUN rm -rf agent/src cli/src \
-    control-plane/api-gateway/src \
-    control-plane/scheduler/src \
-    control-plane/failover-controller/src \
-    control-plane/sdn-controller/src \
-    control-plane/volume-manager/src \
-    control-plane/registry/src
+FROM dependencies AS final
 
-# Copy actual service source code
-COPY control-plane/registry/ ./control-plane/registry/
+COPY --from=cargo-tools /usr/local/cargo/bin/cargo-watch /usr/local/cargo/bin/
 
-# Expose registry port
-EXPOSE 8001
+EXPOSE 8000 8001
 
-CMD ["cargo", "watch", "-x", "run -p registry"]
-
+CMD ["cargo", "watch", "--help"]

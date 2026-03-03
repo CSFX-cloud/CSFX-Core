@@ -11,14 +11,31 @@ path = "src/main.rs"
 [dependencies]
 # Internal dependencies
 shared = { path = "../shared/shared" }
+entity = { path = "../shared/entity" }
+migration = { path = "../shared/migration" }
 
 # Async runtime
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Utilities
 dotenvy = { workspace = true }
 anyhow = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+chrono = { workspace = true, features = ["serde"] }
+
+# Database
+sea-orm = { workspace = true }
+
+# Crypto
+sha2 = { workspace = true }
