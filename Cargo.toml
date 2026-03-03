@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "agent",
     "control-plane/api-gateway",
     "control-plane/scheduler",
     "control-plane/failover-controller",
