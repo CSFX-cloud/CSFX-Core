@@ -18,6 +18,7 @@ pub async fn create(
     status: String,
     tags: Option<serde_json::Value>,
     capabilities: Option<serde_json::Value>,
+    public_key_pem: Option<String>,
 ) -> Result<agents::Model> {
     let model = agents::ActiveModel {
         id: Set(id),
@@ -35,6 +36,7 @@ pub async fn create(
         organization_id: Set(None),
         tags: Set(tags),
         capabilities: Set(capabilities),
+        public_key_pem: Set(public_key_pem),
     };
 
     Ok(model.insert(db).await?)

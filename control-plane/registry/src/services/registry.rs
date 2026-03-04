@@ -131,6 +131,7 @@ impl AgentRegistry {
             "Online".to_string(),
             tags_json,
             None,
+            None,
         )
         .await
         .map_err(|e| format!("Failed to create agent in database: {}", e))?;

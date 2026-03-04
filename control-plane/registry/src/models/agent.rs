@@ -97,12 +97,15 @@ pub struct RegisterRequest {
     pub architecture: String,
     pub agent_version: String,
     pub tags: Option<HashMap<String, String>>,
+    pub csr_pem: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub agent_id: Uuid,
     pub api_key: String,
+    pub certificate_pem: Option<String>,
+    pub ca_cert_pem: Option<String>,
     pub message: String,
 }
 

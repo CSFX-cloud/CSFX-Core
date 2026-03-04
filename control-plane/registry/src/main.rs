@@ -23,6 +23,14 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to database");
     log_info!("main", "Database connection established");
 
+    let cert_ttl_hours: i64 = std::env::var("CSF_CERT_TTL_HOURS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24);
+
+    let pki_service = services::pki::PkiService::new(db_conn.clone(), cert_ttl_hours)
+        .expect("Failed to initialize PKI service");
+
     let token_manager = Arc::new(services::tokens::TokenManager::new(db_conn.clone()));
     let api_key_manager = Arc::new(services::api_keys::ApiKeyManager::new(db_conn.clone()));
     let agent_registry = Arc::new(services::registry::AgentRegistry::new(db_conn.clone()));
@@ -33,6 +41,8 @@ async fn main() -> anyhow::Result<()> {
         token_manager: token_manager.clone(),
         api_key_manager: api_key_manager.clone(),
         agent_registry: agent_registry.clone(),
+        pki_service: Arc::new(pki_service),
+        db: db_conn.clone(),
     };
 
     let token_cleanup_handle = {

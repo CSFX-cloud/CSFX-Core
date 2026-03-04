@@ -55,6 +55,8 @@ pub async fn register_agent(
         ));
     }
 
+    let csr_pem = request.csr_pem.clone();
+
     let agent = match state
         .agent_registry
         .register_agent(RegisterAgentParams {
@@ -82,9 +84,29 @@ pub async fn register_agent(
 
     let api_key = state.api_key_manager.create_key(agent.id).await;
 
+    let (certificate_pem, ca_cert_pem) = if let Some(ref csr) = csr_pem {
+        match state.pki_service.issue_certificate(agent.id, csr).await {
+            Ok(issued) => (
+                Some(issued.certificate_pem),
+                Some(state.pki_service.ca_cert_pem()),
+            ),
+            Err(e) => {
+                crate::log_warn!(
+                    "agent_handler",
+                    &format!("Failed to issue certificate during registration: {}", e)
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+
     Ok(Json(RegisterResponse {
         agent_id: agent.id,
         api_key: api_key.key,
+        certificate_pem,
+        ca_cert_pem,
         message: "Agent successfully registered".to_string(),
     }))
 }
