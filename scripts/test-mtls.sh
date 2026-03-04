@@ -163,6 +163,7 @@ openssl s_server \
     -CAfile "$WORKDIR/ca.crt" \
     -Verify 1 \
     -port 18443 \
+    -4 \
     -quiet &
 SERVER_PID=$!
 sleep 1
@@ -171,16 +172,15 @@ MTLS_OUTPUT=$(echo "PING" | openssl s_client \
     -cert "$WORKDIR/node2.crt" \
     -key "$WORKDIR/node2.key" \
     -CAfile "$WORKDIR/ca.crt" \
-    -connect localhost:18443 \
-    -verify_return_error \
-    -quiet 2>&1 || true)
+    -connect 127.0.0.1:18443 \
+    -verify_return_error 2>&1 || true)
 
 kill $SERVER_PID 2>/dev/null || true
 
 if echo "$MTLS_OUTPUT" | grep -q "Verify return code: 0"; then
     ok "mTLS handshake successful — mutual authentication verified"
-elif echo "$MTLS_OUTPUT" | grep -q "CONNECTED"; then
-    ok "mTLS connection established"
+elif echo "$MTLS_OUTPUT" | grep -q "verify return:1"; then
+    ok "mTLS connection established — chain verified"
 else
     fail "mTLS handshake failed: $MTLS_OUTPUT"
 fi
