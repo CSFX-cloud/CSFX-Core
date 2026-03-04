@@ -20,7 +20,6 @@ FROM base AS dependencies
 COPY Cargo.toml Cargo.lock ./
 
 COPY agent/Cargo.toml ./agent/
-COPY cli/Cargo.toml ./cli/
 COPY control-plane/api-gateway/Cargo.toml ./control-plane/api-gateway/
 COPY control-plane/scheduler/Cargo.toml ./control-plane/scheduler/
 COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-controller/
@@ -31,7 +30,7 @@ COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
 COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
 COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
 
-RUN mkdir -p agent/src cli/src \
+RUN mkdir -p agent/src \
     control-plane/api-gateway/src \
     control-plane/scheduler/src \
     control-plane/failover-controller/src \
@@ -42,7 +41,6 @@ RUN mkdir -p agent/src cli/src \
     control-plane/shared/migration/src \
     control-plane/shared/shared/src \
     && echo "fn main() {}" > agent/src/main.rs \
-    && echo "fn main() {}" > cli/src/main.rs \
     && echo "fn main() {}" > control-plane/api-gateway/src/main.rs \
     && echo "fn main() {}" > control-plane/scheduler/src/main.rs \
     && echo "fn main() {}" > control-plane/failover-controller/src/main.rs \

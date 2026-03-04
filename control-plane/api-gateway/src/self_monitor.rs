@@ -89,6 +89,7 @@ impl SelfMonitor {
                 capabilities: ActiveValue::Set(Some(Json::Array(vec![Json::String(
                     "self-monitor".to_string(),
                 )]))),
+                public_key_pem: ActiveValue::Set(None),
             };
 
             let agent = new_agent.insert(db_conn.as_ref()).await?;

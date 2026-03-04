@@ -19,3 +19,4 @@ anyhow = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 chrono = { workspace = true, features = ["serde"] }
 sysinfo = { workspace = true }
+rcgen = { workspace = true }

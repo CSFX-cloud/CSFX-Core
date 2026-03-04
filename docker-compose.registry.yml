@@ -87,6 +87,29 @@ services:
       timeout: 10s
       retries: 3
 
+  agent:
+    <<: *rust-common
+    container_name: csf-agent-test
+    environment:
+      CSF_GATEWAY_URL: http://api-gateway:8000
+      CSF_REGISTRATION_TOKEN: ${CSF_REGISTRATION_TOKEN}
+      CSF_HEARTBEAT_INTERVAL: "30"
+      RUST_LOG: debug
+    depends_on:
+      registry:
+        condition: service_healthy
+    volumes:
+      - ./agent:/app/agent
+      - ./control-plane/shared:/app/control-plane/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_git:/usr/local/cargo/git
+      - cargo_target_agent:/app/target
+      - agent_state:/var/lib/csf-daemon
+    command: cargo run -p csf-agent
+    restart: "no"
+
 volumes:
   postgres_data:
     driver: local
@@ -97,6 +120,10 @@ volumes:
   cargo_target_api_gateway:
     driver: local
   cargo_target_registry:
+    driver: local
+  cargo_target_agent:
+    driver: local
+  agent_state:
     driver: local
 
 networks:
