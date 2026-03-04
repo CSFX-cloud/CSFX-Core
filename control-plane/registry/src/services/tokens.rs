@@ -143,7 +143,7 @@ impl TokenManager {
             used_at: None,
         };
 
-        crate::db::tokens::mark_used(&self.db, db_token.id, agent_id)
+        crate::db::tokens::mark_used(&self.db, db_token.id)
             .await
             .map_err(|e| format!("Failed to consume token: {}", e))?;
 

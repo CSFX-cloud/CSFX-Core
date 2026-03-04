@@ -43,7 +43,7 @@ pub async fn get_by_token(
         .await?)
 }
 
-pub async fn mark_used(db: &DatabaseConnection, token_id: Uuid, agent_id: Uuid) -> Result<()> {
+pub async fn mark_used(db: &DatabaseConnection, token_id: Uuid) -> Result<()> {
     let mut token: registry_tokens::ActiveModel = registry_tokens::Entity::find_by_id(token_id)
         .one(db)
         .await?
@@ -52,7 +52,6 @@ pub async fn mark_used(db: &DatabaseConnection, token_id: Uuid, agent_id: Uuid) 
 
     token.is_used = Set(true);
     token.used_at = Set(Some(chrono::Utc::now().naive_utc()));
-    token.used_by_agent_id = Set(Some(agent_id));
     token.update(db).await?;
 
     Ok(())

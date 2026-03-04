@@ -644,6 +644,140 @@ pub async fn get_statistics(
     }
 }
 
+/// Revoke agent certificate (Admin only)
+pub async fn revoke_certificate(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    let header_map: Vec<(String, String)> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+
+    proxy_to_registry(
+        &state,
+        reqwest::Method::POST,
+        &format!("/admin/agents/{}/revoke", agent_id),
+        body_json,
+        Some(header_map),
+    )
+    .await
+}
+
+/// Get agent mTLS endpoint info (Admin only)
+pub async fn get_agent_endpoint(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let header_map: Vec<(String, String)> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+
+    proxy_to_registry(
+        &state,
+        reqwest::Method::GET,
+        &format!("/admin/agents/{}/endpoint", agent_id),
+        None,
+        Some(header_map),
+    )
+    .await
+}
+
+/// Get CRL (public)
+pub async fn get_crl(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    proxy_to_registry(&state, reqwest::Method::GET, "/pki/crl", None, None).await
+}
+
+/// Issue certificate for agent
+pub async fn issue_certificate(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    let header_map: Vec<(String, String)> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+
+    proxy_to_registry(
+        &state,
+        reqwest::Method::POST,
+        &format!("/agents/{}/certificate", agent_id),
+        body_json,
+        Some(header_map),
+    )
+    .await
+}
+
+/// Rotate agent certificate
+pub async fn rotate_certificate(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    let header_map: Vec<(String, String)> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+
+    proxy_to_registry(
+        &state,
+        reqwest::Method::POST,
+        &format!("/agents/{}/rotate-certificate", agent_id),
+        body_json,
+        Some(header_map),
+    )
+    .await
+}
+
+async fn proxy_to_registry(
+    state: &AppState,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<serde_json::Value>,
+    headers: Option<Vec<(String, String)>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    match state
+        .service_client
+        .forward_to_registry(method, path, body, headers)
+        .await
+    {
+        Ok((status, Some(response_body))) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Json(response_body)).into_response())
+        }
+        Ok((status, None)) => {
+            let axum_status =
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            Ok((axum_status, Body::empty()).into_response())
+        }
+        Err(e) => {
+            tracing::error!("Failed to forward request to registry: {}", e);
+            Err((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({
+                    "error": "Registry service unavailable",
+                    "details": e.to_string()
+                })),
+            ))
+        }
+    }
+}
+
 /// Registry health check
 #[utoipa::path(
     get,
@@ -683,9 +817,29 @@ pub fn registry_routes() -> Router<AppState> {
         // Admin routes - Agent Management
         .route("/registry/admin/agents", get(list_agents_admin))
         .route("/registry/admin/statistics", get(get_statistics))
+        // Admin routes - PKI
+        .route(
+            "/registry/admin/agents/:id/revoke",
+            post(revoke_certificate),
+        )
+        .route(
+            "/registry/admin/agents/:id/endpoint",
+            get(get_agent_endpoint),
+        )
+        // Public PKI
+        .route("/registry/pki/crl", get(get_crl))
         // Agent routes
         .route("/registry/agents/register", post(register_agent))
         .route("/registry/agents/:id/heartbeat", post(agent_heartbeat))
+        // Agent - certificate management
+        .route(
+            "/registry/agents/:id/certificate",
+            post(issue_certificate),
+        )
+        .route(
+            "/registry/agents/:id/rotate-certificate",
+            post(rotate_certificate),
+        )
         // Health check
         .route("/registry/health", get(registry_health))
 }
