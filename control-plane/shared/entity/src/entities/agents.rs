@@ -20,6 +20,7 @@ pub struct Model {
     pub organization_id: Option<Uuid>,
     pub tags: Option<Json>,
     pub capabilities: Option<Json>,
+    pub public_key_pem: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

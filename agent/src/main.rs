@@ -1,5 +1,6 @@
 mod client;
 mod config;
+mod pki;
 mod system;
 
 use anyhow::{Context, Result};
@@ -29,6 +30,9 @@ async fn main() -> Result<()> {
     let api_client = client::ApiClient::new(gateway_url.clone())
         .context("Failed to initialize API client")?;
 
+    let agent_pki = pki::AgentPki::load_or_generate()
+        .context("Failed to initialize PKI")?;
+
     let (agent_id, api_key) = if config::is_registered() {
         info!("Existing registration found, loading credentials");
         let cfg = config::load_config().context("Failed to load daemon config")?;
@@ -36,8 +40,8 @@ async fn main() -> Result<()> {
         (cfg.agent_id, creds.api_key)
     } else {
         info!("No registration found, starting registration");
-        let reg = perform_registration(&api_client, &gateway_url, heartbeat_interval_secs).await?;
-        (reg.0, reg.1)
+        perform_registration(&api_client, &gateway_url, heartbeat_interval_secs, &agent_pki)
+            .await?
     };
 
     info!(agent_id = %agent_id, "Agent registered, starting heartbeat loop");
@@ -51,6 +55,7 @@ async fn perform_registration(
     client: &client::ApiClient,
     gateway_url: &str,
     heartbeat_interval_secs: u64,
+    agent_pki: &pki::AgentPki,
 ) -> Result<(uuid::Uuid, String)> {
     let token = std::env::var("CSF_REGISTRATION_TOKEN")
         .context("CSF_REGISTRATION_TOKEN is required for first-time registration")?;
@@ -72,9 +77,18 @@ async fn perform_registration(
             &info.os_type,
             &info.os_version,
             &info.architecture,
+            agent_pki.csr_pem(),
         )
         .await
         .context("Registration request failed")?;
+
+    if let (Some(cert_pem), Some(ca_pem)) = (&resp.certificate_pem, &resp.ca_cert_pem) {
+        pki::AgentPki::save_certificate(cert_pem, ca_pem)
+            .context("Failed to save certificate")?;
+        info!("PKI: certificate received and stored");
+    } else {
+        warn!("Registry did not issue a certificate during registration");
+    }
 
     let cfg = config::DaemonConfig {
         gateway_url: gateway_url.to_string(),

@@ -1,6 +1,8 @@
 pub mod agent_api_keys;
+pub mod agent_certificates;
 pub mod agent_metrics;
 pub mod agents;
+pub mod certificate_revocations;
 pub mod config;
 pub mod docker_resources;
 pub mod expenses;
@@ -18,8 +20,10 @@ pub mod user;
 pub mod user_organization;
 
 pub use agent_api_keys::Entity as AgentApiKeys;
+pub use agent_certificates::Entity as AgentCertificates;
 pub use agent_metrics::Entity as AgentMetrics;
 pub use agents::Entity as Agents;
+pub use certificate_revocations::Entity as CertificateRevocations;
 pub use config::Entity as Config;
 pub use docker_resources::Entity as DockerResources;
 pub use expenses::Entity as Expenses;

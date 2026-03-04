@@ -37,9 +37,9 @@ impl ApiKeyManager {
 
     pub async fn create_key(&self, agent_id: Uuid) -> ApiKey {
         let api_key = ApiKey::new(agent_id);
-        let key_hash = crate::db::hash_key(&api_key.key);
+        let key_hash = crate::db::api_keys::hash_key(&api_key.key);
 
-        if let Err(e) = crate::db::create_api_key(&self.db, agent_id, key_hash).await {
+        if let Err(e) = crate::db::api_keys::create(&self.db, agent_id, key_hash).await {
             crate::log_error!(
                 "api_key_manager",
                 &format!("Failed to save API key to database: {}", e)
@@ -55,7 +55,7 @@ impl ApiKeyManager {
     }
 
     pub async fn validate_key(&self, key_str: &str) -> Result<Uuid, String> {
-        match crate::db::get_agent_by_api_key(&self.db, key_str).await {
+        match crate::db::api_keys::get_agent_by_key(&self.db, key_str).await {
             Ok(Some(agent)) => {
                 crate::log_debug!(
                     "api_key_manager",
@@ -78,7 +78,7 @@ impl ApiKeyManager {
     }
 
     pub async fn revoke_key(&self, agent_id: Uuid) -> Result<(), String> {
-        match crate::db::revoke_api_key_by_agent(&self.db, agent_id).await {
+        match crate::db::api_keys::revoke_by_agent(&self.db, agent_id).await {
             Ok(revoked) => {
                 crate::log_info!(
                     "api_key_manager",
@@ -94,16 +94,5 @@ impl ApiKeyManager {
                 Err(format!("Failed to revoke key: {}", e))
             }
         }
-    }
-
-    #[allow(dead_code)]
-    pub async fn rotate_key(&self, agent_id: Uuid) -> Result<ApiKey, String> {
-        self.revoke_key(agent_id).await?;
-        let new_key = self.create_key(agent_id).await;
-        crate::log_info!(
-            "api_key_manager",
-            &format!("Rotated API key for agent: {}", agent_id)
-        );
-        Ok(new_key)
     }
 }

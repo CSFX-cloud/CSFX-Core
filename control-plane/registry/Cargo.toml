@@ -39,3 +39,5 @@ sea-orm = { workspace = true }
 
 # Crypto
 sha2 = { workspace = true }
+rcgen = { workspace = true }
+x509-parser = { workspace = true }

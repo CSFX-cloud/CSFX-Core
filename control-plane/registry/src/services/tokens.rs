@@ -71,7 +71,7 @@ impl TokenManager {
             ttl_hours,
         );
 
-        if let Err(e) = crate::db::create_registry_token(
+        if let Err(e) = crate::db::tokens::create(
             &self.db,
             agent_id,
             token_obj.token.clone(),
@@ -104,7 +104,7 @@ impl TokenManager {
         &self,
         token_str: &str,
     ) -> Result<RegistrationToken, String> {
-        let db_token = crate::db::get_registry_token_by_token(&self.db, token_str)
+        let db_token = crate::db::tokens::get_by_token(&self.db, token_str)
             .await
             .map_err(|e| format!("Database error: {}", e))?
             .ok_or_else(|| "Token not found".to_string())?;
@@ -143,23 +143,20 @@ impl TokenManager {
             used_at: None,
         };
 
-        crate::db::mark_token_as_used(&self.db, db_token.id, agent_id)
+        crate::db::tokens::mark_used(&self.db, db_token.id)
             .await
             .map_err(|e| format!("Failed to consume token: {}", e))?;
 
         crate::log_info!(
             "token_manager",
-            &format!(
-                "Token consumed: {} agent={}",
-                db_token.id, agent_id
-            )
+            &format!("Token consumed: {} agent={}", db_token.id, agent_id)
         );
 
         Ok(token_data)
     }
 
     pub async fn list_tokens(&self) -> Vec<RegistrationToken> {
-        match crate::db::get_unused_tokens(&self.db).await {
+        match crate::db::tokens::get_unused(&self.db).await {
             Ok(db_tokens) => db_tokens
                 .into_iter()
                 .filter_map(|t| {
@@ -190,7 +187,7 @@ impl TokenManager {
     }
 
     pub async fn cleanup_expired(&self) -> usize {
-        match crate::db::delete_expired_tokens(&self.db).await {
+        match crate::db::tokens::delete_expired(&self.db).await {
             Ok(removed) => {
                 if removed > 0 {
                     crate::log_info!(

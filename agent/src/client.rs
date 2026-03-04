@@ -12,12 +12,15 @@ struct RegisterRequest<'a> {
     os_version: &'a str,
     architecture: &'a str,
     agent_version: &'a str,
+    csr_pem: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterResponse {
     pub agent_id: Uuid,
     pub api_key: String,
+    pub certificate_pem: Option<String>,
+    pub ca_cert_pem: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -48,6 +51,7 @@ impl ApiClient {
         os_type: &str,
         os_version: &str,
         architecture: &str,
+        csr_pem: &str,
     ) -> Result<RegisterResponse> {
         let url = format!("{}/api/registry/agents/register", self.gateway_url);
 
@@ -59,6 +63,7 @@ impl ApiClient {
             os_version,
             architecture,
             agent_version: env!("CARGO_PKG_VERSION"),
+            csr_pem,
         };
 
         let resp = self
