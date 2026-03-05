@@ -63,6 +63,26 @@ pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<WorkloadResponse>, s
     Ok(rows.into_iter().map(into_response).collect())
 }
 
+pub async fn update_container_status(
+    db: &DatabaseConnection,
+    workload_id: Uuid,
+    container_id: &str,
+    status: &str,
+) -> Result<(), sea_orm::DbErr> {
+    let workload = workloads::Entity::find_by_id(workload_id)
+        .one(db)
+        .await?
+        .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
+
+    let mut active: workloads::ActiveModel = workload.into();
+    active.container_id = Set(Some(container_id.to_string()));
+    active.status = Set(status.to_string());
+    active.updated_at = Set(Some(Utc::now().naive_utc()));
+
+    active.update(db).await?;
+    Ok(())
+}
+
 pub async fn delete(
     db: &DatabaseConnection,
     workload_id: Uuid,

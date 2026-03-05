@@ -3492,6 +3492,7 @@ dependencies = [
  "entity",
  "migration",
  "rcgen",
+ "reqwest 0.11.27",
  "sea-orm",
  "serde",
  "serde_json",

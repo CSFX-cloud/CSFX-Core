@@ -37,6 +37,8 @@ chrono = { workspace = true, features = ["serde"] }
 # Database
 sea-orm = { workspace = true }
 
+reqwest = { workspace = true }
+
 # Crypto
 sha2 = { workspace = true }
 rcgen = { workspace = true }

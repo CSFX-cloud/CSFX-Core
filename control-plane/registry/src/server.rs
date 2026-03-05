@@ -4,6 +4,7 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
+use reqwest::Client;
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 
@@ -19,6 +20,8 @@ pub struct AppState {
     pub agent_registry: Arc<AgentRegistry>,
     pub pki_service: Arc<PkiService>,
     pub db: DatabaseConnection,
+    pub scheduler_url: String,
+    pub http_client: Client,
 }
 
 pub async fn health_check() -> impl IntoResponse {

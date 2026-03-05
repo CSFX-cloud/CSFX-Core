@@ -115,7 +115,7 @@ pub async fn heartbeat(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(agent_id): Path<Uuid>,
-    Json(_request): Json<HeartbeatRequest>,
+    Json(request): Json<HeartbeatRequest>,
 ) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<ErrorResponse>)> {
     let api_key = headers
         .get("X-API-Key")
@@ -173,15 +173,47 @@ pub async fn heartbeat(
     }
 
     match state.agent_registry.update_heartbeat(agent_id).await {
-        Ok(_) => Ok(Json(HeartbeatResponse {
-            success: true,
-            message: "Heartbeat recorded".to_string(),
-        })),
+        Ok(_) => {
+            if let Some(statuses) = request.container_statuses {
+                if !statuses.is_empty() {
+                    forward_container_statuses(&state, statuses).await;
+                }
+            }
+
+            Ok(Json(HeartbeatResponse {
+                success: true,
+                message: "Heartbeat recorded".to_string(),
+            }))
+        }
         Err(e) => Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
                 error: format!("Agent not found: {}", e),
             }),
         )),
+    }
+}
+
+async fn forward_container_statuses(
+    state: &crate::server::AppState,
+    statuses: Vec<crate::models::agent::ContainerStatus>,
+) {
+    use serde_json::json;
+
+    let payload = json!({
+        "statuses": statuses.iter().map(|s| json!({
+            "workload_id": s.workload_id,
+            "container_id": s.container_id,
+            "status": s.status,
+        })).collect::<Vec<_>>()
+    });
+
+    let url = format!("{}/internal/workloads/status", state.scheduler_url);
+
+    if let Err(e) = state.http_client.post(&url).json(&payload).send().await {
+        crate::log_warn!(
+            "agent_handler",
+            &format!("Failed to forward container statuses to scheduler err={}", e)
+        );
     }
 }

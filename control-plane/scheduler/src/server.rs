@@ -4,7 +4,7 @@ use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::{handlers::workloads, services::scheduler::SchedulerService};
+use crate::{handlers::{internal, workloads}, services::scheduler::SchedulerService};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -23,5 +23,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/workloads", axum::routing::post(workloads::create_workload))
         .route("/workloads", get(workloads::list_workloads))
         .route("/workloads/:id", axum::routing::delete(workloads::delete_workload))
+        .route("/internal/workloads/status", axum::routing::post(internal::update_container_statuses))
         .with_state(state)
 }

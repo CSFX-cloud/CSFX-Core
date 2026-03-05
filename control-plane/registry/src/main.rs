@@ -37,12 +37,22 @@ async fn main() -> anyhow::Result<()> {
 
     log_info!("main", "Managers initialized");
 
+    let scheduler_url = std::env::var("SCHEDULER_SERVICE_URL")
+        .unwrap_or_else(|_| "http://localhost:8002".to_string());
+
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .expect("Failed to build HTTP client");
+
     let state = server::AppState {
         token_manager: token_manager.clone(),
         api_key_manager: api_key_manager.clone(),
         agent_registry: agent_registry.clone(),
         pki_service: Arc::new(pki_service),
         db: db_conn.clone(),
+        scheduler_url,
+        http_client,
     };
 
     let token_cleanup_handle = {
