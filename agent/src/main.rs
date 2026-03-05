@@ -1,10 +1,14 @@
 mod client;
 mod config;
+mod docker;
 mod pki;
 mod system;
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 #[tokio::main]
@@ -61,7 +65,29 @@ async fn main() -> Result<()> {
 
     info!(agent_id = %agent_id, "Agent registered, starting heartbeat loop");
 
-    run_heartbeat_loop(&api_client, agent_id, &api_key, heartbeat_interval_secs).await;
+    let docker_manager = match docker::DockerManager::new() {
+        Ok(dm) => {
+            info!("Docker socket connected");
+            Some(Arc::new(dm))
+        }
+        Err(e) => {
+            warn!(error = %e, "Docker unavailable, container management disabled");
+            None
+        }
+    };
+
+    let running_containers: Arc<Mutex<HashMap<String, String>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    run_heartbeat_loop(
+        &api_client,
+        agent_id,
+        &api_key,
+        heartbeat_interval_secs,
+        docker_manager,
+        running_containers,
+    )
+    .await;
 
     Ok(())
 }
@@ -124,6 +150,8 @@ async fn run_heartbeat_loop(
     agent_id: uuid::Uuid,
     api_key: &str,
     interval_secs: u64,
+    docker: Option<Arc<docker::DockerManager>>,
+    running_containers: Arc<Mutex<HashMap<String, String>>>,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
@@ -131,7 +159,13 @@ async fn run_heartbeat_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                match client.heartbeat(agent_id, api_key).await {
+                if let Some(ref dm) = docker {
+                    process_workloads(client, api_key, dm, &running_containers).await;
+                }
+
+                let statuses = build_container_statuses(&running_containers).await;
+
+                match client.heartbeat(agent_id, api_key, Some(statuses)).await {
                     Ok(_) => {
                         if failure_count > 0 {
                             info!(agent_id = %agent_id, "Heartbeat recovered after {} failures", failure_count);
@@ -159,4 +193,77 @@ async fn run_heartbeat_loop(
     if failure_count > 0 {
         error!(failures = failure_count, "Agent shutting down with unresolved heartbeat failures");
     }
+}
+
+async fn process_workloads(
+    client: &client::ApiClient,
+    api_key: &str,
+    docker: &docker::DockerManager,
+    running_containers: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    let workloads = match client.fetch_assigned_workloads(api_key).await {
+        Ok(w) => w,
+        Err(e) => {
+            warn!(error = %e, "Failed to fetch assigned workloads");
+            return;
+        }
+    };
+
+    for workload in workloads {
+        let already_running = running_containers
+            .lock()
+            .await
+            .contains_key(&workload.id);
+
+        if already_running {
+            continue;
+        }
+
+        info!(workload_id = %workload.id, image = %workload.image, "Starting workload");
+
+        if let Err(e) = docker.pull_image(&workload.image).await {
+            warn!(workload_id = %workload.id, error = %e, "Failed to pull image");
+            continue;
+        }
+
+        let spec = docker::WorkloadSpec {
+            workload_id: workload.id.clone(),
+            name: workload.name.clone(),
+            image: workload.image.clone(),
+            env_vars: workload.env_vars,
+            ports: workload.ports,
+        };
+
+        match docker.start_container(&spec).await {
+            Ok(container_id) => {
+                running_containers
+                    .lock()
+                    .await
+                    .insert(workload.id.clone(), container_id.clone());
+                info!(
+                    workload_id = %workload.id,
+                    container_id = %container_id,
+                    "Workload started"
+                );
+            }
+            Err(e) => {
+                warn!(workload_id = %workload.id, error = %e, "Failed to start container");
+            }
+        }
+    }
+}
+
+async fn build_container_statuses(
+    running_containers: &Arc<Mutex<HashMap<String, String>>>,
+) -> Vec<client::ContainerStatus> {
+    running_containers
+        .lock()
+        .await
+        .iter()
+        .map(|(workload_id, container_id)| client::ContainerStatus {
+            workload_id: workload_id.clone(),
+            container_id: container_id.clone(),
+            status: "running".to_string(),
+        })
+        .collect()
 }

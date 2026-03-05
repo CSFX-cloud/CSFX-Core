@@ -110,8 +110,16 @@ pub struct RegisterResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct ContainerStatus {
+    pub workload_id: String,
+    pub container_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HeartbeatRequest {
     pub status: Option<String>,
+    pub container_statuses: Option<Vec<ContainerStatus>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

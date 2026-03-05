@@ -20,6 +20,7 @@ pub mod subscriptions;
 pub mod system;
 pub mod updates;
 pub mod users;
+pub mod workloads;
 
 /// Creates the main application router and logs all registered routes.
 pub fn create_router() -> Router<AppState> {
@@ -65,7 +66,8 @@ pub fn create_router() -> Router<AppState> {
         .merge(subscriptions::subscriptions_routes())
         .merge(system::routes())
         .merge(updates::router())
-        .merge(users::users_routes());
+        .merge(users::users_routes())
+        .merge(workloads::workloads_routes());
 
     Router::new()
         // API routes

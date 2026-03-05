@@ -36,3 +36,6 @@ nixos/result-*
 keys/
 
 claude.md
+
+*.csr
+*.key
