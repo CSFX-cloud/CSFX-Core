@@ -31,6 +31,7 @@ struct HeartbeatRequest {
 pub struct ApiClient {
     client: Client,
     gateway_url: String,
+    cert_pem: Option<String>,
 }
 
 impl ApiClient {
@@ -40,7 +41,16 @@ impl ApiClient {
             .build()
             .context("Failed to build HTTP client")?;
 
-        Ok(Self { client, gateway_url })
+        Ok(Self {
+            client,
+            gateway_url,
+            cert_pem: None,
+        })
+    }
+
+    pub fn with_certificate(mut self, cert_pem: String) -> Self {
+        self.cert_pem = Some(cert_pem);
+        self
     }
 
     pub async fn register(
@@ -91,14 +101,17 @@ impl ApiClient {
             self.gateway_url, agent_id
         );
 
-        let resp = self
+        let mut req = self
             .client
             .post(&url)
             .header("X-API-Key", api_key)
-            .json(&HeartbeatRequest { status: None })
-            .send()
-            .await
-            .context("Failed to send heartbeat")?;
+            .json(&HeartbeatRequest { status: None });
+
+        if let Some(ref cert_pem) = self.cert_pem {
+            req = req.header("X-Client-Cert", cert_pem.as_str());
+        }
+
+        let resp = req.send().await.context("Failed to send heartbeat")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
