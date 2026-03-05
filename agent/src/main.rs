@@ -44,6 +44,21 @@ async fn main() -> Result<()> {
             .await?
     };
 
+    let api_client = if pki::AgentPki::has_certificate() {
+        match pki::AgentPki::load_cert_pem() {
+            Ok(cert_pem) => {
+                info!("mTLS: client certificate loaded");
+                api_client.with_certificate(cert_pem)
+            }
+            Err(e) => {
+                warn!(error = %e, "mTLS: failed to load certificate, continuing without");
+                api_client
+            }
+        }
+    } else {
+        api_client
+    };
+
     info!(agent_id = %agent_id, "Agent registered, starting heartbeat loop");
 
     run_heartbeat_loop(&api_client, agent_id, &api_key, heartbeat_interval_secs).await;

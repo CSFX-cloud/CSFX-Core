@@ -96,3 +96,24 @@ pub async fn is_revoked(db: &DatabaseConnection, serial_number: i64) -> Result<b
         .await?
         .is_some())
 }
+
+pub async fn verify_client_cert(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+    cert_pem: &str,
+) -> Result<bool> {
+    let cert = agent_certificates::Entity::find()
+        .filter(agent_certificates::Column::AgentId.eq(agent_id))
+        .filter(agent_certificates::Column::IsActive.eq(true))
+        .filter(agent_certificates::Column::CertificatePem.eq(cert_pem))
+        .one(db)
+        .await?;
+
+    match cert {
+        None => Ok(false),
+        Some(c) => {
+            let revoked = is_revoked(db, c.serial_number).await?;
+            Ok(!revoked)
+        }
+    }
+}

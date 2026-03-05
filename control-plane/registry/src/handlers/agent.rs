@@ -150,6 +150,28 @@ pub async fn heartbeat(
         ));
     }
 
+    if let Some(cert_pem) = headers.get("X-Client-Cert").and_then(|v| v.to_str().ok()) {
+        let valid = crate::db::certificates::verify_client_cert(&state.db, agent_id, cert_pem)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Certificate verification failed: {}", e),
+                    }),
+                )
+            })?;
+
+        if !valid {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: "Invalid or revoked client certificate".to_string(),
+                }),
+            ));
+        }
+    }
+
     match state.agent_registry.update_heartbeat(agent_id).await {
         Ok(_) => Ok(Json(HeartbeatResponse {
             success: true,
