@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize)]
@@ -26,6 +27,28 @@ pub struct RegisterResponse {
 #[derive(Debug, Serialize)]
 struct HeartbeatRequest {
     status: Option<String>,
+    container_statuses: Option<Vec<ContainerStatus>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContainerStatus {
+    pub workload_id: String,
+    pub container_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AssignedWorkload {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub cpu_millicores: i32,
+    pub memory_bytes: i64,
+    pub disk_bytes: i64,
+    pub env_vars: Option<HashMap<String, String>>,
+    pub ports: Option<Vec<crate::docker::PortMapping>>,
+    pub status: String,
+    pub container_id: Option<String>,
 }
 
 pub struct ApiClient {
@@ -95,7 +118,12 @@ impl ApiClient {
             .context("Failed to parse registration response")
     }
 
-    pub async fn heartbeat(&self, agent_id: Uuid, api_key: &str) -> Result<()> {
+    pub async fn heartbeat(
+        &self,
+        agent_id: Uuid,
+        api_key: &str,
+        container_statuses: Option<Vec<ContainerStatus>>,
+    ) -> Result<()> {
         let url = format!(
             "{}/api/registry/agents/{}/heartbeat",
             self.gateway_url, agent_id
@@ -105,7 +133,10 @@ impl ApiClient {
             .client
             .post(&url)
             .header("X-API-Key", api_key)
-            .json(&HeartbeatRequest { status: None });
+            .json(&HeartbeatRequest {
+                status: None,
+                container_statuses,
+            });
 
         if let Some(ref cert_pem) = self.cert_pem {
             req = req.header("X-Client-Cert", cert_pem.as_str());
@@ -119,5 +150,39 @@ impl ApiClient {
         }
 
         Ok(())
+    }
+
+    pub async fn fetch_assigned_workloads(
+        &self,
+        api_key: &str,
+    ) -> Result<Vec<AssignedWorkload>> {
+        let url = format!("{}/api/workloads", self.gateway_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-API-Key", api_key)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .send()
+            .await
+            .context("Failed to fetch workloads")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("Failed to fetch workloads status={}", status);
+        }
+
+        let all: Vec<AssignedWorkload> = resp
+            .json()
+            .await
+            .context("Failed to parse workloads response")?;
+
+        Ok(all
+            .into_iter()
+            .filter(|w| {
+                w.status == "scheduled"
+                    && w.container_id.is_none()
+            })
+            .collect())
     }
 }

@@ -1049,7 +1049,9 @@ name = "csf-agent"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "bollard",
  "chrono",
+ "futures-util",
  "rcgen",
  "reqwest 0.12.28",
  "serde",
