@@ -8,12 +8,16 @@ use std::time::Duration;
 pub struct ServiceClient {
     client: Client,
     registry_url: String,
+    scheduler_url: String,
 }
 
 impl ServiceClient {
     pub fn new() -> Self {
         let registry_url = std::env::var("REGISTRY_SERVICE_URL")
             .unwrap_or_else(|_| "http://localhost:8001".to_string());
+
+        let scheduler_url = std::env::var("SCHEDULER_SERVICE_URL")
+            .unwrap_or_else(|_| "http://localhost:8002".to_string());
 
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
@@ -23,6 +27,7 @@ impl ServiceClient {
         Self {
             client,
             registry_url,
+            scheduler_url,
         }
     }
 
@@ -96,6 +101,60 @@ impl ServiceClient {
             Ok(response) => response.status().is_success(),
             Err(_) => false,
         }
+    }
+
+    pub async fn forward_to_scheduler(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        headers: Option<Vec<(String, String)>>,
+    ) -> Result<(StatusCode, Option<serde_json::Value>)> {
+        let url = format!("{}{}", self.scheduler_url, path);
+
+        tracing::debug!("Forwarding {} request to scheduler: {}", method, url);
+
+        let mut request = match method {
+            reqwest::Method::GET => self.client.get(&url),
+            reqwest::Method::POST => self.client.post(&url),
+            reqwest::Method::DELETE => self.client.delete(&url),
+            _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
+        };
+
+        if let Some(headers) = headers {
+            for (key, value) in headers {
+                let key_lower = key.to_lowercase();
+                if key_lower == "content-length"
+                    || key_lower == "host"
+                    || key_lower == "content-type"
+                    || key_lower == "transfer-encoding"
+                {
+                    continue;
+                }
+                request = request.header(key, value);
+            }
+        }
+
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+
+        let response = request
+            .send()
+            .await
+            .context("Failed to send request to scheduler service")?;
+
+        let status = response.status();
+        let body_text = response.text().await.ok();
+        let json_body = body_text.and_then(|text| {
+            if text.is_empty() {
+                None
+            } else {
+                serde_json::from_str(&text).ok()
+            }
+        });
+
+        Ok((status, json_body))
     }
 }
 
