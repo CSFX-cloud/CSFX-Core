@@ -3825,9 +3825,19 @@ name = "scheduler"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "axum",
+ "chrono",
+ "dotenvy",
+ "entity",
+ "etcd-client",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "shared",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
