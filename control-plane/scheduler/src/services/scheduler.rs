@@ -1,15 +1,21 @@
+use chrono::Utc;
+use etcd_client::Client as EtcdClient;
 use sea_orm::DatabaseConnection;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::models::workload::{AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, WorkloadStatus};
+use crate::services::etcd::{delete_placement, put_placement, PlacementRecord};
 
 pub struct SchedulerService {
     db: DatabaseConnection,
+    etcd: Arc<Mutex<EtcdClient>>,
 }
 
 impl SchedulerService {
-    pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+    pub fn new(db: DatabaseConnection, etcd: Arc<Mutex<EtcdClient>>) -> Self {
+        Self { db, etcd }
     }
 
     pub async fn schedule(&self, req: CreateWorkloadRequest) -> Result<CreateWorkloadResponse, String> {
@@ -37,6 +43,18 @@ impl SchedulerService {
                 crate::db::workloads::assign(&self.db, workload.id, agent_id)
                     .await
                     .map_err(|e| format!("Failed to assign workload: {}", e))?;
+
+                let record = PlacementRecord {
+                    workload_id: workload.id,
+                    agent_id,
+                    image: req.image.clone(),
+                    cpu_millicores: req.cpu_millicores,
+                    memory_bytes: req.memory_bytes,
+                    disk_bytes: req.disk_bytes,
+                    scheduled_at: Utc::now().to_rfc3339(),
+                };
+
+                put_placement(&self.etcd, &record).await?;
 
                 crate::log_info!(
                     "scheduler",
@@ -98,6 +116,10 @@ impl SchedulerService {
     pub async fn delete_workload(&self, workload_id: Uuid) -> Result<(), String> {
         crate::db::workloads::delete(&self.db, workload_id)
             .await
-            .map_err(|e| format!("Failed to delete workload: {}", e))
+            .map_err(|e| format!("Failed to delete workload: {}", e))?;
+
+        delete_placement(&self.etcd, workload_id).await?;
+
+        Ok(())
     }
 }

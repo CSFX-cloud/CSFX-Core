@@ -34,11 +34,12 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to etcd");
     log_info!("main", "etcd connection established");
 
-    let scheduler = Arc::new(services::scheduler::SchedulerService::new(db.clone()));
+    let etcd = Arc::new(Mutex::new(etcd));
+    let scheduler = Arc::new(services::scheduler::SchedulerService::new(db.clone(), etcd.clone()));
 
     let state = server::AppState {
         db,
-        etcd: Arc::new(Mutex::new(etcd)),
+        etcd,
         scheduler,
     };
 
