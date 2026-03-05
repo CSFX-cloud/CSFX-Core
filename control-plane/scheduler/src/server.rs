@@ -4,10 +4,13 @@ use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::{handlers::workloads, services::scheduler::SchedulerService};
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
     pub etcd: Arc<Mutex<EtcdClient>>,
+    pub scheduler: Arc<SchedulerService>,
 }
 
 pub async fn health_check() -> impl IntoResponse {
@@ -17,5 +20,8 @@ pub async fn health_check() -> impl IntoResponse {
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
+        .route("/workloads", axum::routing::post(workloads::create_workload))
+        .route("/workloads", get(workloads::list_workloads))
+        .route("/workloads/:id", axum::routing::delete(workloads::delete_workload))
         .with_state(state)
 }

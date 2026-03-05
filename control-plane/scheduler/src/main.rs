@@ -2,8 +2,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+mod db;
+mod handlers;
 mod logger;
+mod models;
 mod server;
+mod services;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -30,9 +34,12 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to etcd");
     log_info!("main", "etcd connection established");
 
+    let scheduler = Arc::new(services::scheduler::SchedulerService::new(db.clone()));
+
     let state = server::AppState {
         db,
         etcd: Arc::new(Mutex::new(etcd)),
+        scheduler,
     };
 
     let app = server::create_router(state);
