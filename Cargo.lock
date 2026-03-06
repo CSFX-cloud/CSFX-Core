@@ -3889,9 +3889,20 @@ name = "sdn-controller"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "axum",
+ "chrono",
+ "dotenvy",
+ "entity",
+ "etcd-client",
+ "reqwest 0.11.27",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "shared",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

@@ -11,6 +11,7 @@ pub struct ServiceClient {
     scheduler_url: String,
     volume_manager_url: String,
     failover_controller_url: String,
+    sdn_controller_url: String,
 }
 
 impl ServiceClient {
@@ -27,6 +28,9 @@ impl ServiceClient {
         let failover_controller_url = std::env::var("FAILOVER_CONTROLLER_URL")
             .unwrap_or_else(|_| "http://localhost:8004".to_string());
 
+        let sdn_controller_url = std::env::var("SDN_CONTROLLER_URL")
+            .unwrap_or_else(|_| "http://localhost:8005".to_string());
+
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -38,6 +42,7 @@ impl ServiceClient {
             scheduler_url,
             volume_manager_url,
             failover_controller_url,
+            sdn_controller_url,
         }
     }
 
@@ -64,10 +69,8 @@ impl ServiceClient {
             }
         };
 
-        // Add custom headers (filter out conflicting headers)
         if let Some(headers) = headers {
             for (key, value) in headers {
-                // Skip headers that should not be forwarded or will be set automatically
                 let key_lower = key.to_lowercase();
                 if key_lower == "content-length"
                     || key_lower == "host"
@@ -80,7 +83,6 @@ impl ServiceClient {
             }
         }
 
-        // Add body if present
         if let Some(body) = body {
             request = request.json(&body);
         }
@@ -261,6 +263,60 @@ impl ServiceClient {
             .send()
             .await
             .context("Failed to send request to failover-controller service")?;
+
+        let status = response.status();
+        let body_text = response.text().await.ok();
+        let json_body = body_text.and_then(|text| {
+            if text.is_empty() {
+                None
+            } else {
+                serde_json::from_str(&text).ok()
+            }
+        });
+
+        Ok((status, json_body))
+    }
+
+    pub async fn forward_to_sdn_controller(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        headers: Option<Vec<(String, String)>>,
+    ) -> Result<(StatusCode, Option<serde_json::Value>)> {
+        let url = format!("{}{}", self.sdn_controller_url, path);
+
+        tracing::debug!("Forwarding {} request to sdn-controller: {}", method, url);
+
+        let mut request = match method {
+            reqwest::Method::GET => self.client.get(&url),
+            reqwest::Method::POST => self.client.post(&url),
+            reqwest::Method::DELETE => self.client.delete(&url),
+            _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
+        };
+
+        if let Some(headers) = headers {
+            for (key, value) in headers {
+                let key_lower = key.to_lowercase();
+                if key_lower == "content-length"
+                    || key_lower == "host"
+                    || key_lower == "content-type"
+                    || key_lower == "transfer-encoding"
+                {
+                    continue;
+                }
+                request = request.header(key, value);
+            }
+        }
+
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+
+        let response = request
+            .send()
+            .await
+            .context("Failed to send request to sdn-controller service")?;
 
         let status = response.status();
         let body_text = response.text().await.ok();

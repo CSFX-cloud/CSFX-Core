@@ -1,27 +1,59 @@
-use tracing::{info, warn};
+use std::net::SocketAddr;
+
+mod db;
+mod handlers;
+mod logger;
+mod models;
+mod server;
+mod services;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logger
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_thread_ids(true)
-        .with_level(true)
-        .init();
+    dotenvy::dotenv().ok();
 
-    info!("🌐 SDN Controller Service starting...");
-    info!("✅ SDN Controller initialized");
-    
-    // Demo: Simulated network management loop
-    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(25));
-    
-    loop {
-        interval.tick().await;
-        info!("🔌 Managing network infrastructure...");
-        info!("   - Configuring VXLAN tunnels");
-        info!("   - Managing IP address allocation (IPAM)");
-        info!("   - Updating firewall rules");
-        info!("   - Optimizing routing tables");
-        warn!("   ⚠️  Demo mode: No actual network changes applied");
+    logger::init_logger();
+
+    log_info!("main", "CSF SDN Controller starting...");
+    log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
+
+    log_info!("main", "Connecting to database...");
+    let db = shared::establish_connection()
+        .await
+        .expect("Failed to connect to database");
+    log_info!("main", "Database connection established");
+
+    let etcd_url = std::env::var("ETCD_URL").unwrap_or_else(|_| "http://localhost:2379".to_string());
+    log_info!("main", &format!("Connecting to etcd url={}", etcd_url));
+    let etcd = etcd_client::Client::connect([etcd_url.as_str()], None)
+        .await
+        .expect("Failed to connect to etcd");
+    log_info!("main", "etcd connection established");
+
+    let ipam = services::ipam::IpamService::new(etcd);
+    let state = server::AppState::new(db, ipam);
+    let app = server::create_router(state);
+
+    let port = std::env::var("SDN_CONTROLLER_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(8005);
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    log_info!("main", &format!("SDN Controller listening port={}", port));
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+
+    tokio::select! {
+        result = axum::serve(listener, app) => {
+            if let Err(e) = result {
+                log_error!("main", &format!("Server error err={}", e));
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            log_info!("main", "Shutdown signal received");
+        }
     }
+
+    log_info!("main", "SDN Controller shutting down");
+    Ok(())
 }
