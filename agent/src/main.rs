@@ -2,6 +2,7 @@ mod client;
 mod config;
 mod docker;
 mod pki;
+mod rbd;
 mod system;
 
 use anyhow::{Context, Result};
@@ -79,6 +80,9 @@ async fn main() -> Result<()> {
     let running_containers: Arc<Mutex<HashMap<String, String>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
+    let mounted_volumes: Arc<Mutex<HashMap<String, String>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
     run_heartbeat_loop(
         &api_client,
         agent_id,
@@ -86,6 +90,7 @@ async fn main() -> Result<()> {
         heartbeat_interval_secs,
         docker_manager,
         running_containers,
+        mounted_volumes,
     )
     .await;
 
@@ -152,6 +157,7 @@ async fn run_heartbeat_loop(
     interval_secs: u64,
     docker: Option<Arc<docker::DockerManager>>,
     running_containers: Arc<Mutex<HashMap<String, String>>>,
+    mounted_volumes: Arc<Mutex<HashMap<String, String>>>,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
@@ -159,6 +165,8 @@ async fn run_heartbeat_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
+                process_volumes(client, agent_id, api_key, &mounted_volumes).await;
+
                 if let Some(ref dm) = docker {
                     process_workloads(client, api_key, dm, &running_containers).await;
                 }
@@ -192,6 +200,58 @@ async fn run_heartbeat_loop(
 
     if failure_count > 0 {
         error!(failures = failure_count, "Agent shutting down with unresolved heartbeat failures");
+    }
+}
+
+async fn process_volumes(
+    client: &client::ApiClient,
+    agent_id: uuid::Uuid,
+    api_key: &str,
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    let volumes = match client.fetch_assigned_volumes(agent_id, api_key).await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "Failed to fetch assigned volumes");
+            return;
+        }
+    };
+
+    for volume in volumes {
+        let already_mounted = mounted_volumes.lock().await.contains_key(&volume.id);
+        if already_mounted {
+            continue;
+        }
+
+        info!(volume_id = %volume.id, image = %volume.image_name, "Mapping volume");
+
+        let device = match rbd::map_device(&volume.pool, &volume.image_name).await {
+            Ok(d) => d,
+            Err(e) => {
+                warn!(volume_id = %volume.id, error = %e, "Failed to map RBD device");
+                continue;
+            }
+        };
+
+        let mount_point = rbd::mount_point_for(&volume.id);
+
+        if let Err(e) = rbd::mount(&device, &mount_point).await {
+            warn!(volume_id = %volume.id, error = %e, "Failed to mount device");
+            let _ = rbd::unmap_device(&device).await;
+            continue;
+        }
+
+        mounted_volumes
+            .lock()
+            .await
+            .insert(volume.id.clone(), device.clone());
+
+        info!(
+            volume_id = %volume.id,
+            device = %device,
+            mount_point = %mount_point,
+            "Volume mounted"
+        );
     }
 }
 

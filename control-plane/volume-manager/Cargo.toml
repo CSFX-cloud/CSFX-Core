@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 # Internal dependencies
 shared = { path = "../shared/shared" }
+entity = { path = "../shared/entity" }
 
 # Async runtime
 tokio = { workspace = true }
@@ -18,6 +19,12 @@ async-trait = { workspace = true }
 
 # etcd
 etcd-client = { workspace = true }
+
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+
+# Database
+sea-orm = { workspace = true }
 
 # Logging
 tracing = { workspace = true }

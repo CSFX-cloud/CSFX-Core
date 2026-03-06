@@ -9,6 +9,7 @@ pub struct ServiceClient {
     client: Client,
     registry_url: String,
     scheduler_url: String,
+    volume_manager_url: String,
 }
 
 impl ServiceClient {
@@ -19,6 +20,9 @@ impl ServiceClient {
         let scheduler_url = std::env::var("SCHEDULER_SERVICE_URL")
             .unwrap_or_else(|_| "http://localhost:8002".to_string());
 
+        let volume_manager_url = std::env::var("VOLUME_MANAGER_URL")
+            .unwrap_or_else(|_| "http://localhost:8003".to_string());
+
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -28,6 +32,7 @@ impl ServiceClient {
             client,
             registry_url,
             scheduler_url,
+            volume_manager_url,
         }
     }
 
@@ -143,6 +148,60 @@ impl ServiceClient {
             .send()
             .await
             .context("Failed to send request to scheduler service")?;
+
+        let status = response.status();
+        let body_text = response.text().await.ok();
+        let json_body = body_text.and_then(|text| {
+            if text.is_empty() {
+                None
+            } else {
+                serde_json::from_str(&text).ok()
+            }
+        });
+
+        Ok((status, json_body))
+    }
+
+    pub async fn forward_to_volume_manager(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+        headers: Option<Vec<(String, String)>>,
+    ) -> Result<(StatusCode, Option<serde_json::Value>)> {
+        let url = format!("{}{}", self.volume_manager_url, path);
+
+        tracing::debug!("Forwarding {} request to volume-manager: {}", method, url);
+
+        let mut request = match method {
+            reqwest::Method::GET => self.client.get(&url),
+            reqwest::Method::POST => self.client.post(&url),
+            reqwest::Method::DELETE => self.client.delete(&url),
+            _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
+        };
+
+        if let Some(headers) = headers {
+            for (key, value) in headers {
+                let key_lower = key.to_lowercase();
+                if key_lower == "content-length"
+                    || key_lower == "host"
+                    || key_lower == "content-type"
+                    || key_lower == "transfer-encoding"
+                {
+                    continue;
+                }
+                request = request.header(key, value);
+            }
+        }
+
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+
+        let response = request
+            .send()
+            .await
+            .context("Failed to send request to volume-manager service")?;
 
         let status = response.status();
         let body_text = response.text().await.ok();

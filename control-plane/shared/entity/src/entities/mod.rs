@@ -18,6 +18,8 @@ pub mod role_permission;
 pub mod subscription;
 pub mod user;
 pub mod user_organization;
+pub mod volume_snapshots;
+pub mod volumes;
 pub mod workloads;
 
 pub use agent_api_keys::Entity as AgentApiKeys;
@@ -40,4 +42,6 @@ pub use role_permission::Entity as RolePermission;
 pub use subscription::Entity as Subscription;
 pub use user::Entity as User;
 pub use user_organization::Entity as UserOrganization;
+pub use volume_snapshots::Entity as VolumeSnapshots;
+pub use volumes::Entity as Volumes;
 pub use workloads::Entity as Workloads;
