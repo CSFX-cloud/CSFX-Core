@@ -10,6 +10,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{info_span, Span};
 
 pub mod agents;
+pub mod events;
 pub mod expenses;
 pub mod marketplace;
 pub mod organizations;
@@ -69,7 +70,8 @@ pub fn create_router() -> Router<AppState> {
         .merge(updates::router())
         .merge(users::users_routes())
         .merge(volumes::volumes_routes())
-        .merge(workloads::workloads_routes());
+        .merge(workloads::workloads_routes())
+        .merge(events::events_routes());
 
     Router::new()
         // API routes

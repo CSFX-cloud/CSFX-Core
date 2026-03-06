@@ -17,6 +17,7 @@ mod m20260304_000000_pki_certificates;
 mod m20260304_120000_drop_api_key_column;
 mod m20260305_000000_add_workloads;
 mod m20260306_000000_add_volumes;
+mod m20260306_120000_add_failover_events;
 
 pub struct Migrator;
 
@@ -41,6 +42,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260304_120000_drop_api_key_column::Migration),
             Box::new(m20260305_000000_add_workloads::Migration),
             Box::new(m20260306_000000_add_volumes::Migration),
+            Box::new(m20260306_120000_add_failover_events::Migration),
         ]
     }
 }
