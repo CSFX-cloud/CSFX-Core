@@ -4,6 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct AssignedVolume {
+    pub id: String,
+    pub name: String,
+    pub pool: String,
+    pub image_name: String,
+    pub status: String,
+    pub mapped_device: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct RegisterRequest<'a> {
     registration_token: &'a str,
@@ -182,6 +192,41 @@ impl ApiClient {
             .filter(|w| {
                 w.status == "scheduled"
                     && w.container_id.is_none()
+            })
+            .collect())
+    }
+
+    pub async fn fetch_assigned_volumes(
+        &self,
+        agent_id: Uuid,
+        api_key: &str,
+    ) -> Result<Vec<AssignedVolume>> {
+        let url = format!("{}/api/volumes", self.gateway_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-API-Key", api_key)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .send()
+            .await
+            .context("Failed to fetch volumes")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("Failed to fetch volumes status={}", status);
+        }
+
+        let all: Vec<AssignedVolume> = resp
+            .json()
+            .await
+            .context("Failed to parse volumes response")?;
+
+        Ok(all
+            .into_iter()
+            .filter(|v| {
+                v.status == "in_use"
+                    && v.mapped_device.is_none()
             })
             .collect())
     }
