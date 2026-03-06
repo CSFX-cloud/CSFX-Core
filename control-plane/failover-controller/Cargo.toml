@@ -11,7 +11,19 @@ name = "failover-controller"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1.43", features = ["full"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anyhow = "1.0"
+shared = { path = "../shared/shared" }
+entity = { path = "../shared/entity" }
+
+tokio = { workspace = true, features = ["full"] }
+axum = { version = "0.7", features = ["macros"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dotenvy = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+chrono = { workspace = true, features = ["serde"] }
+sea-orm = { workspace = true }
+etcd-client = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
