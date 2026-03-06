@@ -8,7 +8,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::{auth::middleware::AuthenticatedUser, AppState};
+use crate::{auth::rbac::{CanManageNetworks, CanViewNetworks}, AppState};
 
 async fn proxy_to_sdn(
     state: &AppState,
@@ -42,121 +42,101 @@ async fn proxy_to_sdn(
     }
 }
 
+fn header_vec(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect()
+}
+
 pub async fn list_networks(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewNetworks(_claims): CanViewNetworks,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::GET, "/networks", None, Some(header_map)).await
 }
 
 pub async fn create_network(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageNetworks(_claims): CanManageNetworks,
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::POST, "/networks", Some(body), Some(header_map)).await
 }
 
 pub async fn get_network(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewNetworks(_claims): CanViewNetworks,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::GET, &format!("/networks/{}", id), None, Some(header_map)).await
 }
 
 pub async fn delete_network(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageNetworks(_claims): CanManageNetworks,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::DELETE, &format!("/networks/{}", id), None, Some(header_map)).await
 }
 
 pub async fn list_policies(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewNetworks(_claims): CanViewNetworks,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::GET, &format!("/networks/{}/policies", id), None, Some(header_map)).await
 }
 
 pub async fn create_policy(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageNetworks(_claims): CanManageNetworks,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::POST, &format!("/networks/{}/policies", id), Some(body), Some(header_map)).await
 }
 
 pub async fn list_members(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewNetworks(_claims): CanViewNetworks,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::GET, &format!("/networks/{}/members", id), None, Some(header_map)).await
 }
 
 pub async fn add_member(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageNetworks(_claims): CanManageNetworks,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::POST, &format!("/networks/{}/members", id), Some(body), Some(header_map)).await
 }
 
 pub async fn remove_member(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageNetworks(_claims): CanManageNetworks,
     State(state): State<AppState>,
     Path((id, workload_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+    let header_map = header_vec(&headers);
     proxy_to_sdn(&state, reqwest::Method::DELETE, &format!("/networks/{}/members/{}", id, workload_id), None, Some(header_map)).await
 }
 

@@ -66,47 +66,25 @@ pub async fn initialize_database(
 
     // 3. Create default permissions
     let permissions_to_create = vec![
-        (
-            "organization.view",
-            "organization",
-            "view",
-            "View organization details",
-        ),
-        (
-            "organization.update",
-            "organization",
-            "update",
-            "Update organization",
-        ),
-        (
-            "organization.delete",
-            "organization",
-            "delete",
-            "Delete organization",
-        ),
-        (
-            "members.view",
-            "members",
-            "view",
-            "View organization members",
-        ),
-        (
-            "members.create",
-            "members",
-            "create",
-            "Add members to organization",
-        ),
+        ("organization.view", "organization", "view", "View organization details"),
+        ("organization.update", "organization", "update", "Update organization"),
+        ("organization.delete", "organization", "delete", "Delete organization"),
+        ("members.view", "members", "view", "View organization members"),
+        ("members.create", "members", "create", "Add members to organization"),
         ("members.update", "members", "update", "Update member roles"),
-        (
-            "members.delete",
-            "members",
-            "delete",
-            "Remove members from organization",
-        ),
+        ("members.delete", "members", "delete", "Remove members from organization"),
         ("users.view", "users", "view", "View user list and details"),
         ("users.create", "users", "create", "Create new users"),
         ("users.update", "users", "update", "Update user details"),
         ("users.delete", "users", "delete", "Delete users"),
+        ("agents.view", "agents", "view", "View agents and metrics"),
+        ("agents.manage", "agents", "manage", "Register and manage agents"),
+        ("workloads.view", "workloads", "view", "View workloads"),
+        ("workloads.manage", "workloads", "manage", "Create and delete workloads"),
+        ("volumes.view", "volumes", "view", "View volumes and snapshots"),
+        ("volumes.manage", "volumes", "manage", "Create, attach, detach and delete volumes"),
+        ("networks.view", "networks", "view", "View networks and policies"),
+        ("networks.manage", "networks", "manage", "Create and manage networks"),
     ];
 
     let mut permission_map = std::collections::HashMap::new();
@@ -175,6 +153,83 @@ pub async fn initialize_database(
         tracing::info!("Admin role created with all permissions");
         role_id
     };
+
+    // 4b. Create Operator role
+    let operator_role_exists = Role::find()
+        .filter(role::Column::Name.eq("Operator"))
+        .filter(role::Column::OrganizationId.eq(default_org_id))
+        .one(db)
+        .await?;
+
+    if operator_role_exists.is_none() {
+        tracing::info!("Creating Operator role...");
+        let role_id = Uuid::new_v4();
+        let now = chrono::Utc::now().naive_utc();
+        let new_role = role::ActiveModel {
+            id: ActiveValue::Set(role_id),
+            name: ActiveValue::Set("Operator".to_string()),
+            description: ActiveValue::Set(Some("Can manage resources but not users".to_string())),
+            organization_id: ActiveValue::Set(default_org_id),
+            is_system_role: ActiveValue::Set(true),
+            created_at: ActiveValue::Set(now),
+        };
+        Role::insert(new_role).exec_without_returning(db).await?;
+
+        let operator_perms = [
+            "agents.view", "agents.manage",
+            "workloads.view", "workloads.manage",
+            "volumes.view", "volumes.manage",
+            "networks.view", "networks.manage",
+            "members.view",
+        ];
+        for perm_name in operator_perms {
+            if let Some(perm_id) = permission_map.get(perm_name) {
+                let role_perm = role_permission::ActiveModel {
+                    role_id: ActiveValue::Set(role_id),
+                    permission_id: ActiveValue::Set(*perm_id),
+                };
+                RolePermission::insert(role_perm).exec_without_returning(db).await?;
+            }
+        }
+        tracing::info!("Operator role created");
+    }
+
+    // 4c. Create Viewer role
+    let viewer_role_exists = Role::find()
+        .filter(role::Column::Name.eq("Viewer"))
+        .filter(role::Column::OrganizationId.eq(default_org_id))
+        .one(db)
+        .await?;
+
+    if viewer_role_exists.is_none() {
+        tracing::info!("Creating Viewer role...");
+        let role_id = Uuid::new_v4();
+        let now = chrono::Utc::now().naive_utc();
+        let new_role = role::ActiveModel {
+            id: ActiveValue::Set(role_id),
+            name: ActiveValue::Set("Viewer".to_string()),
+            description: ActiveValue::Set(Some("Read-only access to resources".to_string())),
+            organization_id: ActiveValue::Set(default_org_id),
+            is_system_role: ActiveValue::Set(true),
+            created_at: ActiveValue::Set(now),
+        };
+        Role::insert(new_role).exec_without_returning(db).await?;
+
+        let viewer_perms = [
+            "agents.view", "workloads.view", "volumes.view", "networks.view",
+            "organization.view", "members.view",
+        ];
+        for perm_name in viewer_perms {
+            if let Some(perm_id) = permission_map.get(perm_name) {
+                let role_perm = role_permission::ActiveModel {
+                    role_id: ActiveValue::Set(role_id),
+                    permission_id: ActiveValue::Set(*perm_id),
+                };
+                RolePermission::insert(role_perm).exec_without_returning(db).await?;
+            }
+        }
+        tracing::info!("Viewer role created");
+    }
 
     // 5. Create admin user if not exists
     let admin_exists = User::find()

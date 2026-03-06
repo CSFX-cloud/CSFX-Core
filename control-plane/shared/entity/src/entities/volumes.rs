@@ -14,6 +14,7 @@ pub struct Model {
     pub attached_to_agent: Option<Uuid>,
     pub attached_to_workload: Option<Uuid>,
     pub mapped_device: Option<String>,
+    pub organization_id: Option<Uuid>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: Option<chrono::NaiveDateTime>,
 }
