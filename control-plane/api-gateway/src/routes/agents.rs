@@ -12,7 +12,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::middleware::AuthenticatedUser;
+use crate::auth::rbac::CanViewAgents;
 use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -251,7 +251,7 @@ pub async fn receive_metrics(
 /// List all agents
 pub async fn list_agents(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    _perm: CanViewAgents,
 ) -> Result<impl IntoResponse, StatusCode> {
     let agents = agents::Entity::find()
         .order_by_desc(agents::Column::RegisteredAt)
@@ -269,7 +269,7 @@ pub async fn list_agents(
 /// Get agent by ID
 pub async fn get_agent(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    _perm: CanViewAgents,
     axum::extract::Path(agent_id): axum::extract::Path<Uuid>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let agent = agents::Entity::find_by_id(agent_id)
@@ -287,7 +287,7 @@ pub async fn get_agent(
 /// Get latest metrics for an agent
 pub async fn get_agent_metrics(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    _perm: CanViewAgents,
     axum::extract::Path(agent_id): axum::extract::Path<Uuid>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let metrics: Vec<agent_metrics::Model> = agent_metrics::Entity::find()

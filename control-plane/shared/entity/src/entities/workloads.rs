@@ -17,6 +17,7 @@ pub struct Model {
     pub assigned_agent_id: Option<Uuid>,
     pub container_id: Option<String>,
     pub created_by: Option<Uuid>,
+    pub organization_id: Option<Uuid>,
     pub created_at: DateTime,
     pub updated_at: Option<DateTime>,
 }

@@ -8,7 +8,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::{auth::middleware::AuthenticatedUser, AppState};
+use crate::{auth::rbac::{CanManageWorkloads, CanViewWorkloads}, AppState};
 
 async fn proxy_to_scheduler(
     state: &AppState,
@@ -43,7 +43,7 @@ async fn proxy_to_scheduler(
 }
 
 pub async fn create_workload(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
@@ -54,7 +54,7 @@ pub async fn create_workload(
 }
 
 pub async fn list_workloads(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewWorkloads(_claims): CanViewWorkloads,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -63,7 +63,7 @@ pub async fn list_workloads(
 }
 
 pub async fn delete_workload(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,

@@ -10,6 +10,7 @@ pub struct Model {
     pub cidr: String,
     pub overlay_type: String,
     pub status: String,
+    pub organization_id: Option<Uuid>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: Option<chrono::NaiveDateTime>,
 }

@@ -8,7 +8,7 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::{auth::middleware::AuthenticatedUser, AppState};
+use crate::{auth::rbac::{CanManageVolumes, CanViewVolumes}, AppState};
 
 async fn proxy_to_volume_manager(
     state: &AppState,
@@ -50,7 +50,7 @@ fn header_vec(headers: &HeaderMap) -> Vec<(String, String)> {
 }
 
 pub async fn create_volume(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
@@ -61,7 +61,7 @@ pub async fn create_volume(
 }
 
 pub async fn list_volumes(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewVolumes(_claims): CanViewVolumes,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -70,7 +70,7 @@ pub async fn list_volumes(
 }
 
 pub async fn get_volume(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewVolumes(_claims): CanViewVolumes,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -80,7 +80,7 @@ pub async fn get_volume(
 }
 
 pub async fn delete_volume(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -90,7 +90,7 @@ pub async fn delete_volume(
 }
 
 pub async fn attach_volume(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -102,7 +102,7 @@ pub async fn attach_volume(
 }
 
 pub async fn detach_volume(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -112,7 +112,7 @@ pub async fn detach_volume(
 }
 
 pub async fn create_snapshot(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
@@ -124,7 +124,7 @@ pub async fn create_snapshot(
 }
 
 pub async fn list_snapshots(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewVolumes(_claims): CanViewVolumes,
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
