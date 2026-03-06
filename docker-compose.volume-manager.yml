@@ -1,0 +1,119 @@
+x-rust-common: &rust-common
+  build:
+    context: .
+    dockerfile: control-plane/Dockerfile.dev.shared
+  volumes:
+    - ./control-plane/shared:/app/control-plane/shared
+    - ./Cargo.toml:/app/Cargo.toml
+    - ./Cargo.lock:/app/Cargo.lock
+    - cargo_cache:/usr/local/cargo/registry
+    - cargo_git:/usr/local/cargo/git
+  networks:
+    - csf-network
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: csf-postgres-volumes
+    environment:
+      POSTGRES_USER: csf_user
+      POSTGRES_PASSWORD: csf_password
+      POSTGRES_DB: csf_core
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U csf_user -d csf_core"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - csf-network
+
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.5.21
+    container_name: csf-etcd-volumes
+    command:
+      - etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+    ports:
+      - "2379:2379"
+    networks:
+      - csf-network
+
+  api-gateway:
+    <<: *rust-common
+    container_name: csf-api-gateway-volumes
+    environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      RUST_LOG: debug
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
+      RSA_KEY_SIZE: "2048"
+      REGISTRY_SERVICE_URL: http://registry:8001
+      SCHEDULER_SERVICE_URL: http://scheduler:8002
+      VOLUME_MANAGER_URL: http://volume-manager:8003
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./control-plane/api-gateway:/app/control-plane/api-gateway
+      - ./control-plane/shared:/app/control-plane/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_git:/usr/local/cargo/git
+      - cargo_target_api_gateway:/app/target
+    command: cargo watch -x "run -p api-gateway"
+
+  volume-manager:
+    <<: *rust-common
+    container_name: csf-volume-manager
+    environment:
+      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      ETCD_ENDPOINTS: http://etcd:2379
+      VOLUME_MANAGER_PORT: "8003"
+      RUST_LOG: debug
+    ports:
+      - "8003:8003"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+      api-gateway:
+        condition: service_started
+    volumes:
+      - ./control-plane/volume-manager:/app/control-plane/volume-manager
+      - ./control-plane/shared:/app/control-plane/shared
+      - ./Cargo.toml:/app/Cargo.toml
+      - ./Cargo.lock:/app/Cargo.lock
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_git:/usr/local/cargo/git
+      - cargo_target_volume_manager:/app/target
+    command: cargo watch -x "run -p volume-manager"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  postgres_data:
+    driver: local
+  cargo_cache:
+    driver: local
+  cargo_git:
+    driver: local
+  cargo_target_api_gateway:
+    driver: local
+  cargo_target_volume_manager:
+    driver: local
+
+networks:
+  csf-network:
+    driver: bridge
