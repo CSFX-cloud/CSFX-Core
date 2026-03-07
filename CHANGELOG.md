@@ -2,6 +2,13 @@
 
 All notable changes to CSF-Core will be documented in this file.
 
+## [0.5.1](https://github.com/CS-Foundry/CSF-Core/compare/v0.5.0...v0.5.1) (2026-03-07)
+
+
+### Bug Fixes
+
+* swagger ui ([033f790](https://github.com/CS-Foundry/CSF-Core/commit/033f790c400efc7981de8c150f88136139c6ba74))
+
 # [0.5.0](https://github.com/CS-Foundry/CSF-Core/compare/v0.4.0...v0.5.0) (2026-03-07)
 
 
