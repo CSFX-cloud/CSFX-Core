@@ -67,24 +67,6 @@ pub async fn mount(device: &str, mount_point: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn umount(mount_point: &str) -> Result<()> {
-    info!(mount_point = %mount_point, "Unmounting device");
-
-    let output = Command::new("umount")
-        .arg(mount_point)
-        .output()
-        .await
-        .context("Failed to execute umount")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(mount_point = %mount_point, error = %stderr, "umount failed");
-        return Err(anyhow!("umount failed: {}", stderr));
-    }
-
-    info!(mount_point = %mount_point, "Device unmounted");
-    Ok(())
-}
 
 pub fn mount_point_for(volume_id: &str) -> String {
     format!("/mnt/csf-volumes/{}", volume_id)

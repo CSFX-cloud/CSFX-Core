@@ -174,6 +174,7 @@ enum Organization {
 }
 
 #[derive(DeriveIden)]
+#[allow(clippy::enum_variant_names)]
 enum Role {
     Table,
     Id,

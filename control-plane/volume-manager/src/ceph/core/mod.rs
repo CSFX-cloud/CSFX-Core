@@ -4,4 +4,3 @@ pub mod error;
 
 pub use client::CephClient;
 pub use config::CephConfig;
-pub use error::{CephError, Result};

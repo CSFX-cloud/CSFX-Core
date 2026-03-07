@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct AssignedVolume {
     pub id: String,
     pub name: String,
@@ -57,6 +58,7 @@ pub struct ContainerStatus {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct AssignedWorkload {
     pub id: String,
     pub name: String,
@@ -95,6 +97,7 @@ impl ApiClient {
         self
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn register(
         &self,
         token: &str,

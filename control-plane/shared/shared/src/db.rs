@@ -27,11 +27,6 @@ pub async fn establish_connection() -> Result<DbConn, DbErr> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn test_db_url_required() {
-        // This would panic if DATABASE_URL is not set
-        // In real tests, you'd mock the environment
-    }
+    fn test_db_url_required() {}
 }
