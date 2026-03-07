@@ -42,6 +42,9 @@ async fn main() -> anyhow::Result<()> {
     let scheduler_url = std::env::var("SCHEDULER_SERVICE_URL")
         .unwrap_or_else(|_| "http://localhost:8002".to_string());
 
+    let gateway_url = std::env::var("API_GATEWAY_URL")
+        .unwrap_or_else(|_| "http://localhost:8000".to_string());
+
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -54,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         pki_service: Arc::new(pki_service),
         db: db_conn.clone(),
         scheduler_url,
+        gateway_url,
         http_client,
     };
 
