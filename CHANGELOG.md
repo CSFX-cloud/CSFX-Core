@@ -2,6 +2,36 @@
 
 All notable changes to CSF-Core will be documented in this file.
 
+# [0.4.0](https://github.com/CS-Foundry/CSF-Core/compare/v0.3.0...v0.4.0) (2026-03-07)
+
+
+### Bug Fixes
+
+* added docker compose and fix build in docker ([e24e7b9](https://github.com/CS-Foundry/CSF-Core/commit/e24e7b9e441289a6edee0c0e244ae5489fe1d413))
+* gitignore ([d6c3dca](https://github.com/CS-Foundry/CSF-Core/commit/d6c3dcafc7f3aa28cf9c49ac9963d67797c9620f))
+* mtls handshake ([cbe31b3](https://github.com/CS-Foundry/CSF-Core/commit/cbe31b3765a60bb945bd5753b925236f0ab9042a))
+* mtls heart beat ([869170f](https://github.com/CS-Foundry/CSF-Core/commit/869170f2b51fc821bf2d64d5dfb4a7860446ab25))
+* mtls issue ([26e0cb2](https://github.com/CS-Foundry/CSF-Core/commit/26e0cb21b0691c34388278cbc8ce251ec1d26146))
+
+
+### Features
+
+* addded ground setup for scheduler ([2cca6f1](https://github.com/CS-Foundry/CSF-Core/commit/2cca6f138a90471c505c1437696002f66bcb5679))
+* added agend volume mount ([8549880](https://github.com/CS-Foundry/CSF-Core/commit/85498809cecb27e3a72946c1d841101dffd9f07c))
+* added container placement in agent and scheduler ([f84c304](https://github.com/CS-Foundry/CSF-Core/commit/f84c3049580e96f7b2f2eabc98e5aaeb2d424d6b))
+* added endpoints in api gateway ([c9a3563](https://github.com/CS-Foundry/CSF-Core/commit/c9a35630d38decf7a007b8c7747da4f17a83597c))
+* added migrations for workloads ([964c20a](https://github.com/CS-Foundry/CSF-Core/commit/964c20a0c0d3d98fcf2e044ff38cc8605ddbddd7))
+* added mtls encryption ([9692379](https://github.com/CS-Foundry/CSF-Core/commit/969237918f5ce7e7b861a8cca9df4dc48c14cd3f))
+* added pki for agent ([73fd3ad](https://github.com/CS-Foundry/CSF-Core/commit/73fd3ad794e1392c4eee1f9d944d82e9d28f9fb4))
+* added Prometheus Metrics and  Rate Limiting ([fbf9a48](https://github.com/CS-Foundry/CSF-Core/commit/fbf9a48b20f6f4a9113c3a3f80051827333e3f41))
+* added rbac for all things ([3b1be5b](https://github.com/CS-Foundry/CSF-Core/commit/3b1be5b3e2b3af6ea290d0f531df8856b87cf708))
+* added ressource modell and workload specs ([50aac08](https://github.com/CS-Foundry/CSF-Core/commit/50aac08caafa6ce4fc0e6deb1eba06aedea4ebbf))
+* added sdn controller for network ([49b5ed9](https://github.com/CS-Foundry/CSF-Core/commit/49b5ed90d558a112f6d1e7e6c8e247a2a81372f2))
+* added volume manager mount ([f0e3313](https://github.com/CS-Foundry/CSF-Core/commit/f0e3313b68e0c026ca6fd6ebeee41616cd23dce3))
+* entry point for schedueler in etcd cluster ([080225c](https://github.com/CS-Foundry/CSF-Core/commit/080225c57fb984d4c713a4593bd1b83a0c571b7d))
+* ground setup failover controler ([47ea8b6](https://github.com/CS-Foundry/CSF-Core/commit/47ea8b647bdc621503a5a06e2afd80ed351c7a27))
+* impl communcitaion and hearbeat ([d51fb91](https://github.com/CS-Foundry/CSF-Core/commit/d51fb91651189334c38132427d4c11da6af7accf))
+
 # [0.3.0](https://github.com/CS-Foundry/CSF-Core/compare/v0.2.0...v0.3.0) (2026-03-03)
 
 
