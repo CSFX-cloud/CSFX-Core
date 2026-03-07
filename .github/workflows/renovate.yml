@@ -1,0 +1,31 @@
+name: Renovate
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (no PRs created)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  renovate:
+    name: Renovate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: renovatebot/github-action@v41
+        with:
+          configurationFile: renovate.json
+          token: ${{ secrets.RENOVATE_TOKEN }}
+        env:
+          LOG_LEVEL: info
+          RENOVATE_DRY_RUN: ${{ inputs.dry_run == true && 'full' || 'null' }}

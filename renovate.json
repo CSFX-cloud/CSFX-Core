@@ -3,6 +3,8 @@
   "extends": [
     "config:recommended"
   ],
+  "onboarding": false,
+  "requireConfig": "optional",
   "schedule": ["before 6am on monday"],
   "timezone": "Europe/Zurich",
   "labels": ["dependencies"],
