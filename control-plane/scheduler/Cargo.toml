@@ -26,3 +26,4 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 chrono = { workspace = true, features = ["serde"] }
 sea-orm = { workspace = true }
 etcd-client = { workspace = true }
+prometheus = { workspace = true }

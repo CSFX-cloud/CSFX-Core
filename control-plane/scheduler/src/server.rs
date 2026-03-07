@@ -4,7 +4,7 @@ use sea_orm::DatabaseConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::{handlers::{internal, workloads}, services::scheduler::SchedulerService};
+use crate::{handlers::{internal, workloads}, metrics, services::scheduler::SchedulerService};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,6 +20,7 @@ pub async fn health_check() -> impl IntoResponse {
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(metrics::metrics_handler))
         .route("/workloads", axum::routing::post(workloads::create_workload))
         .route("/workloads", get(workloads::list_workloads))
         .route("/workloads/:id", axum::routing::delete(workloads::delete_workload))

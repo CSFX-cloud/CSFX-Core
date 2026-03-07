@@ -27,3 +27,4 @@ chrono = { workspace = true, features = ["serde"] }
 sea-orm = { workspace = true }
 etcd-client = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
+prometheus = { workspace = true }

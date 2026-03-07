@@ -43,3 +43,4 @@ reqwest = { workspace = true }
 sha2 = { workspace = true }
 rcgen = { workspace = true }
 x509-parser = { workspace = true }
+prometheus = { workspace = true }

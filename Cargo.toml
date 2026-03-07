@@ -68,6 +68,12 @@ etcd-client = "0.14"
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 x509-parser = "0.16"
 
+# Metrics
+prometheus = { version = "0.13", features = ["process"] }
+
+# Rate limiting
+tower_governor = { version = "0.4", features = ["axum"] }
+
 # Other
 rand = "0.8"
 base64 = "0.22"

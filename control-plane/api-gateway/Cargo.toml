@@ -65,6 +65,8 @@ sysinfo = { workspace = true }
 bollard = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true }
+prometheus = { workspace = true }
+tower_governor = { workspace = true }
 
 [features]
 default = []

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::{
     handlers::{admin, agent, pki},
+    metrics,
     services::{api_keys::ApiKeyManager, pki::PkiService, registry::AgentRegistry, tokens::TokenManager},
 };
 
@@ -31,6 +32,7 @@ pub async fn health_check() -> impl IntoResponse {
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(metrics::metrics_handler))
         // Admin — agent lifecycle
         .route("/admin/agents/pre-register", post(admin::pre_register_agent))
         .route("/admin/agents/pending", get(admin::list_pending_agents))

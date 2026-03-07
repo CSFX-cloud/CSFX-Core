@@ -8,6 +8,7 @@ mod auth_service;
 mod db;
 mod docker_service;
 mod init;
+mod metrics;
 mod rbac_service;
 mod routes;
 mod self_monitor;
@@ -143,6 +144,8 @@ impl Default for AppState {
 async fn main() {
     // Load .env file if it exists
     dotenvy::dotenv().ok();
+
+    metrics::init();
 
     // Initialize tracing subscriber
     tracing_subscriber::fmt()

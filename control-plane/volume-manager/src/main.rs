@@ -6,6 +6,7 @@ mod db;
 mod etcd;
 mod handlers;
 mod logger;
+mod metrics;
 mod models;
 mod patroni;
 mod server;
@@ -17,6 +18,7 @@ async fn main() -> anyhow::Result<()> {
 
     logger::init_logger();
 
+    metrics::init();
     log_info!("main", "CSF Volume Manager starting");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 

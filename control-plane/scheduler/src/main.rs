@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 mod db;
 mod handlers;
 mod logger;
+mod metrics;
 mod models;
 mod server;
 mod services;
@@ -15,6 +16,7 @@ async fn main() -> anyhow::Result<()> {
 
     logger::init_logger();
 
+    metrics::init();
     log_info!("main", "CSF Scheduler Service starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 

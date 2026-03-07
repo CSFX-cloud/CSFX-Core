@@ -1,10 +1,14 @@
 use super::AppState;
+use crate::metrics;
 use crate::utils::router_ext::RouterExt;
 use axum::body::Body;
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use axum::http::Method;
 use axum::http::{HeaderValue, Request, Response};
+use axum::routing::get;
 use axum::Router;
+use std::sync::Arc;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info_span, Span};
@@ -27,6 +31,24 @@ pub mod workloads;
 
 /// Creates the main application router and logs all registered routes.
 pub fn create_router() -> Router<AppState> {
+    let rate_limit_per_second: u64 = std::env::var("RATE_LIMIT_PER_SECOND")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+
+    let burst_size: u32 = std::env::var("RATE_LIMIT_BURST")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200);
+
+    let governor_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(rate_limit_per_second)
+            .burst_size(burst_size)
+            .finish()
+            .expect("invalid rate limit configuration"),
+    );
+
     let frontend_url =
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
@@ -76,8 +98,12 @@ pub fn create_router() -> Router<AppState> {
         .merge(events::events_routes());
 
     Router::new()
+        .route("/metrics", get(metrics::metrics_handler))
         // API routes
         .logged_nest("/api", api_router)
+        .layer(GovernorLayer {
+            config: governor_config,
+        })
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<Body>| {

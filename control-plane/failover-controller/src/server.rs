@@ -1,7 +1,7 @@
 use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 use sea_orm::DatabaseConnection;
 
-use crate::handlers::events;
+use crate::{handlers::events, metrics};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -15,6 +15,7 @@ pub async fn health_check() -> impl IntoResponse {
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(metrics::metrics_handler))
         .route("/events", get(events::list_events))
         .with_state(state)
 }

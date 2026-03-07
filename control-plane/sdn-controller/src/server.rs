@@ -3,6 +3,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::{
     handlers::networks,
+    metrics,
     services::ipam::IpamService,
 };
 
@@ -25,6 +26,7 @@ pub async fn health_check() -> impl IntoResponse {
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(metrics::metrics_handler))
         .route("/networks", get(networks::list_networks).post(networks::create_network))
         .route(
             "/networks/:id",
