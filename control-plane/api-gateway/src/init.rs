@@ -237,7 +237,10 @@ pub async fn initialize_database(
         .one(db)
         .await?;
 
-    if admin_exists.is_none() {
+    let admin_user_id = if let Some(existing_admin) = admin_exists {
+        tracing::info!("Admin user already exists");
+        existing_admin.id
+    } else {
         tracing::info!("Creating default admin user...");
         let salt = generate_salt();
         let hashed_password = hash_password("admin", &salt)?;
@@ -255,24 +258,30 @@ pub async fn initialize_database(
         };
 
         User::insert(admin_user).exec_without_returning(db).await?;
+        tracing::info!("Default admin user created: admin@local.com / admin - Password change required on first login");
+        user_id
+    };
 
-        // Add admin user to default organization with Admin role
-        let user_org_id = Uuid::new_v4();
-        let now = chrono::Utc::now().naive_utc();
+    // Ensure admin user is in the default organization with Admin role
+    let admin_org_exists = UserOrganization::find()
+        .filter(user_organization::Column::UserId.eq(admin_user_id))
+        .filter(user_organization::Column::OrganizationId.eq(default_org_id))
+        .one(db)
+        .await?;
+
+    if admin_org_exists.is_none() {
+        tracing::info!("Assigning admin user to default organization with Admin role...");
         let user_org = user_organization::ActiveModel {
-            id: ActiveValue::Set(user_org_id),
-            user_id: ActiveValue::Set(user_id),
+            id: ActiveValue::Set(Uuid::new_v4()),
+            user_id: ActiveValue::Set(admin_user_id),
             organization_id: ActiveValue::Set(default_org_id),
             role_id: ActiveValue::Set(admin_role_id),
-            joined_at: ActiveValue::Set(now),
+            joined_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         };
         UserOrganization::insert(user_org)
             .exec_without_returning(db)
             .await?;
-
-        tracing::info!("Default admin user created: admin@local.com / admin - Password change required on first login");
-    } else {
-        tracing::info!("Admin user already exists");
+        tracing::info!("Admin user assigned to default organization");
     }
 
     tracing::info!("Database initialization completed");
