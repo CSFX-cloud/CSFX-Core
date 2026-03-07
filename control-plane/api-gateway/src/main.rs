@@ -6,7 +6,6 @@ use utoipa_swagger_ui::SwaggerUi;
 mod auth;
 mod auth_service;
 mod db;
-mod docker_service;
 mod init;
 mod metrics;
 mod rbac_service;
@@ -124,7 +123,6 @@ impl utoipa::Modify for SecurityAddon {
 #[derive(Clone)]
 pub struct AppState {
     pub db_conn: DbConn,
-    pub docker: Option<docker_service::DockerService>,
     pub service_client: service_client::ServiceClient,
 }
 
@@ -151,25 +149,8 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let docker = match docker_service::DockerService::new() {
-        Ok(docker) => {
-            if docker.is_available().await {
-                tracing::info!("docker service initialized");
-                Some(docker)
-            } else {
-                tracing::warn!("docker installed but not running");
-                None
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "docker service unavailable");
-            None
-        }
-    };
-
     let state = AppState {
         db_conn: db_conn.clone(),
-        docker,
         service_client: service_client::ServiceClient::new(),
     };
 
