@@ -191,4 +191,3 @@ volumes:
 networks:
   csf-internal:
     driver: bridge
-    internal: true

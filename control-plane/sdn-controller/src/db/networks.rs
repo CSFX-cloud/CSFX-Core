@@ -19,6 +19,7 @@ pub async fn create_network(
         cidr: Set(req.cidr),
         overlay_type: Set(req.overlay_type),
         status: Set("active".to_string()),
+        organization_id: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
     };
