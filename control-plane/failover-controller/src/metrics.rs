@@ -25,18 +25,6 @@ pub fn init() {
     });
 }
 
-pub fn record_request(method: &str, path: &str, status: u16, duration_secs: f64) {
-    if let Some(counter) = HTTP_REQUESTS_TOTAL.get() {
-        counter
-            .with_label_values(&[method, path, &status.to_string()])
-            .inc();
-    }
-    if let Some(histogram) = HTTP_REQUEST_DURATION_SECONDS.get() {
-        histogram
-            .with_label_values(&[method, path])
-            .observe(duration_secs);
-    }
-}
 
 pub async fn metrics_handler() -> impl IntoResponse {
     let encoder = TextEncoder::new();

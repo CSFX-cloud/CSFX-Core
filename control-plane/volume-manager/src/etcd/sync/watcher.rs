@@ -13,7 +13,7 @@ impl StateWatcher {
     }
 
     /// Beobachtet einen Key-Prefix für Änderungen
-    pub async fn watch_prefix<F>(&self, prefix: &str, callback: F) -> Result<(), EtcdError>
+    pub async fn watch_prefix<F>(&self, prefix: &str, _callback: F) -> Result<(), EtcdError>
     where
         F: FnMut(WatchEvent) + Send + 'static,
     {
@@ -31,7 +31,7 @@ impl StateWatcher {
     }
 
     /// Beobachtet einen spezifischen Key
-    pub async fn watch_key<F>(&self, key: &str, callback: F) -> Result<(), EtcdError>
+    pub async fn watch_key<F>(&self, key: &str, _callback: F) -> Result<(), EtcdError>
     where
         F: FnMut(WatchEvent) + Send + 'static,
     {

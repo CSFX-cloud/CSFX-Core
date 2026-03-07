@@ -280,8 +280,6 @@ pub async fn delete_pending_agent(
     }
 }
 
-/// Create token (Admin only) - DEPRECATED
-#[deprecated(note = "Use pre_register_agent instead")]
 #[utoipa::path(
     post,
     path = "/registry/admin/tokens",

@@ -38,19 +38,6 @@ pub async fn get_active_certificate(
         .await?)
 }
 
-pub async fn deactivate_certificates(db: &DatabaseConnection, agent_id: Uuid) -> Result<u64> {
-    let result = agent_certificates::Entity::update_many()
-        .col_expr(
-            agent_certificates::Column::IsActive,
-            sea_orm::sea_query::Expr::value(false),
-        )
-        .filter(agent_certificates::Column::AgentId.eq(agent_id))
-        .filter(agent_certificates::Column::IsActive.eq(true))
-        .exec(db)
-        .await?;
-
-    Ok(result.rows_affected)
-}
 
 pub async fn revoke_certificate(
     db: &DatabaseConnection,

@@ -184,7 +184,7 @@ impl LeaderElection {
     }
 
     /// Wartet auf Leadership Changes (Watch)
-    pub async fn watch_leadership<F>(&self, callback: F) -> Result<(), EtcdError>
+    pub async fn watch_leadership<F>(&self, _callback: F) -> Result<(), EtcdError>
     where
         F: FnMut(Option<String>) + Send + 'static,
     {

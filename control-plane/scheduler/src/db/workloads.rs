@@ -33,6 +33,7 @@ pub async fn create(
         assigned_agent_id: Set(None),
         container_id: Set(None),
         created_by: Set(None),
+        organization_id: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
     };

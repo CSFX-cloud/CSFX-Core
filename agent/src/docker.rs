@@ -16,6 +16,7 @@ pub struct PortMapping {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct WorkloadSpec {
     pub workload_id: String,
     pub name: String,
@@ -130,22 +131,9 @@ impl DockerManager {
         Ok(container.id)
     }
 
-    pub async fn stop_container(&self, container_id: &str) -> Result<()> {
-        self.docker
-            .stop_container(container_id, None)
-            .await
-            .context("Failed to stop container")?;
-
-        self.docker
-            .remove_container(container_id, None)
-            .await
-            .context("Failed to remove container")?;
-
-        info!(container_id = %container_id, "Container stopped and removed");
-        Ok(())
-    }
 }
 
+#[allow(clippy::type_complexity)]
 fn build_port_config(
     ports: Option<&[PortMapping]>,
 ) -> (

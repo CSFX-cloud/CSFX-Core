@@ -5,6 +5,7 @@ use sea_orm::{
 };
 use uuid::Uuid;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create(
     db: &DatabaseConnection,
     id: Uuid,
