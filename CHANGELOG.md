@@ -2,6 +2,13 @@
 
 All notable changes to CSF-Core will be documented in this file.
 
+# [0.5.0](https://github.com/CS-Foundry/CSF-Core/compare/v0.4.0...v0.5.0) (2026-03-07)
+
+
+### Features
+
+* added OpenTelemetry Tracing ([2d11250](https://github.com/CS-Foundry/CSF-Core/commit/2d1125022cacd19c63e92d6e02cd0ec12a4896a5))
+
 # [0.4.0](https://github.com/CS-Foundry/CSF-Core/compare/v0.3.0...v0.4.0) (2026-03-07)
 
 
