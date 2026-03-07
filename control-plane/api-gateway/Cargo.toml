@@ -67,6 +67,11 @@ futures-util = { workspace = true }
 reqwest = { workspace = true }
 prometheus = { workspace = true }
 tower_governor = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 
 [features]
 default = []

@@ -14,6 +14,7 @@ mod routes;
 mod self_monitor;
 mod service_client;
 mod system_collector;
+mod telemetry;
 mod utils;
 
 use routes::expenses::{CreateExpenseRequest, UpdateExpenseRequest};
@@ -146,11 +147,7 @@ async fn main() {
     dotenvy::dotenv().ok();
 
     metrics::init();
-
-    // Initialize tracing subscriber
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    telemetry::init_tracing();
 
     // Initialize database connection and run migrations
     let db_conn = match db::establish_connection().await {

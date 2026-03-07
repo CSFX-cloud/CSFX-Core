@@ -42,7 +42,7 @@ serde_json = "1.0.145"
 
 # Logging & Tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 
 # Security
 jsonwebtoken = "9.3.0"
@@ -73,6 +73,13 @@ prometheus = { version = "0.13", features = ["process"] }
 
 # Rate limiting
 tower_governor = { version = "0.4", features = ["axum"] }
+
+# OpenTelemetry
+opentelemetry = { version = "0.31" }
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "trace"] }
+opentelemetry-semantic-conventions = { version = "0.31" }
+tracing-opentelemetry = { version = "0.32" }
 
 # Other
 rand = "0.8"

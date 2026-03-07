@@ -27,3 +27,8 @@ chrono = { workspace = true, features = ["serde"] }
 sea-orm = { workspace = true }
 etcd-client = { workspace = true }
 prometheus = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+tracing-opentelemetry = { workspace = true }

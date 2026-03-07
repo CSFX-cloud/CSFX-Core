@@ -1,5 +1,9 @@
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::KeyValue;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::{event, Level};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 #[derive(Debug, Clone, Copy)]
 pub enum LogLevel {
@@ -22,13 +26,53 @@ impl From<LogLevel> for Level {
     }
 }
 
-pub fn init_logger() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+fn build_otlp_provider(service_name: &str) -> Option<SdkTracerProvider> {
+    let endpoint = std::env::var("OTLP_ENDPOINT").ok()?;
 
-    tracing_subscriber::registry()
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .ok()?;
+
+    let resource = opentelemetry_sdk::Resource::builder_empty()
+        .with_attribute(KeyValue::new(
+            opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+            service_name.to_string(),
+        ))
+        .build();
+
+    let provider = SdkTracerProvider::builder()
+        .with_resource(resource)
+        .with_batch_exporter(exporter)
+        .build();
+
+    Some(provider)
+}
+
+pub fn init_logger() {
+    init_logger_with_service(env!("CARGO_PKG_NAME"));
+}
+
+pub fn init_logger_with_service(service_name: &'static str) {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let fmt_layer = fmt::layer().with_target(false).with_thread_ids(true);
+
+    let registry = tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer().with_target(false).with_thread_ids(true))
-        .init();
+        .with(fmt_layer);
+
+    match build_otlp_provider(service_name) {
+        Some(provider) => {
+            let tracer = provider.tracer(service_name);
+            let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+            registry.with(otel_layer).init();
+            tracing::info!(service = service_name, "OpenTelemetry tracing enabled");
+        }
+        None => {
+            registry.init();
+        }
+    }
 }
 
 pub fn log_message(level: LogLevel, module: &str, location: &str, description: &str) {
