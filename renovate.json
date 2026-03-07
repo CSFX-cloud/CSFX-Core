@@ -1,0 +1,43 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "schedule": ["before 6am on monday"],
+  "timezone": "Europe/Zurich",
+  "labels": ["dependencies"],
+  "assignees": [],
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "groupName": "Rust dependencies",
+      "automerge": false
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "automerge": true,
+      "automergeType": "pr",
+      "matchUpdateTypes": ["minor", "patch"]
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "groupName": "Docker base images",
+      "automerge": false
+    },
+    {
+      "matchDepNames": ["postgres"],
+      "groupName": "PostgreSQL",
+      "automerge": false
+    },
+    {
+      "matchDepNames": ["rust"],
+      "groupName": "Rust toolchain",
+      "automerge": false
+    }
+  ],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/vendor/**"
+  ]
+}

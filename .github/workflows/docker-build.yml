@@ -74,8 +74,8 @@ jobs:
       - name: Set image name
         id: image
         run: |
-          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/${REPO}-${{ matrix.service }}" >> $GITHUB_OUTPUT
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -132,8 +132,8 @@ jobs:
       - name: Set image name
         id: image
         run: |
-          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/${REPO}-${{ matrix.service }}" >> $GITHUB_OUTPUT
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
 
       - uses: actions/download-artifact@v4
         with:
@@ -173,11 +173,11 @@ jobs:
       - name: Write summary
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
-          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "## Docker Build — v${VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Service | Image |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
           for svc in api-gateway registry scheduler volume-manager failover-controller sdn-controller; do
-            echo "| ${svc} | \`ghcr.io/${REPO}-${svc}:${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| ${svc} | \`ghcr.io/${ORG}/csf-ce-${svc}:${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
           done
