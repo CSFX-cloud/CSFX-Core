@@ -172,8 +172,9 @@ async fn run_heartbeat_loop(
                 }
 
                 let statuses = build_container_statuses(&running_containers).await;
+                let metrics = system::collect_metrics();
 
-                match client.heartbeat(agent_id, api_key, Some(statuses)).await {
+                match client.heartbeat(agent_id, api_key, Some(statuses), Some(metrics)).await {
                     Ok(_) => {
                         if failure_count > 0 {
                             info!(agent_id = %agent_id, "Heartbeat recovered after {} failures", failure_count);

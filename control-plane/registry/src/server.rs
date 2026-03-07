@@ -22,6 +22,7 @@ pub struct AppState {
     pub pki_service: Arc<PkiService>,
     pub db: DatabaseConnection,
     pub scheduler_url: String,
+    pub gateway_url: String,
     pub http_client: Client,
 }
 

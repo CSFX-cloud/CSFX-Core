@@ -38,6 +38,15 @@ pub struct RegisterResponse {
 struct HeartbeatRequest {
     status: Option<String>,
     container_statuses: Option<Vec<ContainerStatus>>,
+    cpu_usage_percent: Option<f32>,
+    cpu_cores: Option<u32>,
+    memory_total_bytes: Option<u64>,
+    memory_used_bytes: Option<u64>,
+    disk_total_bytes: Option<u64>,
+    disk_used_bytes: Option<u64>,
+    network_rx_bytes: Option<u64>,
+    network_tx_bytes: Option<u64>,
+    uptime_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -133,11 +142,22 @@ impl ApiClient {
         agent_id: Uuid,
         api_key: &str,
         container_statuses: Option<Vec<ContainerStatus>>,
+        metrics: Option<crate::system::SystemMetrics>,
     ) -> Result<()> {
         let url = format!(
             "{}/api/registry/agents/{}/heartbeat",
             self.gateway_url, agent_id
         );
+
+        let (cpu_usage_percent, cpu_cores, memory_total_bytes, memory_used_bytes,
+             disk_total_bytes, disk_used_bytes, network_rx_bytes, network_tx_bytes,
+             uptime_seconds) = metrics.map(|m| (
+            Some(m.cpu_usage_percent), Some(m.cpu_cores),
+            Some(m.memory_total_bytes), Some(m.memory_used_bytes),
+            Some(m.disk_total_bytes), Some(m.disk_used_bytes),
+            Some(m.network_rx_bytes), Some(m.network_tx_bytes),
+            Some(m.uptime_seconds),
+        )).unwrap_or_default();
 
         let mut req = self
             .client
@@ -146,6 +166,15 @@ impl ApiClient {
             .json(&HeartbeatRequest {
                 status: None,
                 container_statuses,
+                cpu_usage_percent,
+                cpu_cores,
+                memory_total_bytes,
+                memory_used_bytes,
+                disk_total_bytes,
+                disk_used_bytes,
+                network_rx_bytes,
+                network_tx_bytes,
+                uptime_seconds,
             });
 
         if let Some(ref cert_pem) = self.cert_pem {
@@ -198,7 +227,7 @@ impl ApiClient {
 
     pub async fn fetch_assigned_volumes(
         &self,
-        agent_id: Uuid,
+        _agent_id: Uuid,
         api_key: &str,
     ) -> Result<Vec<AssignedVolume>> {
         let url = format!("{}/api/volumes", self.gateway_url);

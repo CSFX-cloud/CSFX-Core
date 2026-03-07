@@ -120,6 +120,15 @@ pub struct ContainerStatus {
 pub struct HeartbeatRequest {
     pub status: Option<String>,
     pub container_statuses: Option<Vec<ContainerStatus>>,
+    pub cpu_usage_percent: Option<f32>,
+    pub cpu_cores: Option<u32>,
+    pub memory_total_bytes: Option<u64>,
+    pub memory_used_bytes: Option<u64>,
+    pub disk_total_bytes: Option<u64>,
+    pub disk_used_bytes: Option<u64>,
+    pub network_rx_bytes: Option<u64>,
+    pub network_tx_bytes: Option<u64>,
+    pub uptime_seconds: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

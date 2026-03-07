@@ -174,6 +174,8 @@ pub async fn heartbeat(
 
     match state.agent_registry.update_heartbeat(agent_id).await {
         Ok(_) => {
+            forward_metrics(&state, agent_id, &request).await;
+
             if let Some(statuses) = request.container_statuses {
                 if !statuses.is_empty() {
                     forward_container_statuses(&state, statuses).await;
@@ -214,6 +216,41 @@ async fn forward_container_statuses(
         crate::log_warn!(
             "agent_handler",
             &format!("Failed to forward container statuses to scheduler err={}", e)
+        );
+    }
+}
+
+async fn forward_metrics(
+    state: &crate::server::AppState,
+    agent_id: Uuid,
+    request: &HeartbeatRequest,
+) {
+    if request.cpu_usage_percent.is_none() && request.memory_total_bytes.is_none() {
+        return;
+    }
+
+    use serde_json::json;
+
+    let payload = json!({
+        "agent_id": agent_id,
+        "timestamp": chrono::Utc::now(),
+        "cpu_usage_percent": request.cpu_usage_percent,
+        "cpu_cores": request.cpu_cores,
+        "memory_total_bytes": request.memory_total_bytes,
+        "memory_used_bytes": request.memory_used_bytes,
+        "disk_total_bytes": request.disk_total_bytes,
+        "disk_used_bytes": request.disk_used_bytes,
+        "network_rx_bytes": request.network_rx_bytes,
+        "network_tx_bytes": request.network_tx_bytes,
+        "uptime_seconds": request.uptime_seconds,
+    });
+
+    let url = format!("{}/api/agents/metrics", state.gateway_url);
+
+    if let Err(e) = state.http_client.post(&url).json(&payload).send().await {
+        crate::log_warn!(
+            "agent_handler",
+            &format!("Failed to forward metrics to gateway err={}", e)
         );
     }
 }
