@@ -18,7 +18,7 @@ version = "0.2.2"
 edition = "2021"
 authors = ["CS-Foundry"]
 license = "SEE LICENSE IN LICENSE"
-repository = "https://github.com/CS-Foundry/CSF-Core"
+repository = "https://github.com/CS-Foundry/CSF-Core-CE"
 
 [workspace.dependencies]
 # Async runtime
@@ -98,3 +98,8 @@ reqwest = { version = "0.11", features = ["json"] }
 opt-level = 3
 lto = true
 codegen-units = 1
+
+[profile.docker-release]
+inherits = "release"
+lto = false
+codegen-units = 4

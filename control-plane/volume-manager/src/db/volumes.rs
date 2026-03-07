@@ -27,6 +27,7 @@ pub async fn create(
         attached_to_agent: Set(None),
         attached_to_workload: Set(None),
         mapped_device: Set(None),
+        organization_id: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
     };

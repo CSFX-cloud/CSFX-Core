@@ -1,0 +1,193 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: csf-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-csf_core}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-csf_core}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.5.21
+    container_name: csf-etcd
+    command:
+      - etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd-data
+    volumes:
+      - etcd_data:/etcd-data
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile.prod.shared
+      args:
+        SERVICE_BIN: api-gateway
+    container_name: csf-api-gateway
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      RUST_LOG: ${RUST_LOG:-info}
+      JWT_SECRET: ${JWT_SECRET}
+      RSA_KEY_SIZE: "4096"
+      REGISTRY_SERVICE_URL: http://registry:8001
+      SCHEDULER_SERVICE_URL: http://scheduler:8002
+      VOLUME_MANAGER_URL: http://volume-manager:8003
+      FAILOVER_CONTROLLER_URL: http://failover-controller:8004
+      SDN_CONTROLLER_URL: http://sdn-controller:8005
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - csf-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/system/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  registry:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile.prod.shared
+      args:
+        SERVICE_BIN: registry
+    container_name: csf-registry
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      ETCD_ENDPOINTS: http://etcd:2379
+      REGISTRY_PORT: "8001"
+      RUST_LOG: ${RUST_LOG:-info}
+      SCHEDULER_SERVICE_URL: http://scheduler:8002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile.prod.shared
+      args:
+        SERVICE_BIN: scheduler
+    container_name: csf-scheduler
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      ETCD_ENDPOINTS: http://etcd:2379
+      SCHEDULER_PORT: "8002"
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  volume-manager:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile.prod.shared
+      args:
+        SERVICE_BIN: volume-manager
+    container_name: csf-volume-manager
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      ETCD_ENDPOINTS: http://etcd:2379
+      VOLUME_MANAGER_PORT: "8003"
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  failover-controller:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile.prod.shared
+      args:
+        SERVICE_BIN: failover-controller
+    container_name: csf-failover-controller
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      FAILOVER_CONTROLLER_PORT: "8004"
+      SCHEDULER_SERVICE_URL: http://scheduler:8002
+      VOLUME_MANAGER_URL: http://volume-manager:8003
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      scheduler:
+        condition: service_started
+      volume-manager:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  sdn-controller:
+    build:
+      context: .
+      dockerfile: control-plane/Dockerfile.prod.shared
+      args:
+        SERVICE_BIN: sdn-controller
+    container_name: csf-sdn-controller
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      ETCD_URL: http://etcd:2379
+      SDN_CONTROLLER_PORT: "8005"
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  etcd_data:
+
+networks:
+  csf-internal:
+    driver: bridge
