@@ -17,7 +17,6 @@ mod system_collector;
 mod telemetry;
 mod utils;
 
-use routes::expenses::{CreateExpenseRequest, UpdateExpenseRequest};
 use routes::registry::{
     AgentStatistics, ErrorResponse as RegistryErrorResponse, HeartbeatRequest,
     PreRegisterAgentRequest, PreRegisterAgentResponse, RegisterAgentRequest, RegisterAgentResponse,
@@ -29,44 +28,35 @@ use routes::users::{
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        // User & Authentication
         routes::users::register_user,
         routes::users::login_user,
         routes::users::logout_user,
         routes::users::get_public_key,
         routes::users::get_user_profile,
-        // Expenses
-        routes::expenses::get_expenses,
-        routes::expenses::get_expense,
-        routes::expenses::create_expense,
-        // Registry - Admin
+        routes::users::validate_session,
+        routes::users::setup_2fa,
+        routes::users::enable_2fa,
+        routes::users::disable_2fa,
+        routes::users::change_password,
+        routes::users::change_email,
         routes::registry::pre_register_agent,
         routes::registry::list_pending_agents,
         routes::registry::delete_pending_agent,
         routes::registry::list_tokens,
         routes::registry::list_agents_admin,
         routes::registry::get_statistics,
-        // Registry - Agent
         routes::registry::register_agent,
         routes::registry::agent_heartbeat,
-        // Registry - Health
         routes::registry::registry_health,
-        // Registry - Deprecated
         routes::registry::create_token,
     ),
     components(
         schemas(
-            // User schemas
             RegisterRequest,
             LoginRequest,
             AuthResponse,
             PublicKeyResponse,
             UserProfileResponse,
-            // Expense schemas
-            CreateExpenseRequest,
-            UpdateExpenseRequest,
-            entity::expenses::Model,
-            // Registry schemas
             PreRegisterAgentRequest,
             PreRegisterAgentResponse,
             RegisterAgentRequest,
@@ -77,26 +67,31 @@ use routes::users::{
         )
     ),
     tags(
-        (name = "Authentication", description = "User authentication endpoints"),
-        (name = "Encryption", description = "RSA encryption endpoints"),
-        (name = "Expenses", description = "Expense management endpoints"),
-        (name = "Registry - Admin", description = "Registry administration endpoints (Pre-Registration workflow)"),
-        (name = "Registry - Agent", description = "Agent registration and heartbeat endpoints"),
+        (name = "Authentication", description = "User authentication and session management"),
+        (name = "Encryption", description = "RSA public key for password encryption"),
+        (name = "Registry - Admin", description = "Agent registry administration"),
+        (name = "Registry - Agent", description = "Agent registration and heartbeat"),
         (name = "Registry - Health", description = "Registry service health check"),
         (name = "Registry - Admin (Deprecated)", description = "Deprecated token-based registration"),
+        (name = "Agents", description = "Agent listing and metrics"),
+        (name = "Volumes", description = "Volume lifecycle management (proxied to volume-manager)"),
+        (name = "Workloads", description = "Workload scheduling (proxied to scheduler)"),
+        (name = "Networks", description = "SDN network management (proxied to sdn-controller)"),
+        (name = "Events", description = "Failover and system events (proxied to failover-controller)"),
+        (name = "System", description = "Control plane system info and metrics"),
     ),
     modifiers(&SecurityAddon),
     info(
         title = "CSF Control Plane API",
-        version = "0.1.0",
-        description = "CS-Foundry Control Plane API with agent registry, Zero Trust security, and pre-registration workflow",
+        version = "0.2.0",
+        description = "CS-Foundry Control Plane — agent registry, workload scheduling, volume management, SDN, failover, RBAC",
         contact(
             name = "CS-Foundry Team",
             email = "support@cs-foundry.com"
         )
     ),
     servers(
-        (url = "http://localhost:8000", description = "Local development server")
+        (url = "http://localhost:8000/api", description = "Local development server")
     )
 )]
 pub struct ApiDoc;
@@ -133,79 +128,65 @@ pub struct AppState {
     pub service_client: service_client::ServiceClient,
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        // This is a placeholder implementation for middleware
-        // In practice, you wouldn't use this default
-        panic!("AppState should be created with actual database connection")
-    }
-}
-
 #[tokio::main]
 async fn main() {
-    // Load .env file if it exists
     dotenvy::dotenv().ok();
 
     metrics::init();
     telemetry::init_tracing();
 
-    // Initialize database connection and run migrations
     let db_conn = match db::establish_connection().await {
         Ok(conn) => {
-            tracing::info!("Database connection established successfully");
+            tracing::info!("database connection established");
             conn
         }
         Err(e) => {
-            tracing::error!("Failed to connect to database: {}", e);
+            tracing::error!(error = %e, "failed to connect to database");
             std::process::exit(1);
         }
     };
 
-    // Initialize database with default data (RSA keys, admin user)
     if let Err(e) = init::initialize_database(&db_conn).await {
-        tracing::error!("Failed to initialize database: {}", e);
+        tracing::error!(error = %e, "failed to initialize database");
         std::process::exit(1);
     }
 
-    // Initialize Docker service
     let docker = match docker_service::DockerService::new() {
         Ok(docker) => {
             if docker.is_available().await {
-                tracing::info!("🐳 Docker service initialized successfully");
+                tracing::info!("docker service initialized");
                 Some(docker)
             } else {
-                tracing::warn!("⚠️  Docker is installed but not running");
+                tracing::warn!("docker installed but not running");
                 None
             }
         }
         Err(e) => {
-            tracing::warn!(
-                "⚠️  Docker service not available: {}. Container management will be limited.",
-                e
-            );
+            tracing::warn!(error = %e, "docker service unavailable");
             None
         }
     };
 
-    // Create application state
     let state = AppState {
         db_conn: db_conn.clone(),
         docker,
         service_client: service_client::ServiceClient::new(),
     };
 
-    // Start self-monitoring service
-    tracing::info!("🔄 Starting self-monitoring service...");
+    tracing::info!("starting self-monitoring service");
     self_monitor::start_self_monitoring(std::sync::Arc::new(db_conn)).await;
 
-    // build our application with a route
     let app = routes::create_router()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state);
 
-    // run our app with hyper
     let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
-    tracing::info!("listening on {}", addr);
+    tracing::info!(addr = %addr, "listening");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
