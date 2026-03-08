@@ -63,14 +63,13 @@ in
     enable = true;
     package = csf.agentPackage;
     apiGateway = "http://localhost:8000";
-    registrationToken = "";
     heartbeatInterval = 60;
     logLevel = "info";
-  };
-
-  systemd.services.csf-daemon = {
-    after = lib.mkAfter [ "csf-control-plane.service" ];
-    wants = [ "csf-control-plane.service" ];
+    masterNode = {
+      enable = true;
+      adminUsername = "admin";
+      adminPassword = "change_me_in_production";
+    };
   };
 
   environment.systemPackages = with pkgs; [
