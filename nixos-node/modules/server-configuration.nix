@@ -1,135 +1,89 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, csf, ... }:
 
+let
+  composeDir = "/etc/csf-core";
+in
 {
-  # System configuration - WICHTIG: Muss mit der ursprünglichen Installation übereinstimmen!
   system.stateVersion = "25.11";
 
-  # Boot configuration
   boot = {
     loader.grub = {
       enable = true;
       device = "/dev/sda";
       useOSProber = true;
     };
-    
-    # Hardware-spezifische Einstellungen (von hardware-configuration.nix)
     initrd.availableKernelModules = [ "ata_piix" "uhci_hcd" "virtio_pci" "virtio_scsi" "sd_mod" "sr_mod" ];
-    initrd.kernelModules = [ ];
-    kernelModules = [ ];
-    extraModulePackages = [ ];
+    initrd.kernelModules = [];
+    kernelModules = [];
+    extraModulePackages = [];
   };
 
-  # File Systems (von hardware-configuration.nix)
   fileSystems."/" = {
     device = "/dev/disk/by-uuid/e4b27226-e75f-4cef-9dec-fc0c6f2185ac";
     fsType = "ext4";
   };
 
-  swapDevices = [ ];
+  swapDevices = [];
 
-  # Platform
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
 
-  # Networking
   networking = {
-    hostName = "nixos"; # Match existing hostname
-    
-    # NetworkManager aktivieren (wie auf dem Zielsystem)
+    hostName = "csf-node";
     networkmanager.enable = true;
-    
     firewall = {
       enable = true;
       allowedTCPPorts = [
-        22    # SSH
-        80    # HTTP
-        443   # HTTPS
-        8080  # Docker nginx test
-        8000  # CSF-Core Backend
+        22
+        8000
       ];
     };
   };
 
-  # Time zone
-  time.timeZone = "Europe/Berlin";
+  time.timeZone = "UTC";
 
-  # Locale settings
-  i18n.defaultLocale = "de_DE.UTF-8";
-  i18n.extraLocaleSettings = {
-    LC_ADDRESS = "de_DE.UTF-8";
-    LC_IDENTIFICATION = "de_DE.UTF-8";
-    LC_MEASUREMENT = "de_DE.UTF-8";
-    LC_MONETARY = "de_DE.UTF-8";
-    LC_NAME = "de_DE.UTF-8";
-    LC_NUMERIC = "de_DE.UTF-8";
-    LC_PAPER = "de_DE.UTF-8";
-    LC_TELEPHONE = "de_DE.UTF-8";
-    LC_TIME = "de_DE.UTF-8";
-  };
-
-  # Console keymap
-  console.keyMap = "de";
-
-  # X11 keymap
-  services.xserver.xkb = {
-    layout = "de";
-    variant = "";
-  };
-
-  # SSH Server für Remote-Zugriff
   services.openssh = {
     enable = true;
     settings = {
-      PermitRootLogin = "yes"; # Match existing config
-      PasswordAuthentication = true; # Match existing config
+      PermitRootLogin = "prohibit-password";
+      PasswordAuthentication = false;
     };
   };
 
-  # Bestehenden User rootcsf übernehmen
   users.users.rootcsf = {
     isNormalUser = true;
     description = "rootcsf";
     extraGroups = [ "networkmanager" "wheel" "docker" ];
-    packages = with pkgs; [];
   };
 
-  # Sudo ohne Passwort für wheel-Gruppe (für automatisiertes Deployment)
   security.sudo.wheelNeedsPassword = false;
 
-  # GnuPG Agent (wie auf dem Zielsystem)
-  programs.mtr.enable = true;
-  programs.gnupg.agent = {
-    enable = true;
-    enableSSHSupport = true;
-  };
-
-  # Docker aktivieren
   virtualisation.docker = {
     enable = true;
     enableOnBoot = true;
   };
 
-  # System packages
-  environment.systemPackages = with pkgs; [
-    # Docker tools
-    docker-compose
+  services.csf-daemon = {
+    enable = true;
+    package = csf.agentPackage;
+    apiGateway = "http://localhost:8000";
+    registrationToken = "";
+    heartbeatInterval = 60;
+    logLevel = "info";
+  };
 
-    # System utilities
+  environment.systemPackages = with pkgs; [
+    docker-compose
     curl
     wget
     vim
     htop
     git
     tmux
-    
-    # Debugging tools
     lsof
-    netcat
-    tcpdump
   ];
 
-  # Docker Compose service for CSF-Core Backend
-  systemd.services.docker-compose-csf-backend = {
-    description = "Docker Compose CSF-Core Backend Service";
+  systemd.services.csf-control-plane = {
+    description = "CSF Control Plane (Docker Compose)";
     after = [ "docker.service" "network-online.target" ];
     requires = [ "docker.service" ];
     wants = [ "network-online.target" ];
@@ -138,30 +92,20 @@
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      WorkingDirectory = "/etc/csf-core";
-      
-      # Start containers
-      ExecStart = "${pkgs.docker-compose}/bin/docker-compose up -d --remove-orphans";
-      
-      # Stop containers gracefully
-      ExecStop = "${pkgs.docker-compose}/bin/docker-compose down";
-      
-      # Timeout settings
+      WorkingDirectory = composeDir;
+      ExecStartPre = "${pkgs.docker}/bin/docker compose pull --quiet";
+      ExecStart = "${pkgs.docker}/bin/docker compose up -d --remove-orphans";
+      ExecStop = "${pkgs.docker}/bin/docker compose down";
       TimeoutStartSec = "300";
       TimeoutStopSec = "120";
     };
   };
 
-  # Activation script to setup Docker Compose for CSF-Core Backend
-  system.activationScripts.docker-setup = {
+  system.activationScripts.csf-core-setup = {
     text = ''
-      # Create csf-core directory
-      mkdir -p /etc/csf-core
+      mkdir -p ${composeDir}
 
-      # Create docker-compose.yml for CSF-Core Backend
-      cat > /etc/csf-core/docker-compose.yml <<'EOF'
-version: '3.8'
-
+      cat > ${composeDir}/docker-compose.yml <<'COMPOSE'
 services:
   postgres:
     image: postgres:16-alpine
@@ -172,8 +116,8 @@ services:
       POSTGRES_DB: csf_core
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    networks:
+      - csf-internal
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U csf -d csf_core"]
@@ -181,69 +125,151 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
-    image: ghcr.io/cs-foundry/csf-core-backend:latest
-    container_name: csf-backend
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.5.21
+    container_name: csf-etcd
+    command:
+      - etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd-data
+    volumes:
+      - etcd_data:/etcd-data
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  api-gateway:
+    image: ghcr.io/cs-foundry/csf-ce-api-gateway:0.2.2-alpha.353
+    container_name: csf-api-gateway
+    environment:
+      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      RUST_LOG: info
+      JWT_SECRET: change_me_in_production
+      RSA_KEY_SIZE: "4096"
+      REGISTRY_SERVICE_URL: http://registry:8001
+      SCHEDULER_SERVICE_URL: http://scheduler:8002
+      VOLUME_MANAGER_URL: http://volume-manager:8003
+      FAILOVER_CONTROLLER_URL: http://failover-controller:8004
+      SDN_CONTROLLER_URL: http://sdn-controller:8005
     ports:
       - "8000:8000"
-    environment:
-      - RUST_LOG=debug
-      - DATABASE_URL=postgres://csf:csfpassword@postgres:5432/csf_core
-      - JWT_SECRET=supersecretkey_change_me_in_production
-      - FRONTEND_URL=http://localhost:3000
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - csf-internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/system/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  registry:
+    image: ghcr.io/cs-foundry/csf-ce-registry:0.2.2-alpha.353
+    container_name: csf-registry
+    environment:
+      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      ETCD_ENDPOINTS: http://etcd:2379
+      REGISTRY_PORT: "8001"
+      RUST_LOG: info
+      SCHEDULER_SERVICE_URL: http://scheduler:8002
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  scheduler:
+    image: ghcr.io/cs-foundry/csf-ce-scheduler:0.2.2-alpha.353
+    container_name: csf-scheduler
+    environment:
+      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      ETCD_ENDPOINTS: http://etcd:2379
+      SCHEDULER_PORT: "8002"
+      RUST_LOG: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  volume-manager:
+    image: ghcr.io/cs-foundry/csf-ce-volume-manager:0.2.2-alpha.353
+    container_name: csf-volume-manager
+    environment:
+      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      ETCD_ENDPOINTS: http://etcd:2379
+      VOLUME_MANAGER_PORT: "8003"
+      RUST_LOG: info
+    volumes:
+      - /mnt/csf-volumes:/mnt/csf-volumes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  failover-controller:
+    image: ghcr.io/cs-foundry/csf-ce-failover-controller:0.2.2-alpha.353
+    container_name: csf-failover-controller
+    environment:
+      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      FAILOVER_CONTROLLER_PORT: "8004"
+      SCHEDULER_SERVICE_URL: http://scheduler:8002
+      VOLUME_MANAGER_URL: http://volume-manager:8003
+      RUST_LOG: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      scheduler:
+        condition: service_started
+      volume-manager:
+        condition: service_started
+    networks:
+      - csf-internal
+    restart: unless-stopped
+
+  sdn-controller:
+    image: ghcr.io/cs-foundry/csf-ce-sdn-controller:0.2.2-alpha.353
+    container_name: csf-sdn-controller
+    environment:
+      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      ETCD_URL: http://etcd:2379
+      SDN_CONTROLLER_PORT: "8005"
+      RUST_LOG: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      etcd:
+        condition: service_started
+    networks:
+      - csf-internal
     restart: unless-stopped
 
 volumes:
   postgres_data:
-EOF
+  etcd_data:
 
-      # Create test script
-      cat > /root/test-csf-backend.sh <<'EOF'
-#!/bin/bash
-echo "=== CSF-Core Backend Test ==="
-echo "Hostname: $(hostname)"
-echo "Date: $(date)"
-echo ""
-echo "Docker version:"
-docker --version
-echo ""
-echo "Docker Compose version:"
-docker-compose --version
-echo ""
-echo "Docker images:"
-docker images
-echo ""
-echo "Running containers:"
-docker ps
-echo ""
-echo "Docker Compose status:"
-cd /etc/csf-core && docker-compose ps
-echo ""
-echo "=== Network Test ==="
-echo "Testing backend API:"
-curl -s http://localhost:8000/health || echo "Backend not responding"
-echo ""
-echo "Testing database connection:"
-docker exec csf-postgres pg_isready -U csf -d csf_core || echo "Database not ready"
-echo ""
-echo "=== Test Complete ==="
-EOF
-      chmod +x /root/test-csf-backend.sh
+networks:
+  csf-internal:
+    driver: bridge
+COMPOSE
     '';
     deps = [];
   };
 
-  # Automatic updates (optional, aber empfohlen)
-  system.autoUpgrade = {
-    enable = false; # Auf true setzen für automatische Updates
-    dates = "04:00";
-    allowReboot = false;
-  };
-
-  # Nix settings
   nix = {
     settings = {
       experimental-features = [ "nix-command" "flakes" ];

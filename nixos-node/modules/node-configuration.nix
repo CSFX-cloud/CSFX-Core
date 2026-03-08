@@ -1,4 +1,4 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, csf, ... }:
 
 {
   system.stateVersion = "24.11";
@@ -21,6 +21,15 @@
   users.users.root.hashedPassword = "!";
 
   services.openssh.enable = false;
+
+  services.csf-daemon = {
+    enable = true;
+    package = csf.agentPackage;
+    apiGateway = "http://gateway.csf.local:8000";
+    registrationToken = "";
+    heartbeatInterval = 60;
+    logLevel = "info";
+  };
 
   nix = {
     settings = {

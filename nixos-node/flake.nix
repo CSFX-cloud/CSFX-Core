@@ -21,6 +21,10 @@
     };
 
     csfDaemonModule = import ./modules/csf-daemon.nix;
+
+    agentSpecialArgs = {
+      csf.agentPackage = csfAgentPkg;
+    };
   in
   {
     nixosConfigurations = {
@@ -29,9 +33,22 @@
         modules = [ ./modules/iso-configuration.nix ];
       };
 
+      csf-node = nixpkgs.lib.nixosSystem {
+        inherit system;
+        specialArgs = agentSpecialArgs;
+        modules = [
+          csfDaemonModule
+          ./modules/node-configuration.nix
+        ];
+      };
+
       csf-server = nixpkgs.lib.nixosSystem {
         inherit system;
-        modules = [ ./modules/server-configuration.nix ];
+        specialArgs = agentSpecialArgs;
+        modules = [
+          csfDaemonModule
+          ./modules/server-configuration.nix
+        ];
       };
     };
 
