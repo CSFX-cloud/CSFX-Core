@@ -195,20 +195,19 @@ impl ApiClient {
         &self,
         api_key: &str,
     ) -> Result<Vec<AssignedWorkload>> {
-        let url = format!("{}/api/workloads", self.gateway_url);
+        let url = format!("{}/api/agents/self/workloads", self.gateway_url);
 
         let resp = self
             .client
             .get(&url)
             .header("X-API-Key", api_key)
-            .header("Authorization", format!("Bearer {}", api_key))
             .send()
             .await
             .context("Failed to fetch workloads")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            anyhow::bail!("Failed to fetch workloads status={}", status);
+            anyhow::bail!("Failed to fetch workloads status={} {}", status, resp.text().await.unwrap_or_default());
         }
 
         let all: Vec<AssignedWorkload> = resp
@@ -218,10 +217,7 @@ impl ApiClient {
 
         Ok(all
             .into_iter()
-            .filter(|w| {
-                w.status == "scheduled"
-                    && w.container_id.is_none()
-            })
+            .filter(|w| w.status == "scheduled" && w.container_id.is_none())
             .collect())
     }
 
@@ -230,20 +226,19 @@ impl ApiClient {
         _agent_id: Uuid,
         api_key: &str,
     ) -> Result<Vec<AssignedVolume>> {
-        let url = format!("{}/api/volumes", self.gateway_url);
+        let url = format!("{}/api/agents/self/volumes", self.gateway_url);
 
         let resp = self
             .client
             .get(&url)
             .header("X-API-Key", api_key)
-            .header("Authorization", format!("Bearer {}", api_key))
             .send()
             .await
             .context("Failed to fetch volumes")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            anyhow::bail!("Failed to fetch volumes status={}", status);
+            anyhow::bail!("Failed to fetch volumes status={} {}", status, resp.text().await.unwrap_or_default());
         }
 
         let all: Vec<AssignedVolume> = resp
@@ -253,10 +248,7 @@ impl ApiClient {
 
         Ok(all
             .into_iter()
-            .filter(|v| {
-                v.status == "in_use"
-                    && v.mapped_device.is_none()
-            })
+            .filter(|v| v.status == "in_use" && v.mapped_device.is_none())
             .collect())
     }
 }
