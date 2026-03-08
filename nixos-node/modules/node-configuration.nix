@@ -1,7 +1,7 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, csf, ... }:
 
 {
-  system.stateVersion = "24.11";
+  system.stateVersion = "25.05";
 
   boot.loader.grub = {
     enable = true;
@@ -21,6 +21,15 @@
   users.users.root.hashedPassword = "!";
 
   services.openssh.enable = false;
+
+  services.csf-daemon = {
+    enable = true;
+    package = csf.agentPackage;
+    apiGateway = "http://gateway.csf.local:8000";
+    registrationToken = "csf-bootstrap.change_me";
+    heartbeatInterval = 60;
+    logLevel = "info";
+  };
 
   nix = {
     settings = {

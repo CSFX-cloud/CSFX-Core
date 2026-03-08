@@ -2,15 +2,30 @@
   description = "CSF NixOS Node Configuration";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, rust-overlay }:
   let
     system = "x86_64-linux";
-    pkgs = nixpkgs.legacyPackages.${system};
+    pkgs = import nixpkgs {
+      inherit system;
+      overlays = [ rust-overlay.overlays.default ];
+    };
 
-    csfAgentPkg = pkgs.rustPlatform.buildRustPackage {
+    rustToolchain = pkgs.rust-bin.stable."1.88.0".default.override {
+      extensions = [ "rust-src" ];
+      targets = [ "x86_64-unknown-linux-gnu" ];
+    };
+
+    csfAgentPkg = (pkgs.makeRustPlatform {
+      cargo = rustToolchain;
+      rustc = rustToolchain;
+    }).buildRustPackage {
       pname = "csf-agent";
       version = "0.2.2";
       src = ../.;
@@ -21,6 +36,10 @@
     };
 
     csfDaemonModule = import ./modules/csf-daemon.nix;
+
+    agentSpecialArgs = {
+      csf.agentPackage = csfAgentPkg;
+    };
   in
   {
     nixosConfigurations = {
@@ -29,9 +48,22 @@
         modules = [ ./modules/iso-configuration.nix ];
       };
 
+      csf-node = nixpkgs.lib.nixosSystem {
+        inherit system;
+        specialArgs = agentSpecialArgs;
+        modules = [
+          csfDaemonModule
+          ./modules/node-configuration.nix
+        ];
+      };
+
       csf-server = nixpkgs.lib.nixosSystem {
         inherit system;
-        modules = [ ./modules/server-configuration.nix ];
+        specialArgs = agentSpecialArgs;
+        modules = [
+          csfDaemonModule
+          ./modules/server-configuration.nix
+        ];
       };
     };
 

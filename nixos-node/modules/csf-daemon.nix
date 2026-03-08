@@ -2,6 +2,7 @@
 
 let
   cfg = config.services.csf-daemon;
+  credentialsFile = "/var/lib/csf-daemon/credentials";
 in
 {
   options.services.csf-daemon = {
@@ -21,7 +22,7 @@ in
     registrationToken = lib.mkOption {
       type = lib.types.str;
       default = "";
-      description = "One-time registration token. Consumed on first boot, ignored thereafter.";
+      description = "Cluster-wide bootstrap token (csf-bootstrap.*) or node-specific pre-register token (reg_*). Ignored once the agent is registered.";
     };
 
     heartbeatInterval = lib.mkOption {
@@ -60,9 +61,10 @@ in
 
       environment = {
         CSF_GATEWAY_URL = cfg.apiGateway;
-        CSF_REGISTRATION_TOKEN = cfg.registrationToken;
         CSF_HEARTBEAT_INTERVAL = toString cfg.heartbeatInterval;
         RUST_LOG = cfg.logLevel;
+      } // lib.optionalAttrs (cfg.registrationToken != "") {
+        CSF_REGISTRATION_TOKEN = cfg.registrationToken;
       };
 
       serviceConfig = {
@@ -73,7 +75,6 @@ in
         Group = "csf-daemon";
         StateDirectory = "csf-daemon";
         StateDirectoryMode = "0700";
-
         NoNewPrivileges = true;
         ProtectSystem = "strict";
         ProtectHome = true;
