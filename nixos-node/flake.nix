@@ -3,14 +3,29 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, rust-overlay }:
   let
     system = "x86_64-linux";
-    pkgs = nixpkgs.legacyPackages.${system};
+    pkgs = import nixpkgs {
+      inherit system;
+      overlays = [ rust-overlay.overlays.default ];
+    };
 
-    csfAgentPkg = pkgs.rustPlatform.buildRustPackage {
+    rustToolchain = pkgs.rust-bin.stable."1.88.0".default.override {
+      extensions = [ "rust-src" ];
+      targets = [ "x86_64-unknown-linux-gnu" ];
+    };
+
+    csfAgentPkg = (pkgs.makeRustPlatform {
+      cargo = rustToolchain;
+      rustc = rustToolchain;
+    }).buildRustPackage {
       pname = "csf-agent";
       version = "0.2.2";
       src = ../.;
