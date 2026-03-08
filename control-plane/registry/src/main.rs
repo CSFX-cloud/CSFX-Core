@@ -34,6 +34,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to initialize PKI service");
 
     let token_manager = Arc::new(services::tokens::TokenManager::new(db_conn.clone()));
+    let bootstrap_token_manager = Arc::new(services::bootstrap_tokens::BootstrapTokenManager::new(db_conn.clone()));
     let api_key_manager = Arc::new(services::api_keys::ApiKeyManager::new(db_conn.clone()));
     let agent_registry = Arc::new(services::registry::AgentRegistry::new(db_conn.clone()));
 
@@ -52,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = server::AppState {
         token_manager: token_manager.clone(),
+        bootstrap_token_manager: bootstrap_token_manager.clone(),
         api_key_manager: api_key_manager.clone(),
         agent_registry: agent_registry.clone(),
         pki_service: Arc::new(pki_service),
@@ -63,11 +65,13 @@ async fn main() -> anyhow::Result<()> {
 
     let token_cleanup_handle = {
         let token_mgr = token_manager.clone();
+        let bootstrap_mgr = bootstrap_token_manager.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
             loop {
                 interval.tick().await;
                 token_mgr.cleanup_expired().await;
+                bootstrap_mgr.cleanup_expired().await;
             }
         })
     };

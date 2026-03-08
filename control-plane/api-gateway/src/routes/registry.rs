@@ -778,6 +778,45 @@ async fn proxy_to_registry(
     }
 }
 
+pub async fn create_bootstrap_token(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    let header_map: Vec<(String, String)> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+    proxy_to_registry(&state, reqwest::Method::POST, "/admin/bootstrap-tokens", body_json, Some(header_map)).await
+}
+
+pub async fn list_bootstrap_tokens(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let header_map: Vec<(String, String)> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+    proxy_to_registry(&state, reqwest::Method::GET, "/admin/bootstrap-tokens", None, Some(header_map)).await
+}
+
+pub async fn revoke_bootstrap_token(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let header_map: Vec<(String, String)> = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+    proxy_to_registry(&state, reqwest::Method::POST, &format!("/admin/bootstrap-tokens/{}/revoke", id), None, Some(header_map)).await
+}
+
 /// Registry health check
 #[utoipa::path(
     get,
@@ -811,6 +850,10 @@ pub fn registry_routes() -> Router<AppState> {
             "/registry/admin/agents/pending/:id",
             post(delete_pending_agent),
         )
+        // Admin routes - Bootstrap Token Management
+        .route("/registry/admin/bootstrap-tokens", post(create_bootstrap_token))
+        .route("/registry/admin/bootstrap-tokens", get(list_bootstrap_tokens))
+        .route("/registry/admin/bootstrap-tokens/:id/revoke", post(revoke_bootstrap_token))
         // Admin routes - Token Management (DEPRECATED)
         .route("/registry/admin/tokens", post(create_token))
         .route("/registry/admin/tokens", get(list_tokens))

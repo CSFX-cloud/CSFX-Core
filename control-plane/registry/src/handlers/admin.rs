@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::Json,
 };
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -10,6 +11,18 @@ use crate::{
     server::AppState,
     services::registry::PreRegisterParams,
 };
+
+#[derive(Debug, Deserialize)]
+pub struct CreateBootstrapTokenRequest {
+    pub description: Option<String>,
+    pub ttl_hours: Option<i64>,
+    pub max_uses: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RevokeBootstrapTokenResponse {
+    pub message: String,
+}
 
 pub async fn pre_register_agent(
     State(state): State<AppState>,
@@ -126,4 +139,37 @@ pub async fn get_statistics(
     State(state): State<AppState>,
 ) -> Json<crate::models::agent::AgentStatistics> {
     Json(state.agent_registry.get_statistics().await)
+}
+
+pub async fn create_bootstrap_token(
+    State(state): State<AppState>,
+    Json(request): Json<CreateBootstrapTokenRequest>,
+) -> Result<Json<crate::services::bootstrap_tokens::BootstrapToken>, (StatusCode, Json<ErrorResponse>)> {
+    let ttl_hours = request.ttl_hours.unwrap_or(24 * 30);
+    let max_uses = request.max_uses.unwrap_or(100);
+
+    state
+        .bootstrap_token_manager
+        .create(request.description, "admin".to_string(), ttl_hours, max_uses)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e })))
+}
+
+pub async fn list_bootstrap_tokens(
+    State(state): State<AppState>,
+) -> Json<Vec<crate::services::bootstrap_tokens::BootstrapToken>> {
+    Json(state.bootstrap_token_manager.list().await)
+}
+
+pub async fn revoke_bootstrap_token(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<RevokeBootstrapTokenResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .bootstrap_token_manager
+        .revoke(id)
+        .await
+        .map(|_| Json(RevokeBootstrapTokenResponse { message: format!("Bootstrap token {} revoked", id) }))
+        .map_err(|e| (StatusCode::NOT_FOUND, Json(ErrorResponse { error: e })))
 }

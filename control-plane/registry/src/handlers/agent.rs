@@ -15,52 +15,72 @@ pub async fn register_agent(
     State(state): State<AppState>,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let token_data = match state
-        .token_manager
-        .validate_and_consume_token(&request.registration_token)
-        .await
-    {
-        Ok(token) => token,
-        Err(e) => {
+    let agent_id = if crate::services::bootstrap_tokens::BootstrapTokenManager::is_bootstrap_token(
+        &request.registration_token,
+    ) {
+        if let Err(e) = state
+            .bootstrap_token_manager
+            .validate_and_use(&request.registration_token)
+            .await
+        {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(ErrorResponse {
-                    error: format!("Invalid registration token: {}", e),
+                    error: format!("Invalid bootstrap token: {}", e),
                 }),
-            ))
+            ));
         }
+        uuid::Uuid::new_v4()
+    } else {
+        let token_data = match state
+            .token_manager
+            .validate_and_consume_token(&request.registration_token)
+            .await
+        {
+            Ok(token) => token,
+            Err(e) => {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(ErrorResponse {
+                        error: format!("Invalid registration token: {}", e),
+                    }),
+                ))
+            }
+        };
+
+        if token_data.expected_name != request.name {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Agent name mismatch. Expected '{}', got '{}'",
+                        token_data.expected_name, request.name
+                    ),
+                }),
+            ));
+        }
+
+        if token_data.expected_hostname != request.hostname {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: format!(
+                        "Agent hostname mismatch. Expected '{}', got '{}'",
+                        token_data.expected_hostname, request.hostname
+                    ),
+                }),
+            ));
+        }
+
+        token_data.agent_id
     };
-
-    if token_data.expected_name != request.name {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: format!(
-                    "Agent name mismatch. Expected '{}', got '{}'",
-                    token_data.expected_name, request.name
-                ),
-            }),
-        ));
-    }
-
-    if token_data.expected_hostname != request.hostname {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: format!(
-                    "Agent hostname mismatch. Expected '{}', got '{}'",
-                    token_data.expected_hostname, request.hostname
-                ),
-            }),
-        ));
-    }
 
     let csr_pem = request.csr_pem.clone();
 
     let agent = match state
         .agent_registry
         .register_agent(RegisterAgentParams {
-            agent_id: token_data.agent_id,
+            agent_id,
             name: request.name,
             hostname: request.hostname,
             os_type: request.os_type,

@@ -1,4 +1,5 @@
 pub mod agent_api_keys;
+pub mod bootstrap_tokens;
 pub mod failover_events;
 pub mod agent_certificates;
 pub mod agent_metrics;
@@ -22,6 +23,7 @@ pub mod volumes;
 pub mod workloads;
 
 pub use agent_api_keys::Entity as AgentApiKeys;
+pub use bootstrap_tokens::Entity as BootstrapTokens;
 pub use failover_events::Entity as FailoverEvents;
 pub use agent_certificates::Entity as AgentCertificates;
 pub use agent_metrics::Entity as AgentMetrics;

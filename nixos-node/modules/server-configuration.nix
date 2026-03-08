@@ -63,13 +63,9 @@ in
     enable = true;
     package = csf.agentPackage;
     apiGateway = "http://localhost:8000";
+    registrationToken = "csf-bootstrap.change_me";
     heartbeatInterval = 60;
     logLevel = "info";
-    masterNode = {
-      enable = true;
-      adminUsername = "admin";
-      adminPassword = "change_me_in_production";
-    };
   };
 
   environment.systemPackages = with pkgs; [
