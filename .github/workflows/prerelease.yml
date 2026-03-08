@@ -57,6 +57,9 @@ jobs:
           - volume-manager
           - failover-controller
           - sdn-controller
+        arch:
+          - amd64
+          - arm64
         include:
           - arch: amd64
             runner: ubuntu-latest
