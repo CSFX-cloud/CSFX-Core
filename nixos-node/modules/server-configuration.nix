@@ -141,11 +141,15 @@ services:
       PATRONI_SUPERUSER_PASSWORD: postgrespass
       PATRONI_RESTAPI_LISTEN: "0.0.0.0:8008"
       PATRONI_RESTAPI_CONNECT_ADDRESS: "patroni:8008"
-      POSTGRES_USER: csf
-      POSTGRES_PASSWORD: csfpassword
-      POSTGRES_DB: csf_core
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          initdb:
+            - auth-host: md5
+            - auth-local: trust
+          post_bootstrap: /etc/csf-bootstrap.sh
     volumes:
       - patroni_data:/home/postgres/pgdata
+      - /etc/csf-core/patroni-bootstrap.sh:/etc/csf-bootstrap.sh:ro
     networks:
       - csf-internal
     depends_on:
@@ -273,6 +277,14 @@ networks:
   csf-internal:
     driver: bridge
 COMPOSE
+
+      cat > ${composeDir}/patroni-bootstrap.sh <<'BOOTSTRAP'
+#!/bin/bash
+psql -U postgres -c "CREATE USER csf WITH PASSWORD 'csfpassword';"
+psql -U postgres -c "CREATE DATABASE csf_core OWNER csf;"
+psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE csf_core TO csf;"
+BOOTSTRAP
+      chmod +x ${composeDir}/patroni-bootstrap.sh
     '';
     deps = [];
   };
