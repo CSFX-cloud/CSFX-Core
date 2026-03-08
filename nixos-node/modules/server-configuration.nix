@@ -32,10 +32,7 @@ in
     networkmanager.enable = true;
     firewall = {
       enable = true;
-      allowedTCPPorts = [
-        22
-        8000
-      ];
+      allowedTCPPorts = [ 22 8000 ];
     };
   };
 
@@ -71,6 +68,11 @@ in
     logLevel = "info";
   };
 
+  systemd.services.csf-daemon = {
+    after = lib.mkAfter [ "csf-control-plane.service" ];
+    wants = [ "csf-control-plane.service" ];
+  };
+
   environment.systemPackages = with pkgs; [
     docker-compose
     curl
@@ -96,7 +98,7 @@ in
       ExecStartPre = "${pkgs.docker}/bin/docker compose pull --quiet";
       ExecStart = "${pkgs.docker}/bin/docker compose up -d --remove-orphans";
       ExecStop = "${pkgs.docker}/bin/docker compose down";
-      TimeoutStartSec = "300";
+      TimeoutStartSec = "600";
       TimeoutStopSec = "120";
     };
   };
@@ -107,24 +109,6 @@ in
 
       cat > ${composeDir}/docker-compose.yml <<'COMPOSE'
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: csf-postgres
-    environment:
-      POSTGRES_USER: csf
-      POSTGRES_PASSWORD: csfpassword
-      POSTGRES_DB: csf_core
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - csf-internal
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U csf -d csf_core"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   etcd:
     image: gcr.io/etcd-development/etcd:v3.5.21
     container_name: csf-etcd
@@ -139,11 +123,46 @@ services:
       - csf-internal
     restart: unless-stopped
 
+  patroni:
+    image: ghcr.io/zalando/spilo-15:3.0-p1
+    container_name: csf-patroni
+    hostname: patroni
+    environment:
+      PATRONI_NAME: patroni
+      PATRONI_SCOPE: postgres-csf
+      PATRONI_ETCD3_HOSTS: "etcd:2379"
+      PATRONI_ETCD3_PROTOCOL: http
+      PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata
+      PATRONI_POSTGRESQL_LISTEN: "0.0.0.0:5432"
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: "patroni:5432"
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: replpass
+      PATRONI_SUPERUSER_USERNAME: postgres
+      PATRONI_SUPERUSER_PASSWORD: postgrespass
+      PATRONI_RESTAPI_LISTEN: "0.0.0.0:8008"
+      PATRONI_RESTAPI_CONNECT_ADDRESS: "patroni:8008"
+      POSTGRES_USER: csf
+      POSTGRES_PASSWORD: csfpassword
+      POSTGRES_DB: csf_core
+    volumes:
+      - patroni_data:/home/postgres/pgdata
+    networks:
+      - csf-internal
+    depends_on:
+      - etcd
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/health | grep -q running || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
   api-gateway:
     image: ghcr.io/cs-foundry/csf-ce-api-gateway:0.2.2-alpha.353
     container_name: csf-api-gateway
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
       RUST_LOG: info
       JWT_SECRET: change_me_in_production
       RSA_KEY_SIZE: "4096"
@@ -155,7 +174,7 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
+      patroni:
         condition: service_healthy
     networks:
       - csf-internal
@@ -165,22 +184,20 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 30s
 
   registry:
     image: ghcr.io/cs-foundry/csf-ce-registry:0.2.2-alpha.353
     container_name: csf-registry
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
       ETCD_ENDPOINTS: http://etcd:2379
       REGISTRY_PORT: "8001"
       RUST_LOG: info
       SCHEDULER_SERVICE_URL: http://scheduler:8002
     depends_on:
-      postgres:
+      patroni:
         condition: service_healthy
-      etcd:
-        condition: service_started
     networks:
       - csf-internal
     restart: unless-stopped
@@ -189,15 +206,13 @@ services:
     image: ghcr.io/cs-foundry/csf-ce-scheduler:0.2.2-alpha.353
     container_name: csf-scheduler
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
       ETCD_ENDPOINTS: http://etcd:2379
       SCHEDULER_PORT: "8002"
       RUST_LOG: info
     depends_on:
-      postgres:
+      patroni:
         condition: service_healthy
-      etcd:
-        condition: service_started
     networks:
       - csf-internal
     restart: unless-stopped
@@ -206,17 +221,15 @@ services:
     image: ghcr.io/cs-foundry/csf-ce-volume-manager:0.2.2-alpha.353
     container_name: csf-volume-manager
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
       ETCD_ENDPOINTS: http://etcd:2379
       VOLUME_MANAGER_PORT: "8003"
       RUST_LOG: info
     volumes:
       - /mnt/csf-volumes:/mnt/csf-volumes
     depends_on:
-      postgres:
+      patroni:
         condition: service_healthy
-      etcd:
-        condition: service_started
     networks:
       - csf-internal
     restart: unless-stopped
@@ -225,18 +238,14 @@ services:
     image: ghcr.io/cs-foundry/csf-ce-failover-controller:0.2.2-alpha.353
     container_name: csf-failover-controller
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
       FAILOVER_CONTROLLER_PORT: "8004"
       SCHEDULER_SERVICE_URL: http://scheduler:8002
       VOLUME_MANAGER_URL: http://volume-manager:8003
       RUST_LOG: info
     depends_on:
-      postgres:
+      patroni:
         condition: service_healthy
-      scheduler:
-        condition: service_started
-      volume-manager:
-        condition: service_started
     networks:
       - csf-internal
     restart: unless-stopped
@@ -245,22 +254,20 @@ services:
     image: ghcr.io/cs-foundry/csf-ce-sdn-controller:0.2.2-alpha.353
     container_name: csf-sdn-controller
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@postgres:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
       ETCD_URL: http://etcd:2379
       SDN_CONTROLLER_PORT: "8005"
       RUST_LOG: info
     depends_on:
-      postgres:
+      patroni:
         condition: service_healthy
-      etcd:
-        condition: service_started
     networks:
       - csf-internal
     restart: unless-stopped
 
 volumes:
-  postgres_data:
   etcd_data:
+  patroni_data:
 
 networks:
   csf-internal:
