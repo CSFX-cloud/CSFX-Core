@@ -249,6 +249,11 @@ pub async fn receive_metrics(
     Ok(StatusCode::CREATED)
 }
 
+fn is_container_id(hostname: &str) -> bool {
+    let h = hostname.trim();
+    h.len() == 12 && h.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// List all agents
 pub async fn list_agents(
     State(state): State<AppState>,
@@ -263,7 +268,11 @@ pub async fn list_agents(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let response: Vec<AgentResponse> = agents.into_iter().map(Into::into).collect();
+    let response: Vec<AgentResponse> = agents
+        .into_iter()
+        .filter(|a| !is_container_id(&a.hostname))
+        .map(Into::into)
+        .collect();
     Ok(Json(response))
 }
 
