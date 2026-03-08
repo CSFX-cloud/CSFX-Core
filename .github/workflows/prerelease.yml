@@ -1,0 +1,172 @@
+name: Pre-release Build
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Pre-release version (e.g. 0.9.0-alpha.1)"
+        required: true
+        type: string
+      channel:
+        description: "Channel"
+        required: true
+        type: choice
+        options: [alpha, beta, rc]
+        default: alpha
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            BASE=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+            COUNT=$(git rev-list --count HEAD)
+            echo "version=${BASE}-alpha.${COUNT}" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build ${{ matrix.service }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - registry
+          - scheduler
+          - volume-manager
+          - failover-controller
+          - sdn-controller
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        id: image
+        run: |
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: control-plane/Dockerfile.prod.shared
+          build-args: |
+            SERVICE_BIN=${{ matrix.service }}
+            BUILD_JOBS=2
+          push: true
+          outputs: type=registry,name=${{ steps.image.outputs.name }},push-by-digest=true
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          cache-from: type=gha,scope=pre-${{ matrix.service }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=pre-${{ matrix.service }}-${{ matrix.arch }}
+
+      - name: Save digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > /tmp/digests/${{ matrix.service }}-${{ matrix.arch }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.service }}-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.service }}-${{ matrix.arch }}.txt
+          retention-days: 1
+
+  manifest:
+    name: Manifest ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [version, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - registry
+          - scheduler
+          - volume-manager
+          - failover-controller
+          - sdn-controller
+    steps:
+      - name: Set image name
+        id: image
+        run: |
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.service }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          IMAGE="${{ steps.image.outputs.name }}"
+          AMD64=$(cat /tmp/digests/${{ matrix.service }}-amd64.txt)
+          ARM64=$(cat /tmp/digests/${{ matrix.service }}-arm64.txt)
+          docker buildx imagetools create \
+            -t ${IMAGE}:${VERSION} \
+            ${IMAGE}@${AMD64} \
+            ${IMAGE}@${ARM64}
+
+  github-release:
+    name: GitHub Pre-release
+    runs-on: ubuntu-latest
+    needs: [version, manifest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create pre-release
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --prerelease \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
