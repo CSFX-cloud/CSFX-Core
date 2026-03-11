@@ -20,7 +20,13 @@
 
   users.users.root.hashedPassword = "!";
 
-  services.openssh.enable = false;
+  services.openssh = {
+    enable = true;
+    settings = {
+      PermitRootLogin = "no";
+      PasswordAuthentication = false;
+    };
+  };
 
   services.csf-daemon = {
     enable = true;
