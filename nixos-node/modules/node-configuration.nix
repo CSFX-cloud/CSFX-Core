@@ -20,13 +20,18 @@
 
   users.users.root.hashedPassword = "!";
 
-  services.openssh.enable = false;
+  services.openssh = {
+    enable = true;
+    settings = {
+      PermitRootLogin = "no";
+      PasswordAuthentication = false;
+    };
+  };
 
   services.csf-daemon = {
     enable = true;
     package = csf.agentPackage;
     apiGateway = "http://gateway.csf.local:8000";
-    registrationToken = "csf-bootstrap.change_me";
     heartbeatInterval = 60;
     logLevel = "info";
   };

@@ -22,7 +22,6 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        tracing::info!("Request headers: {:?}", parts.headers);
         let token = parts
             .headers
             .get("Authorization")

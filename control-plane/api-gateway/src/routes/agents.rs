@@ -5,13 +5,14 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use entity::entities::{agent_metrics, agents};
+use entity::entities::{agent_metrics, agents, volumes, workloads};
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::auth::agent::AgentApiKey;
 use crate::auth::rbac::CanViewAgents;
 use crate::AppState;
 
@@ -248,6 +249,11 @@ pub async fn receive_metrics(
     Ok(StatusCode::CREATED)
 }
 
+fn is_container_id(hostname: &str) -> bool {
+    let h = hostname.trim();
+    h.len() == 12 && h.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// List all agents
 pub async fn list_agents(
     State(state): State<AppState>,
@@ -262,7 +268,11 @@ pub async fn list_agents(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let response: Vec<AgentResponse> = agents.into_iter().map(Into::into).collect();
+    let response: Vec<AgentResponse> = agents
+        .into_iter()
+        .filter(|a| !is_container_id(&a.hostname))
+        .map(Into::into)
+        .collect();
     Ok(Json(response))
 }
 
@@ -304,14 +314,69 @@ pub async fn get_agent_metrics(
     Ok(Json(metrics))
 }
 
+pub async fn get_agent_metrics_latest(
+    State(state): State<AppState>,
+    _perm: CanViewAgents,
+    axum::extract::Path(agent_id): axum::extract::Path<Uuid>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let metric = agent_metrics::Entity::find()
+        .filter(agent_metrics::Column::AgentId.eq(agent_id))
+        .order_by_desc(agent_metrics::Column::Timestamp)
+        .one(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to fetch latest agent metrics");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(metric))
+}
+
+pub async fn get_self_workloads(
+    agent: AgentApiKey,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let rows = workloads::Entity::find()
+        .filter(workloads::Column::AssignedAgentId.eq(agent.agent_id))
+        .all(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to fetch workloads for agent");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(rows))
+}
+
+pub async fn get_self_volumes(
+    agent: AgentApiKey,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let rows = volumes::Entity::find()
+        .filter(volumes::Column::AttachedToAgent.eq(agent.agent_id))
+        .all(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to fetch volumes for agent");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(rows))
+}
+
 pub fn agents_routes() -> Router<AppState> {
     Router::new()
         // Public endpoints (for agents)
         .route("/agents/register", post(register_agent))
         .route("/agents/heartbeat", post(heartbeat))
         .route("/agents/metrics", post(receive_metrics))
+        // Agent-authenticated endpoints (X-API-Key)
+        .route("/agents/self/workloads", get(get_self_workloads))
+        .route("/agents/self/volumes", get(get_self_volumes))
         // Protected endpoints (for frontend)
         .route("/agents", get(list_agents))
         .route("/agents/:id", get(get_agent))
         .route("/agents/:id/metrics", get(get_agent_metrics))
+        .route("/agents/:id/metrics/latest", get(get_agent_metrics_latest))
 }
