@@ -55,8 +55,9 @@ in
 
     systemd.services.csf-daemon = {
       description = "CSF Local Daemon Agent";
-      after = [ "network-online.target" ];
+      after = [ "network-online.target" "csf-control-plane.service" ];
       wants = [ "network-online.target" ];
+      requires = [ "csf-control-plane.service" ];
       wantedBy = [ "multi-user.target" ];
 
       environment = {

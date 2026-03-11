@@ -102,10 +102,11 @@ pub async fn verify_client_cert(
     agent_id: Uuid,
     cert_pem: &str,
 ) -> Result<bool> {
+    let normalized = cert_pem.replace("\\n", "\n");
     let cert = agent_certificates::Entity::find()
         .filter(agent_certificates::Column::AgentId.eq(agent_id))
         .filter(agent_certificates::Column::IsActive.eq(true))
-        .filter(agent_certificates::Column::CertificatePem.eq(cert_pem))
+        .filter(agent_certificates::Column::CertificatePem.eq(normalized))
         .one(db)
         .await?;
 
