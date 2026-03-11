@@ -178,7 +178,8 @@ impl ApiClient {
             });
 
         if let Some(ref cert_pem) = self.cert_pem {
-            req = req.header("X-Client-Cert", cert_pem.as_str());
+            let encoded = cert_pem.replace('\n', "\\n");
+            req = req.header("X-Client-Cert", encoded);
         }
 
         let resp = req.send().await.context("Failed to send heartbeat")?;
