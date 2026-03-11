@@ -103,8 +103,16 @@ async fn perform_registration(
     heartbeat_interval_secs: u64,
     agent_pki: &pki::AgentPki,
 ) -> Result<(uuid::Uuid, String)> {
-    let token = std::env::var("CSF_REGISTRATION_TOKEN")
-        .context("CSF_REGISTRATION_TOKEN is required for first-time registration")?;
+    let token = match std::env::var("CSF_REGISTRATION_TOKEN") {
+        Ok(t) => t,
+        Err(_) => {
+            info!("CSF_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
+            client
+                .fetch_bootstrap_token()
+                .await
+                .context("Failed to fetch bootstrap token from gateway")?
+        }
+    };
 
     let info = system::collect_info();
 

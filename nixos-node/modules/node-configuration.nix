@@ -32,7 +32,6 @@
     enable = true;
     package = csf.agentPackage;
     apiGateway = "http://gateway.csf.local:8000";
-    registrationToken = "csf-bootstrap.change_me";
     heartbeatInterval = 60;
     logLevel = "info";
   };

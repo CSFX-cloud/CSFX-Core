@@ -221,6 +221,32 @@ impl ApiClient {
             .collect())
     }
 
+    pub async fn fetch_bootstrap_token(&self) -> Result<String> {
+        let url = format!("{}/api/registry/internal/bootstrap-token", self.gateway_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch bootstrap token")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!("Bootstrap token fetch failed status={}", status);
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .context("Failed to parse bootstrap token response")?;
+
+        body["token"]
+            .as_str()
+            .map(|s| s.to_string())
+            .context("Bootstrap token response missing 'token' field")
+    }
+
     pub async fn fetch_assigned_volumes(
         &self,
         _agent_id: Uuid,

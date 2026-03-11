@@ -838,8 +838,43 @@ pub async fn registry_health(State(state): State<AppState>) -> impl IntoResponse
     }
 }
 
+pub async fn internal_bootstrap_token(
+    State(state): State<AppState>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let ip = addr.ip();
+    let allowed = ip.is_loopback()
+        || match ip {
+            std::net::IpAddr::V4(v4) => {
+                let octets = v4.octets();
+                octets[0] == 10
+                    || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31)
+                    || (octets[0] == 192 && octets[1] == 168)
+            }
+            std::net::IpAddr::V6(_) => false,
+        };
+
+    if !allowed {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "internal endpoint not accessible from this network"})),
+        ));
+    }
+
+    proxy_to_registry(
+        &state,
+        reqwest::Method::POST,
+        "/admin/bootstrap-tokens",
+        Some(json!({"description": "auto-issued for node bootstrap", "ttl_hours": 1, "max_uses": 1})),
+        None,
+    )
+    .await
+}
+
 pub fn registry_routes() -> Router<AppState> {
     Router::new()
+        // Internal - node bootstrap (no auth, IP-restricted)
+        .route("/registry/internal/bootstrap-token", get(internal_bootstrap_token))
         // Admin routes - Pre-Registration (NEW WORKFLOW)
         .route(
             "/registry/admin/agents/pre-register",
