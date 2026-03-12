@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ETCD_ENDPOINT="${ETCD_ENDPOINT:-http://localhost:2379}"
+ETCD_USERNAME="${ETCD_USERNAME:-csf}"
+ETCD_PASSWORD="${ETCD_PASSWORD:?ETCD_PASSWORD must be set}"
 COMPOSE_FILE="${COMPOSE_FILE:-/opt/csf/docker-compose.prod.yml}"
 GHCR_ORG="${GHCR_ORG:-csfx-cloud}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
@@ -13,19 +15,33 @@ log() {
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
 }
 
+etcd_auth_token() {
+    curl -sf "${ETCD_ENDPOINT}/v3/auth/authenticate" \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"${ETCD_USERNAME}\", \"password\": \"${ETCD_PASSWORD}\"}" \
+        | jq -r '.token // empty'
+}
+
 etcd_get() {
+    local token
+    token="$(etcd_auth_token)"
     curl -sf "${ETCD_ENDPOINT}/v3/kv/range" \
         -X POST \
         -H "Content-Type: application/json" \
+        -H "Authorization: ${token}" \
         -d "{\"key\": \"$(printf '%s' "$1" | base64 -w0)\"}" \
         | jq -r '.kvs[0].value // empty' \
         | base64 -d 2>/dev/null || true
 }
 
 etcd_put() {
+    local token
+    token="$(etcd_auth_token)"
     curl -sf "${ETCD_ENDPOINT}/v3/kv/put" \
         -X POST \
         -H "Content-Type: application/json" \
+        -H "Authorization: ${token}" \
         -d "{\"key\": \"$(printf '%s' "$1" | base64 -w0)\", \"value\": \"$(printf '%s' "$2" | base64 -w0)\"}" \
         > /dev/null
 }

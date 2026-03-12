@@ -9,6 +9,7 @@ User=csf-updater
 Group=docker
 EnvironmentFile=/opt/csf/.env
 Environment=ETCD_ENDPOINT=http://localhost:2379
+Environment=ETCD_USERNAME=csf
 Environment=COMPOSE_FILE=/opt/csf/docker-compose.prod.yml
 Environment=POLL_INTERVAL=30
 ExecStart=/opt/csf/csf-updater.sh
