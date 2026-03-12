@@ -8,8 +8,11 @@ COMPOSE_FILE="${COMPOSE_FILE:-/opt/csf/docker-compose.prod.yml}"
 GHCR_ORG="${GHCR_ORG:-csfx-cloud}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 
+GHCR_TOKEN="${GHCR_TOKEN:?GHCR_TOKEN must be set}"
 ETCD_DESIRED_KEY="/csf/config/desired_cp_version"
 ETCD_RESULT_KEY="/csf/config/last_update_result"
+
+SERVICES=(api-gateway registry scheduler volume-manager failover-controller sdn-controller)
 
 log() {
     echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
@@ -54,6 +57,41 @@ current_version() {
         | head -1 || true
 }
 
+ghcr_digest() {
+    local image="$1" tag="$2"
+    curl -sf \
+        -H "Authorization: Bearer ${GHCR_TOKEN}" \
+        -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+        "https://ghcr.io/v2/${image}/manifests/${tag}" \
+        -I | grep -i "^docker-content-digest:" | tr -d '[:space:]' | cut -d: -f2-
+}
+
+local_digest() {
+    docker inspect --format='{{index .RepoDigests 0}}' "$1" 2>/dev/null \
+        | cut -d@ -f2 || true
+}
+
+verify_images() {
+    local version="$1"
+    log "verifying image digests against GHCR"
+    for svc in "${SERVICES[@]}"; do
+        local image="ghcr.io/${GHCR_ORG}/csf-ce-${svc}"
+        local remote_digest local_dig
+        remote_digest="$(ghcr_digest "${GHCR_ORG}/csf-ce-${svc}" "${version}")"
+        local_dig="$(local_digest "${image}:${version}")"
+
+        if [[ -z "$remote_digest" ]]; then
+            log "failed to fetch remote digest for ${svc}"
+            return 1
+        fi
+        if [[ "$remote_digest" != "$local_dig" ]]; then
+            log "digest mismatch for ${svc}: remote=${remote_digest} local=${local_dig}"
+            return 1
+        fi
+        log "verified ${svc}: ${remote_digest}"
+    done
+}
+
 run_update() {
     local version="$1"
     log "starting update to ${version}"
@@ -64,6 +102,12 @@ run_update() {
     if ! GHCR_ORG="$GHCR_ORG" CSF_VERSION="$version" \
         docker compose -f "$COMPOSE_FILE" pull; then
         log "pull failed"
+        etcd_put "$ETCD_RESULT_KEY" "failed"
+        return 1
+    fi
+
+    if ! verify_images "$version"; then
+        log "image verification failed, aborting update"
         etcd_put "$ETCD_RESULT_KEY" "failed"
         return 1
     fi
