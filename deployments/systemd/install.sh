@@ -34,6 +34,17 @@ fi
 
 cp "${SCRIPT_DIR}/csf-updater.service" /etc/systemd/system/csf-updater.service
 
+if command -v ufw &>/dev/null; then
+    ufw deny in 2379/tcp comment "etcd - internal only"
+    ufw deny in 2380/tcp comment "etcd peer - internal only"
+    echo "ufw rules added: etcd ports 2379/2380 blocked from external access"
+elif command -v firewall-cmd &>/dev/null; then
+    firewall-cmd --permanent --add-rich-rule='rule port port="2379" protocol="tcp" reject'
+    firewall-cmd --permanent --add-rich-rule='rule port port="2380" protocol="tcp" reject'
+    firewall-cmd --reload
+    echo "firewalld rules added: etcd ports 2379/2380 blocked from external access"
+fi
+
 systemctl daemon-reload
 systemctl enable csf-updater
 systemctl start csf-updater
