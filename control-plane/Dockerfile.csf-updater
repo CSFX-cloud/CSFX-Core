@@ -1,0 +1,48 @@
+FROM rust:1.88-slim-bookworm AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    libpq-dev \
+    protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY agent/Cargo.toml ./agent/
+COPY control-plane/api-gateway/Cargo.toml ./control-plane/api-gateway/
+COPY control-plane/csf-migrate/Cargo.toml ./control-plane/csf-migrate/
+COPY control-plane/csf-updater/Cargo.toml ./control-plane/csf-updater/
+COPY control-plane/scheduler/Cargo.toml ./control-plane/scheduler/
+COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-controller/
+COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
+COPY control-plane/volume-manager/Cargo.toml ./control-plane/volume-manager/
+COPY control-plane/registry/Cargo.toml ./control-plane/registry/
+COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
+COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
+COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
+
+COPY control-plane/shared/ ./control-plane/shared/
+
+RUN mkdir -p agent/src \
+    control-plane/api-gateway/src \
+    control-plane/csf-migrate/src \
+    control-plane/csf-updater/src \
+    control-plane/scheduler/src \
+    control-plane/failover-controller/src \
+    control-plane/sdn-controller/src \
+    control-plane/volume-manager/src \
+    control-plane/registry/src \
+    && for d in agent control-plane/api-gateway control-plane/csf-migrate control-plane/csf-updater \
+       control-plane/scheduler control-plane/failover-controller control-plane/sdn-controller \
+       control-plane/volume-manager control-plane/registry; do \
+         echo "fn main() {}" > $d/src/main.rs; \
+       done
+
+COPY . .
+
+RUN cargo build --release --bin csf-updater
+
+FROM scratch AS export
+COPY --from=builder /app/target/release/csf-updater /csf-updater

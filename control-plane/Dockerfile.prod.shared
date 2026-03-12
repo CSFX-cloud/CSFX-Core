@@ -25,12 +25,14 @@ COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
 COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
 COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
 COPY control-plane/csf-migrate/Cargo.toml ./control-plane/csf-migrate/
+COPY control-plane/csf-updater/Cargo.toml ./control-plane/csf-updater/
 
 COPY control-plane/shared/ ./control-plane/shared/
 
 RUN mkdir -p agent/src \
     control-plane/api-gateway/src \
     control-plane/csf-migrate/src \
+    control-plane/csf-updater/src \
     control-plane/scheduler/src \
     control-plane/failover-controller/src \
     control-plane/sdn-controller/src \
@@ -39,6 +41,7 @@ RUN mkdir -p agent/src \
     && echo "fn main() {}" > agent/src/main.rs \
     && echo "fn main() {}" > control-plane/api-gateway/src/main.rs \
     && echo "fn main() {}" > control-plane/csf-migrate/src/main.rs \
+    && echo "fn main() {}" > control-plane/csf-updater/src/main.rs \
     && echo "fn main() {}" > control-plane/scheduler/src/main.rs \
     && echo "fn main() {}" > control-plane/failover-controller/src/main.rs \
     && echo "fn main() {}" > control-plane/sdn-controller/src/main.rs \
