@@ -64,6 +64,7 @@ image = { workspace = true }
 sysinfo = { workspace = true }
 reqwest = { workspace = true }
 prometheus = { workspace = true }
+etcd-client = { workspace = true }
 tower_governor = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
