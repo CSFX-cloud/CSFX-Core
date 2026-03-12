@@ -5,7 +5,8 @@ Requires=docker.service
 
 [Service]
 Type=simple
-User=root
+User=csf-updater
+Group=docker
 EnvironmentFile=/opt/csf/.env
 Environment=ETCD_ENDPOINT=http://localhost:2379
 Environment=COMPOSE_FILE=/opt/csf/docker-compose.prod.yml
