@@ -136,6 +136,7 @@ dependencies = [
  "cookie",
  "dotenvy",
  "entity",
+ "etcd-client",
  "http 1.4.0",
  "hyper 1.8.1",
  "hyper-util",
@@ -1066,6 +1067,19 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "csf-migrate"
+version = "0.2.2"
+dependencies = [
+ "dotenvy",
+ "migration",
+ "sea-orm",
+ "sea-orm-migration",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4543,9 +4557,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dotenvy",
- "migration",
  "sea-orm",
- "sea-orm-migration",
  "serde",
  "thiserror 1.0.69",
  "tokio",

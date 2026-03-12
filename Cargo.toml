@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "agent",
     "control-plane/api-gateway",
+    "control-plane/csf-migrate",
     "control-plane/scheduler",
     "control-plane/failover-controller",
     "control-plane/sdn-controller",

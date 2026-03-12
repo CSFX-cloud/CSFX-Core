@@ -31,12 +31,21 @@ services:
       - csf-internal
     restart: unless-stopped
 
+  migrate:
+    image: ghcr.io/${GHCR_ORG}/csf-ce-api-gateway:${CSF_VERSION:-latest}
+    container_name: csf-migrate
+    command: ["/csf-migrate"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - csf-internal
+    restart: "no"
+
   api-gateway:
-    build:
-      context: .
-      dockerfile: control-plane/Dockerfile.prod.shared
-      args:
-        SERVICE_BIN: api-gateway
+    image: ghcr.io/${GHCR_ORG}/csf-ce-api-gateway:${CSF_VERSION:-latest}
     container_name: csf-api-gateway
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
@@ -48,11 +57,14 @@ services:
       VOLUME_MANAGER_URL: http://volume-manager:8003
       FAILOVER_CONTROLLER_URL: http://failover-controller:8004
       SDN_CONTROLLER_URL: http://sdn-controller:8005
+      ETCD_ENDPOINTS: http://etcd:2379
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     networks:
       - csf-internal
     restart: unless-stopped
@@ -64,11 +76,7 @@ services:
       start_period: 15s
 
   registry:
-    build:
-      context: .
-      dockerfile: control-plane/Dockerfile.prod.shared
-      args:
-        SERVICE_BIN: registry
+    image: ghcr.io/${GHCR_ORG}/csf-ce-registry:${CSF_VERSION:-latest}
     container_name: csf-registry
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
@@ -81,6 +89,8 @@ services:
         condition: service_healthy
       etcd:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     networks:
       - csf-internal
     restart: unless-stopped
@@ -92,11 +102,7 @@ services:
       start_period: 15s
 
   scheduler:
-    build:
-      context: .
-      dockerfile: control-plane/Dockerfile.prod.shared
-      args:
-        SERVICE_BIN: scheduler
+    image: ghcr.io/${GHCR_ORG}/csf-ce-scheduler:${CSF_VERSION:-latest}
     container_name: csf-scheduler
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
@@ -108,16 +114,14 @@ services:
         condition: service_healthy
       etcd:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     networks:
       - csf-internal
     restart: unless-stopped
 
   volume-manager:
-    build:
-      context: .
-      dockerfile: control-plane/Dockerfile.prod.shared
-      args:
-        SERVICE_BIN: volume-manager
+    image: ghcr.io/${GHCR_ORG}/csf-ce-volume-manager:${CSF_VERSION:-latest}
     container_name: csf-volume-manager
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
@@ -129,16 +133,14 @@ services:
         condition: service_healthy
       etcd:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     networks:
       - csf-internal
     restart: unless-stopped
 
   failover-controller:
-    build:
-      context: .
-      dockerfile: control-plane/Dockerfile.prod.shared
-      args:
-        SERVICE_BIN: failover-controller
+    image: ghcr.io/${GHCR_ORG}/csf-ce-failover-controller:${CSF_VERSION:-latest}
     container_name: csf-failover-controller
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
@@ -153,16 +155,14 @@ services:
         condition: service_started
       volume-manager:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     networks:
       - csf-internal
     restart: unless-stopped
 
   sdn-controller:
-    build:
-      context: .
-      dockerfile: control-plane/Dockerfile.prod.shared
-      args:
-        SERVICE_BIN: sdn-controller
+    image: ghcr.io/${GHCR_ORG}/csf-ce-sdn-controller:${CSF_VERSION:-latest}
     container_name: csf-sdn-controller
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
@@ -174,6 +174,8 @@ services:
         condition: service_healthy
       etcd:
         condition: service_started
+      migrate:
+        condition: service_completed_successfully
     networks:
       - csf-internal
     restart: unless-stopped

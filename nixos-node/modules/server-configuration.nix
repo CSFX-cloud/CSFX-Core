@@ -83,6 +83,7 @@ in
     after = [ "docker.service" "network-online.target" ];
     requires = [ "docker.service" ];
     wants = [ "network-online.target" ];
+    partOf = [ "docker.service" ];
     wantedBy = [ "multi-user.target" ];
 
     serviceConfig = {
