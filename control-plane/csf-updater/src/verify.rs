@@ -17,7 +17,7 @@ pub async fn verify_images(cfg: &Config, version: &str) -> Result<()> {
 
     for svc in SERVICES {
         let image = format!("{}/csf-ce-{}", cfg.ghcr_org, svc);
-        let remote = remote_digest(&client, &cfg.ghcr_token, &image, version).await?;
+        let remote = remote_digest(&client, &image, version).await?;
         let local = local_digest(&format!("ghcr.io/{}/csf-ce-{}:{}", cfg.ghcr_org, svc, version))?;
 
         if remote != local {
@@ -33,11 +33,10 @@ pub async fn verify_images(cfg: &Config, version: &str) -> Result<()> {
     Ok(())
 }
 
-async fn remote_digest(client: &reqwest::Client, token: &str, image: &str, tag: &str) -> Result<String> {
+async fn remote_digest(client: &reqwest::Client, image: &str, tag: &str) -> Result<String> {
     let url = format!("https://ghcr.io/v2/{}/manifests/{}", image, tag);
     let resp = client
         .head(&url)
-        .header("Authorization", format!("Bearer {}", token))
         .header("Accept", "application/vnd.docker.distribution.manifest.v2+json")
         .send()
         .await?;

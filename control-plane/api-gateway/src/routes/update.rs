@@ -36,12 +36,7 @@ pub fn routes() -> Router<AppState> {
 async fn etcd_client() -> Result<Client, StatusCode> {
     let endpoints = env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://etcd:2379".to_string());
 
-    let opts = match (env::var("ETCD_USERNAME"), env::var("ETCD_PASSWORD")) {
-        (Ok(user), Ok(pass)) => Some(etcd_client::ConnectOptions::new().with_user(user, pass)),
-        _ => None,
-    };
-
-    Client::connect([endpoints.as_str()], opts)
+    Client::connect([endpoints.as_str()], None)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to connect to etcd");

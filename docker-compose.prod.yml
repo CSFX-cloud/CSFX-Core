@@ -36,34 +36,6 @@ services:
       timeout: 5s
       retries: 5
 
-  etcd-init:
-    image: gcr.io/etcd-development/etcd:v3.5.21
-    container_name: csf-etcd-init
-    environment:
-      ETCDCTL_ENDPOINTS: http://etcd:2379
-      ETCD_ROOT_PASSWORD: ${ETCD_ROOT_PASSWORD}
-      ETCD_CSF_PASSWORD: ${ETCD_CSF_PASSWORD}
-    depends_on:
-      etcd:
-        condition: service_healthy
-    networks:
-      - csf-internal
-    restart: "no"
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        if etcdctl user get root 2>/dev/null; then
-          echo "etcd auth already configured"
-          exit 0
-        fi
-        etcdctl user add root:$${ETCD_ROOT_PASSWORD}
-        etcdctl user add csf:$${ETCD_CSF_PASSWORD}
-        etcdctl role add csf-role
-        etcdctl role grant-permission csf-role readwrite '/csf/' --prefix=true
-        etcdctl user grant-role csf csf-role
-        etcdctl auth enable
-        echo "etcd auth configured"
-
   migrate:
     image: ghcr.io/${GHCR_ORG}/csf-ce-api-gateway:${CSF_VERSION:-latest}
     container_name: csf-migrate
@@ -91,16 +63,12 @@ services:
       FAILOVER_CONTROLLER_URL: http://failover-controller:8004
       SDN_CONTROLLER_URL: http://sdn-controller:8005
       ETCD_ENDPOINTS: http://etcd:2379
-      ETCD_USERNAME: csf
-      ETCD_PASSWORD: ${ETCD_CSF_PASSWORD}
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
-        condition: service_completed_successfully
-      etcd-init:
         condition: service_completed_successfully
     networks:
       - csf-internal
@@ -118,8 +86,6 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
       ETCD_ENDPOINTS: http://etcd:2379
-      ETCD_USERNAME: csf
-      ETCD_PASSWORD: ${ETCD_CSF_PASSWORD}
       REGISTRY_PORT: "8001"
       RUST_LOG: ${RUST_LOG:-info}
       SCHEDULER_SERVICE_URL: http://scheduler:8002
@@ -127,8 +93,6 @@ services:
       postgres:
         condition: service_healthy
       migrate:
-        condition: service_completed_successfully
-      etcd-init:
         condition: service_completed_successfully
     networks:
       - csf-internal
@@ -146,16 +110,12 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
       ETCD_ENDPOINTS: http://etcd:2379
-      ETCD_USERNAME: csf
-      ETCD_PASSWORD: ${ETCD_CSF_PASSWORD}
       SCHEDULER_PORT: "8002"
       RUST_LOG: ${RUST_LOG:-info}
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
-        condition: service_completed_successfully
-      etcd-init:
         condition: service_completed_successfully
     networks:
       - csf-internal
@@ -167,16 +127,12 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
       ETCD_ENDPOINTS: http://etcd:2379
-      ETCD_USERNAME: csf
-      ETCD_PASSWORD: ${ETCD_CSF_PASSWORD}
       VOLUME_MANAGER_PORT: "8003"
       RUST_LOG: ${RUST_LOG:-info}
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
-        condition: service_completed_successfully
-      etcd-init:
         condition: service_completed_successfully
     networks:
       - csf-internal
@@ -210,16 +166,12 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
       ETCD_URL: http://etcd:2379
-      ETCD_USERNAME: csf
-      ETCD_PASSWORD: ${ETCD_CSF_PASSWORD}
       SDN_CONTROLLER_PORT: "8005"
       RUST_LOG: ${RUST_LOG:-info}
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
-        condition: service_completed_successfully
-      etcd-init:
         condition: service_completed_successfully
     networks:
       - csf-internal

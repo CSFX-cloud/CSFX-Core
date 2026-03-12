@@ -1,5 +1,4 @@
 use anyhow::Result;
-use etcd_client::ConnectOptions;
 
 use crate::config::Config;
 
@@ -13,10 +12,7 @@ pub struct Client {
 impl Client {
     pub async fn connect(cfg: &Config) -> Result<Self> {
         let endpoints: Vec<&str> = cfg.etcd_endpoints.iter().map(|s| s.as_str()).collect();
-        let opts = ConnectOptions::new()
-            .with_user(cfg.etcd_username.clone(), cfg.etcd_password.clone());
-
-        let inner = etcd_client::Client::connect(endpoints, Some(opts)).await?;
+        let inner = etcd_client::Client::connect(endpoints, None).await?;
         Ok(Self { inner })
     }
 
