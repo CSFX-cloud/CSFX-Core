@@ -3,7 +3,7 @@ use etcd_client::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 
-use crate::auth::middleware::AuthenticatedUser;
+use crate::auth::rbac::CanManageSystem;
 use crate::AppState;
 
 const ETCD_DESIRED_VERSION_KEY: &str = "/csf/config/desired_cp_version";
@@ -44,7 +44,7 @@ async fn etcd_client() -> Result<Client, StatusCode> {
 }
 
 async fn trigger_update(
-    _auth: AuthenticatedUser,
+    _auth: CanManageSystem,
     State(_state): State<AppState>,
     Json(req): Json<UpdateRequest>,
 ) -> Result<Json<UpdateResponse>, StatusCode> {
@@ -81,7 +81,7 @@ async fn trigger_update(
 }
 
 async fn update_status(
-    _auth: AuthenticatedUser,
+    _auth: CanManageSystem,
     State(_state): State<AppState>,
 ) -> Result<Json<UpdateStatusResponse>, StatusCode> {
     let mut client = etcd_client().await?;

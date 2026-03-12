@@ -85,6 +85,7 @@ pub async fn initialize_database(
         ("volumes.manage", "volumes", "manage", "Create, attach, detach and delete volumes"),
         ("networks.view", "networks", "view", "View networks and policies"),
         ("networks.manage", "networks", "manage", "Create and manage networks"),
+        ("system.manage", "system", "manage", "Trigger control plane updates"),
     ];
 
     let mut permission_map = std::collections::HashMap::new();
