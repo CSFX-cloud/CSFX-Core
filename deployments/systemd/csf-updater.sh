@@ -74,6 +74,10 @@ run_update() {
     log "update to ${version} complete"
 }
 
+is_valid_version() {
+    [[ "$1" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]
+}
+
 log "csf-updater started, polling etcd every ${POLL_INTERVAL}s"
 
 last_applied=""
@@ -82,8 +86,18 @@ while true; do
     desired="$(etcd_get "$ETCD_DESIRED_KEY")"
 
     if [[ -n "$desired" && "$desired" != "$last_applied" ]]; then
+        if ! is_valid_version "$desired"; then
+            log "rejected invalid version string: ${desired}"
+            etcd_put "$ETCD_RESULT_KEY" "failed"
+            last_applied="$desired"
+            sleep "$POLL_INTERVAL"
+            continue
+        fi
+
         log "desired version: ${desired}, last applied: ${last_applied:-none}"
         if run_update "$desired"; then
+            last_applied="$desired"
+        else
             last_applied="$desired"
         fi
     fi
