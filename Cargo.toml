@@ -4,6 +4,7 @@ members = [
     "agent",
     "control-plane/api-gateway",
     "control-plane/csf-migrate",
+    "control-plane/csf-updater",
     "control-plane/scheduler",
     "control-plane/failover-controller",
     "control-plane/sdn-controller",

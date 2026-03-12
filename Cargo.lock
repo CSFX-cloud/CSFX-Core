@@ -1083,6 +1083,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "csf-updater"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "etcd-client",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
