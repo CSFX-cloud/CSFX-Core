@@ -167,6 +167,9 @@ jobs:
         binary:
           - csf-updater
           - csf-agent
+        arch:
+          - amd64
+          - arm64
         include:
           - arch: amd64
             runner: ubuntu-latest
