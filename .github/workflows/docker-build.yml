@@ -110,6 +110,7 @@ jobs:
           build-args: |
             SERVICE_BIN=${{ matrix.service }}
             BUILD_JOBS=2
+            CSF_BUILD_VERSION=${{ needs.prepare.outputs.version }}
           push: true
           outputs: type=registry,name=${{ steps.image.outputs.name }},push-by-digest=true
           platforms: ${{ matrix.platform }}
@@ -166,14 +167,14 @@ jobs:
           key: csf-updater-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build
-        working-directory: control-plane
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CSF_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           cargo build --release --bin csf-updater --target ${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/csf-updater ../csf-updater-${{ matrix.arch }}
-          sha256sum ../csf-updater-${{ matrix.arch }} > ../csf-updater-${{ matrix.arch }}.sha256
+          cp target/${{ matrix.target }}/release/csf-updater csf-updater-${{ matrix.arch }}
+          sha256sum csf-updater-${{ matrix.arch }} > csf-updater-${{ matrix.arch }}.sha256
 
       - uses: actions/upload-artifact@v4
         with:
