@@ -64,7 +64,7 @@ utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "6.0", features = ["axum"] }
 
 # etcd
-etcd-client = "0.14"
+etcd-client = { version = "0.14", default-features = false, features = ["tls-roots"] }
 
 # PKI
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
