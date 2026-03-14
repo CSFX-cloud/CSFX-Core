@@ -27,6 +27,9 @@ COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
 COPY control-plane/csf-migrate/Cargo.toml ./control-plane/csf-migrate/
 COPY control-plane/csf-updater/Cargo.toml ./control-plane/csf-updater/
 
+COPY agent/build.rs ./agent/
+COPY control-plane/api-gateway/build.rs ./control-plane/api-gateway/
+COPY control-plane/csf-updater/build.rs ./control-plane/csf-updater/
 COPY control-plane/shared/ ./control-plane/shared/
 
 RUN mkdir -p agent/src \
@@ -54,8 +57,10 @@ FROM base AS builder
 
 ARG SERVICE_BIN
 ARG BUILD_JOBS=2
+ARG CSF_BUILD_VERSION
 
 ENV CARGO_BUILD_JOBS=${BUILD_JOBS}
+ENV CSF_BUILD_VERSION=${CSF_BUILD_VERSION}
 
 COPY --from=planner /app/recipe.json recipe.json
 
