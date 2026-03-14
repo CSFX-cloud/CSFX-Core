@@ -237,7 +237,6 @@ jobs:
     name: Attach csf-updater to release
     runs-on: ubuntu-latest
     needs: [prepare, build-updater]
-    if: needs.prepare.outputs.is_release == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -246,22 +245,27 @@ jobs:
           pattern: csf-updater-*
           merge-multiple: true
 
-      - name: Resolve tag
-        id: tag
+      - name: Create or update release
         run: |
-          TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload to release
-        run: |
-          gh release upload ${{ steps.tag.outputs.tag }} \
-            csf-updater-amd64 \
-            csf-updater-amd64.sha256 \
-            csf-updater-arm64 \
-            csf-updater-arm64.sha256 \
-            --clobber
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v${VERSION}"
+          if gh release view "${TAG}" &>/dev/null; then
+            gh release upload "${TAG}" \
+              csf-updater-amd64 \
+              csf-updater-amd64.sha256 \
+              csf-updater-arm64 \
+              csf-updater-arm64.sha256 \
+              --clobber
+          else
+            gh release create "${TAG}" \
+              --title "v${VERSION}" \
+              --prerelease \
+              --notes "Alpha build ${VERSION}" \
+              csf-updater-amd64 \
+              csf-updater-amd64.sha256 \
+              csf-updater-arm64 \
+              csf-updater-arm64.sha256
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

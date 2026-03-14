@@ -19,7 +19,12 @@
 
     rustToolchain = pkgs.rust-bin.stable."1.88.0".default.override {
       extensions = [ "rust-src" ];
-      targets = [ "x86_64-unknown-linux-gnu" ];
+      targets = [ "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
+    };
+
+    muslPlatform = pkgs.makeRustPlatform {
+      cargo = rustToolchain;
+      rustc = rustToolchain;
     };
 
     csfAgentPkg = (pkgs.makeRustPlatform {
@@ -35,10 +40,23 @@
       buildInputs = [ pkgs.openssl ];
     };
 
+    csfUpdaterPkg = muslPlatform.buildRustPackage {
+      pname = "csf-updater";
+      version = "0.2.2";
+      src = ../.;
+      cargoLock.lockFile = ../Cargo.lock;
+      buildAndTestSubdir = "control-plane/csf-updater";
+      CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
+      nativeBuildInputs = [ pkgs.musl ];
+      buildInputs = [];
+      doCheck = false;
+    };
+
     csfDaemonModule = import ./modules/csf-daemon.nix;
 
     agentSpecialArgs = {
       csf.agentPackage = csfAgentPkg;
+      csf.updaterPackage = csfUpdaterPkg;
     };
   in
   {
@@ -71,6 +89,7 @@
 
     packages.${system} = {
       csf-agent = csfAgentPkg;
+      csf-updater = csfUpdaterPkg;
       default = csfAgentPkg;
       iso = self.nixosConfigurations.iso.config.system.build.isoImage;
     };
