@@ -16,6 +16,6 @@ tracing-subscriber = { workspace = true }
 dotenvy = { workspace = true }
 anyhow = { workspace = true }
 etcd-client = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }

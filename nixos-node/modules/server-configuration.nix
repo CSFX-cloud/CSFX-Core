@@ -2,19 +2,7 @@
 
 let
   composeDir = "/etc/csf-core";
-  csfUpdaterVersion = "0.2.2-alpha.384";
-  csfUpdaterBin = pkgs.stdenv.mkDerivation {
-    pname = "csf-updater";
-    version = csfUpdaterVersion;
-    src = pkgs.fetchurl {
-      url = "https://github.com/CSFX-cloud/CSF-Core/releases/download/v${csfUpdaterVersion}/csf-updater-amd64";
-      sha256 = lib.fakeSha256;
-    };
-    phases = [ "installPhase" ];
-    installPhase = ''
-      install -Dm755 $src $out/bin/csf-updater
-    '';
-  };
+  csfUpdaterBin = csf.updaterPackage;
 in
 {
   system.stateVersion = "25.11";
@@ -210,7 +198,7 @@ services:
     restart: unless-stopped
 
   api-gateway:
-    image: ghcr.io/csfx-cloud/csf-ce-api-gateway:0.2.2-alpha.384
+    image: ghcr.io/csfx-cloud/csf-ce-api-gateway:0.2.2-alpha.388
     container_name: csf-api-gateway
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -238,7 +226,7 @@ services:
       start_period: 30s
 
   registry:
-    image: ghcr.io/csfx-cloud/csf-ce-registry:0.2.2-alpha.384
+    image: ghcr.io/csfx-cloud/csf-ce-registry:0.2.2-alpha.388
     container_name: csf-registry
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -254,7 +242,7 @@ services:
     restart: unless-stopped
 
   scheduler:
-    image: ghcr.io/csfx-cloud/csf-ce-scheduler:0.2.2-alpha.384
+    image: ghcr.io/csfx-cloud/csf-ce-scheduler:0.2.2-alpha.388
     container_name: csf-scheduler
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -269,7 +257,7 @@ services:
     restart: unless-stopped
 
   volume-manager:
-    image: ghcr.io/csfx-cloud/csf-ce-volume-manager:0.2.2-alpha.384
+    image: ghcr.io/csfx-cloud/csf-ce-volume-manager:0.2.2-alpha.388
     container_name: csf-volume-manager
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -286,7 +274,7 @@ services:
     restart: unless-stopped
 
   failover-controller:
-    image: ghcr.io/csfx-cloud/csf-ce-failover-controller:0.2.2-alpha.384
+    image: ghcr.io/csfx-cloud/csf-ce-failover-controller:0.2.2-alpha.388
     container_name: csf-failover-controller
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -302,7 +290,7 @@ services:
     restart: unless-stopped
 
   sdn-controller:
-    image: ghcr.io/csfx-cloud/csf-ce-sdn-controller:0.2.2-alpha.384
+    image: ghcr.io/csfx-cloud/csf-ce-sdn-controller:0.2.2-alpha.388
     container_name: csf-sdn-controller
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
