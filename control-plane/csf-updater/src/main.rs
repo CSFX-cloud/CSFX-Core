@@ -1,5 +1,6 @@
 mod config;
 mod etcd;
+mod secret;
 mod updater;
 mod verify;
 
@@ -56,7 +57,7 @@ async fn run_once(cfg: &config::Config, last_applied: &str) -> anyhow::Result<Op
     info!(version = %desired, last_applied = %last_applied, "starting update");
     etcd.put(etcd::RESULT_KEY, "in_progress").await?;
 
-    match updater::run(cfg, &desired).await {
+    match updater::run(cfg, &desired, &mut etcd).await {
         Ok(()) => {
             etcd.put(etcd::RESULT_KEY, "success").await?;
             info!(version = %desired, "update complete");

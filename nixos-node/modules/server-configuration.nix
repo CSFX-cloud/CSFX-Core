@@ -83,6 +83,8 @@ in
     isSystemUser = true;
     group = "csf-updater";
     extraGroups = [ "docker" ];
+    home = "/var/lib/csf-updater";
+    createHome = true;
     shell = pkgs.shadow;
   };
   users.groups.csf-updater = {};
@@ -203,6 +205,8 @@ services:
   api-gateway:
     image: ghcr.io/csfx-cloud/csf-ce-api-gateway:0.2.2-alpha.410
     container_name: csf-api-gateway
+    env_file:
+      - /etc/csf-core/gateway.env
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
       RUST_LOG: info
