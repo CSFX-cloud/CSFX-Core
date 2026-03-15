@@ -22,7 +22,7 @@
       targets = [ "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
     };
 
-    muslPlatform = pkgs.makeRustPlatform {
+    muslPlatform = pkgs.pkgsStatic.makeRustPlatform {
       cargo = rustToolchain;
       rustc = rustToolchain;
     };
@@ -46,8 +46,7 @@
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
       buildAndTestSubdir = "control-plane/csf-updater";
-      CARGO_BUILD_TARGET = "x86_64-unknown-linux-musl";
-      nativeBuildInputs = [ pkgs.musl ];
+      nativeBuildInputs = [ pkgs.pkg-config ];
       buildInputs = [];
       doCheck = false;
     };
