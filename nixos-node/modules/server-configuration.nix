@@ -154,6 +154,8 @@ services:
       - --data-dir=/etcd-data
     volumes:
       - etcd_data:/etcd-data
+    ports:
+      - "2379:2379"
     networks:
       - csf-internal
     restart: unless-stopped
