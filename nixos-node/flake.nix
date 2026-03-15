@@ -22,15 +22,12 @@
       targets = [ "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
     };
 
-    muslPlatform = pkgs.pkgsStatic.makeRustPlatform {
+    gnuPlatform = pkgs.makeRustPlatform {
       cargo = rustToolchain;
       rustc = rustToolchain;
     };
 
-    csfAgentPkg = (pkgs.makeRustPlatform {
-      cargo = rustToolchain;
-      rustc = rustToolchain;
-    }).buildRustPackage {
+    csfAgentPkg = gnuPlatform.buildRustPackage {
       pname = "csf-agent";
       version = "0.2.2";
       src = ../.;
@@ -40,7 +37,7 @@
       buildInputs = [ pkgs.openssl ];
     };
 
-    csfUpdaterPkg = muslPlatform.buildRustPackage {
+    csfUpdaterPkg = gnuPlatform.buildRustPackage {
       pname = "csf-updater";
       version = "0.2.2";
       src = ../.;
