@@ -4,6 +4,7 @@ use crate::config::Config;
 
 pub const DESIRED_VERSION_KEY: &str = "/csf/config/desired_cp_version";
 pub const RESULT_KEY: &str = "/csf/config/last_update_result";
+pub const GHCR_TOKEN_KEY: &str = "/csf/config/ghcr_token";
 
 pub struct Client {
     inner: etcd_client::Client,

@@ -3,11 +3,13 @@ use etcd_client::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 
+use crate::auth::crypto::{decrypt_secret, encrypt_secret};
 use crate::auth::rbac::CanManageSystem;
 use crate::AppState;
 
 const ETCD_DESIRED_VERSION_KEY: &str = "/csf/config/desired_cp_version";
 const ETCD_UPDATE_RESULT_KEY: &str = "/csf/config/last_update_result";
+const ETCD_GHCR_TOKEN_KEY: &str = "/csf/config/ghcr_token";
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateRequest {
@@ -27,10 +29,17 @@ pub struct UpdateStatusResponse {
     pub last_result: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct GhcrTokenRequest {
+    pub token: String,
+    pub username: String,
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/system/update", post(trigger_update))
         .route("/system/update/status", get(update_status))
+        .route("/system/ghcr-token", post(set_ghcr_token))
 }
 
 async fn etcd_client() -> Result<Client, StatusCode> {
@@ -175,4 +184,37 @@ async fn write_result(result: &str) {
     if let Ok(mut client) = etcd_client().await {
         let _ = client.put(ETCD_UPDATE_RESULT_KEY, result.as_bytes(), None).await;
     }
+}
+
+async fn set_ghcr_token(
+    _auth: CanManageSystem,
+    State(_state): State<AppState>,
+    Json(req): Json<GhcrTokenRequest>,
+) -> Result<StatusCode, StatusCode> {
+    if req.token.is_empty() || req.username.is_empty() {
+        return Err(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    let encryption_key = env::var("SECRET_ENCRYPTION_KEY").map_err(|_| {
+        tracing::error!("SECRET_ENCRYPTION_KEY not set");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let payload = format!("{}:{}", req.username, req.token);
+    let encrypted = encrypt_secret(&payload, &encryption_key).map_err(|e| {
+        tracing::error!(error = %e, "failed to encrypt ghcr token");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let mut client = etcd_client().await?;
+    client
+        .put(ETCD_GHCR_TOKEN_KEY, encrypted.as_bytes(), None)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to write ghcr token to etcd");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    tracing::info!(username = %req.username, "ghcr token updated");
+    Ok(StatusCode::NO_CONTENT)
 }

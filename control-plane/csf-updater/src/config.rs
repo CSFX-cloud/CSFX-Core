@@ -6,6 +6,7 @@ pub struct Config {
     pub ghcr_org: String,
     pub compose_file: String,
     pub poll_interval_secs: u64,
+    pub secret_encryption_key: String,
 }
 
 impl Config {
@@ -23,6 +24,8 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(30),
+            secret_encryption_key: env::var("SECRET_ENCRYPTION_KEY")
+                .context("SECRET_ENCRYPTION_KEY must be set")?,
         })
     }
 }

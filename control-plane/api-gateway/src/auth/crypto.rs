@@ -79,6 +79,59 @@ pub fn verify_password(password: &str, salt: &str, hashed: &str) -> CryptoResult
     Ok(verify(salted_password, hashed)?)
 }
 
+pub fn encrypt_secret(plaintext: &str, key_b64: &str) -> CryptoResult<String> {
+    use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+    use rand::RngCore;
+
+    let key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|_| CryptoError::InvalidEncryptedData)?;
+    if key_bytes.len() != 32 {
+        return Err(CryptoError::InvalidEncryptedData);
+    }
+
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|_| CryptoError::InvalidEncryptedData)?;
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|_| CryptoError::InvalidEncryptedData)?;
+
+    let mut combined = nonce_bytes.to_vec();
+    combined.extend_from_slice(&ciphertext);
+    Ok(base64::engine::general_purpose::STANDARD.encode(combined))
+}
+
+pub fn decrypt_secret(encoded: &str, key_b64: &str) -> CryptoResult<String> {
+    use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+
+    let key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|_| CryptoError::InvalidEncryptedData)?;
+    if key_bytes.len() != 32 {
+        return Err(CryptoError::InvalidEncryptedData);
+    }
+
+    let combined = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| CryptoError::InvalidEncryptedData)?;
+    if combined.len() < 12 {
+        return Err(CryptoError::InvalidEncryptedData);
+    }
+
+    let (nonce_bytes, ciphertext) = combined.split_at(12);
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes).map_err(|_| CryptoError::InvalidEncryptedData)?;
+    let nonce = Nonce::from_slice(nonce_bytes);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| CryptoError::InvalidEncryptedData)?;
+
+    String::from_utf8(plaintext).map_err(|_| CryptoError::InvalidEncryptedData)
+}
+
 pub fn generate_salt() -> String {
     use rand::Rng;
     const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ\
