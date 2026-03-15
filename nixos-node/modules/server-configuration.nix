@@ -115,7 +115,7 @@ in
       GHCR_ORG = "csfx-cloud";
       POLL_INTERVAL_SECS = "30";
       RUST_LOG = "info";
-      PATH = "/run/wrappers/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin";
+      PATH = lib.mkForce "/run/wrappers/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin";
     };
   };
 
