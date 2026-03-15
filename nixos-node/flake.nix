@@ -43,7 +43,7 @@
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
       buildAndTestSubdir = "control-plane/csf-updater";
-      nativeBuildInputs = [ pkgs.pkg-config ];
+      nativeBuildInputs = [ pkgs.pkg-config pkgs.protobuf ];
       buildInputs = [];
       doCheck = false;
     };
