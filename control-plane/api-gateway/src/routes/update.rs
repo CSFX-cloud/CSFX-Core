@@ -112,7 +112,11 @@ async fn etcd_get(client: &mut Client, key: &str) -> Result<Option<String>, Stat
 
 fn is_valid_semver(version: &str) -> bool {
     let v = version.strip_prefix('v').unwrap_or(version);
-    let parts: Vec<&str> = v.split('.').collect();
+    let (base, _pre) = match v.split_once('-') {
+        Some((b, p)) => (b, Some(p)),
+        None => (v, None),
+    };
+    let parts: Vec<&str> = base.split('.').collect();
     parts.len() == 3 && parts.iter().all(|p| p.parse::<u32>().is_ok())
 }
 
