@@ -264,7 +264,7 @@ services:
     restart: unless-stopped
 
   volume-manager:
-    image: ghcr.io/csfx-cloud/csf-ce-volume-manager:0.2.2-alpha.410
+    image: ghcr.io/csfx-cloud/csf-ce-volume-manager:0.2.2-alpha.415
     container_name: csf-volume-manager
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
