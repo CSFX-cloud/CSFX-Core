@@ -12,12 +12,12 @@ const SERVICES: &[&str] = &[
     "sdn-controller",
 ];
 
-pub async fn verify_images(cfg: &Config, version: &str) -> Result<()> {
+pub async fn verify_images(cfg: &Config, version: &str, ghcr_auth: Option<&str>) -> Result<()> {
     let client = reqwest::Client::new();
 
     for svc in SERVICES {
         let image = format!("{}/csf-ce-{}", cfg.ghcr_org, svc);
-        let remote = remote_digest(&client, &image, version).await?;
+        let remote = remote_digest(&client, &image, version, ghcr_auth).await?;
         let local = local_digest(&format!("ghcr.io/{}/csf-ce-{}:{}", cfg.ghcr_org, svc, version))?;
 
         if remote != local {
@@ -33,13 +33,17 @@ pub async fn verify_images(cfg: &Config, version: &str) -> Result<()> {
     Ok(())
 }
 
-async fn remote_digest(client: &reqwest::Client, image: &str, tag: &str) -> Result<String> {
+async fn remote_digest(client: &reqwest::Client, image: &str, tag: &str, ghcr_auth: Option<&str>) -> Result<String> {
     let url = format!("https://ghcr.io/v2/{}/manifests/{}", image, tag);
-    let resp = client
+    let mut req = client
         .head(&url)
-        .header("Accept", "application/vnd.docker.distribution.manifest.v2+json")
-        .send()
-        .await?;
+        .header("Accept", "application/vnd.docker.distribution.manifest.v2+json");
+
+    if let Some(auth) = ghcr_auth {
+        req = req.header("Authorization", format!("Basic {}", auth));
+    }
+
+    let resp = req.send().await?;
 
     if !resp.status().is_success() {
         bail!("GHCR manifest request failed for {}: {}", image, resp.status());
