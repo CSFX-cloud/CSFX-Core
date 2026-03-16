@@ -9,17 +9,17 @@ use crate::secret::decrypt_secret;
 use crate::verify;
 
 pub async fn run(cfg: &Config, version: &str, etcd: &mut etcd::Client) -> Result<()> {
-    let docker_config_dir = setup_docker_auth(cfg, etcd).await?;
+    let (docker_config_dir, ghcr_auth) = setup_docker_auth(cfg, etcd).await?;
     pull(cfg, version, docker_config_dir.as_deref()).await?;
-    verify::verify_images(cfg, version).await?;
+    verify::verify_images(cfg, version, ghcr_auth.as_deref()).await?;
     up(cfg, version, docker_config_dir.as_deref()).await?;
     health_check(cfg, version).await
 }
 
-async fn setup_docker_auth(cfg: &Config, etcd: &mut etcd::Client) -> Result<Option<String>> {
+async fn setup_docker_auth(cfg: &Config, etcd: &mut etcd::Client) -> Result<(Option<String>, Option<String>)> {
     let encrypted = match etcd.get(etcd::GHCR_TOKEN_KEY).await? {
         Some(v) => v,
-        None => return Ok(None),
+        None => return Ok((None, None)),
     };
 
     let payload = decrypt_secret(&encrypted, &cfg.secret_encryption_key)?;
@@ -45,7 +45,7 @@ async fn setup_docker_auth(cfg: &Config, etcd: &mut etcd::Client) -> Result<Opti
 
     tokio::fs::write(&config_path, serde_json::to_string(&config)?).await?;
     let dir_path = dir.into_path().to_string_lossy().to_string();
-    Ok(Some(dir_path))
+    Ok((Some(dir_path), Some(auth_b64)))
 }
 
 async fn pull(cfg: &Config, version: &str, docker_config_dir: Option<&str>) -> Result<()> {
