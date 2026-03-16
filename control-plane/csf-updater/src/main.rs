@@ -66,7 +66,7 @@ async fn run_once(cfg: &config::Config, last_applied: &str) -> anyhow::Result<Op
         Err(e) => {
             tracing::error!(error = %e, version = %desired, "update failed");
             etcd.put(etcd::RESULT_KEY, "failed").await?;
-            Ok(Some(desired))
+            Ok(None)
         }
     }
 }
