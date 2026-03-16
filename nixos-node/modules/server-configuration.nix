@@ -107,7 +107,7 @@ in
       NoNewPrivileges = true;
       ProtectSystem = "strict";
       ProtectHome = true;
-      ReadWritePaths = [ composeDir ];
+      ReadWritePaths = [ composeDir "/tmp" ];
     };
 
     environment = {
