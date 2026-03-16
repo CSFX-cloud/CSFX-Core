@@ -239,8 +239,13 @@ jobs:
           VERSION="${{ needs.prepare.outputs.version }}"
           IMAGE="${{ steps.image.outputs.name }}"
 
-          AMD64=$(cat /tmp/digests/${{ matrix.service }}-amd64.txt)
-          ARM64=$(cat /tmp/digests/${{ matrix.service }}-arm64.txt)
+          if [ -z "${VERSION}" ]; then
+            echo "VERSION is empty, aborting"
+            exit 1
+          fi
+
+          AMD64=$(tr -d '[:space:]' < /tmp/digests/${{ matrix.service }}-amd64.txt)
+          ARM64=$(tr -d '[:space:]' < /tmp/digests/${{ matrix.service }}-arm64.txt)
 
           docker buildx imagetools create \
             -t ${IMAGE}:${VERSION} \
