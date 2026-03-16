@@ -75,6 +75,9 @@ jobs:
           - volume-manager
           - failover-controller
           - sdn-controller
+        arch:
+          - amd64
+          - arm64
         include:
           - arch: amd64
             runner: ubuntu-latest
@@ -235,6 +238,7 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           IMAGE="${{ steps.image.outputs.name }}"
+
           AMD64=$(cat /tmp/digests/${{ matrix.service }}-amd64.txt)
           ARM64=$(cat /tmp/digests/${{ matrix.service }}-arm64.txt)
 
