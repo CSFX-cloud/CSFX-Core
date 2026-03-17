@@ -57,6 +57,16 @@ in
 
   security.sudo.wheelNeedsPassword = false;
 
+  security.sudo.extraRules = [
+    {
+      users = [ "csf-updater" ];
+      commands = [
+        { command = "/run/current-system/sw/bin/systemctl restart csf-daemon"; options = [ "NOPASSWD" ]; }
+        { command = "/run/current-system/sw/bin/systemctl restart csf-updater"; options = [ "NOPASSWD" ]; }
+      ];
+    }
+  ];
+
   virtualisation.docker = {
     enable = true;
     enableOnBoot = true;

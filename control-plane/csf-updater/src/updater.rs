@@ -13,7 +13,9 @@ pub async fn run(cfg: &Config, version: &str, etcd: &mut etcd::Client) -> Result
     pull(cfg, version, docker_config_dir.as_deref()).await?;
     verify::verify_images(cfg, version, ghcr_auth.as_deref()).await?;
     up(cfg, version, docker_config_dir.as_deref()).await?;
-    health_check(cfg, version).await
+    health_check(cfg, version).await?;
+    update_agent_binary(cfg, version).await?;
+    update_self_binary(cfg, version).await
 }
 
 async fn setup_docker_auth(cfg: &Config, etcd: &mut etcd::Client) -> Result<(Option<String>, Option<String>)> {
@@ -80,6 +82,65 @@ async fn health_check(cfg: &Config, version: &str) -> Result<()> {
 
     info!("all services healthy");
     Ok(())
+}
+
+async fn update_agent_binary(cfg: &Config, version: &str) -> Result<()> {
+    info!(version = %version, "updating csf-agent binary");
+    let arch = detect_arch();
+    let url = format!(
+        "{}/v{}/csf-agent-{}",
+        cfg.github_release_base_url, version, arch
+    );
+    let dest = format!("{}/csf-agent", cfg.binary_dir);
+    download_and_swap(&url, &dest).await?;
+    restart_unit("csf-daemon").await
+}
+
+async fn update_self_binary(cfg: &Config, version: &str) -> Result<()> {
+    info!(version = %version, "updating csf-updater binary");
+    let arch = detect_arch();
+    let url = format!(
+        "{}/v{}/csf-updater-{}",
+        cfg.github_release_base_url, version, arch
+    );
+    let dest = format!("{}/csf-updater", cfg.binary_dir);
+    download_and_swap(&url, &dest).await?;
+    restart_unit("csf-updater").await
+}
+
+async fn download_and_swap(url: &str, dest: &str) -> Result<()> {
+    let tmp = format!("{}.new", dest);
+
+    let resp = reqwest::get(url).await?;
+    if !resp.status().is_success() {
+        bail!("failed to download {}: {}", url, resp.status());
+    }
+
+    let bytes = resp.bytes().await?;
+    tokio::fs::write(&tmp, &bytes).await?;
+
+    let mut perms = tokio::fs::metadata(&tmp).await?.permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    tokio::fs::set_permissions(&tmp, perms).await?;
+
+    tokio::fs::rename(&tmp, dest).await?;
+    info!(dest = %dest, "binary swapped");
+    Ok(())
+}
+
+async fn restart_unit(unit: &str) -> Result<()> {
+    let status = Command::new("sudo")
+        .args(["systemctl", "restart", unit])
+        .status()
+        .await?;
+    if !status.success() {
+        bail!("systemctl restart {} failed: {}", unit, status);
+    }
+    Ok(())
+}
+
+fn detect_arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") { "arm64" } else { "amd64" }
 }
 
 async fn compose(cfg: &Config, version: &str, docker_config_dir: Option<&str>, args: &[&str]) -> Result<()> {
