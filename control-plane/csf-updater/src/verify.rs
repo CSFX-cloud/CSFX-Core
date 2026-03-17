@@ -33,17 +33,41 @@ pub async fn verify_images(cfg: &Config, version: &str, ghcr_auth: Option<&str>)
     Ok(())
 }
 
-async fn remote_digest(client: &reqwest::Client, image: &str, tag: &str, ghcr_auth: Option<&str>) -> Result<String> {
-    let url = format!("https://ghcr.io/v2/{}/manifests/{}", image, tag);
-    let mut req = client
-        .head(&url)
-        .header("Accept", "application/vnd.docker.distribution.manifest.v2+json");
+async fn exchange_token(client: &reqwest::Client, image: &str, basic_auth: &str) -> Result<String> {
+    let url = format!(
+        "https://ghcr.io/token?scope=repository:{}:pull",
+        image
+    );
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Basic {}", basic_auth))
+        .send()
+        .await?;
 
-    if let Some(auth) = ghcr_auth {
-        req = req.header("Authorization", format!("Basic {}", auth));
+    if !resp.status().is_success() {
+        bail!("GHCR token exchange failed for {}: {}", image, resp.status());
     }
 
-    let resp = req.send().await?;
+    let body: serde_json::Value = resp.json().await?;
+    body["token"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("no token in GHCR token response for {}", image))
+}
+
+async fn remote_digest(client: &reqwest::Client, image: &str, tag: &str, ghcr_auth: Option<&str>) -> Result<String> {
+    let bearer = match ghcr_auth {
+        Some(auth) => exchange_token(client, image, auth).await?,
+        None => bail!("no GHCR auth configured"),
+    };
+
+    let url = format!("https://ghcr.io/v2/{}/manifests/{}", image, tag);
+    let resp = client
+        .head(&url)
+        .header("Authorization", format!("Bearer {}", bearer))
+        .header("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+        .send()
+        .await?;
 
     if !resp.status().is_success() {
         bail!("GHCR manifest request failed for {}: {}", image, resp.status());
