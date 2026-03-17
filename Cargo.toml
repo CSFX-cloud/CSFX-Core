@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "agent",
     "control-plane/api-gateway",
+    "control-plane/csf-migrate",
+    "control-plane/csf-updater",
     "control-plane/scheduler",
     "control-plane/failover-controller",
     "control-plane/sdn-controller",
@@ -18,7 +20,7 @@ version = "0.2.2"
 edition = "2021"
 authors = ["CS-Foundry"]
 license = "SEE LICENSE IN LICENSE"
-repository = "https://github.com/CS-Foundry/CSF-Core-CE"
+repository = "https://github.com/CSFX-cloud/CSF-Core"
 
 [workspace.dependencies]
 # Async runtime
@@ -62,7 +64,7 @@ utoipa = { version = "4.2", features = ["axum_extras", "uuid", "chrono"] }
 utoipa-swagger-ui = { version = "6.0", features = ["axum"] }
 
 # etcd
-etcd-client = "0.14"
+etcd-client = { version = "0.14", default-features = false, features = ["tls-roots"] }
 
 # PKI
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
@@ -83,6 +85,7 @@ tracing-opentelemetry = { version = "0.32" }
 
 # Other
 rand = "0.8"
+aes-gcm = "0.10"
 base64 = "0.22"
 sha1 = "0.10"
 sha2 = "0.10"
@@ -92,7 +95,7 @@ image = "0.25"
 sysinfo = "0.32"
 bollard = "0.17"
 futures-util = "0.3"
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.release]
 opt-level = 3

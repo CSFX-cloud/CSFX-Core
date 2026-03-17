@@ -1,0 +1,252 @@
+name: Pre-release Build
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Pre-release version (e.g. 0.9.0-alpha.1)"
+        required: true
+        type: string
+      channel:
+        description: "Channel"
+        required: true
+        type: choice
+        options: [alpha, beta, rc]
+        default: alpha
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  version:
+    name: Resolve Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            BASE=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+            COUNT=$(git rev-list --count HEAD)
+            echo "version=${BASE}-alpha.${COUNT}" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    name: Build ${{ matrix.service }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - registry
+          - scheduler
+          - volume-manager
+          - failover-controller
+          - sdn-controller
+        arch:
+          - amd64
+          - arm64
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image name
+        id: image
+        run: |
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: control-plane/Dockerfile.prod.shared
+          build-args: |
+            SERVICE_BIN=${{ matrix.service }}
+            BUILD_JOBS=2
+          push: true
+          outputs: type=registry,name=${{ steps.image.outputs.name }},push-by-digest=true
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          cache-from: type=gha,scope=pre-${{ matrix.service }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=pre-${{ matrix.service }}-${{ matrix.arch }}
+
+      - name: Save digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > /tmp/digests/${{ matrix.service }}-${{ matrix.arch }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.service }}-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.service }}-${{ matrix.arch }}.txt
+          retention-days: 1
+
+  manifest:
+    name: Manifest ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [version, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - registry
+          - scheduler
+          - volume-manager
+          - failover-controller
+          - sdn-controller
+    steps:
+      - name: Set image name
+        id: image
+        run: |
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.service }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push manifest
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          IMAGE="${{ steps.image.outputs.name }}"
+          AMD64=$(cat /tmp/digests/${{ matrix.service }}-amd64.txt)
+          ARM64=$(cat /tmp/digests/${{ matrix.service }}-arm64.txt)
+          docker buildx imagetools create \
+            -t ${IMAGE}:${VERSION} \
+            ${IMAGE}@${AMD64} \
+            ${IMAGE}@${ARM64}
+
+  build-binaries:
+    name: Build ${{ matrix.binary }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        binary:
+          - csf-updater
+          - csf-agent
+        arch:
+          - amd64
+          - arm64
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            sudo apt-get install -y musl-tools protobuf-compiler
+          else
+            sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools protobuf-compiler
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.binary }}-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+          CSF_BUILD_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cargo build --release --bin ${{ matrix.binary }} --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.binary }}-${{ matrix.arch }}
+          sha256sum ${{ matrix.binary }}-${{ matrix.arch }} > ${{ matrix.binary }}-${{ matrix.arch }}.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}-${{ matrix.arch }}
+          path: |
+            ${{ matrix.binary }}-${{ matrix.arch }}
+            ${{ matrix.binary }}-${{ matrix.arch }}.sha256
+          retention-days: 7
+
+  github-release:
+    name: GitHub Pre-release
+    runs-on: ubuntu-latest
+    needs: [version, manifest, build-binaries]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: csf-*
+          merge-multiple: true
+
+      - name: Create pre-release
+        run: |
+          VERSION="${{ needs.version.outputs.version }}"
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --prerelease \
+            --generate-notes \
+            csf-updater-amd64 \
+            csf-updater-amd64.sha256 \
+            csf-updater-arm64 \
+            csf-updater-arm64.sha256 \
+            csf-agent-amd64 \
+            csf-agent-amd64.sha256 \
+            csf-agent-arm64 \
+            csf-agent-arm64.sha256
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

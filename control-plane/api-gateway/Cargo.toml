@@ -55,6 +55,7 @@ utoipa-swagger-ui = { workspace = true }
 
 # Other
 rand = { workspace = true }
+aes-gcm = { workspace = true }
 base64 = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
@@ -64,6 +65,7 @@ image = { workspace = true }
 sysinfo = { workspace = true }
 reqwest = { workspace = true }
 prometheus = { workspace = true }
+etcd-client = { workspace = true }
 tower_governor = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }

@@ -19,6 +19,7 @@ pub mod networks;
 pub mod organizations;
 pub mod registry;
 pub mod system;
+pub mod update;
 pub mod users;
 pub mod volumes;
 pub mod workloads;
@@ -80,6 +81,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(organizations::routes())
         .merge(registry::registry_routes())
         .merge(system::routes())
+        .merge(update::routes())
         .merge(users::users_routes())
         .merge(volumes::volumes_routes())
         .merge(workloads::workloads_routes())

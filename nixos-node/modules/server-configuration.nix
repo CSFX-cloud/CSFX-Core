@@ -2,6 +2,9 @@
 
 let
   composeDir = "/etc/csf-core";
+  binDir = "/var/lib/csf-updater/bin";
+  csfUpdaterBin = csf.updaterPackage;
+  csfAgentBin = csf.agentPackage;
 in
 {
   system.stateVersion = "25.11";
@@ -54,6 +57,16 @@ in
 
   security.sudo.wheelNeedsPassword = false;
 
+  security.sudo.extraRules = [
+    {
+      users = [ "csf-updater" ];
+      commands = [
+        { command = "/run/current-system/sw/bin/systemctl restart csf-daemon"; options = [ "NOPASSWD" ]; }
+        { command = "/run/current-system/sw/bin/systemctl restart csf-updater"; options = [ "NOPASSWD" ]; }
+      ];
+    }
+  ];
+
   virtualisation.docker = {
     enable = true;
     enableOnBoot = true;
@@ -62,6 +75,7 @@ in
   services.csf-daemon = {
     enable = true;
     package = csf.agentPackage;
+    binaryPath = "${binDir}/csf-agent";
     apiGateway = "http://localhost:8000";
     heartbeatInterval = 60;
     logLevel = "info";
@@ -78,11 +92,55 @@ in
     lsof
   ];
 
+  users.users.csf-updater = {
+    isSystemUser = true;
+    group = "csf-updater";
+    extraGroups = [ "docker" ];
+    home = "/var/lib/csf-updater";
+    createHome = true;
+    shell = pkgs.shadow;
+  };
+  users.groups.csf-updater = {};
+
+  systemd.services.csf-updater = {
+    description = "CSF Control Plane Updater";
+    after = [ "docker.service" "network-online.target" "csf-control-plane.service" ];
+    requires = [ "docker.service" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+
+    serviceConfig = {
+      Type = "simple";
+      User = "csf-updater";
+      Group = "csf-updater";
+      EnvironmentFile = "/etc/csf-core/updater.env";
+      ExecStart = "${binDir}/csf-updater";
+      Restart = "always";
+      RestartSec = "10";
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      ReadWritePaths = [ composeDir "/tmp" binDir ];
+    };
+
+    environment = {
+      ETCD_ENDPOINTS = "http://localhost:2379";
+      ETCD_USERNAME = "csf";
+      COMPOSE_FILE = "${composeDir}/docker-compose.yml";
+      GHCR_ORG = "csfx-cloud";
+      POLL_INTERVAL_SECS = "30";
+      RUST_LOG = "info";
+      BINARY_DIR = binDir;
+      GITHUB_RELEASE_BASE_URL = "https://github.com/csfx-cloud/CSF-Core/releases/download";
+      PATH = lib.mkForce "/run/wrappers/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin";
+    };
+  };
+
   systemd.services.csf-control-plane = {
     description = "CSF Control Plane (Docker Compose)";
     after = [ "docker.service" "network-online.target" ];
     requires = [ "docker.service" ];
     wants = [ "network-online.target" ];
+    partOf = [ "docker.service" ];
     wantedBy = [ "multi-user.target" ];
 
     serviceConfig = {
@@ -95,6 +153,25 @@ in
       TimeoutStartSec = "600";
       TimeoutStopSec = "120";
     };
+  };
+
+  system.activationScripts.csf-binaries = {
+    text = ''
+      mkdir -p ${binDir}
+      chown csf-updater:csf-updater ${binDir}
+      chmod 750 ${binDir}
+      if [ ! -f ${binDir}/csf-updater ]; then
+        cp ${csfUpdaterBin}/bin/csf-updater ${binDir}/csf-updater
+        chown csf-updater:csf-updater ${binDir}/csf-updater
+        chmod 750 ${binDir}/csf-updater
+      fi
+      if [ ! -f ${binDir}/csf-agent ]; then
+        cp ${csfAgentBin}/bin/csf-agent ${binDir}/csf-agent
+        chown csf-updater:csf-updater ${binDir}/csf-agent
+        chmod 750 ${binDir}/csf-agent
+      fi
+    '';
+    deps = [];
   };
 
   system.activationScripts.csf-core-setup = {
@@ -113,6 +190,8 @@ services:
       - --data-dir=/etcd-data
     volumes:
       - etcd_data:/etcd-data
+    ports:
+      - "2379:2379"
     networks:
       - csf-internal
     restart: unless-stopped
@@ -157,8 +236,10 @@ services:
     restart: unless-stopped
 
   api-gateway:
-    image: ghcr.io/cs-foundry/csf-ce-api-gateway:0.2.2-alpha.371
+    image: ghcr.io/csfx-cloud/csf-ce-api-gateway:0.2.2-alpha.42
     container_name: csf-api-gateway
+    env_file:
+      - /etc/csf-core/gateway.env
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
       RUST_LOG: info
@@ -185,7 +266,7 @@ services:
       start_period: 30s
 
   registry:
-    image: ghcr.io/cs-foundry/csf-ce-registry:0.2.2-alpha.371
+    image: ghcr.io/csfx-cloud/csf-ce-registry:0.2.2-alpha.42
     container_name: csf-registry
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -201,7 +282,7 @@ services:
     restart: unless-stopped
 
   scheduler:
-    image: ghcr.io/cs-foundry/csf-ce-scheduler:0.2.2-alpha.371
+    image: ghcr.io/csfx-cloud/csf-ce-scheduler:0.2.2-alpha.42
     container_name: csf-scheduler
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -216,7 +297,7 @@ services:
     restart: unless-stopped
 
   volume-manager:
-    image: ghcr.io/cs-foundry/csf-ce-volume-manager:0.2.2-alpha.371
+    image: ghcr.io/csfx-cloud/csf-ce-volume-manager:0.2.2-alpha.42
     container_name: csf-volume-manager
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -233,7 +314,7 @@ services:
     restart: unless-stopped
 
   failover-controller:
-    image: ghcr.io/cs-foundry/csf-ce-failover-controller:0.2.2-alpha.371
+    image: ghcr.io/csfx-cloud/csf-ce-failover-controller:0.2.2-alpha.42
     container_name: csf-failover-controller
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -249,7 +330,7 @@ services:
     restart: unless-stopped
 
   sdn-controller:
-    image: ghcr.io/cs-foundry/csf-ce-sdn-controller:0.2.2-alpha.371
+    image: ghcr.io/csfx-cloud/csf-ce-sdn-controller:0.2.2-alpha.42
     container_name: csf-sdn-controller
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core

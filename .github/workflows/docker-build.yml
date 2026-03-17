@@ -10,9 +10,12 @@ on:
         description: "Version tag (e.g. 1.2.3)"
         required: true
         type: string
+  push:
+    branches:
+      - develop
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -21,10 +24,12 @@ jobs:
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     outputs:
       version: ${{ steps.version.outputs.version }}
       should_build: ${{ steps.version.outputs.should_build }}
+      is_release: ${{ steps.version.outputs.is_release }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,13 +39,22 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
             echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+            RUN_NUM="${{ github.run_number }}"
+            echo "version=${VERSION}-alpha.${RUN_NUM}" >> $GITHUB_OUTPUT
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "is_release=false" >> $GITHUB_OUTPUT
           else
             TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || echo "")
             if [ -z "$TAG" ]; then
               echo "should_build=false" >> $GITHUB_OUTPUT
+              echo "is_release=false" >> $GITHUB_OUTPUT
             else
               echo "version=${TAG#v}" >> $GITHUB_OUTPUT
               echo "should_build=true" >> $GITHUB_OUTPUT
+              echo "is_release=true" >> $GITHUB_OUTPUT
             fi
           fi
         env:
@@ -61,6 +75,9 @@ jobs:
           - volume-manager
           - failover-controller
           - sdn-controller
+        arch:
+          - amd64
+          - arm64
         include:
           - arch: amd64
             runner: ubuntu-latest
@@ -96,6 +113,7 @@ jobs:
           build-args: |
             SERVICE_BIN=${{ matrix.service }}
             BUILD_JOBS=2
+            CSF_BUILD_VERSION=${{ needs.prepare.outputs.version }}
           push: true
           outputs: type=registry,name=${{ steps.image.outputs.name }},push-by-digest=true
           platforms: ${{ matrix.platform }}
@@ -113,6 +131,71 @@ jobs:
           name: digest-${{ matrix.service }}-${{ matrix.arch }}
           path: /tmp/digests/${{ matrix.service }}-${{ matrix.arch }}.txt
           retention-days: 1
+
+  build-binaries:
+    name: Build ${{ matrix.binary }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        binary:
+          - csf-updater
+          - csf-agent
+        arch:
+          - amd64
+          - arm64
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            sudo apt-get install -y musl-tools protobuf-compiler
+          else
+            sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools protobuf-compiler
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ matrix.binary }}-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+          CSF_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cargo build --release --bin ${{ matrix.binary }} --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.binary }}-${{ matrix.arch }}
+          sha256sum ${{ matrix.binary }}-${{ matrix.arch }} > ${{ matrix.binary }}-${{ matrix.arch }}.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}-${{ matrix.arch }}
+          path: |
+            ${{ matrix.binary }}-${{ matrix.arch }}
+            ${{ matrix.binary }}-${{ matrix.arch }}.sha256
+          retention-days: 7
 
   manifest:
     name: Manifest ${{ matrix.service }}
@@ -155,8 +238,14 @@ jobs:
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           IMAGE="${{ steps.image.outputs.name }}"
-          AMD64=$(cat /tmp/digests/${{ matrix.service }}-amd64.txt)
-          ARM64=$(cat /tmp/digests/${{ matrix.service }}-arm64.txt)
+
+          if [ -z "${VERSION}" ]; then
+            echo "VERSION is empty, aborting"
+            exit 1
+          fi
+
+          AMD64=$(tr -d '[:space:]' < /tmp/digests/${{ matrix.service }}-amd64.txt)
+          ARM64=$(tr -d '[:space:]' < /tmp/digests/${{ matrix.service }}-arm64.txt)
 
           docker buildx imagetools create \
             -t ${IMAGE}:${VERSION} \
@@ -164,20 +253,73 @@ jobs:
             ${IMAGE}@${AMD64} \
             ${IMAGE}@${ARM64}
 
+  attach-binaries-release:
+    name: Attach binaries to release
+    runs-on: ubuntu-latest
+    needs: [prepare, build-binaries]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: csf-*
+          merge-multiple: true
+
+      - name: Create or update release
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          TAG="v${VERSION}"
+          if gh release view "${TAG}" &>/dev/null; then
+            gh release upload "${TAG}" \
+              csf-updater-amd64 \
+              csf-updater-amd64.sha256 \
+              csf-updater-arm64 \
+              csf-updater-arm64.sha256 \
+              csf-agent-amd64 \
+              csf-agent-amd64.sha256 \
+              csf-agent-arm64 \
+              csf-agent-arm64.sha256 \
+              --clobber
+          else
+            gh release create "${TAG}" \
+              --title "v${VERSION}" \
+              --prerelease \
+              --notes "Alpha build ${VERSION}" \
+              csf-updater-amd64 \
+              csf-updater-amd64.sha256 \
+              csf-updater-arm64 \
+              csf-updater-arm64.sha256 \
+              csf-agent-amd64 \
+              csf-agent-amd64.sha256 \
+              csf-agent-arm64 \
+              csf-agent-arm64.sha256
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   summary:
     name: Summary
     runs-on: ubuntu-latest
-    needs: [prepare, manifest]
+    needs: [prepare, manifest, build-binaries]
     if: always()
     steps:
       - name: Write summary
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
           ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "## Docker Build — v${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "## Build — v${VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Docker Images" >> $GITHUB_STEP_SUMMARY
           echo "| Service | Image |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
           for svc in api-gateway registry scheduler volume-manager failover-controller sdn-controller; do
             echo "| ${svc} | \`ghcr.io/${ORG}/csf-ce-${svc}:${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Binaries" >> $GITHUB_STEP_SUMMARY
+          echo "| Binary | Arch | Artifact |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------|----------|" >> $GITHUB_STEP_SUMMARY
+          for bin in csf-updater csf-agent; do
+            echo "| ${bin} | amd64 | \`${bin}-amd64\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| ${bin} | arm64 | \`${bin}-arm64\` |" >> $GITHUB_STEP_SUMMARY
           done

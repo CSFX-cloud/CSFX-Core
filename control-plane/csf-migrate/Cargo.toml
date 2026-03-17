@@ -1,25 +1,19 @@
 [package]
-name = "shared"
+name = "csf-migrate"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
+
+[[bin]]
+name = "csf-migrate"
+path = "src/main.rs"
 
 [dependencies]
-# Database
+migration = { path = "../shared/migration" }
 sea-orm = { workspace = true }
-
-# Async
+sea-orm-migration = { workspace = true }
 tokio = { workspace = true }
-async-trait = { workspace = true }
-
-# Logging
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-
-# Utilities
 dotenvy = { workspace = true }
-anyhow = { workspace = true }
-thiserror = { workspace = true }
-
-# Serialization
-serde = { workspace = true }
