@@ -48,6 +48,7 @@ in
     users.users.csf-daemon = {
       isSystemUser = true;
       group = "csf-daemon";
+      extraGroups = [ "csf-updater" ];
       home = "/var/lib/csf-daemon";
       shell = pkgs.shadow;
       description = "CSF daemon service user";

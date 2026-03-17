@@ -2,7 +2,7 @@
 
 let
   composeDir = "/etc/csf-core";
-  binDir = "/usr/local/bin";
+  binDir = "/var/lib/csf-updater/bin";
   csfUpdaterBin = csf.updaterPackage;
   csfAgentBin = csf.agentPackage;
 in
@@ -158,13 +158,17 @@ in
   system.activationScripts.csf-binaries = {
     text = ''
       mkdir -p ${binDir}
+      chown csf-updater:csf-updater ${binDir}
+      chmod 750 ${binDir}
       if [ ! -f ${binDir}/csf-updater ]; then
         cp ${csfUpdaterBin}/bin/csf-updater ${binDir}/csf-updater
-        chmod 755 ${binDir}/csf-updater
+        chown csf-updater:csf-updater ${binDir}/csf-updater
+        chmod 750 ${binDir}/csf-updater
       fi
       if [ ! -f ${binDir}/csf-agent ]; then
         cp ${csfAgentBin}/bin/csf-agent ${binDir}/csf-agent
-        chmod 755 ${binDir}/csf-agent
+        chown csf-updater:csf-updater ${binDir}/csf-agent
+        chmod 750 ${binDir}/csf-agent
       fi
     '';
     deps = [];

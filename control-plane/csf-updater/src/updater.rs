@@ -1,4 +1,5 @@
 use anyhow::{bail, Result};
+use sha2::{Digest, Sha256};
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::info;
@@ -111,20 +112,47 @@ async fn update_self_binary(cfg: &Config, version: &str) -> Result<()> {
 async fn download_and_swap(url: &str, dest: &str) -> Result<()> {
     let tmp = format!("{}.new", dest);
 
-    let resp = reqwest::get(url).await?;
-    if !resp.status().is_success() {
-        bail!("failed to download {}: {}", url, resp.status());
-    }
+    let bytes = fetch(url).await?;
+    let expected = fetch_checksum(&format!("{}.sha256", url)).await?;
+    verify_checksum(&bytes, &expected)?;
 
-    let bytes = resp.bytes().await?;
     tokio::fs::write(&tmp, &bytes).await?;
 
     let mut perms = tokio::fs::metadata(&tmp).await?.permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o750);
     tokio::fs::set_permissions(&tmp, perms).await?;
 
     tokio::fs::rename(&tmp, dest).await?;
     info!(dest = %dest, "binary swapped");
+    Ok(())
+}
+
+async fn fetch(url: &str) -> Result<bytes::Bytes> {
+    let resp = reqwest::get(url).await?;
+    if !resp.status().is_success() {
+        bail!("failed to download {}: {}", url, resp.status());
+    }
+    Ok(resp.bytes().await?)
+}
+
+async fn fetch_checksum(url: &str) -> Result<String> {
+    let resp = reqwest::get(url).await?;
+    if !resp.status().is_success() {
+        bail!("failed to download checksum {}: {}", url, resp.status());
+    }
+    let text = resp.text().await?;
+    text.split_whitespace()
+        .next()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("empty checksum file at {}", url))
+}
+
+fn verify_checksum(data: &[u8], expected: &str) -> Result<()> {
+    let digest = hex::encode(Sha256::digest(data));
+    if digest != expected {
+        bail!("checksum mismatch: expected={} got={}", expected, digest);
+    }
+    info!("checksum verified");
     Ok(())
 }
 
