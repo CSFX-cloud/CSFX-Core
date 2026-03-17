@@ -117,7 +117,6 @@ in
       ExecStart = "${binDir}/csf-updater";
       Restart = "always";
       RestartSec = "10";
-      NoNewPrivileges = true;
       ProtectSystem = "strict";
       ProtectHome = true;
       ReadWritePaths = [ composeDir "/tmp" binDir ];
