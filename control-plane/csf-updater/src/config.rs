@@ -7,6 +7,8 @@ pub struct Config {
     pub compose_file: String,
     pub poll_interval_secs: u64,
     pub secret_encryption_key: String,
+    pub binary_dir: String,
+    pub github_release_base_url: String,
 }
 
 impl Config {
@@ -26,6 +28,10 @@ impl Config {
                 .unwrap_or(30),
             secret_encryption_key: env::var("SECRET_ENCRYPTION_KEY")
                 .context("SECRET_ENCRYPTION_KEY must be set")?,
+            binary_dir: env::var("BINARY_DIR")
+                .unwrap_or_else(|_| "/usr/local/bin".to_string()),
+            github_release_base_url: env::var("GITHUB_RELEASE_BASE_URL")
+                .unwrap_or_else(|_| "https://github.com/csfx-cloud/CSF-Core/releases/download".to_string()),
         })
     }
 }

@@ -13,6 +13,12 @@ in
       description = "The csf-agent package to use.";
     };
 
+    binaryPath = lib.mkOption {
+      type = lib.types.str;
+      default = "/usr/local/bin/csf-agent";
+      description = "Path to the csf-agent binary. Can be overwritten by the updater.";
+    };
+
     apiGateway = lib.mkOption {
       type = lib.types.str;
       example = "https://gateway.csf.example:8000";
@@ -42,6 +48,7 @@ in
     users.users.csf-daemon = {
       isSystemUser = true;
       group = "csf-daemon";
+      extraGroups = [ "csf-updater" ];
       home = "/var/lib/csf-daemon";
       shell = pkgs.shadow;
       description = "CSF daemon service user";
@@ -69,7 +76,7 @@ in
       };
 
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/csf-agent";
+        ExecStart = cfg.binaryPath;
         Restart = "always";
         RestartSec = "5s";
         User = "csf-daemon";

@@ -82,7 +82,7 @@ async fn remote_digest(client: &reqwest::Client, image: &str, tag: &str, ghcr_au
 
 fn local_digest(image: &str) -> Result<String> {
     let output = std::process::Command::new("docker")
-        .args(["inspect", "--format", "{{index .RepoDigests 0}}", image])
+        .args(["image", "inspect", "--format", "{{json .RepoDigests}}", image])
         .output()?;
 
     if !output.status.success() {
@@ -90,9 +90,11 @@ fn local_digest(image: &str) -> Result<String> {
     }
 
     let raw = String::from_utf8(output.stdout)?;
-    raw.trim()
-        .split('@')
-        .nth(1)
-        .map(|s| s.to_string())
-        .ok_or_else(|| anyhow::anyhow!("could not parse digest from docker inspect output for {}", image))
+    let digests: Vec<String> = serde_json::from_str(raw.trim())
+        .map_err(|e| anyhow::anyhow!("failed to parse RepoDigests for {}: {}", image, e))?;
+
+    digests
+        .into_iter()
+        .find_map(|d| d.split('@').nth(1).map(|s| s.to_string()))
+        .ok_or_else(|| anyhow::anyhow!("no repo digest found for {}", image))
 }

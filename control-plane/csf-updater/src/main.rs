@@ -39,6 +39,11 @@ async fn main() -> anyhow::Result<()> {
 async fn run_once(cfg: &config::Config, last_applied: &str) -> anyhow::Result<Option<String>> {
     let mut etcd = etcd::Client::connect(cfg).await?;
 
+    if etcd.get(etcd::PAUSED_KEY).await?.as_deref() == Some("true") {
+        tracing::info!("updates paused, skipping");
+        return Ok(None);
+    }
+
     let desired = match etcd.get(etcd::DESIRED_VERSION_KEY).await? {
         Some(v) => v,
         None => return Ok(None),
@@ -66,7 +71,7 @@ async fn run_once(cfg: &config::Config, last_applied: &str) -> anyhow::Result<Op
         Err(e) => {
             tracing::error!(error = %e, version = %desired, "update failed");
             etcd.put(etcd::RESULT_KEY, "failed").await?;
-            Ok(None)
+            Ok(Some(desired))
         }
     }
 }
