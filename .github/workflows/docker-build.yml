@@ -41,7 +41,7 @@ jobs:
             echo "should_build=true" >> $GITHUB_OUTPUT
             echo "is_release=true" >> $GITHUB_OUTPUT
           elif [ "${{ github.event_name }}" = "push" ]; then
-            VERSION=$(grep '^version' control-plane/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+            VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
             RUN_NUM="${{ github.run_number }}"
             echo "version=${VERSION}-alpha.${RUN_NUM}" >> $GITHUB_OUTPUT
             echo "should_build=true" >> $GITHUB_OUTPUT
