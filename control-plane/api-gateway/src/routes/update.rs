@@ -10,6 +10,7 @@ use crate::AppState;
 const ETCD_DESIRED_VERSION_KEY: &str = "/csf/config/desired_cp_version";
 const ETCD_UPDATE_RESULT_KEY: &str = "/csf/config/last_update_result";
 const ETCD_GHCR_TOKEN_KEY: &str = "/csf/config/ghcr_token";
+const ETCD_PAUSED_KEY: &str = "/csf/config/update_paused";
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateRequest {
@@ -27,6 +28,7 @@ pub struct UpdateStatusResponse {
     pub current_version: String,
     pub desired_version: Option<String>,
     pub last_result: Option<String>,
+    pub paused: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +41,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/system/update", post(trigger_update))
         .route("/system/update/status", get(update_status))
+        .route("/system/update/pause", post(pause_updates))
+        .route("/system/update/resume", post(resume_updates))
         .route("/system/ghcr-token", post(set_ghcr_token))
 }
 
@@ -98,11 +102,13 @@ async fn update_status(
 
     let desired = etcd_get(&mut client, ETCD_DESIRED_VERSION_KEY).await?;
     let last_result = etcd_get(&mut client, ETCD_UPDATE_RESULT_KEY).await?;
+    let paused = etcd_get(&mut client, ETCD_PAUSED_KEY).await?.as_deref() == Some("true");
 
     Ok(Json(UpdateStatusResponse {
         current_version: env!("CARGO_PKG_VERSION").to_string(),
         desired_version: desired,
         last_result,
+        paused,
     }))
 }
 
@@ -184,6 +190,38 @@ async fn write_result(result: &str) {
     if let Ok(mut client) = etcd_client().await {
         let _ = client.put(ETCD_UPDATE_RESULT_KEY, result.as_bytes(), None).await;
     }
+}
+
+async fn pause_updates(
+    _auth: CanManageSystem,
+    State(_state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    let mut client = etcd_client().await?;
+    client
+        .put(ETCD_PAUSED_KEY, b"true", None)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to set update_paused in etcd");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    tracing::info!("updates paused");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn resume_updates(
+    _auth: CanManageSystem,
+    State(_state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    let mut client = etcd_client().await?;
+    client
+        .delete(ETCD_PAUSED_KEY, None)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to delete update_paused from etcd");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    tracing::info!("updates resumed");
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn set_ghcr_token(
