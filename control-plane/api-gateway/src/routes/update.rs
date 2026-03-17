@@ -29,6 +29,8 @@ pub struct UpdateStatusResponse {
     pub desired_version: Option<String>,
     pub last_result: Option<String>,
     pub paused: bool,
+    pub agent_version: Option<String>,
+    pub updater_version: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -104,12 +106,28 @@ async fn update_status(
     let last_result = etcd_get(&mut client, ETCD_UPDATE_RESULT_KEY).await?;
     let paused = etcd_get(&mut client, ETCD_PAUSED_KEY).await?.as_deref() == Some("true");
 
+    let binary_dir = env::var("BINARY_DIR").unwrap_or_else(|_| "/usr/local/bin".to_string());
+    let agent_version = binary_version(&format!("{}/csf-agent", binary_dir)).await;
+    let updater_version = binary_version(&format!("{}/csf-updater", binary_dir)).await;
+
     Ok(Json(UpdateStatusResponse {
         current_version: env!("CARGO_PKG_VERSION").to_string(),
         desired_version: desired,
         last_result,
         paused,
+        agent_version,
+        updater_version,
     }))
+}
+
+async fn binary_version(path: &str) -> Option<String> {
+    let output = tokio::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .await
+        .ok()?;
+    let raw = String::from_utf8(output.stdout).ok()?;
+    raw.split_whitespace().last().map(|s| s.trim().to_string())
 }
 
 async fn etcd_get(client: &mut Client, key: &str) -> Result<Option<String>, StatusCode> {
