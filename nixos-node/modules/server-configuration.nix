@@ -2,7 +2,9 @@
 
 let
   composeDir = "/etc/csf-core";
+  binDir = "/usr/local/bin";
   csfUpdaterBin = csf.updaterPackage;
+  csfAgentBin = csf.agentPackage;
 in
 {
   system.stateVersion = "25.11";
@@ -63,6 +65,7 @@ in
   services.csf-daemon = {
     enable = true;
     package = csf.agentPackage;
+    binaryPath = "${binDir}/csf-agent";
     apiGateway = "http://localhost:8000";
     heartbeatInterval = 60;
     logLevel = "info";
@@ -101,13 +104,13 @@ in
       User = "csf-updater";
       Group = "csf-updater";
       EnvironmentFile = "/etc/csf-core/updater.env";
-      ExecStart = "${csfUpdaterBin}/bin/csf-updater";
+      ExecStart = "${binDir}/csf-updater";
       Restart = "always";
       RestartSec = "10";
       NoNewPrivileges = true;
       ProtectSystem = "strict";
       ProtectHome = true;
-      ReadWritePaths = [ composeDir "/tmp" ];
+      ReadWritePaths = [ composeDir "/tmp" binDir ];
     };
 
     environment = {
@@ -117,6 +120,8 @@ in
       GHCR_ORG = "csfx-cloud";
       POLL_INTERVAL_SECS = "30";
       RUST_LOG = "info";
+      BINARY_DIR = binDir;
+      GITHUB_RELEASE_BASE_URL = "https://github.com/csfx-cloud/CSF-Core/releases/download";
       PATH = lib.mkForce "/run/wrappers/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin";
     };
   };
@@ -139,6 +144,21 @@ in
       TimeoutStartSec = "600";
       TimeoutStopSec = "120";
     };
+  };
+
+  system.activationScripts.csf-binaries = {
+    text = ''
+      mkdir -p ${binDir}
+      if [ ! -f ${binDir}/csf-updater ]; then
+        cp ${csfUpdaterBin}/bin/csf-updater ${binDir}/csf-updater
+        chmod 755 ${binDir}/csf-updater
+      fi
+      if [ ! -f ${binDir}/csf-agent ]; then
+        cp ${csfAgentBin}/bin/csf-agent ${binDir}/csf-agent
+        chmod 755 ${binDir}/csf-agent
+      fi
+    '';
+    deps = [];
   };
 
   system.activationScripts.csf-core-setup = {
