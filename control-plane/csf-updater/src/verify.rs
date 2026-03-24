@@ -81,6 +81,18 @@ async fn remote_digest(client: &reqwest::Client, image: &str, tag: &str, ghcr_au
 }
 
 fn local_digest(image: &str) -> Result<String> {
+    let pull = std::process::Command::new("docker")
+        .args(["pull", "--quiet", image])
+        .output()?;
+
+    if !pull.status.success() {
+        bail!(
+            "docker pull failed for {}: {}",
+            image,
+            String::from_utf8_lossy(&pull.stderr).trim()
+        );
+    }
+
     let output = std::process::Command::new("docker")
         .args(["image", "inspect", "--format", "{{json .RepoDigests}}", image])
         .output()?;
