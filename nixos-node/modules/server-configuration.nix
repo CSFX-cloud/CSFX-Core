@@ -236,7 +236,7 @@ services:
     restart: unless-stopped
 
   api-gateway:
-    image: ghcr.io/csfx-cloud/csf-ce-api-gateway:0.2.2-alpha.42
+    image: ghcr.io/csfx-cloud/csf-ce-api-gateway:0.2.2-alpha.44
     container_name: csf-api-gateway
     env_file:
       - /etc/csf-core/gateway.env
@@ -266,7 +266,7 @@ services:
       start_period: 30s
 
   registry:
-    image: ghcr.io/csfx-cloud/csf-ce-registry:0.2.2-alpha.42
+    image: ghcr.io/csfx-cloud/csf-ce-registry:0.2.2-alpha.44
     container_name: csf-registry
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -282,7 +282,7 @@ services:
     restart: unless-stopped
 
   scheduler:
-    image: ghcr.io/csfx-cloud/csf-ce-scheduler:0.2.2-alpha.42
+    image: ghcr.io/csfx-cloud/csf-ce-scheduler:0.2.2-alpha.44
     container_name: csf-scheduler
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -297,7 +297,7 @@ services:
     restart: unless-stopped
 
   volume-manager:
-    image: ghcr.io/csfx-cloud/csf-ce-volume-manager:0.2.2-alpha.42
+    image: ghcr.io/csfx-cloud/csf-ce-volume-manager:0.2.2-alpha.44
     container_name: csf-volume-manager
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -314,7 +314,7 @@ services:
     restart: unless-stopped
 
   failover-controller:
-    image: ghcr.io/csfx-cloud/csf-ce-failover-controller:0.2.2-alpha.42
+    image: ghcr.io/csfx-cloud/csf-ce-failover-controller:0.2.2-alpha.44
     container_name: csf-failover-controller
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
@@ -330,7 +330,7 @@ services:
     restart: unless-stopped
 
   sdn-controller:
-    image: ghcr.io/csfx-cloud/csf-ce-sdn-controller:0.2.2-alpha.42
+    image: ghcr.io/csfx-cloud/csf-ce-sdn-controller:0.2.2-alpha.44
     container_name: csf-sdn-controller
     environment:
       DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
