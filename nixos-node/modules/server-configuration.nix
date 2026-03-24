@@ -102,6 +102,10 @@ in
   };
   users.groups.csf-updater = {};
 
+  systemd.tmpfiles.rules = [
+    "d /var/lib/csf-updater 0710 csf-updater csf-daemon -"
+  ];
+
   systemd.services.csf-updater = {
     description = "CSF Control Plane Updater";
     after = [ "docker.service" "network-online.target" "csf-control-plane.service" ];
@@ -158,7 +162,7 @@ in
   system.activationScripts.csf-binaries = {
     text = ''
       mkdir -p ${binDir}
-      chown csf-updater:csf-updater ${binDir}
+      chown csf-updater:csf-daemon ${binDir}
       chmod 750 ${binDir}
       if [ ! -f ${binDir}/csf-updater ]; then
         cp ${csfUpdaterBin}/bin/csf-updater ${binDir}/csf-updater

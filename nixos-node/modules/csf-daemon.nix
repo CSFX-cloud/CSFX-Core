@@ -98,6 +98,7 @@ in
         RestrictRealtime = true;
         SystemCallFilter = "@system-service";
         ReadWritePaths = [ "/var/lib/csf-daemon" ];
+        ReadOnlyPaths = [ "/var/lib/csf-updater/bin" ];
       };
     };
   };
