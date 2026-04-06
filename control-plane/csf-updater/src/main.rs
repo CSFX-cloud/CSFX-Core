@@ -128,6 +128,7 @@ async fn execute_once(cfg: &config::Config, last_applied: &str) -> anyhow::Resul
 
     info!(flake_rev = %desired, last_applied = %last_applied, "starting update");
     etcd.put(etcd::BUILD_STATUS_KEY, "building").await?;
+    etcd.delete_prefix(etcd::NODE_HEARTBEAT_PREFIX).await?;
 
     let (_cancel_tx, cancel_rx) = watch::channel(false);
 
