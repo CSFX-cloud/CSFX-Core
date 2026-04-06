@@ -31,6 +31,7 @@ pub struct AppState {
     pub scheduler_url: String,
     pub gateway_url: String,
     pub http_client: Client,
+    pub etcd_endpoints: String,
 }
 
 pub async fn health_check() -> impl IntoResponse {

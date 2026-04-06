@@ -51,6 +51,9 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .expect("Failed to build HTTP client");
 
+    let etcd_endpoints = std::env::var("ETCD_ENDPOINTS")
+        .unwrap_or_else(|_| "http://localhost:2379".to_string());
+
     let state = server::AppState {
         token_manager: token_manager.clone(),
         bootstrap_token_manager: bootstrap_token_manager.clone(),
@@ -61,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
         scheduler_url,
         gateway_url,
         http_client,
+        etcd_endpoints,
     };
 
     let token_cleanup_handle = {

@@ -202,9 +202,12 @@ pub async fn heartbeat(
                 }
             }
 
+            let desired_flake_rev = read_desired_flake_rev(&state.etcd_endpoints).await;
+
             Ok(Json(HeartbeatResponse {
                 success: true,
                 message: "Heartbeat recorded".to_string(),
+                desired_flake_rev,
             }))
         }
         Err(e) => Err((
@@ -214,6 +217,22 @@ pub async fn heartbeat(
             }),
         )),
     }
+}
+
+async fn read_desired_flake_rev(etcd_endpoints: &str) -> Option<String> {
+    let mut client = etcd_client::Client::connect([etcd_endpoints], None)
+        .await
+        .ok()?;
+
+    let resp = client
+        .get("/csf/config/desired_flake_rev", None)
+        .await
+        .ok()?;
+
+    resp.kvs()
+        .first()
+        .and_then(|kv| std::str::from_utf8(kv.value()).ok())
+        .map(|s| s.to_string())
 }
 
 async fn forward_container_statuses(
