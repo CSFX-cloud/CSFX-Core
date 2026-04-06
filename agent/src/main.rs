@@ -191,6 +191,10 @@ async fn run_heartbeat_loop(
                             failure_count = 0;
                         }
 
+                        if let Some(count) = resp.post_update_heartbeats {
+                            update_watch::write_heartbeat_counter(count).await;
+                        }
+
                         if let Some(rev) = resp.desired_flake_rev {
                             let rev_clone = rev.clone();
                             let current = current_flake_rev.clone();

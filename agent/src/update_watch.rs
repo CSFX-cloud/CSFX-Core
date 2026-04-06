@@ -4,6 +4,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 const TRIGGER_FILE: &str = "/var/lib/csf/update_trigger";
+const HEARTBEAT_COUNTER_FILE: &str = "/var/lib/csf/post_update_heartbeats";
 const MAX_JITTER_SECS: u64 = 300;
 
 pub async fn handle(agent_id: Uuid, desired_flake_rev: &str, current_flake_rev: &str) {
@@ -30,6 +31,13 @@ pub async fn handle(agent_id: Uuid, desired_flake_rev: &str, current_flake_rev: 
     } else {
         info!(flake_rev = %desired_flake_rev, "update trigger written");
     }
+}
+
+pub async fn write_heartbeat_counter(count: u32) {
+    if let Some(parent) = std::path::Path::new(HEARTBEAT_COUNTER_FILE).parent() {
+        let _ = fs::create_dir_all(parent).await;
+    }
+    let _ = fs::write(HEARTBEAT_COUNTER_FILE, count.to_string()).await;
 }
 
 async fn write_trigger(flake_rev: &str) -> anyhow::Result<()> {

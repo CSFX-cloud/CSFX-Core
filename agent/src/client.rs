@@ -59,6 +59,7 @@ pub struct ContainerStatus {
 #[derive(Debug, Deserialize)]
 pub struct HeartbeatResponse {
     pub desired_flake_rev: Option<String>,
+    pub post_update_heartbeats: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]

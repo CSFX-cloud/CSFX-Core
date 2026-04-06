@@ -203,12 +203,14 @@ pub async fn heartbeat(
             }
 
             let desired_flake_rev = read_desired_flake_rev(&state.etcd_endpoints).await;
-            increment_post_update_heartbeats(&state.etcd_endpoints, agent_id).await;
+            let post_update_heartbeats =
+                increment_post_update_heartbeats(&state.etcd_endpoints, agent_id).await;
 
             Ok(Json(HeartbeatResponse {
                 success: true,
                 message: "Heartbeat recorded".to_string(),
                 desired_flake_rev,
+                post_update_heartbeats,
             }))
         }
         Err(e) => Err((
@@ -236,13 +238,12 @@ async fn read_desired_flake_rev(etcd_endpoints: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-async fn increment_post_update_heartbeats(etcd_endpoints: &str, agent_id: Uuid) {
+async fn increment_post_update_heartbeats(etcd_endpoints: &str, agent_id: Uuid) -> Option<u32> {
     let key = format!("/csf/nodes/{}/post_update_heartbeats", agent_id);
 
-    let mut client = match etcd_client::Client::connect([etcd_endpoints], None).await {
-        Ok(c) => c,
-        Err(_) => return,
-    };
+    let mut client = etcd_client::Client::connect([etcd_endpoints], None)
+        .await
+        .ok()?;
 
     let current: u32 = client
         .get(key.as_str(), None)
@@ -252,9 +253,14 @@ async fn increment_post_update_heartbeats(etcd_endpoints: &str, agent_id: Uuid) 
         .and_then(|v| std::str::from_utf8(&v).ok().and_then(|s| s.parse().ok()))
         .unwrap_or(0);
 
-    let _ = client
-        .put(key.as_str(), (current + 1).to_string().as_bytes(), None)
-        .await;
+    let next = current + 1;
+
+    client
+        .put(key.as_str(), next.to_string().as_bytes(), None)
+        .await
+        .ok()?;
+
+    Some(next)
 }
 
 async fn forward_container_statuses(
