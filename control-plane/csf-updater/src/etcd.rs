@@ -2,9 +2,9 @@ use anyhow::Result;
 
 use crate::config::Config;
 
-pub const DESIRED_VERSION_KEY: &str = "/csf/config/desired_cp_version";
-pub const RESULT_KEY: &str = "/csf/config/last_update_result";
-pub const GHCR_TOKEN_KEY: &str = "/csf/config/ghcr_token";
+pub const DESIRED_FLAKE_REV_KEY: &str = "/csf/config/desired_flake_rev";
+pub const BUILD_STATUS_KEY: &str = "/csf/config/cp_build_status";
+pub const RESULT_KEY: &str = "/csf/config/last_build_result";
 pub const PAUSED_KEY: &str = "/csf/config/update_paused";
 
 pub struct Client {

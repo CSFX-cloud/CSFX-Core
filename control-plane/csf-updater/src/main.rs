@@ -1,8 +1,6 @@
 mod config;
 mod etcd;
-mod secret;
 mod updater;
-mod verify;
 
 use std::time::Duration;
 use tracing::info;
@@ -44,7 +42,7 @@ async fn run_once(cfg: &config::Config, last_applied: &str) -> anyhow::Result<Op
         return Ok(None);
     }
 
-    let desired = match etcd.get(etcd::DESIRED_VERSION_KEY).await? {
+    let desired = match etcd.get(etcd::DESIRED_FLAKE_REV_KEY).await? {
         Some(v) => v,
         None => return Ok(None),
     };
@@ -53,35 +51,31 @@ async fn run_once(cfg: &config::Config, last_applied: &str) -> anyhow::Result<Op
         return Ok(None);
     }
 
-    if !is_valid_version(&desired) {
-        tracing::warn!(version = %desired, "rejected invalid version string");
+    if !is_valid_sha(&desired) {
+        tracing::warn!(flake_rev = %desired, "rejected invalid flake rev");
         etcd.put(etcd::RESULT_KEY, "failed").await?;
         return Ok(Some(desired));
     }
 
-    info!(version = %desired, last_applied = %last_applied, "starting update");
-    etcd.put(etcd::RESULT_KEY, "in_progress").await?;
+    info!(flake_rev = %desired, last_applied = %last_applied, "starting update");
+    etcd.put(etcd::BUILD_STATUS_KEY, "building").await?;
 
     match updater::run(cfg, &desired, &mut etcd).await {
         Ok(()) => {
+            etcd.put(etcd::BUILD_STATUS_KEY, "ready").await?;
             etcd.put(etcd::RESULT_KEY, "success").await?;
-            info!(version = %desired, "update complete");
+            info!(flake_rev = %desired, "update complete");
             Ok(Some(desired))
         }
         Err(e) => {
-            tracing::error!(error = %e, version = %desired, "update failed");
+            tracing::error!(error = %e, flake_rev = %desired, "update failed");
+            etcd.put(etcd::BUILD_STATUS_KEY, "failed").await?;
             etcd.put(etcd::RESULT_KEY, "failed").await?;
             Ok(Some(desired))
         }
     }
 }
 
-fn is_valid_version(v: &str) -> bool {
-    let v = v.trim_start_matches('v');
-    let (base, _pre) = match v.split_once('-') {
-        Some((b, p)) => (b, Some(p)),
-        None => (v, None),
-    };
-    let parts: Vec<&str> = base.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| p.parse::<u32>().is_ok())
+fn is_valid_sha(rev: &str) -> bool {
+    rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit())
 }
