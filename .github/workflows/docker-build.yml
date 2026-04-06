@@ -297,6 +297,87 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  update-infra:
+    name: Update CSFX-Infra versions.nix
+    runs-on: ubuntu-latest
+    needs: [prepare, manifest, build-binaries, attach-binaries-release]
+    if: needs.prepare.outputs.is_release == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/CSFX-Infra
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          path: infra
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: csf-agent-*
+          path: /tmp/binaries
+          merge-multiple: true
+
+      - name: Write versions.nix
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO="${{ github.repository }}"
+          RELEASE_BASE="https://github.com/${REPO}/releases/download/v${VERSION}"
+
+          get_digest() {
+            local svc=$1
+            local amd=$(tr -d '[:space:]' < /tmp/digests/${svc}-amd64.txt 2>/dev/null || echo "")
+            local arm=$(tr -d '[:space:]' < /tmp/digests/${svc}-arm64.txt 2>/dev/null || echo "")
+            echo "ghcr.io/${ORG}/csf-ce-${svc}@${amd}"
+          }
+
+          get_sha256() {
+            local binary=$1
+            local arch=$2
+            cat /tmp/binaries/${binary}-${arch}.sha256 2>/dev/null | awk '{print $1}'
+          }
+
+          cat > infra/versions.nix <<EOF
+          {
+            csf = {
+              version = "${VERSION}";
+              images = {
+                api-gateway         = { digest = "$(get_digest api-gateway)"; };
+                registry            = { digest = "$(get_digest registry)"; };
+                scheduler           = { digest = "$(get_digest scheduler)"; };
+                volume-manager      = { digest = "$(get_digest volume-manager)"; };
+                failover-controller = { digest = "$(get_digest failover-controller)"; };
+                sdn-controller      = { digest = "$(get_digest sdn-controller)"; };
+              };
+              agent = {
+                amd64 = {
+                  url    = "${RELEASE_BASE}/csf-agent-amd64";
+                  sha256 = "$(get_sha256 csf-agent amd64)";
+                };
+                arm64 = {
+                  url    = "${RELEASE_BASE}/csf-agent-arm64";
+                  sha256 = "$(get_sha256 csf-agent arm64)";
+                };
+              };
+            };
+          }
+          EOF
+
+      - name: Commit and push versions.nix
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          cd infra
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add versions.nix
+          git diff --cached --quiet && echo "no changes" && exit 0
+          git commit -m "chore: update versions.nix for v${VERSION}"
+          git push
+
   summary:
     name: Summary
     runs-on: ubuntu-latest
