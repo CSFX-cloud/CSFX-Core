@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use crate::config::Config;
 
+pub const AVAILABLE_FLAKE_REV_KEY: &str = "/csf/config/available_flake_rev";
 pub const DESIRED_FLAKE_REV_KEY: &str = "/csf/config/desired_flake_rev";
 pub const BUILD_STATUS_KEY: &str = "/csf/config/cp_build_status";
 pub const RESULT_KEY: &str = "/csf/config/last_build_result";

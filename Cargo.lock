@@ -1133,18 +1133,12 @@ dependencies = [
 name = "csf-updater"
 version = "0.2.2"
 dependencies = [
- "aes-gcm",
  "anyhow",
- "base64 0.22.1",
- "bytes",
  "dotenvy",
  "etcd-client",
- "hex",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
- "sha2",
- "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

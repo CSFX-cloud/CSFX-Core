@@ -6,6 +6,7 @@ use std::env;
 use crate::auth::rbac::CanManageSystem;
 use crate::AppState;
 
+const ETCD_AVAILABLE_FLAKE_REV_KEY: &str = "/csf/config/available_flake_rev";
 const ETCD_DESIRED_FLAKE_REV_KEY: &str = "/csf/config/desired_flake_rev";
 const ETCD_BUILD_STATUS_KEY: &str = "/csf/config/cp_build_status";
 const ETCD_RESULT_KEY: &str = "/csf/config/last_build_result";
@@ -25,6 +26,7 @@ pub struct UpdateResponse {
 #[derive(Debug, Serialize)]
 pub struct UpdateStatusResponse {
     pub current_version: String,
+    pub available_flake_rev: Option<String>,
     pub desired_flake_rev: Option<String>,
     pub build_status: Option<String>,
     pub last_result: Option<String>,
@@ -83,6 +85,7 @@ async fn update_status(
 ) -> Result<Json<UpdateStatusResponse>, StatusCode> {
     let mut client = etcd_client().await?;
 
+    let available_flake_rev = etcd_get(&mut client, ETCD_AVAILABLE_FLAKE_REV_KEY).await?;
     let desired_flake_rev = etcd_get(&mut client, ETCD_DESIRED_FLAKE_REV_KEY).await?;
     let build_status = etcd_get(&mut client, ETCD_BUILD_STATUS_KEY).await?;
     let last_result = etcd_get(&mut client, ETCD_RESULT_KEY).await?;
@@ -90,6 +93,7 @@ async fn update_status(
 
     Ok(Json(UpdateStatusResponse {
         current_version: env!("CARGO_PKG_VERSION").to_string(),
+        available_flake_rev,
         desired_flake_rev,
         build_status,
         last_result,
