@@ -321,6 +321,16 @@ jobs:
           path: /tmp/binaries
           merge-multiple: true
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Write versions.nix
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
@@ -328,17 +338,17 @@ jobs:
           REPO="${{ github.repository }}"
           RELEASE_BASE="https://github.com/${REPO}/releases/download/v${VERSION}"
 
-          get_digest() {
+          get_manifest_digest() {
             local svc=$1
-            local amd=$(tr -d '[:space:]' < /tmp/digests/${svc}-amd64.txt 2>/dev/null || echo "")
-            local arm=$(tr -d '[:space:]' < /tmp/digests/${svc}-arm64.txt 2>/dev/null || echo "")
-            echo "ghcr.io/${ORG}/csf-ce-${svc}@${amd}"
+            local image="ghcr.io/${ORG}/csf-ce-${svc}:${VERSION}"
+            docker buildx imagetools inspect "${image}" \
+              --format '{{json .Manifest}}' | jq -r '.digest'
           }
 
           get_sha256() {
             local binary=$1
             local arch=$2
-            cat /tmp/binaries/${binary}-${arch}.sha256 2>/dev/null | awk '{print $1}'
+            awk '{print $1}' /tmp/binaries/${binary}-${arch}.sha256 2>/dev/null
           }
 
           cat > infra/versions.nix <<EOF
@@ -346,12 +356,12 @@ jobs:
             csf = {
               version = "${VERSION}";
               images = {
-                api-gateway         = { digest = "$(get_digest api-gateway)"; };
-                registry            = { digest = "$(get_digest registry)"; };
-                scheduler           = { digest = "$(get_digest scheduler)"; };
-                volume-manager      = { digest = "$(get_digest volume-manager)"; };
-                failover-controller = { digest = "$(get_digest failover-controller)"; };
-                sdn-controller      = { digest = "$(get_digest sdn-controller)"; };
+                api-gateway         = { digest = "$(get_manifest_digest api-gateway)"; };
+                registry            = { digest = "$(get_manifest_digest registry)"; };
+                scheduler           = { digest = "$(get_manifest_digest scheduler)"; };
+                volume-manager      = { digest = "$(get_manifest_digest volume-manager)"; };
+                failover-controller = { digest = "$(get_manifest_digest failover-controller)"; };
+                sdn-controller      = { digest = "$(get_manifest_digest sdn-controller)"; };
               };
               agent = {
                 amd64 = {
