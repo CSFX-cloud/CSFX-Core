@@ -2,10 +2,12 @@ use anyhow::Result;
 
 use crate::config::Config;
 
-pub const DESIRED_VERSION_KEY: &str = "/csf/config/desired_cp_version";
-pub const RESULT_KEY: &str = "/csf/config/last_update_result";
-pub const GHCR_TOKEN_KEY: &str = "/csf/config/ghcr_token";
+pub const AVAILABLE_FLAKE_REV_KEY: &str = "/csf/config/available_flake_rev";
+pub const DESIRED_FLAKE_REV_KEY: &str = "/csf/config/desired_flake_rev";
+pub const BUILD_STATUS_KEY: &str = "/csf/config/cp_build_status";
+pub const RESULT_KEY: &str = "/csf/config/last_build_result";
 pub const PAUSED_KEY: &str = "/csf/config/update_paused";
+pub const NODE_HEARTBEAT_PREFIX: &str = "/csf/nodes/";
 
 pub struct Client {
     inner: etcd_client::Client,
@@ -29,6 +31,14 @@ impl Client {
 
     pub async fn put(&mut self, key: &str, value: &str) -> Result<()> {
         self.inner.put(key, value.as_bytes(), None).await?;
+        Ok(())
+    }
+
+    pub async fn delete_prefix(&mut self, prefix: &str) -> Result<()> {
+        use etcd_client::DeleteOptions;
+        self.inner
+            .delete(prefix, Some(DeleteOptions::new().with_prefix()))
+            .await?;
         Ok(())
     }
 }

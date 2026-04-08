@@ -4,6 +4,7 @@ mod docker;
 mod pki;
 mod rbd;
 mod system;
+mod update_watch;
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -169,6 +170,7 @@ async fn run_heartbeat_loop(
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
+    let mut current_flake_rev = String::new();
 
     loop {
         tokio::select! {
@@ -183,10 +185,23 @@ async fn run_heartbeat_loop(
                 let metrics = system::collect_metrics();
 
                 match client.heartbeat(agent_id, api_key, Some(statuses), Some(metrics)).await {
-                    Ok(_) => {
+                    Ok(resp) => {
                         if failure_count > 0 {
                             info!(agent_id = %agent_id, "Heartbeat recovered after {} failures", failure_count);
                             failure_count = 0;
+                        }
+
+                        if let Some(count) = resp.post_update_heartbeats {
+                            update_watch::write_heartbeat_counter(count).await;
+                        }
+
+                        if let Some(rev) = resp.desired_flake_rev {
+                            let rev_clone = rev.clone();
+                            let current = current_flake_rev.clone();
+                            tokio::spawn(async move {
+                                update_watch::handle(agent_id, &rev_clone, &current).await;
+                            });
+                            current_flake_rev = rev;
                         }
                     }
                     Err(e) => {

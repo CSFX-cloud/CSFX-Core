@@ -38,6 +38,7 @@ chrono = { workspace = true, features = ["serde"] }
 sea-orm = { workspace = true }
 
 reqwest = { workspace = true }
+etcd-client = { workspace = true }
 
 # Crypto
 sha2 = { workspace = true }

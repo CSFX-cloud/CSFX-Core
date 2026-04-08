@@ -57,6 +57,12 @@ pub struct ContainerStatus {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct HeartbeatResponse {
+    pub desired_flake_rev: Option<String>,
+    pub post_update_heartbeats: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct AssignedWorkload {
     pub id: String,
     pub name: String,
@@ -143,7 +149,7 @@ impl ApiClient {
         api_key: &str,
         container_statuses: Option<Vec<ContainerStatus>>,
         metrics: Option<crate::system::SystemMetrics>,
-    ) -> Result<()> {
+    ) -> Result<HeartbeatResponse> {
         let url = format!(
             "{}/api/registry/agents/{}/heartbeat",
             self.gateway_url, agent_id
@@ -189,7 +195,9 @@ impl ApiClient {
             anyhow::bail!("Heartbeat failed status={}", status);
         }
 
-        Ok(())
+        resp.json::<HeartbeatResponse>()
+            .await
+            .context("Failed to parse heartbeat response")
     }
 
     pub async fn fetch_assigned_workloads(

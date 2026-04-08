@@ -1133,15 +1133,12 @@ dependencies = [
 name = "csf-updater"
 version = "0.2.2"
 dependencies = [
- "aes-gcm",
  "anyhow",
- "base64 0.22.1",
  "dotenvy",
  "etcd-client",
  "reqwest 0.11.27",
  "serde",
  "serde_json",
- "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3854,6 +3851,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "entity",
+ "etcd-client",
  "migration",
  "opentelemetry",
  "opentelemetry-otlp",

@@ -1,5 +1,5 @@
 {
-  description = "CSF NixOS Node Configuration";
+  description = "CSF Node — binary builds and server configuration";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
@@ -22,12 +22,12 @@
       targets = [ "x86_64-unknown-linux-gnu" "x86_64-unknown-linux-musl" ];
     };
 
-    gnuPlatform = pkgs.makeRustPlatform {
+    platform = pkgs.makeRustPlatform {
       cargo = rustToolchain;
       rustc = rustToolchain;
     };
 
-    csfAgentPkg = gnuPlatform.buildRustPackage {
+    csfAgentPkg = platform.buildRustPackage {
       pname = "csf-agent";
       version = "0.2.2";
       src = ../.;
@@ -37,7 +37,7 @@
       buildInputs = [ pkgs.openssl ];
     };
 
-    csfUpdaterPkg = gnuPlatform.buildRustPackage {
+    csfUpdaterPkg = platform.buildRustPackage {
       pname = "csf-updater";
       version = "0.2.2";
       src = ../.;
@@ -48,46 +48,36 @@
       doCheck = false;
     };
 
-    csfDaemonModule = import ./modules/csf-daemon.nix;
+    versions = import ../CSFX-Infra/versions.nix;
 
-    agentSpecialArgs = {
+    serverSpecialArgs = {
       csf.agentPackage = csfAgentPkg;
       csf.updaterPackage = csfUpdaterPkg;
+      inherit versions;
     };
   in
   {
-    nixosConfigurations = {
-      iso = nixpkgs.lib.nixosSystem {
-        inherit system;
-        modules = [ ./modules/iso-configuration.nix ];
-      };
-
-      csf-node = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = agentSpecialArgs;
-        modules = [
-          csfDaemonModule
-          ./modules/node-configuration.nix
-        ];
-      };
-
-      csf-server = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = agentSpecialArgs;
-        modules = [
-          csfDaemonModule
-          ./modules/server-configuration.nix
-        ];
-      };
+    nixosConfigurations.csf-server = nixpkgs.lib.nixosSystem {
+      inherit system;
+      specialArgs = serverSpecialArgs;
+      modules = [ ./modules/server-configuration.nix ];
     };
 
-    nixosModules.csf-daemon = csfDaemonModule;
+    nixosConfigurations.csf-iso = nixpkgs.lib.nixosSystem {
+      inherit system;
+      specialArgs = serverSpecialArgs;
+      modules = [ ./modules/iso-configuration.nix ];
+    };
 
     packages.${system} = {
       csf-agent = csfAgentPkg;
       csf-updater = csfUpdaterPkg;
       default = csfAgentPkg;
-      iso = self.nixosConfigurations.iso.config.system.build.isoImage;
+      iso = nixpkgs.lib.nixosSystem {
+        inherit system;
+        specialArgs = serverSpecialArgs;
+        modules = [ ./modules/iso-configuration.nix ];
+      }.config.system.build.isoImage;
     };
   };
 }
