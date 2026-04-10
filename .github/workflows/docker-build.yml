@@ -386,7 +386,9 @@ jobs:
           git add versions.nix
           git diff --cached --quiet && echo "no changes" && exit 0
           git commit -m "chore: update versions.nix for v${VERSION}"
-          git push
+          git push origin main
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
 
   summary:
     name: Summary

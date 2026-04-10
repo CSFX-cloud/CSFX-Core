@@ -336,3 +336,5 @@ jobs:
           git diff --cached --quiet && echo "no changes" && exit 0
           git commit -m "chore: update versions.nix for v${VERSION}"
           git push origin develop
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
