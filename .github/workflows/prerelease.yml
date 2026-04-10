@@ -260,6 +260,7 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/CSFX-Infra
           token: ${{ secrets.INFRA_REPO_TOKEN }}
+          ref: develop
           path: infra
 
       - uses: actions/download-artifact@v4
@@ -330,7 +331,8 @@ jobs:
           cd infra
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B develop
           git add versions.nix
           git diff --cached --quiet && echo "no changes" && exit 0
           git commit -m "chore: update versions.nix for v${VERSION}"
-          git push
+          git push origin develop
