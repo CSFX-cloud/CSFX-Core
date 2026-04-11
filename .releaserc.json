@@ -52,7 +52,7 @@
       "@semantic-release/changelog",
       {
         "changelogFile": "CHANGELOG.md",
-        "changelogTitle": "# Changelog\n\nAll notable changes to CSF-Core will be documented in this file."
+        "changelogTitle": "# Changelog\n\nAll notable changes to CSFX-Core will be documented in this file."
       }
     ],
     [
@@ -85,7 +85,7 @@
       "@semantic-release/git",
       {
         "assets": [
-          "CHANGELOG.md", 
+          "CHANGELOG.md",
           "package.json",
           "frontend/package.json",
           "backend/Cargo.toml"

@@ -1,11 +1,11 @@
 [package]
-name = "csf-agent"
+name = "csfx-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "csf-agent"
+name = "csfx-agent"
 path = "src/main.rs"
 
 [dependencies]

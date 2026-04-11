@@ -80,14 +80,14 @@
 </script>
 
 <svelte:head>
-  <title>Local System - CSF Core</title>
+  <title>Local System - CSFX Core</title>
 </svelte:head>
 
 <div class="space-y-6">
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-3xl font-bold">Local System</h1>
-      <p class="text-muted-foreground">Monitor the system running the CSF Core backend daemon</p>
+      <p class="text-muted-foreground">Monitor the system running the CSFX Core backend daemon</p>
     </div>
     <Button variant="outline" size="sm" onclick={loadData} disabled={loading}>
       <RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />

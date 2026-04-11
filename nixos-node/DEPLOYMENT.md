@@ -1,4 +1,4 @@
-# CSF-Core NixOS Deployment Guide
+# CSFX-Core NixOS Deployment Guide
 
 ## Voraussetzungen
 
@@ -11,7 +11,7 @@
 Falls noch nicht vorhanden, generiere einen SSH-Key:
 
 ```bash
-ssh-keygen -t ed25519 -C "csf-deployment@mac"
+ssh-keygen -t ed25519 -C "csfx-deployment@mac"
 ```
 
 Kopiere den Public Key auf den Server:
@@ -50,15 +50,15 @@ Bearbeite [`modules/server-configuration.nix`](modules/server-configuration.nix)
 ### Remote-Deployment von deinem Mac:
 
 ```bash
-cd /Volumes/CedricExterne/Coding/CSF-Core/nixos-node
+cd /Volumes/CedricExterne/Coding/CSFX-Core/nixos-node
 
 # Deployment auf den Server
-nixos-rebuild switch --flake .#csf-server --target-host root@dein-server --use-remote-sudo
+nixos-rebuild switch --flake .#csfx-server --target-host root@dein-server --use-remote-sudo
 ```
 
 **Optionen:**
 
-- `--flake .#csf-server`: Verwendet die `csf-server`-Konfiguration aus der flake.nix
+- `--flake .#csfx-server`: Verwendet die `csfx-server`-Konfiguration aus der flake.nix
 - `--target-host root@dein-server`: Deployment-Ziel (ersetze `dein-server` mit IP oder Hostname)
 - `--use-remote-sudo`: Verwendet sudo auf dem Remote-Server (falls benötigt)
 - `--build-host localhost`: Build lokal auf dem Mac (statt auf dem Server)
@@ -67,10 +67,10 @@ nixos-rebuild switch --flake .#csf-server --target-host root@dein-server --use-r
 
 ```bash
 # 1. Build lokal
-nix build .#nixosConfigurations.csf-server.config.system.build.toplevel
+nix build .#nixosConfigurations.csfx-server.config.system.build.toplevel
 
 # 2. Auf Server kopieren und aktivieren
-nixos-rebuild switch --flake .#csf-server --target-host root@dein-server --build-host localhost
+nixos-rebuild switch --flake .#csfx-server --target-host root@dein-server --build-host localhost
 ```
 
 ## Schritt 4: Verifizierung
@@ -108,7 +108,7 @@ git add modules/server-configuration.nix
 git commit -m "Update server config"
 
 # Deployment
-nixos-rebuild switch --flake .#csf-server --target-host root@dein-server
+nixos-rebuild switch --flake .#csfx-server --target-host root@dein-server
 ```
 
 ## Troubleshooting
@@ -127,14 +127,14 @@ ssh root@dein-server "cat ~/.ssh/authorized_keys"
 
 ```bash
 # Lokaler Test-Build
-nix build .#nixosConfigurations.csf-server.config.system.build.toplevel --show-trace
+nix build .#nixosConfigurations.csfx-server.config.system.build.toplevel --show-trace
 ```
 
 ### Konfiguration validieren
 
 ```bash
 # Syntax-Check ohne Deployment
-nixos-rebuild dry-build --flake .#csf-server --target-host root@dein-server
+nixos-rebuild dry-build --flake .#csfx-server --target-host root@dein-server
 ```
 
 ### Rollback bei Problemen
@@ -152,11 +152,11 @@ Falls du direkten Zugriff auf den Server hast:
 ```bash
 # 1. Repo auf den Server klonen
 ssh root@dein-server
-git clone https://github.com/CS-Foundry/CSF-Core.git /etc/nixos/csf-core
+git clone https://github.com/CS-Foundry/CSFX-Core.git /etc/nixos/csfx-core
 
 # 2. Lokal auf dem Server bauen und aktivieren
-cd /etc/nixos/csf-core/nixos-node
-nixos-rebuild switch --flake .#csf-server
+cd /etc/nixos/csfx-core/nixos-node
+nixos-rebuild switch --flake .#csfx-server
 ```
 
 ## Architektur-Wechsel
@@ -164,7 +164,7 @@ nixos-rebuild switch --flake .#csf-server
 Für ARM-Server (Raspberry Pi, etc.), ändere in `flake.nix`:
 
 ```nix
-nixosConfigurations.csf-server = nixpkgs.lib.nixosSystem {
+nixosConfigurations.csfx-server = nixpkgs.lib.nixosSystem {
   system = "aarch64-linux"; # statt "x86_64-linux"
   modules = [ ./modules/server-configuration.nix ];
 };
@@ -173,5 +173,5 @@ nixosConfigurations.csf-server = nixpkgs.lib.nixosSystem {
 Dann deployment:
 
 ```bash
-nixos-rebuild switch --flake .#csf-server --target-host root@raspberry-pi --build-host localhost
+nixos-rebuild switch --flake .#csfx-server --target-host root@raspberry-pi --build-host localhost
 ```

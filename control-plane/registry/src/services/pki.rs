@@ -39,12 +39,11 @@ impl PkiService {
 
     fn load_or_generate_ca() -> Result<CaState> {
         match (
-            std::env::var("CSF_CA_CERT_PEM"),
-            std::env::var("CSF_CA_KEY_PEM"),
+            std::env::var("CSFX_CA_CERT_PEM"),
+            std::env::var("CSFX_CA_KEY_PEM"),
         ) {
             (Ok(cert_pem), Ok(key_pem)) => {
-                KeyPair::from_pem(&key_pem)
-                    .map_err(|e| anyhow!("Failed to load CA key: {}", e))?;
+                KeyPair::from_pem(&key_pem).map_err(|e| anyhow!("Failed to load CA key: {}", e))?;
 
                 crate::log_info!("pki", "CA loaded from environment");
 
@@ -57,7 +56,7 @@ impl PkiService {
             _ => {
                 crate::log_warn!(
                     "pki",
-                    "CSF_CA_CERT_PEM/CSF_CA_KEY_PEM not set, generating ephemeral CA"
+                    "CSFX_CA_CERT_PEM/CSFX_CA_KEY_PEM not set, generating ephemeral CA"
                 );
                 Self::generate_ca()
             }
@@ -70,8 +69,12 @@ impl PkiService {
 
         let mut params = CertificateParams::default();
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params.distinguished_name.push(DnType::CommonName, "CSF Internal CA");
-        params.distinguished_name.push(DnType::OrganizationName, "CS-Foundry");
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "CSFX Internal CA");
+        params
+            .distinguished_name
+            .push(DnType::OrganizationName, "CSFX");
         params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
         params.not_before = rcgen::date_time_ymd(2024, 1, 1);
         params.not_after = rcgen::date_time_ymd(2035, 1, 1);
@@ -154,10 +157,9 @@ impl PkiService {
         agent_id: Uuid,
         new_csr_pem: &str,
     ) -> Result<IssuedCertificate> {
-        if let Some(old_cert) =
-            crate::db::certificates::get_active_certificate(&self.db, agent_id)
-                .await
-                .map_err(|e| anyhow!("DB error: {}", e))?
+        if let Some(old_cert) = crate::db::certificates::get_active_certificate(&self.db, agent_id)
+            .await
+            .map_err(|e| anyhow!("DB error: {}", e))?
         {
             crate::db::certificates::revoke_certificate(
                 &self.db,
@@ -180,24 +182,15 @@ impl PkiService {
         self.issue_certificate(agent_id, new_csr_pem).await
     }
 
-    pub async fn revoke_agent_certificate(
-        &self,
-        agent_id: Uuid,
-        reason: String,
-    ) -> Result<()> {
+    pub async fn revoke_agent_certificate(&self, agent_id: Uuid, reason: String) -> Result<()> {
         let cert = crate::db::certificates::get_active_certificate(&self.db, agent_id)
             .await
             .map_err(|e| anyhow!("DB error: {}", e))?
             .ok_or_else(|| anyhow!("No active certificate for agent: {}", agent_id))?;
 
-        crate::db::certificates::revoke_certificate(
-            &self.db,
-            cert.serial_number,
-            agent_id,
-            reason,
-        )
-        .await
-        .map_err(|e| anyhow!("Failed to revoke certificate: {}", e))?;
+        crate::db::certificates::revoke_certificate(&self.db, cert.serial_number, agent_id, reason)
+            .await
+            .map_err(|e| anyhow!("Failed to revoke certificate: {}", e))?;
 
         crate::log_info!(
             "pki",

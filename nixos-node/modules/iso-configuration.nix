@@ -1,9 +1,9 @@
-{ config, pkgs, lib, csf, versions, ... }:
+{ config, pkgs, lib, csfx, versions, ... }:
 
 let
   updateUnitsModule = import ../../../CSFX-Infra/modules/update-units.nix;
 
-  installScript = pkgs.writeShellScript "csf-install" ''
+  installScript = pkgs.writeShellScript "csfx-install" ''
     set -euo pipefail
 
     DISK=""
@@ -16,11 +16,11 @@ let
     done
 
     if [ -z "$DISK" ]; then
-      echo "[csf-install] ERROR: no suitable disk found" >&2
+      echo "[csfx-install] ERROR: no suitable disk found" >&2
       exit 1
     fi
 
-    echo "[csf-install] target disk: $DISK"
+    echo "[csfx-install] target disk: $DISK"
 
     if [[ "$DISK" == *nvme* ]]; then
       PART_BOOT="${DISK}p1"
@@ -42,30 +42,30 @@ let
     mkdir -p /mnt/boot
     mount "$PART_BOOT" /mnt/boot
 
-    echo "[csf-install] partitioning complete, running nixos-install"
+    echo "[csfx-install] partitioning complete, running nixos-install"
 
     nixos-install \
       --no-root-passwd \
-      --flake /iso/csf-flake#csf-server
+      --flake /iso/csfx-flake#csfx-server
 
-    echo "[csf-install] installation complete — rebooting in 5s"
+    echo "[csfx-install] installation complete — rebooting in 5s"
     sleep 5
     reboot
   '';
 
   logoText = builtins.readFile ../logo.txt;
 
-  motd = pkgs.writeText "csf-motd" ''
+  motd = pkgs.writeText "csfx-motd" ''
     ${logoText}
 
     ╔══════════════════════════════════════════════════════════════════╗
-    ║                    CSF Node Installer                            ║
+    ║                    CSFX Node Installer                           ║
     ║                                                                  ║
     ║  Automatische Installation startet in 10 Sekunden.              ║
     ║  CTRL+C zum Abbrechen und manuellem Eingriff.                    ║
     ║                                                                  ║
     ║  Nach der Installation:                                          ║
-    ║    - csf-agent verbindet sich mit dem API Gateway                ║
+    ║    - csfx-agent verbindet sich mit dem API Gateway               ║
     ║    - Updates laufen automatisch via GitOps                       ║
     ║                                                                  ║
     ╚══════════════════════════════════════════════════════════════════╝
@@ -79,21 +79,21 @@ in
 
   system.stateVersion = "25.05";
 
-  isoImage.volumeID = "CSF-NODE";
-  isoImage.edition = lib.mkForce "csf";
-  isoImage.prependToMenuLabel = "CSF Node Installer — ";
+  isoImage.volumeID = "CSFX-NODE";
+  isoImage.edition = lib.mkForce "csfx";
+  isoImage.prependToMenuLabel = "CSFX Node Installer — ";
   isoImage.makeEfiBootable = true;
   isoImage.makeUsbBootable = true;
 
   isoImage.storeContents = [
-    csf.agentPackage
-    csf.updaterPackage
+    csfx.agentPackage
+    csfx.updaterPackage
   ];
 
   isoImage.contents = [
     {
       source = ../../../CSFX-Infra;
-      target = "/csf-flake";
+      target = "/csfx-flake";
     }
   ];
 
@@ -106,7 +106,7 @@ in
   boot.loader.timeout = lib.mkForce 10;
 
   networking = {
-    hostName = "csf-installer";
+    hostName = "csfx-installer";
     useDHCP = true;
     firewall.enable = false;
   };
@@ -130,8 +130,8 @@ in
 
   environment.etc."motd".source = motd;
 
-  systemd.services.csf-autoinstall = {
-    description = "CSF automatic node installer";
+  systemd.services.csfx-autoinstall = {
+    description = "CSFX automatic node installer";
     after = [ "network-online.target" "getty.target" ];
     wants = [ "network-online.target" ];
     wantedBy = [ "multi-user.target" ];

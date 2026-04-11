@@ -157,7 +157,7 @@
 </script>
 
 <svelte:head>
-  <title>{agent?.name || 'Agent Details'} - CSF Core</title>
+  <title>{agent?.name || 'Agent Details'} - CSFX Core</title>
 </svelte:head>
 
 <div class="space-y-6">

@@ -2,13 +2,13 @@ use anyhow::Result;
 
 use crate::config::Config;
 
-pub const DESIRED_VERSION_KEY: &str = "/csf/config/desired_version";
-pub const AVAILABLE_FLAKE_REV_KEY: &str = "/csf/config/available_flake_rev";
-pub const DESIRED_FLAKE_REV_KEY: &str = "/csf/config/desired_flake_rev";
-pub const BUILD_STATUS_KEY: &str = "/csf/config/cp_build_status";
-pub const RESULT_KEY: &str = "/csf/config/last_build_result";
-pub const PAUSED_KEY: &str = "/csf/config/update_paused";
-pub const NODE_HEARTBEAT_PREFIX: &str = "/csf/nodes/";
+pub const DESIRED_VERSION_KEY: &str = "/csfx/config/desired_version";
+pub const AVAILABLE_FLAKE_REV_KEY: &str = "/csfx/config/available_flake_rev";
+pub const DESIRED_FLAKE_REV_KEY: &str = "/csfx/config/desired_flake_rev";
+pub const BUILD_STATUS_KEY: &str = "/csfx/config/cp_build_status";
+pub const RESULT_KEY: &str = "/csfx/config/last_build_result";
+pub const PAUSED_KEY: &str = "/csfx/config/update_paused";
+pub const NODE_HEARTBEAT_PREFIX: &str = "/csfx/nodes/";
 
 pub struct Client {
     inner: etcd_client::Client,

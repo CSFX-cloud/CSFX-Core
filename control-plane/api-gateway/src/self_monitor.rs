@@ -55,7 +55,7 @@ impl SelfMonitor {
     pub async fn new(db_conn: Arc<DbConn>) -> Result<Self> {
         // Get or create local agent
         let hostname = System::host_name().unwrap_or_else(|| "localhost".to_string());
-        let agent_name = format!("CSF-Core-{}", hostname);
+        let agent_name = format!("CSFX-Core-{}", hostname);
 
         // Check if agent already exists
         let existing_agent = agents::Entity::find()

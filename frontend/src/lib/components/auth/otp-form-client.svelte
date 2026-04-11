@@ -168,11 +168,11 @@
       <div class="text-center text-white">
         <img
           src="/logos/CSF_Logo.png"
-          alt="CSF-Core Logo"
+          alt="CSFX-Core Logo"
           class="mx-auto mb-4 w-200 h-200 md:w-200 h-200 lg:w-[240px] h-[240px]"
         />
 
-        <h2 class="text-4xl font-bold mb-4 text-shadow-glow">CSF-Core</h2>
+        <h2 class="text-4xl font-bold mb-4 text-shadow-glow">CSFX-Core</h2>
         <div class="space-y-2 text-lg text-shadow-glow">The AI-Ready Business Platform</div>
       </div>
     </div>

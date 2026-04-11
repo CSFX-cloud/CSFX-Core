@@ -2,15 +2,15 @@
 set -euo pipefail
 
 ETCD_ENDPOINT="${ETCD_ENDPOINT:-http://localhost:2379}"
-ETCD_USERNAME="${ETCD_USERNAME:-csf}"
+ETCD_USERNAME="${ETCD_USERNAME:-csfx}"
 ETCD_PASSWORD="${ETCD_PASSWORD:?ETCD_PASSWORD must be set}"
-COMPOSE_FILE="${COMPOSE_FILE:-/opt/csf/docker-compose.prod.yml}"
+COMPOSE_FILE="${COMPOSE_FILE:-/opt/csfxx/docker-compose.prod.yml}"
 GHCR_ORG="${GHCR_ORG:-csfx-cloud}"
 POLL_INTERVAL="${POLL_INTERVAL:-30}"
 
 GHCR_TOKEN="${GHCR_TOKEN:?GHCR_TOKEN must be set}"
-ETCD_DESIRED_KEY="/csf/config/desired_cp_version"
-ETCD_RESULT_KEY="/csf/config/last_update_result"
+ETCD_DESIRED_KEY="/csfx/config/desired_cp_version"
+ETCD_RESULT_KEY="/csfx/config/last_update_result"
 
 SERVICES=(api-gateway registry scheduler volume-manager failover-controller sdn-controller)
 
@@ -75,9 +75,9 @@ verify_images() {
     local version="$1"
     log "verifying image digests against GHCR"
     for svc in "${SERVICES[@]}"; do
-        local image="ghcr.io/${GHCR_ORG}/csf-ce-${svc}"
+        local image="ghcr.io/${GHCR_ORG}/csfx-ce-${svc}"
         local remote_digest local_dig
-        remote_digest="$(ghcr_digest "${GHCR_ORG}/csf-ce-${svc}" "${version}")"
+        remote_digest="$(ghcr_digest "${GHCR_ORG}/csfx-ce-${svc}" "${version}")"
         local_dig="$(local_digest "${image}:${version}")"
 
         if [[ -z "$remote_digest" ]]; then
@@ -99,7 +99,7 @@ run_update() {
     etcd_put "$ETCD_RESULT_KEY" "in_progress"
 
     log "pulling images"
-    if ! GHCR_ORG="$GHCR_ORG" CSF_VERSION="$version" \
+    if ! GHCR_ORG="$GHCR_ORG" CSFX_VERSION="$version" \
         docker compose -f "$COMPOSE_FILE" pull; then
         log "pull failed"
         etcd_put "$ETCD_RESULT_KEY" "failed"
@@ -113,7 +113,7 @@ run_update() {
     fi
 
     log "restarting services"
-    if ! GHCR_ORG="$GHCR_ORG" CSF_VERSION="$version" \
+    if ! GHCR_ORG="$GHCR_ORG" CSFX_VERSION="$version" \
         docker compose -f "$COMPOSE_FILE" up -d; then
         log "up failed"
         etcd_put "$ETCD_RESULT_KEY" "failed"
@@ -122,7 +122,7 @@ run_update() {
 
     log "waiting for health checks"
     sleep 15
-    if ! GHCR_ORG="$GHCR_ORG" CSF_VERSION="$version" \
+    if ! GHCR_ORG="$GHCR_ORG" CSFX_VERSION="$version" \
         docker compose -f "$COMPOSE_FILE" ps --format json \
         | jq -e '[.[] | select(.Health == "unhealthy")] | length == 0' > /dev/null 2>&1; then
         log "health check failed"
@@ -138,7 +138,7 @@ is_valid_version() {
     [[ "$1" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9._-]+)?$ ]]
 }
 
-log "csf-updater started, polling etcd every ${POLL_INTERVAL}s"
+log "csfx-updater started, polling etcd every ${POLL_INTERVAL}s"
 
 last_applied=""
 

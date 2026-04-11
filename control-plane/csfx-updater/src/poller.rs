@@ -61,7 +61,7 @@ async fn resolve_version_to_sha(
     let client = reqwest::Client::new();
     let mut req = client
         .get(&url)
-        .header("User-Agent", "csf-updater")
+        .header("User-Agent", "csfx-updater")
         .header("Accept", "application/vnd.github.v3+json");
 
     if let Some(etag) = last_etag.as_deref() {
@@ -105,7 +105,7 @@ async fn dereference_tag(cfg: &Config, tag_sha: &str) -> Result<String> {
 
     let resp = reqwest::Client::new()
         .get(&url)
-        .header("User-Agent", "csf-updater")
+        .header("User-Agent", "csfx-updater")
         .header("Accept", "application/vnd.github.v3+json")
         .send()
         .await?;

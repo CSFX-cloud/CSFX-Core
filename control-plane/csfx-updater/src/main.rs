@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     info!(
         poll_interval_secs = cfg.poll_interval_secs,
         infra_repo_github = %cfg.infra_repo_github,
-        "csf-updater started"
+        "csfx-updater started"
     );
 
     let cfg = std::sync::Arc::new(cfg);

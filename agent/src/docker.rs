@@ -70,7 +70,7 @@ impl DockerManager {
     }
 
     pub async fn start_container(&self, spec: &WorkloadSpec) -> Result<String> {
-        let container_name = format!("csf-{}", spec.workload_id);
+        let container_name = format!("csfx-{}", spec.workload_id);
 
         let env: Option<Vec<String>> = spec.env_vars.as_ref().map(|vars| {
             vars.iter()
@@ -99,8 +99,8 @@ impl DockerManager {
             },
             host_config: Some(host_config),
             labels: Some(HashMap::from([
-                ("csf.workload_id".to_string(), spec.workload_id.clone()),
-                ("csf.managed".to_string(), "true".to_string()),
+                ("csfx.workload_id".to_string(), spec.workload_id.clone()),
+                ("csfx.managed".to_string(), "true".to_string()),
             ])),
             ..Default::default()
         };

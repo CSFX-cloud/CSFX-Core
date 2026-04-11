@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     logger::init_logger();
 
     metrics::init();
-    log_info!("main", "CSF Scheduler Service starting...");
+    log_info!("main", "CSFX Scheduler Service starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
     log_info!("main", "Connecting to database...");
@@ -26,18 +26,24 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to database");
     log_info!("main", "Database connection established");
 
-    let etcd_endpoints = std::env::var("ETCD_ENDPOINTS")
-        .unwrap_or_else(|_| "http://localhost:2379".to_string());
+    let etcd_endpoints =
+        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://localhost:2379".to_string());
     let etcd_endpoints: Vec<&str> = etcd_endpoints.split(',').collect();
 
-    log_info!("main", &format!("Connecting to etcd endpoints={}", etcd_endpoints.join(",")));
+    log_info!(
+        "main",
+        &format!("Connecting to etcd endpoints={}", etcd_endpoints.join(","))
+    );
     let etcd = etcd_client::Client::connect(etcd_endpoints, None)
         .await
         .expect("Failed to connect to etcd");
     log_info!("main", "etcd connection established");
 
     let etcd = Arc::new(Mutex::new(etcd));
-    let scheduler = Arc::new(services::scheduler::SchedulerService::new(db.clone(), etcd.clone()));
+    let scheduler = Arc::new(services::scheduler::SchedulerService::new(
+        db.clone(),
+        etcd.clone(),
+    ));
 
     let state = server::AppState {
         db,

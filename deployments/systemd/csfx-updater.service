@@ -1,24 +1,24 @@
 [Unit]
-Description=CSF Control Plane Updater
+Description=CSFX Control Plane Updater
 After=network.target docker.service
 Requires=docker.service
 
 [Service]
 Type=simple
-User=csf-updater
+User=csfx-updater
 Group=docker
-EnvironmentFile=/opt/csf/.env
+EnvironmentFile=/opt/csfx/.env
 Environment=ETCD_ENDPOINT=http://localhost:2379
 Environment=ETCD_USERNAME=csf
 Environment=GHCR_ORG=csfx-cloud
-Environment=COMPOSE_FILE=/opt/csf/docker-compose.prod.yml
+Environment=COMPOSE_FILE=/opt/csfx/docker-compose.prod.yml
 Environment=POLL_INTERVAL=30
-ExecStart=/opt/csf/csf-updater.sh
+ExecStart=/opt/csfx/csfx-updater.sh
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=csf-updater
+SyslogIdentifier=csfx-updater
 
 [Install]
 WantedBy=multi-user.target

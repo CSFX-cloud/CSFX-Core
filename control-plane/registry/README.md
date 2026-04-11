@@ -1,4 +1,4 @@
-# CSF Registry Service
+# CSFX Registry Service
 
 Sicherer Agent Registry Service mit Token-basierter Registrierung und API Key Management.
 
@@ -126,7 +126,7 @@ Response:
 ```json
 {
   "agent_id": "660e8400-e29b-41d4-a716-446655440000",
-  "api_key": "csf_agent_xyz789...",
+  "api_key": "csfx_agent_xyz789...",
   "message": "Agent successfully registered"
 }
 ```
@@ -136,7 +136,7 @@ Response:
 ```bash
 curl -X POST http://localhost:8000/api/registry/agents/660e8400-e29b-41d4-a716-446655440000/heartbeat \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: csf_agent_xyz789..." \
+  -H "X-API-Key: csfx_agent_xyz789..." \
   -d '{
     "status": "online"
   }'
@@ -256,7 +256,7 @@ lsof -i :8001
 
 1. **API Key korrekt?**
    - Verwende den API Key aus der Registrierungs-Response
-   - Format: `X-API-Key: csf_agent_...`
+   - Format: `X-API-Key: csfx_agent_...`
 
 2. **Agent ID korrekt?**
    - URL muss die korrekte Agent ID enthalten

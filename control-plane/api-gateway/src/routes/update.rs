@@ -6,12 +6,12 @@ use std::env;
 use crate::auth::rbac::CanManageSystem;
 use crate::AppState;
 
-const ETCD_DESIRED_VERSION_KEY: &str = "/csf/config/desired_version";
-const ETCD_AVAILABLE_FLAKE_REV_KEY: &str = "/csf/config/available_flake_rev";
-const ETCD_DESIRED_FLAKE_REV_KEY: &str = "/csf/config/desired_flake_rev";
-const ETCD_BUILD_STATUS_KEY: &str = "/csf/config/cp_build_status";
-const ETCD_RESULT_KEY: &str = "/csf/config/last_build_result";
-const ETCD_PAUSED_KEY: &str = "/csf/config/update_paused";
+const ETCD_DESIRED_VERSION_KEY: &str = "/csfx/config/desired_version";
+const ETCD_AVAILABLE_FLAKE_REV_KEY: &str = "/csfx/config/available_flake_rev";
+const ETCD_DESIRED_FLAKE_REV_KEY: &str = "/csfx/config/desired_flake_rev";
+const ETCD_BUILD_STATUS_KEY: &str = "/csfx/config/cp_build_status";
+const ETCD_RESULT_KEY: &str = "/csfx/config/last_build_result";
+const ETCD_PAUSED_KEY: &str = "/csfx/config/update_paused";
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateRequest {
