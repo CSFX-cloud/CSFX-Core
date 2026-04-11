@@ -19,7 +19,7 @@ pub async fn put_placement(
     etcd: &Arc<Mutex<Client>>,
     record: &PlacementRecord,
 ) -> Result<(), String> {
-    let key = format!("/csf/placements/{}", record.workload_id);
+    let key = format!("/csfx/placements/{}", record.workload_id);
     let value = serde_json::to_string(record)
         .map_err(|e| format!("Failed to serialize placement: {}", e))?;
 
@@ -36,7 +36,7 @@ pub async fn delete_placement(
     etcd: &Arc<Mutex<Client>>,
     workload_id: Uuid,
 ) -> Result<(), String> {
-    let key = format!("/csf/placements/{}", workload_id);
+    let key = format!("/csfx/placements/{}", workload_id);
 
     etcd.lock()
         .await

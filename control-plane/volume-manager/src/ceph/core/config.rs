@@ -24,7 +24,7 @@ impl CephConfig {
             keyring_path: env::var("CEPH_KEYRING").ok(),
             client_name: env::var("CEPH_CLIENT_NAME").unwrap_or_else(|_| "admin".to_string()),
             default_pool: env::var("CEPH_DEFAULT_POOL")
-                .unwrap_or_else(|_| "csf-volumes".to_string()),
+                .unwrap_or_else(|_| "csfx-volumes".to_string()),
             default_pg_num: env::var("CEPH_PG_NUM")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -72,7 +72,7 @@ impl Default for CephConfig {
             ],
             keyring_path: None,
             client_name: "admin".to_string(),
-            default_pool: "csf-volumes".to_string(),
+            default_pool: "csfx-volumes".to_string(),
             default_pg_num: 128,
             default_replication: 3,
         }

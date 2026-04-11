@@ -131,7 +131,7 @@
     <div class="w-full max-w-md space-y-8">
       <div class="text-center">
         <h1 class="text-3xl font-bold tracking-tight">Willkommen zurück</h1>
-        <p class="text-muted-foreground mt-2">Melden Sie sich in Ihrem CSF-Core Konto an</p>
+        <p class="text-muted-foreground mt-2">Melden Sie sich in Ihrem CSFX-Core Konto an</p>
       </div>
 
       <form onsubmit={handleSubmit} class="space-y-6">
@@ -204,7 +204,7 @@
           class="mx-auto mb-4 w-200 h-200 md:w-200 h-200 lg:w-[240px] h-[240px]"
         />
 
-        <h2 class="text-4xl font-bold mb-4 text-shadow-glow">CSF-Core</h2>
+        <h2 class="text-4xl font-bold mb-4 text-shadow-glow">CSFX-Core</h2>
         <div class="space-y-2 text-lg text-shadow-glow">The AI-Ready Business Platform</div>
       </div>
     </div>

@@ -3,7 +3,7 @@ x-rust-common: &rust-common
     context: .
     dockerfile: control-plane/Dockerfile.dev.shared
     cache_from:
-      - type=registry,ref=csf-core-rust-base:latest
+      - type=registry,ref=csfx-core-rust-base:latest
   volumes:
     - ./control-plane/shared:/app/control-plane/shared
     - ./Cargo.toml:/app/Cargo.toml
@@ -11,34 +11,34 @@ x-rust-common: &rust-common
     - cargo_cache:/usr/local/cargo/registry
     - cargo_git:/usr/local/cargo/git
   networks:
-    - csf-network
+    - csfx-network
   restart: unless-stopped
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: csf-postgres-registry
+    container_name: csfx-postgres-registry
     environment:
-      POSTGRES_USER: csf_user
-      POSTGRES_PASSWORD: csf_password
-      POSTGRES_DB: csf_core
+      POSTGRES_USER: csfx_user
+      POSTGRES_PASSWORD: csfx_password
+      POSTGRES_DB: csfx_core
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U csf_user -d csf_core"]
+      test: ["CMD-SHELL", "pg_isready -U csfx_user -d csfx_core"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - csf-network
+      - csfx-network
 
   api-gateway:
     <<: *rust-common
-    container_name: csf-api-gateway-registry
+    container_name: csfx-api-gateway-registry
     environment:
-      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      DATABASE_URL: postgres://csfx_user:csfx_password@postgres:5432/csfx_core
       RUST_LOG: debug
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       RSA_KEY_SIZE: "2048"
@@ -60,9 +60,9 @@ services:
 
   registry:
     <<: *rust-common
-    container_name: csf-registry-service
+    container_name: csfx-registry-service
     environment:
-      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      DATABASE_URL: postgres://csfx_user:csfx_password@postgres:5432/csfx_core
       RUST_LOG: debug
       REGISTRY_PORT: 8001
     ports:
@@ -89,11 +89,11 @@ services:
 
   agent:
     <<: *rust-common
-    container_name: csf-agent-test
+    container_name: csfx-agent-test
     environment:
-      CSF_GATEWAY_URL: http://api-gateway:8000
-      CSF_REGISTRATION_TOKEN: ${CSF_REGISTRATION_TOKEN}
-      CSF_HEARTBEAT_INTERVAL: "30"
+      CSFX_GATEWAY_URL: http://api-gateway:8000
+      CSFX_REGISTRATION_TOKEN: ${CSFX_REGISTRATION_TOKEN}
+      CSFX_HEARTBEAT_INTERVAL: "30"
       RUST_LOG: debug
     depends_on:
       registry:
@@ -106,8 +106,8 @@ services:
       - cargo_cache:/usr/local/cargo/registry
       - cargo_git:/usr/local/cargo/git
       - cargo_target_agent:/app/target
-      - agent_state:/var/lib/csf-daemon
-    command: cargo run -p csf-agent
+      - agent_state:/var/lib/csfxx-daemon
+    command: cargo run -p csfx-agent
     restart: "no"
 
 volumes:
@@ -127,5 +127,5 @@ volumes:
     driver: local
 
 networks:
-  csf-network:
+  csfx-network:
     driver: bridge

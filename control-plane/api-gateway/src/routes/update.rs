@@ -6,26 +6,28 @@ use std::env;
 use crate::auth::rbac::CanManageSystem;
 use crate::AppState;
 
-const ETCD_AVAILABLE_FLAKE_REV_KEY: &str = "/csf/config/available_flake_rev";
-const ETCD_DESIRED_FLAKE_REV_KEY: &str = "/csf/config/desired_flake_rev";
-const ETCD_BUILD_STATUS_KEY: &str = "/csf/config/cp_build_status";
-const ETCD_RESULT_KEY: &str = "/csf/config/last_build_result";
-const ETCD_PAUSED_KEY: &str = "/csf/config/update_paused";
+const ETCD_DESIRED_VERSION_KEY: &str = "/csfx/config/desired_version";
+const ETCD_AVAILABLE_FLAKE_REV_KEY: &str = "/csfx/config/available_flake_rev";
+const ETCD_DESIRED_FLAKE_REV_KEY: &str = "/csfx/config/desired_flake_rev";
+const ETCD_BUILD_STATUS_KEY: &str = "/csfx/config/cp_build_status";
+const ETCD_RESULT_KEY: &str = "/csfx/config/last_build_result";
+const ETCD_PAUSED_KEY: &str = "/csfx/config/update_paused";
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateRequest {
-    pub flake_rev: String,
+    pub version: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct UpdateResponse {
     pub status: String,
-    pub flake_rev: String,
+    pub version: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct UpdateStatusResponse {
     pub current_version: String,
+    pub desired_version: Option<String>,
     pub available_flake_rev: Option<String>,
     pub desired_flake_rev: Option<String>,
     pub build_status: Option<String>,
@@ -57,25 +59,25 @@ async fn trigger_update(
     State(_state): State<AppState>,
     Json(req): Json<UpdateRequest>,
 ) -> Result<Json<UpdateResponse>, StatusCode> {
-    if !is_valid_sha(&req.flake_rev) {
+    if !is_valid_version(&req.version) {
         return Err(StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     let mut client = etcd_client().await?;
 
     client
-        .put(ETCD_DESIRED_FLAKE_REV_KEY, req.flake_rev.as_bytes(), None)
+        .put(ETCD_DESIRED_VERSION_KEY, req.version.as_bytes(), None)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "failed to write desired flake rev to etcd");
+            tracing::error!(error = %e, "failed to write desired version to etcd");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    tracing::info!(flake_rev = %req.flake_rev, "update requested");
+    tracing::info!(version = %req.version, "update requested");
 
     Ok(Json(UpdateResponse {
         status: "update_scheduled".to_string(),
-        flake_rev: req.flake_rev,
+        version: req.version,
     }))
 }
 
@@ -85,6 +87,7 @@ async fn update_status(
 ) -> Result<Json<UpdateStatusResponse>, StatusCode> {
     let mut client = etcd_client().await?;
 
+    let desired_version = etcd_get(&mut client, ETCD_DESIRED_VERSION_KEY).await?;
     let available_flake_rev = etcd_get(&mut client, ETCD_AVAILABLE_FLAKE_REV_KEY).await?;
     let desired_flake_rev = etcd_get(&mut client, ETCD_DESIRED_FLAKE_REV_KEY).await?;
     let build_status = etcd_get(&mut client, ETCD_BUILD_STATUS_KEY).await?;
@@ -93,6 +96,7 @@ async fn update_status(
 
     Ok(Json(UpdateStatusResponse {
         current_version: env!("CARGO_PKG_VERSION").to_string(),
+        desired_version,
         available_flake_rev,
         desired_flake_rev,
         build_status,
@@ -114,8 +118,9 @@ async fn etcd_get(client: &mut Client, key: &str) -> Result<Option<String>, Stat
         .map(|s| s.to_string()))
 }
 
-fn is_valid_sha(rev: &str) -> bool {
-    rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit())
+fn is_valid_version(version: &str) -> bool {
+    let v = version.trim_start_matches('v');
+    !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
 async fn pause_updates(

@@ -228,7 +228,7 @@ async fn read_desired_flake_rev(etcd_endpoints: &str) -> Option<String> {
         .ok()?;
 
     let resp = client
-        .get("/csf/config/desired_flake_rev", None)
+        .get("/csfx/config/desired_flake_rev", None)
         .await
         .ok()?;
 
@@ -239,7 +239,7 @@ async fn read_desired_flake_rev(etcd_endpoints: &str) -> Option<String> {
 }
 
 async fn increment_post_update_heartbeats(etcd_endpoints: &str, agent_id: Uuid) -> Option<u32> {
-    let key = format!("/csf/nodes/{}/post_update_heartbeats", agent_id);
+    let key = format!("/csfx/nodes/{}/post_update_heartbeats", agent_id);
 
     let mut client = etcd_client::Client::connect([etcd_endpoints], None)
         .await

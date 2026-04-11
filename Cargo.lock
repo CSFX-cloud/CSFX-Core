@@ -1098,7 +1098,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "csf-agent"
+name = "csfx-agent"
 version = "0.2.2"
 dependencies = [
  "anyhow",
@@ -1117,7 +1117,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "csf-migrate"
+name = "csfx-migrate"
 version = "0.2.2"
 dependencies = [
  "dotenvy",
@@ -1130,7 +1130,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "csf-updater"
+name = "csfx-updater"
 version = "0.2.2"
 dependencies = [
  "anyhow",

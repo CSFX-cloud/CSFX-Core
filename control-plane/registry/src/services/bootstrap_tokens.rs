@@ -3,7 +3,7 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-const TOKEN_PREFIX: &str = "csf-bootstrap.";
+const TOKEN_PREFIX: &str = "csfx-bootstrap.";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapToken {

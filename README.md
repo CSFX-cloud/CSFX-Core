@@ -1,14 +1,14 @@
 <div align="center">
 
-# CSF-Core
+# CSFX-Core
 
 ### Unified Infrastructure Management Platform
 
-[![Pipeline Status](https://img.shields.io/github/actions/workflow/status/CS-Foundry/CSF-Core/main-release.yml?branch=main&label=Release-Pipeline&style=for-the-badge&logo=github)](https://github.com/CS-Foundry/CSF-Core/actions/runs/20679215646)
-[![Lint Status](https://img.shields.io/github/actions/workflow/status/CS-Foundry/CSF-Core/lint.yml?branch=main&label=Lint%20%26%20Format&style=for-the-badge&logo=github&color=blueviolet)](https://github.com/CS-Foundry/CSF-Core/actions/runs/20679215645)
-[![Version](https://img.shields.io/github/v/release/CS-Foundry/CSF-Core?style=for-the-badge&color=blue)](https://github.com/CS-Foundry/CSF-Core/releases)
-[![Downloads](https://img.shields.io/github/downloads/CS-Foundry/CSF-Core/total?style=for-the-badge&color=success)](https://github.com/CS-Foundry/CSF-Core/releases)
-[![License](https://img.shields.io/badge/License-CSF--Internal-purple?style=for-the-badge)](LICENSE)
+[![Pipeline Status](https://img.shields.io/github/actions/workflow/status/CS-Foundry/CSFX-Core/main-release.yml?branch=main&label=Release-Pipeline&style=for-the-badge&logo=github)](https://github.com/CS-Foundry/CSFX-Core/actions/runs/20679215646)
+[![Lint Status](https://img.shields.io/github/actions/workflow/status/CS-Foundry/CSFX-Core/lint.yml?branch=main&label=Lint%20%26%20Format&style=for-the-badge&logo=github&color=blueviolet)](https://github.com/CS-Foundry/CSFX-Core/actions/runs/20679215645)
+[![Version](https://img.shields.io/github/v/release/CS-Foundry/CSFX-Core?style=for-the-badge&color=blue)](https://github.com/CS-Foundry/CSFX-Core/releases)
+[![Downloads](https://img.shields.io/github/downloads/CS-Foundry/CSFX-Core/total?style=for-the-badge&color=success)](https://github.com/CS-Foundry/CSFX-Core/releases)
+[![License](https://img.shields.io/badge/License-CSFX--Internal-purple?style=for-the-badge)](LICENSE)
 
 <p align="center">
   <b>High-Performance Backend & Frontend in a single systemd service.</b><br>
@@ -23,7 +23,7 @@
 
 ## ⚡ About the Project
 
-**CSF-Core** revolutionizes infrastructure management through a **Unified Architecture** approach. Instead of manually orchestrating complex microservices, CSF-Core delivers a monolithic yet modular binary that serves both the API backend and the frontend.
+**CSFX-Core** revolutionizes infrastructure management through a **Unified Architecture** approach. Instead of manually orchestrating complex microservices, CSFX-Core delivers a monolithic yet modular binary that serves both the API backend and the frontend.
 
 ### Key Features
 
@@ -36,12 +36,12 @@
 
 ## 🚀 Quick Start
 
-Install CSF-Core on your Linux system in under 30 seconds using our one-line installer.
+Install CSFX-Core on your Linux system in under 30 seconds using our one-line installer.
 
 ### Installation
 
 ```bash
-curl -fsSL [https://raw.githubusercontent.com/CS-Foundry/CSF-Core/main/scripts/install.sh](https://raw.githubusercontent.com/CS-Foundry/CSF-Core/main/scripts/install.sh) | sudo bash
+curl -fsSL [https://raw.githubusercontent.com/CS-Foundry/CSFX-Core/main/scripts/install.sh](https://raw.githubusercontent.com/CS-Foundry/CSFX-Core/main/scripts/install.sh) | sudo bash
 ```
 
 ### Technology Stack
@@ -63,7 +63,7 @@ You can find our complete documentation in the [`docs/`](https://www.google.com/
 
 We actively support our users with integration and troubleshooting.
 
-- **🐛 Bug Reports:** Please use [GitHub Issues](https://github.com/CS-Foundry/CSF-Core/issues) to report bugs.
+- **🐛 Bug Reports:** Please use [GitHub Issues](https://github.com/CS-Foundry/CSFX-Core/issues) to report bugs.
 - **📖 Documentation:** Check the [`docs/`](https://www.google.com/search?q=./docs/) folder for detailed instructions.
 - **🔧 Debugging:** For connectivity issues, refer to the [Connection Debugging Guide](https://www.google.com/search?q=./docs/troubleshooting/DEBUG_CONNECTION.md).
 

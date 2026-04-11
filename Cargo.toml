@@ -3,8 +3,8 @@ resolver = "2"
 members = [
     "agent",
     "control-plane/api-gateway",
-    "control-plane/csf-migrate",
-    "control-plane/csf-updater",
+    "control-plane/csfx-migrate",
+    "control-plane/csfx-updater",
     "control-plane/scheduler",
     "control-plane/failover-controller",
     "control-plane/sdn-controller",
@@ -20,7 +20,7 @@ version = "0.2.2"
 edition = "2021"
 authors = ["CS-Foundry"]
 license = "SEE LICENSE IN LICENSE"
-repository = "https://github.com/CSFX-cloud/CSF-Core"
+repository = "https://github.com/CSFX-cloud/CSFX-Core"
 
 [workspace.dependencies]
 # Async runtime

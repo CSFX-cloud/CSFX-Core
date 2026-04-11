@@ -9,19 +9,19 @@ COLOR_RESET='\033[0m'
 echo -e "${COLOR_YELLOW}🧹 Cleaning etcd data...${COLOR_RESET}"
 
 # Lösche alle alten Daten
-echo "Deleting all keys under /csf/volume-manager/..."
+echo "Deleting all keys under /csfx/volume-manager/..."
 
 # Nodes
-ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csf/volume-manager/nodes/ --prefix
+ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csfx/volume-manager/nodes/ --prefix
 
 # Leader
-ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csf/volume-manager/election/ --prefix
+ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csfx/volume-manager/election/ --prefix
 
 # Volumes
-ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csf/volume-manager/volumes/ --prefix
+ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csfx/volume-manager/volumes/ --prefix
 
 # Snapshots
-ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csf/volume-manager/snapshots/ --prefix
+ETCDCTL_API=3 etcdctl --endpoints=localhost:2379 del /csfx/volume-manager/snapshots/ --prefix
 
 echo -e "${COLOR_GREEN}✅ etcd cleaned!${COLOR_RESET}"
 echo ""

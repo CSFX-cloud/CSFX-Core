@@ -8,20 +8,20 @@ static HTTP_REQUEST_DURATION_SECONDS: OnceLock<HistogramVec> = OnceLock::new();
 pub fn init() {
     HTTP_REQUESTS_TOTAL.get_or_init(|| {
         register_counter_vec!(
-            "csf_http_requests_total",
+            "csfx_http_requests_total",
             "Total HTTP requests",
             &["method", "path", "status"]
         )
-        .expect("failed to register csf_http_requests_total")
+        .expect("failed to register csfx_http_requests_total")
     });
 
     HTTP_REQUEST_DURATION_SECONDS.get_or_init(|| {
         register_histogram_vec!(
-            "csf_http_request_duration_seconds",
+            "csfx_http_request_duration_seconds",
             "HTTP request duration in seconds",
             &["method", "path"]
         )
-        .expect("failed to register csf_http_request_duration_seconds")
+        .expect("failed to register csfx_http_request_duration_seconds")
     });
 }
 

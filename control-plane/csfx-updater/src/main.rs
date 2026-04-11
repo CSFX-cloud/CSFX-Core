@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
     info!(
         poll_interval_secs = cfg.poll_interval_secs,
         infra_repo_github = %cfg.infra_repo_github,
-        "csf-updater started"
+        "csfx-updater started"
     );
 
     let cfg = std::sync::Arc::new(cfg);
@@ -128,7 +128,6 @@ async fn execute_once(cfg: &config::Config, last_applied: &str) -> anyhow::Resul
 
     info!(flake_rev = %desired, last_applied = %last_applied, "starting update");
     etcd.put(etcd::BUILD_STATUS_KEY, "building").await?;
-    etcd.delete_prefix(etcd::NODE_HEARTBEAT_PREFIX).await?;
 
     let (_cancel_tx, cancel_rx) = watch::channel(false);
 

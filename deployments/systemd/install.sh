@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CSF_DIR="/opt/csf"
+CSFX_DIR="/opt/csfxx"
 
 if [[ "$EUID" -ne 0 ]]; then
     echo "run as root"
@@ -11,28 +11,28 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-if ! id csf-updater &>/dev/null; then
-    useradd --system --no-create-home --shell /usr/sbin/nologin csf-updater
-    usermod -aG docker csf-updater
-    echo "created csf-updater system user"
+if ! id csfx-updater &>/dev/null; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin csfx-updater
+    usermod -aG docker csfx-updater
+    echo "created csfx-updater system user"
 fi
 
-mkdir -p "$CSF_DIR"
-chown csf-updater:docker "$CSF_DIR"
+mkdir -p "$CSFX_DIR"
+chown csfx-updater:docker "$CSFX_DIR"
 
-cp "${REPO_ROOT}/docker-compose.prod.yml" "${CSF_DIR}/docker-compose.prod.yml"
-cp "${SCRIPT_DIR}/csf-updater.sh" "${CSF_DIR}/csf-updater.sh"
-chmod 750 "${CSF_DIR}/csf-updater.sh"
-chown csf-updater:docker "${CSF_DIR}/csf-updater.sh"
+cp "${REPO_ROOT}/docker-compose.prod.yml" "${CSFX_DIR}/docker-compose.prod.yml"
+cp "${SCRIPT_DIR}/csfx-updater.sh" "${CSFX_DIR}/csfx-updater.sh"
+chmod 750 "${CSFX_DIR}/csfx-updater.sh"
+chown csfx-updater:docker "${CSFX_DIR}/csfx-updater.sh"
 
-if [[ ! -f "${CSF_DIR}/.env" ]]; then
-    cp "${REPO_ROOT}/.env.example" "${CSF_DIR}/.env"
-    chmod 640 "${CSF_DIR}/.env"
-    chown csf-updater:docker "${CSF_DIR}/.env"
-    echo "created ${CSF_DIR}/.env — fill in values before starting"
+if [[ ! -f "${CSFX_DIR}/.env" ]]; then
+    cp "${REPO_ROOT}/.env.example" "${CSFX_DIR}/.env"
+    chmod 640 "${CSFX_DIR}/.env"
+    chown csfx-updater:docker "${CSFX_DIR}/.env"
+    echo "created ${CSFX_DIR}/.env — fill in values before starting"
 fi
 
-cp "${SCRIPT_DIR}/csf-updater.service" /etc/systemd/system/csf-updater.service
+cp "${SCRIPT_DIR}/csfx-updater.service" /etc/systemd/system/csfx-updater.service
 
 if command -v ufw &>/dev/null; then
     ufw deny in 2379/tcp comment "etcd - internal only"
@@ -46,8 +46,8 @@ elif command -v firewall-cmd &>/dev/null; then
 fi
 
 systemctl daemon-reload
-systemctl enable csf-updater
-systemctl start csf-updater
+systemctl enable csfx-updater
+systemctl start csfx-updater
 
-echo "csf-updater installed and started"
-echo "logs: journalctl -u csf-updater -f"
+echo "csfx-updater installed and started"
+echo "logs: journalctl -u csfx-updater -f"

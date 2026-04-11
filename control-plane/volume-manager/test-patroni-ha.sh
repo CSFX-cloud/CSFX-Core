@@ -76,15 +76,15 @@ test_write() {
     if [ "$primary" == "patroni1" ]; then replica="patroni2"; 
     else replica="patroni1"; fi
 
-    docker exec $primary psql -U csf -d csf_core -c \
+    docker exec $primary psql -U csfx -d csfx_core -c \
         "CREATE TABLE IF NOT EXISTS failover_test (id SERIAL PRIMARY KEY, data TEXT, created_at TIMESTAMP DEFAULT NOW());" &>/dev/null
     
-    docker exec $primary psql -U csf -d csf_core -c \
+    docker exec $primary psql -U csfx -d csfx_core -c \
         "INSERT INTO failover_test (data) VALUES ('$test_data');" &>/dev/null
     
     # Verify on replica
     sleep 2
-    local result=$(docker exec $replica psql -U csf -d csf_core -t -c \
+    local result=$(docker exec $replica psql -U csfx -d csfx_core -t -c \
         "SELECT data FROM failover_test WHERE data='$test_data';" 2>/dev/null | xargs)
     
     if [ "$result" == "$test_data" ]; then
@@ -212,7 +212,7 @@ test_postgres_failover() {
     # Test connection to new primary
     echo "Testing connection to new primary..."
     sleep 3
-    if docker exec $new_primary psql -U csf -d csf_core -c "SELECT 1;" &>/dev/null; then
+    if docker exec $new_primary psql -U csfx -d csfx_core -c "SELECT 1;" &>/dev/null; then
         echo -e "${GREEN}✅ New primary is accepting connections${NC}"
     else
         echo -e "${RED}❌ New primary not ready${NC}"
@@ -257,7 +257,7 @@ test_ceph_failure() {
     echo ""
     
     echo -e "${YELLOW}Testing if PostgreSQL still works...${NC}"
-    if docker exec patroni1 psql -U csf -d csf_core -c "SELECT version();" &>/dev/null; then
+    if docker exec patroni1 psql -U csfx -d csfx_core -c "SELECT version();" &>/dev/null; then
         echo -e "${GREEN}✅ PostgreSQL still working (Ceph has 2 replicas)${NC}"
     else
         echo -e "${RED}❌ PostgreSQL affected${NC}"

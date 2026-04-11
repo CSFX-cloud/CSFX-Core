@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use rcgen::{CertificateParams, DnType, KeyPair, PKCS_ECDSA_P256_SHA256};
 use std::path::Path;
 
-const KEY_FILE: &str = "/var/lib/csf-daemon/agent.key";
-const CSR_FILE: &str = "/var/lib/csf-daemon/agent.csr";
-const CERT_FILE: &str = "/var/lib/csf-daemon/agent.crt";
-const CA_FILE: &str = "/var/lib/csf-daemon/ca.crt";
+const KEY_FILE: &str = "/var/lib/csfx-daemon/agent.key";
+const CSR_FILE: &str = "/var/lib/csfx-daemon/agent.csr";
+const CERT_FILE: &str = "/var/lib/csfx-daemon/agent.crt";
+const CA_FILE: &str = "/var/lib/csfx-daemon/ca.crt";
 
 pub struct AgentPki {
     key_pem: String,

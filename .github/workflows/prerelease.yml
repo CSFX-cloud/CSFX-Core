@@ -74,7 +74,7 @@ jobs:
         id: image
         run: |
           ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+          echo "name=ghcr.io/${ORG}/csfx-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
 
       - uses: docker/setup-buildx-action@v3
 
@@ -130,7 +130,7 @@ jobs:
         id: image
         run: |
           ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+          echo "name=ghcr.io/${ORG}/csfx-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
 
       - uses: actions/download-artifact@v4
         with:
@@ -165,8 +165,8 @@ jobs:
       fail-fast: false
       matrix:
         binary:
-          - csf-updater
-          - csf-agent
+          - csfx-updater
+          - csfx-agent
         arch:
           - amd64
           - arm64
@@ -207,7 +207,7 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          CSF_BUILD_VERSION: ${{ needs.version.outputs.version }}
+          CSFX_BUILD_VERSION: ${{ needs.version.outputs.version }}
         run: |
           cargo build --release --bin ${{ matrix.binary }} --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.binary }}-${{ matrix.arch }}
@@ -230,7 +230,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: csf-*
+          pattern: csfx-*
           merge-multiple: true
 
       - name: Create pre-release
@@ -240,14 +240,14 @@ jobs:
             --title "v${VERSION}" \
             --prerelease \
             --generate-notes \
-            csf-updater-amd64 \
-            csf-updater-amd64.sha256 \
-            csf-updater-arm64 \
-            csf-updater-arm64.sha256 \
-            csf-agent-amd64 \
-            csf-agent-amd64.sha256 \
-            csf-agent-arm64 \
-            csf-agent-arm64.sha256
+            csfx-updater-amd64 \
+            csfx-updater-amd64.sha256 \
+            csfx-updater-arm64 \
+            csfx-updater-arm64.sha256 \
+            csfx-agent-amd64 \
+            csfx-agent-amd64.sha256 \
+            csfx-agent-arm64 \
+            csfx-agent-arm64.sha256
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -260,11 +260,12 @@ jobs:
         with:
           repository: ${{ github.repository_owner }}/CSFX-Infra
           token: ${{ secrets.INFRA_REPO_TOKEN }}
+          ref: develop
           path: infra
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: csf-agent-*
+          pattern: csfx-agent-*
           path: /tmp/binaries
           merge-multiple: true
 
@@ -287,7 +288,7 @@ jobs:
 
           get_manifest_digest() {
             local svc=$1
-            local image="ghcr.io/${ORG}/csf-ce-${svc}:${VERSION}"
+            local image="ghcr.io/${ORG}/csfx-ce-${svc}:${VERSION}"
             docker buildx imagetools inspect "${image}" \
               --format '{{json .Manifest}}' | jq -r '.digest'
           }
@@ -300,7 +301,7 @@ jobs:
 
           cat > infra/versions.nix <<EOF
           {
-            csf = {
+            csfx = {
               version = "${VERSION}";
               images = {
                 api-gateway         = { digest = "$(get_manifest_digest api-gateway)"; };
@@ -312,12 +313,12 @@ jobs:
               };
               agent = {
                 amd64 = {
-                  url    = "${RELEASE_BASE}/csf-agent-amd64";
-                  sha256 = "$(get_sha256 csf-agent amd64)";
+                  url    = "${RELEASE_BASE}/csfx-agent-amd64";
+                  sha256 = "$(get_sha256 csfx-agent amd64)";
                 };
                 arm64 = {
-                  url    = "${RELEASE_BASE}/csf-agent-arm64";
-                  sha256 = "$(get_sha256 csf-agent arm64)";
+                  url    = "${RELEASE_BASE}/csfx-agent-arm64";
+                  sha256 = "$(get_sha256 csfx-agent arm64)";
                 };
               };
             };
@@ -330,7 +331,10 @@ jobs:
           cd infra
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B develop
           git add versions.nix
           git diff --cached --quiet && echo "no changes" && exit 0
           git commit -m "chore: update versions.nix for v${VERSION}"
-          git push
+          git push origin develop
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"

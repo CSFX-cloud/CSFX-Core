@@ -23,12 +23,12 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    info!(version = env!("CARGO_PKG_VERSION"), "csf-agent starting");
+    info!(version = env!("CARGO_PKG_VERSION"), "csfx-agent starting");
 
-    let gateway_url = std::env::var("CSF_GATEWAY_URL")
-        .context("CSF_GATEWAY_URL environment variable is required")?;
+    let gateway_url = std::env::var("CSFX_GATEWAY_URL")
+        .context("CSFX_GATEWAY_URL environment variable is required")?;
 
-    let heartbeat_interval_secs: u64 = std::env::var("CSF_HEARTBEAT_INTERVAL")
+    let heartbeat_interval_secs: u64 = std::env::var("CSFX_HEARTBEAT_INTERVAL")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(60);
@@ -104,10 +104,10 @@ async fn perform_registration(
     heartbeat_interval_secs: u64,
     agent_pki: &pki::AgentPki,
 ) -> Result<(uuid::Uuid, String)> {
-    let token = match std::env::var("CSF_REGISTRATION_TOKEN") {
+    let token = match std::env::var("CSFX_REGISTRATION_TOKEN") {
         Ok(t) => t,
         Err(_) => {
-            info!("CSF_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
+            info!("CSFX_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
             client
                 .fetch_bootstrap_token()
                 .await

@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GHCR_ORG="${GHCR_ORG:-local}"
-CSF_VERSION="${CSF_VERSION:-dev}"
+CSFX_VERSION="${CSFX_VERSION:-dev}"
 
 SERVICES=(api-gateway registry scheduler volume-manager failover-controller sdn-controller)
 
@@ -15,13 +15,13 @@ for svc in "${SERVICES[@]}"; do
         -f control-plane/Dockerfile.prod.shared \
         --build-arg SERVICE_BIN="${svc}" \
         --build-arg BUILD_JOBS="$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)" \
-        -t "ghcr.io/${GHCR_ORG}/csf-ce-${svc}:${CSF_VERSION}" \
-        -t "ghcr.io/${GHCR_ORG}/csf-ce-${svc}:latest" \
+        -t "ghcr.io/${GHCR_ORG}/csfx-ce-${svc}:${CSFX_VERSION}" \
+        -t "ghcr.io/${GHCR_ORG}/csfx-ce-${svc}:latest" \
         .
-    echo "built ghcr.io/${GHCR_ORG}/csf-ce-${svc}:${CSF_VERSION}"
+    echo "built ghcr.io/${GHCR_ORG}/csfx-ce-${svc}:${CSFX_VERSION}"
 done
 
 echo "all images built"
 echo ""
 echo "run with:"
-echo "  GHCR_ORG=${GHCR_ORG} CSF_VERSION=${CSF_VERSION} docker compose -f docker-compose.prod.yml up -d"
+echo "  GHCR_ORG=${GHCR_ORG} CSFX_VERSION=${CSFX_VERSION} docker compose -f docker-compose.prod.yml up -d"

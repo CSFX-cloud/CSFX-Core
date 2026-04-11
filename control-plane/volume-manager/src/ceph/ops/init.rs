@@ -54,14 +54,14 @@ pub async fn init_ceph() -> Result<CephManager> {
             min_size: 2,
         },
         CephPool {
-            name: "csf-postgres".to_string(),
+            name: "csfx-postgres".to_string(),
             pg_num: 64,
             pgp_num: 64,
             size: config.default_replication,
             min_size: 2,
         },
         CephPool {
-            name: "csf-metadata".to_string(),
+            name: "csfx-metadata".to_string(),
             pg_num: 32,
             pgp_num: 32,
             size: config.default_replication,
@@ -108,7 +108,7 @@ pub async fn create_postgres_volumes(ceph: &CephManager, node_count: u32) -> Res
 
         let volume = crate::ceph::storage::types::CephVolume {
             name: volume_name.clone(),
-            pool: "csf-postgres".to_string(),
+            pool: "csfx-postgres".to_string(),
             size_mb: 10240, // 10 GB
             features: vec!["layering".to_string(), "exclusive-lock".to_string()],
             encrypted: false,

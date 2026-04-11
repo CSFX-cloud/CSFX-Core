@@ -3,8 +3,8 @@ use tokio::fs;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-const TRIGGER_FILE: &str = "/var/lib/csf/update_trigger";
-const HEARTBEAT_COUNTER_FILE: &str = "/var/lib/csf/post_update_heartbeats";
+const TRIGGER_FILE: &str = "/var/lib/csfx/update_trigger";
+const HEARTBEAT_COUNTER_FILE: &str = "/var/lib/csfx/post_update_heartbeats";
 const MAX_JITTER_SECS: u64 = 300;
 
 pub async fn handle(agent_id: Uuid, desired_flake_rev: &str, current_flake_rev: &str) {

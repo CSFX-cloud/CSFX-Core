@@ -157,13 +157,13 @@ check_patroni_health() {
 check_volume_manager_health() {
     log_step "Checking Volume Manager..."
     
-    local leader=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null)
+    local leader=$(etcdctl --endpoints=localhost:2379 get /csfx/volume-manager/election/leader --print-value-only 2>/dev/null)
     
     if [ -n "$leader" ]; then
         log_success "Volume Manager leader: $leader"
         
         # Count nodes
-        local node_count=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/nodes/ --prefix --keys-only 2>/dev/null | grep -c "/csf/volume-manager/nodes/" || echo "0")
+        local node_count=$(etcdctl --endpoints=localhost:2379 get /csfx/volume-manager/nodes/ --prefix --keys-only 2>/dev/null | grep -c "/csfx/volume-manager/nodes/" || echo "0")
         log_info "Registered nodes: $node_count"
         return 0
     else
@@ -204,18 +204,18 @@ test_data_replication() {
     local test_data="hybrid_test_$(date +%s)"
     
     log_step "Creating test table..."
-    docker exec patroni1 psql -U csf -d csf_core -c \
+    docker exec patroni1 psql -U csfx -d csfx_core -c \
         "CREATE TABLE IF NOT EXISTS hybrid_test (id SERIAL PRIMARY KEY, data TEXT, created_at TIMESTAMP DEFAULT NOW());" &>/dev/null
     
     log_step "Writing test data to primary..."
-    docker exec patroni1 psql -U csf -d csf_core -c \
+    docker exec patroni1 psql -U csfx -d csfx_core -c \
         "INSERT INTO hybrid_test (data) VALUES ('$test_data');" &>/dev/null
     
     # Wait for replication
     sleep 2
     
     log_step "Verifying data on replica..."
-    local result=$(docker exec patroni2 psql -U csf -d csf_core -t -c \
+    local result=$(docker exec patroni2 psql -U csfx -d csfx_core -t -c \
         "SELECT data FROM hybrid_test WHERE data='$test_data';" 2>/dev/null | xargs)
     
     if [ "$result" == "$test_data" ]; then
@@ -296,7 +296,7 @@ test_postgres_failover() {
                     
                     # Test connectivity
                     sleep 2
-                    if docker exec $new_primary psql -U csf -d csf_core -c "SELECT 1;" &>/dev/null; then
+                    if docker exec $new_primary psql -U csfx -d csfx_core -c "SELECT 1;" &>/dev/null; then
                         log_success "New primary accepting connections"
                     fi
                     
@@ -348,7 +348,7 @@ test_ceph_failover() {
     echo ""
     
     log_step "Testing PostgreSQL availability..."
-    if docker exec patroni1 psql -U csf -d csf_core -c "SELECT version();" &>/dev/null; then
+    if docker exec patroni1 psql -U csfx -d csfx_core -c "SELECT version();" &>/dev/null; then
         log_success "PostgreSQL still fully operational (Ceph has 2 remaining replicas)"
     else
         log_error "PostgreSQL affected by OSD failure"
@@ -375,7 +375,7 @@ test_ceph_failover() {
 test_volume_manager_failover() {
     log_header "Test 5: Volume Manager Failover"
     
-    local current_leader=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null)
+    local current_leader=$(etcdctl --endpoints=localhost:2379 get /csfx/volume-manager/election/leader --print-value-only 2>/dev/null)
     
     if [ -z "$current_leader" ]; then
         log_error "No leader found"
@@ -398,7 +398,7 @@ test_volume_manager_failover() {
     log_step "Waiting for leader re-election (10s)..."
     sleep 10
     
-    local new_leader=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null)
+    local new_leader=$(etcdctl --endpoints=localhost:2379 get /csfx/volume-manager/election/leader --print-value-only 2>/dev/null)
     
     if [ -n "$new_leader" ] && [ "$new_leader" != "$current_leader" ]; then
         log_success "New leader elected: $new_leader"
@@ -457,11 +457,11 @@ test_e2e_integration() {
     log_step "Testing complete data flow..."
     local test_val="e2e_test_$(date +%s)"
     
-    if docker exec patroni1 psql -U csf -d csf_core -c \
+    if docker exec patroni1 psql -U csfx -d csfx_core -c \
         "CREATE TABLE IF NOT EXISTS e2e_test (val TEXT); INSERT INTO e2e_test VALUES ('$test_val');" &>/dev/null; then
         
         sleep 2
-        local result=$(docker exec patroni2 psql -U csf -d csf_core -t -c \
+        local result=$(docker exec patroni2 psql -U csfx -d csfx_core -t -c \
             "SELECT val FROM e2e_test WHERE val='$test_val';" 2>/dev/null | xargs)
         
         if [ "$result" == "$test_val" ]; then
@@ -488,7 +488,7 @@ test_performance_metrics() {
     echo ""
     
     # PostgreSQL connections
-    local pg_connections=$(docker exec patroni1 psql -U csf -d csf_core -t -c \
+    local pg_connections=$(docker exec patroni1 psql -U csfx -d csfx_core -t -c \
         "SELECT count(*) FROM pg_stat_activity;" 2>/dev/null | xargs)
     echo -e "${CYAN}PostgreSQL Connections:${NC} $pg_connections"
     
@@ -516,7 +516,7 @@ test_live_monitoring() {
         
         # etcd
         echo -e "${CYAN}🔑 etcd Leader:${NC}"
-        etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null || echo "none"
+        etcdctl --endpoints=localhost:2379 get /csfx/volume-manager/election/leader --print-value-only 2>/dev/null || echo "none"
         echo ""
         
         # Ceph
@@ -595,7 +595,7 @@ test_chaos() {
     
     # Scenario 3: Kill Volume Manager leader
     log_info "🔥 Scenario 3: Killing Volume Manager leader..."
-    local leader=$(etcdctl --endpoints=localhost:2379 get /csf/volume-manager/election/leader --print-value-only 2>/dev/null)
+    local leader=$(etcdctl --endpoints=localhost:2379 get /csfx/volume-manager/election/leader --print-value-only 2>/dev/null)
     if [ -n "$leader" ]; then
         docker-compose -f docker-compose.patroni.yml stop $leader &>/dev/null
         log_warn "$leader stopped"
@@ -609,7 +609,7 @@ test_chaos() {
     # Check if system is still functional
     log_step "Testing system functionality under stress..."
     
-    if docker exec patroni2 psql -U csf -d csf_core -c "SELECT 1;" &>/dev/null; then
+    if docker exec patroni2 psql -U csfx -d csfx_core -c "SELECT 1;" &>/dev/null; then
         log_success "✅ Database still accessible!"
     else
         log_error "Database not accessible"

@@ -17,7 +17,7 @@ impl ApiKey {
     pub fn new(agent_id: Uuid) -> Self {
         Self {
             id: Uuid::new_v4(),
-            key: format!("csf_agent_{}", Uuid::new_v4().simple()),
+            key: format!("csfx_agent_{}", Uuid::new_v4().simple()),
             agent_id,
             created_at: Utc::now(),
             last_used: None,

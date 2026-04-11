@@ -87,5 +87,5 @@ pub async fn umount(mount_point: &str) -> Result<()> {
 }
 
 pub fn mount_point_for(volume_id: &str) -> String {
-    format!("/mnt/csf-volumes/{}", volume_id)
+    format!("/mnt/csfx-volumes/{}", volume_id)
 }

@@ -1,5 +1,5 @@
 {
-  description = "CSF Node — binary builds and server configuration";
+  description = "CSFX Node — binary builds and server configuration";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
@@ -28,7 +28,7 @@
     };
 
     csfAgentPkg = platform.buildRustPackage {
-      pname = "csf-agent";
+      pname = "csfx-agent";
       version = "0.2.2";
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
@@ -38,11 +38,11 @@
     };
 
     csfUpdaterPkg = platform.buildRustPackage {
-      pname = "csf-updater";
+      pname = "csfx-updater";
       version = "0.2.2";
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
-      buildAndTestSubdir = "control-plane/csf-updater";
+      buildAndTestSubdir = "control-plane/csfx-updater";
       nativeBuildInputs = [ pkgs.pkg-config pkgs.protobuf ];
       buildInputs = [];
       doCheck = false;
@@ -51,27 +51,27 @@
     versions = import ../CSFX-Infra/versions.nix;
 
     serverSpecialArgs = {
-      csf.agentPackage = csfAgentPkg;
-      csf.updaterPackage = csfUpdaterPkg;
+      csfx.agentPackage = csfAgentPkg;
+      csfx.updaterPackage = csfUpdaterPkg;
       inherit versions;
     };
   in
   {
-    nixosConfigurations.csf-server = nixpkgs.lib.nixosSystem {
+    nixosConfigurations.csfx-server = nixpkgs.lib.nixosSystem {
       inherit system;
       specialArgs = serverSpecialArgs;
       modules = [ ./modules/server-configuration.nix ];
     };
 
-    nixosConfigurations.csf-iso = nixpkgs.lib.nixosSystem {
+    nixosConfigurations.csfx-iso = nixpkgs.lib.nixosSystem {
       inherit system;
       specialArgs = serverSpecialArgs;
       modules = [ ./modules/iso-configuration.nix ];
     };
 
     packages.${system} = {
-      csf-agent = csfAgentPkg;
-      csf-updater = csfUpdaterPkg;
+      csfx-agent = csfAgentPkg;
+      csfx-updater = csfUpdaterPkg;
       default = csfAgentPkg;
       iso = nixpkgs.lib.nixosSystem {
         inherit system;

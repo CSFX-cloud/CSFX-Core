@@ -23,7 +23,7 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(120),
             infra_repo_mirror_dir: env::var("INFRA_REPO_MIRROR_DIR")
-                .unwrap_or_else(|_| "/var/lib/csf-updater/infra.git".to_string()),
+                .unwrap_or_else(|_| "/var/lib/csfx-updater/infra.git".to_string()),
             infra_repo_mirror_url: env::var("INFRA_REPO_MIRROR_URL")
                 .context("INFRA_REPO_MIRROR_URL must be set")?,
             infra_repo_github: env::var("INFRA_REPO_GITHUB")

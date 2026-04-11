@@ -1,12 +1,12 @@
 [package]
-name = "csf-migrate"
+name = "csfx-migrate"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
 
 [[bin]]
-name = "csf-migrate"
+name = "csfx-migrate"
 path = "src/main.rs"
 
 [dependencies]

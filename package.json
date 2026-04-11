@@ -1,11 +1,11 @@
 {
-  "name": "csf-core",
+  "name": "csfx-core",
   "version": "0.5.1",
   "private": true,
   "description": "A secure financial management application with end-to-end encryption",
   "repository": {
     "type": "git",
-    "url": "https://github.com/CS-Foundry/CSF-Core.git"
+    "url": "https://github.com/CS-Foundry/CSFX-Core.git"
   },
   "author": "CS-Foundry",
   "license": "MIT",

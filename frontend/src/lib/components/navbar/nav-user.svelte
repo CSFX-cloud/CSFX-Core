@@ -71,7 +71,7 @@
             </Avatar.Root>
             <div class="grid flex-1 text-left text-sm leading-tight">
               <span class="truncate font-medium">{authState.user?.username || 'User'}</span>
-              <span class="truncate text-xs">CSF-Core</span>
+              <span class="truncate text-xs">CSFX-Core</span>
             </div>
             <ChevronsUpDownIcon class="ml-auto size-4" />
           </Sidebar.MenuButton>
@@ -94,7 +94,7 @@
             </Avatar.Root>
             <div class="grid flex-1 text-left text-sm leading-tight">
               <span class="truncate font-medium">{authState.user?.username || 'User'}</span>
-              <span class="truncate text-xs">CSF-Core</span>
+              <span class="truncate text-xs">CSFX-Core</span>
             </div>
           </div>
         </DropdownMenu.Label>
