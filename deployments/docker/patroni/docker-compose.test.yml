@@ -1,0 +1,30 @@
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.12
+    network_mode: host
+    command:
+      - etcd
+      - --data-dir=/data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://127.0.0.1:2379
+    volumes:
+      - etcd-test:/data
+
+  patroni:
+    image: csfx-ce-patroni:local
+    network_mode: host
+    depends_on:
+      - etcd
+    environment:
+      PATRONI_NAME: test-local
+      PATRONI_RESTAPI_CONNECT_ADDRESS: 127.0.0.1:8008
+      PATRONI_ETCD3_HOSTS: 127.0.0.1:2379
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: 127.0.0.1:5432
+      PATRONI_SUPERUSER_PASSWORD: postgres
+      PATRONI_REPLICATION_PASSWORD: replicator
+    volumes:
+      - patroni-test:/data
+
+volumes:
+  etcd-test:
+  patroni-test:
