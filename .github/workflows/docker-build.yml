@@ -75,6 +75,7 @@ jobs:
           - volume-manager
           - failover-controller
           - sdn-controller
+          - patroni
         arch:
           - amd64
           - arm64
@@ -85,6 +86,9 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
             platform: linux/arm64
+          - service: patroni
+            dockerfile: deployments/docker/patroni/Dockerfile
+            context: deployments/docker/patroni
     steps:
       - uses: actions/checkout@v4
 
@@ -93,6 +97,20 @@ jobs:
         run: |
           ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "name=ghcr.io/${ORG}/csfx-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+
+      - name: Resolve Dockerfile and context
+        id: dockerctx
+        run: |
+          if [ -n "${{ matrix.dockerfile }}" ]; then
+            echo "file=${{ matrix.dockerfile }}" >> $GITHUB_OUTPUT
+            echo "context=${{ matrix.context }}" >> $GITHUB_OUTPUT
+            echo "build_args=" >> $GITHUB_OUTPUT
+          else
+            echo "file=control-plane/Dockerfile.prod.shared" >> $GITHUB_OUTPUT
+            echo "context=." >> $GITHUB_OUTPUT
+            printf 'build_args=SERVICE_BIN=%s\nBUILD_JOBS=2\nCSFX_BUILD_VERSION=%s\n' \
+              "${{ matrix.service }}" "${{ needs.prepare.outputs.version }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -108,12 +126,9 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: control-plane/Dockerfile.prod.shared
-          build-args: |
-            SERVICE_BIN=${{ matrix.service }}
-            BUILD_JOBS=2
-            CSFX_BUILD_VERSION=${{ needs.prepare.outputs.version }}
+          context: ${{ steps.dockerctx.outputs.context }}
+          file: ${{ steps.dockerctx.outputs.file }}
+          build-args: ${{ steps.dockerctx.outputs.build_args }}
           push: true
           outputs: type=registry,name=${{ steps.image.outputs.name }},push-by-digest=true
           platforms: ${{ matrix.platform }}
@@ -211,6 +226,7 @@ jobs:
           - volume-manager
           - failover-controller
           - sdn-controller
+          - patroni
     steps:
       - name: Set image name
         id: image
@@ -362,6 +378,7 @@ jobs:
                 volume-manager      = { digest = "$(get_manifest_digest volume-manager)"; };
                 failover-controller = { digest = "$(get_manifest_digest failover-controller)"; };
                 sdn-controller      = { digest = "$(get_manifest_digest sdn-controller)"; };
+                patroni             = { digest = "$(get_manifest_digest patroni)"; };
               };
               agent = {
                 amd64 = {
