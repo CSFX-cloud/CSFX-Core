@@ -33,7 +33,7 @@ bootstrap:
       options:
         - createrole
         - createdb
-  post_bootstrap: /etc/patroni/post-bootstrap.sh
+  post_init: /etc/patroni/post-bootstrap.sh
 
 postgresql:
   listen: 0.0.0.0:5432
