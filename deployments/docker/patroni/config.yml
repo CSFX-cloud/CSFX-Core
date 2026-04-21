@@ -27,6 +27,13 @@ bootstrap:
   pg_hba:
     - host replication replicator 0.0.0.0/0 md5
     - host all all 0.0.0.0/0 md5
+  users:
+    csfx:
+      password: ${PATRONI_APP_PASSWORD}
+      options:
+        - createrole
+        - createdb
+  post_bootstrap: /etc/patroni/post-bootstrap.sh
 
 postgresql:
   listen: 0.0.0.0:5432

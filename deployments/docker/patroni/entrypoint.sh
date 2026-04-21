@@ -10,6 +10,7 @@ sed \
   -e "s|\${PATRONI_POSTGRESQL_CONNECT_ADDRESS}|${PATRONI_POSTGRESQL_CONNECT_ADDRESS}|g" \
   -e "s|\${PATRONI_REPLICATION_PASSWORD}|${PATRONI_REPLICATION_PASSWORD}|g" \
   -e "s|\${PATRONI_SUPERUSER_PASSWORD}|${PATRONI_SUPERUSER_PASSWORD}|g" \
+  -e "s|\${PATRONI_APP_PASSWORD}|${PATRONI_APP_PASSWORD}|g" \
   /etc/patroni/config.yml.tpl > /etc/patroni/config.yml
 
 exec patroni /etc/patroni/config.yml
