@@ -13,4 +13,8 @@ sed \
   -e "s|\${PATRONI_APP_PASSWORD}|${PATRONI_APP_PASSWORD}|g" \
   /etc/patroni/config.yml.tpl > /etc/patroni/config.yml
 
+sed -e "s|\${PATRONI_APP_PASSWORD}|${PATRONI_APP_PASSWORD}|g" \
+  /etc/patroni/post-bootstrap.sh.tpl > /etc/patroni/post-bootstrap.sh
+chmod +x /etc/patroni/post-bootstrap.sh
+
 exec patroni /etc/patroni/config.yml

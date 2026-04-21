@@ -10,9 +10,9 @@ RUN mkdir -p /etc/patroni /data && \
 
 COPY config.yml /etc/patroni/config.yml.tpl
 COPY entrypoint.sh /entrypoint.sh
-COPY post-bootstrap.sh /etc/patroni/post-bootstrap.sh
-RUN chmod +x /entrypoint.sh /etc/patroni/post-bootstrap.sh && \
-    chown patroni:patroni /etc/patroni/config.yml.tpl /etc/patroni/post-bootstrap.sh
+COPY post-bootstrap.sh /etc/patroni/post-bootstrap.sh.tpl
+RUN chmod +x /entrypoint.sh /etc/patroni/post-bootstrap.sh.tpl && \
+    chown patroni:patroni /etc/patroni/config.yml.tpl /etc/patroni/post-bootstrap.sh.tpl
 
 ENV PATRONI_POSTGRESQL_DATA_DIR=/data/pgdata \
     PATRONI_POSTGRESQL_BIN_DIR=/usr/local/bin \

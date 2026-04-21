@@ -22,6 +22,7 @@ services:
       PATRONI_POSTGRESQL_CONNECT_ADDRESS: 127.0.0.1:5432
       PATRONI_SUPERUSER_PASSWORD: postgres
       PATRONI_REPLICATION_PASSWORD: replicator
+      PATRONI_APP_PASSWORD: testpassword
     volumes:
       - patroni-test:/data
 
