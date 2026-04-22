@@ -1,38 +1,46 @@
-{ config, pkgs, lib, csf, ... }:
+{ config, pkgs, lib, csfx, versions, ... }:
 
 let
-  composeDir = "/etc/csf-core";
-  binDir = "/var/lib/csf-updater/bin";
-  csfUpdaterBin = csf.updaterPackage;
-  csfAgentBin = csf.agentPackage;
+  updateUnitsModule = import ../../../CSFX-Infra/modules/update-units.nix;
+  composeDir = "/etc/csfx-core";
 in
 {
-  system.stateVersion = "25.11";
+  imports = [ updateUnitsModule ];
+
+  system.stateVersion = "25.05";
 
   boot = {
     loader.grub = {
       enable = true;
       device = "/dev/sda";
-      useOSProber = true;
     };
     initrd.availableKernelModules = [ "ata_piix" "uhci_hcd" "virtio_pci" "virtio_scsi" "sd_mod" "sr_mod" ];
-    initrd.kernelModules = [];
-    kernelModules = [];
-    extraModulePackages = [];
   };
 
   fileSystems."/" = {
-    device = "/dev/disk/by-uuid/e4b27226-e75f-4cef-9dec-fc0c6f2185ac";
+    device = "/dev/disk/by-label/nixos";
     fsType = "ext4";
+  };
+
+  fileSystems."/boot" = {
+    device = "/dev/disk/by-label/boot";
+    fsType = "vfat";
   };
 
   swapDevices = [];
 
+  boot.kernel.sysctl = {
+    "vm.swappiness" = 1;
+    "vm.dirty_ratio" = 10;
+    "vm.dirty_background_ratio" = 5;
+    "vm.vfs_cache_pressure" = 50;
+  };
+
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
 
   networking = {
-    hostName = "csf-node";
-    networkmanager.enable = true;
+    hostName = "csfx-node";
+    useDHCP = true;
     firewall = {
       enable = true;
       allowedTCPPorts = [ 22 8000 ];
@@ -49,132 +57,93 @@ in
     };
   };
 
-  users.users.rootcsf = {
+  users.users.admin = {
     isNormalUser = true;
-    description = "rootcsf";
-    extraGroups = [ "networkmanager" "wheel" "docker" ];
+    extraGroups = [ "wheel" "docker" ];
+    openssh.authorizedKeys.keys = [];
   };
 
   security.sudo.wheelNeedsPassword = false;
-
-  security.sudo.extraRules = [
-    {
-      users = [ "csf-updater" ];
-      commands = [
-        { command = "/run/current-system/sw/bin/systemctl restart csf-daemon"; options = [ "NOPASSWD" ]; }
-        { command = "/run/current-system/sw/bin/systemctl restart csf-updater"; options = [ "NOPASSWD" ]; }
-      ];
-    }
-  ];
 
   virtualisation.docker = {
     enable = true;
     enableOnBoot = true;
   };
 
-  services.csf-daemon = {
-    enable = true;
-    package = csf.agentPackage;
-    binaryPath = "${binDir}/csf-agent";
-    apiGateway = "http://localhost:8000";
-    heartbeatInterval = 60;
-    logLevel = "info";
+  users.users.csfx-agent = {
+    isSystemUser = true;
+    group = "csfx-agent";
+    home = "/var/lib/csfxx-daemon";
+    createHome = true;
   };
+  users.groups.csfx-agent = {};
+  users.groups.csfx-updater = {};
 
-  environment.systemPackages = with pkgs; [
-    docker-compose
-    curl
-    wget
-    vim
-    htop
-    git
-    tmux
-    lsof
+  systemd.tmpfiles.rules = [
+    "d /var/lib/csfxx-daemon 0750 csfx-agent csfx-agent -"
+    "d /var/lib/csfxx 0750 csfx-agent csfx-updater -"
+    "f /var/lib/csfxx/update_trigger 0660 csfx-agent csfx-updater -"
+    "d /var/lib/csfxx-updater 0750 root root -"
+    "d /var/lib/csfxx-updater/infra.git 0750 root root -"
   ];
 
-  users.users.csf-updater = {
-    isSystemUser = true;
-    group = "csf-updater";
-    extraGroups = [ "docker" ];
-    home = "/var/lib/csf-updater";
-    createHome = true;
-    shell = pkgs.shadow;
-  };
-  users.groups.csf-updater = {};
-
-  systemd.services.csf-updater = {
-    description = "CSF Control Plane Updater";
-    after = [ "docker.service" "network-online.target" "csf-control-plane.service" ];
-    requires = [ "docker.service" ];
-    wants = [ "network-online.target" ];
+  systemd.services.csfx-agent = {
+    description = "CSFX Agent Daemon";
     wantedBy = [ "multi-user.target" ];
-
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
     serviceConfig = {
-      Type = "simple";
-      User = "csf-updater";
-      Group = "csf-updater";
-      EnvironmentFile = "/etc/csf-core/updater.env";
-      ExecStart = "${binDir}/csf-updater";
-      Restart = "always";
-      RestartSec = "10";
+      ExecStart = "${csfx.agentPackage}/bin/csfx-agent";
+      User = "csfx-agent";
+      Group = "csfx-agent";
+      Restart = "on-failure";
+      RestartSec = "10s";
+      PrivateTmp = true;
       ProtectSystem = "strict";
-      ProtectHome = true;
-      ReadWritePaths = [ composeDir "/tmp" binDir ];
+      ReadWritePaths = [ "/var/lib/csfxx-daemon" "/var/lib/csfxx" ];
+      NoNewPrivileges = true;
     };
+    environment = {
+      CSFX_GATEWAY_URL = "http://localhost:8000";
+      CSFX_HEARTBEAT_INTERVAL = "60";
+      RUST_LOG = "info";
+    };
+  };
 
+  systemd.services.csfx-updater = {
+    description = "CSFX GitOps Updater";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    serviceConfig = {
+      ExecStart = "${csfx.updaterPackage}/bin/csfx-updater";
+      Restart = "on-failure";
+      RestartSec = "10s";
+      StateDirectory = "csfx-updater";
+    };
     environment = {
       ETCD_ENDPOINTS = "http://localhost:2379";
-      ETCD_USERNAME = "csf";
-      COMPOSE_FILE = "${composeDir}/docker-compose.yml";
-      GHCR_ORG = "csfx-cloud";
-      POLL_INTERVAL_SECS = "30";
+      INFRA_REPO_GITHUB = "csfx-cloud/CSFX-Infra";
+      INFRA_REPO_BRANCH = "main";
+      INFRA_REPO_MIRROR_URL = "https://github.com/csfx-cloud/CSFX-Infra.git";
+      INFRA_REPO_MIRROR_DIR = "/var/lib/csfxx-updater/infra.git";
+      POLL_INTERVAL_SECS = "120";
       RUST_LOG = "info";
-      BINARY_DIR = binDir;
-      GITHUB_RELEASE_BASE_URL = "https://github.com/csfx-cloud/CSF-Core/releases/download";
-      PATH = lib.mkForce "/run/wrappers/bin:/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin";
     };
   };
 
-  systemd.services.csf-control-plane = {
-    description = "CSF Control Plane (Docker Compose)";
-    after = [ "docker.service" "network-online.target" ];
-    requires = [ "docker.service" ];
-    wants = [ "network-online.target" ];
-    partOf = [ "docker.service" ];
-    wantedBy = [ "multi-user.target" ];
-
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      WorkingDirectory = composeDir;
-      ExecStartPre = "${pkgs.docker}/bin/docker compose pull --quiet";
-      ExecStart = "${pkgs.docker}/bin/docker compose up -d --remove-orphans";
-      ExecStop = "${pkgs.docker}/bin/docker compose down";
-      TimeoutStartSec = "600";
-      TimeoutStopSec = "120";
-    };
+  services.csfx-update-units = {
+    enable = true;
+    nixCacheUrl = "http://localhost:5000";
+    nixCachePublicKey = "";
   };
 
-  system.activationScripts.csf-binaries = {
-    text = ''
-      mkdir -p ${binDir}
-      chown csf-updater:csf-updater ${binDir}
-      chmod 750 ${binDir}
-      if [ ! -f ${binDir}/csf-updater ]; then
-        cp ${csfUpdaterBin}/bin/csf-updater ${binDir}/csf-updater
-        chown csf-updater:csf-updater ${binDir}/csf-updater
-        chmod 750 ${binDir}/csf-updater
-      fi
-      if [ ! -f ${binDir}/csf-agent ]; then
-        cp ${csfAgentBin}/bin/csf-agent ${binDir}/csf-agent
-        chown csf-updater:csf-updater ${binDir}/csf-agent
-        chmod 750 ${binDir}/csf-agent
-      fi
-    '';
-    deps = [];
+  nix.settings = {
+    experimental-features = [ "nix-command" "flakes" ];
+    trusted-users = [ "root" ];
   };
 
-  system.activationScripts.csf-core-setup = {
+  system.activationScripts.csfx-core-compose = {
     text = ''
       mkdir -p ${composeDir}
 
@@ -182,27 +151,25 @@ in
 services:
   etcd:
     image: gcr.io/etcd-development/etcd:v3.5.21
-    container_name: csf-etcd
+    container_name: csfx-etcd
     command:
       - etcd
-      - --advertise-client-urls=http://etcd:2379
+      - --advertise-client-urls=http://0.0.0.0:2379
       - --listen-client-urls=http://0.0.0.0:2379
       - --data-dir=/etcd-data
     volumes:
       - etcd_data:/etcd-data
     ports:
       - "2379:2379"
-    networks:
-      - csf-internal
     restart: unless-stopped
 
   patroni:
     image: ghcr.io/zalando/spilo-15:3.0-p1
-    container_name: csf-patroni
+    container_name: csfx-patroni
     hostname: patroni
     environment:
       PATRONI_NAME: patroni
-      PATRONI_SCOPE: postgres-csf
+      PATRONI_SCOPE: postgres-csfx
       PATRONI_ETCD3_HOSTS: "etcd:2379"
       PATRONI_ETCD3_PROTOCOL: http
       PATRONI_POSTGRESQL_DATA_DIR: /home/postgres/pgdata
@@ -219,12 +186,10 @@ services:
           initdb:
             - auth-host: md5
             - auth-local: trust
-          post_bootstrap: /etc/csf-bootstrap.sh
+          post_bootstrap: /etc/csfx-bootstrap.sh
     volumes:
       - patroni_data:/home/postgres/pgdata
-      - /etc/csf-core/patroni-bootstrap.sh:/etc/csf-bootstrap.sh:ro
-    networks:
-      - csf-internal
+      - /etc/csfx-core/patroni-bootstrap.sh:/etc/csfx-bootstrap.sh:ro
     depends_on:
       - etcd
     healthcheck:
@@ -236,88 +201,70 @@ services:
     restart: unless-stopped
 
   api-gateway:
-    image: ghcr.io/csfx-cloud/csf-ce-api-gateway:0.2.2-alpha.42
-    container_name: csf-api-gateway
-    env_file:
-      - /etc/csf-core/gateway.env
+    image: ghcr.io/csfx-cloud/csfx-ce-api-gateway@${versions.csf.images.api-gateway.digest}
+    container_name: csfx-api-gateway
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
-      RUST_LOG: info
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csfx_core
       JWT_SECRET: change_me_in_production
-      RSA_KEY_SIZE: "4096"
+      ETCD_ENDPOINTS: http://etcd:2379
       REGISTRY_SERVICE_URL: http://registry:8001
       SCHEDULER_SERVICE_URL: http://scheduler:8002
       VOLUME_MANAGER_URL: http://volume-manager:8003
       FAILOVER_CONTROLLER_URL: http://failover-controller:8004
       SDN_CONTROLLER_URL: http://sdn-controller:8005
+      RUST_LOG: info
     ports:
       - "8000:8000"
     depends_on:
       patroni:
         condition: service_healthy
-    networks:
-      - csf-internal
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/system/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
   registry:
-    image: ghcr.io/csfx-cloud/csf-ce-registry:0.2.2-alpha.42
-    container_name: csf-registry
+    image: ghcr.io/csfx-cloud/csfx-ce-registry@${versions.csf.images.registry.digest}
+    container_name: csfx-registry
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csfx_core
       ETCD_ENDPOINTS: http://etcd:2379
       REGISTRY_PORT: "8001"
       RUST_LOG: info
-      SCHEDULER_SERVICE_URL: http://scheduler:8002
     depends_on:
       patroni:
         condition: service_healthy
-    networks:
-      - csf-internal
     restart: unless-stopped
 
   scheduler:
-    image: ghcr.io/csfx-cloud/csf-ce-scheduler:0.2.2-alpha.42
-    container_name: csf-scheduler
+    image: ghcr.io/csfx-cloud/csfx-ce-scheduler@${versions.csf.images.scheduler.digest}
+    container_name: csfx-scheduler
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csfx_core
       ETCD_ENDPOINTS: http://etcd:2379
       SCHEDULER_PORT: "8002"
       RUST_LOG: info
     depends_on:
       patroni:
         condition: service_healthy
-    networks:
-      - csf-internal
     restart: unless-stopped
 
   volume-manager:
-    image: ghcr.io/csfx-cloud/csf-ce-volume-manager:0.2.2-alpha.42
-    container_name: csf-volume-manager
+    image: ghcr.io/csfx-cloud/csfx-ce-volume-manager@${versions.csf.images.volume-manager.digest}
+    container_name: csfx-volume-manager
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csfx_core
       ETCD_ENDPOINTS: http://etcd:2379
       VOLUME_MANAGER_PORT: "8003"
       RUST_LOG: info
-    volumes:
-      - /mnt/csf-volumes:/mnt/csf-volumes
     depends_on:
       patroni:
         condition: service_healthy
-    networks:
-      - csf-internal
     restart: unless-stopped
 
   failover-controller:
-    image: ghcr.io/csfx-cloud/csf-ce-failover-controller:0.2.2-alpha.42
-    container_name: csf-failover-controller
+    image: ghcr.io/csfx-cloud/csfx-ce-failover-controller@${versions.csf.images.failover-controller.digest}
+    container_name: csfx-failover-controller
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csfx_core
+      ETCD_ENDPOINTS: http://etcd:2379
       FAILOVER_CONTROLLER_PORT: "8004"
       SCHEDULER_SERVICE_URL: http://scheduler:8002
       VOLUME_MANAGER_URL: http://volume-manager:8003
@@ -325,54 +272,58 @@ services:
     depends_on:
       patroni:
         condition: service_healthy
-    networks:
-      - csf-internal
     restart: unless-stopped
 
   sdn-controller:
-    image: ghcr.io/csfx-cloud/csf-ce-sdn-controller:0.2.2-alpha.42
-    container_name: csf-sdn-controller
+    image: ghcr.io/csfx-cloud/csfx-ce-sdn-controller@${versions.csf.images.sdn-controller.digest}
+    container_name: csfx-sdn-controller
     environment:
-      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csf_core
-      ETCD_URL: http://etcd:2379
+      DATABASE_URL: postgres://csf:csfpassword@patroni:5432/csfx_core
+      ETCD_ENDPOINTS: http://etcd:2379
       SDN_CONTROLLER_PORT: "8005"
       RUST_LOG: info
     depends_on:
       patroni:
         condition: service_healthy
-    networks:
-      - csf-internal
     restart: unless-stopped
 
 volumes:
   etcd_data:
   patroni_data:
-
-networks:
-  csf-internal:
-    driver: bridge
 COMPOSE
 
       cat > ${composeDir}/patroni-bootstrap.sh <<'BOOTSTRAP'
 #!/bin/bash
-psql -U postgres -c "CREATE USER csf WITH PASSWORD 'csfpassword';"
-psql -U postgres -c "CREATE DATABASE csf_core OWNER csf;"
-psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE csf_core TO csf;"
+psql -U postgres -c "CREATE USER csfx WITH PASSWORD 'csfpassword';"
+psql -U postgres -c "CREATE DATABASE csfx_core OWNER csf;"
+psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE csfx_core TO csf;"
 BOOTSTRAP
       chmod +x ${composeDir}/patroni-bootstrap.sh
     '';
     deps = [];
   };
 
-  nix = {
-    settings = {
-      experimental-features = [ "nix-command" "flakes" ];
-      auto-optimise-store = true;
-    };
-    gc = {
-      automatic = true;
-      dates = "weekly";
-      options = "--delete-older-than 30d";
+  systemd.services.csfx-control-plane = {
+    description = "CSFX Control Plane (Docker Compose)";
+    after = [ "docker.service" "network-online.target" ];
+    requires = [ "docker.service" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      WorkingDirectory = composeDir;
+      ExecStart = "${pkgs.docker}/bin/docker compose up -d --remove-orphans";
+      ExecStop = "${pkgs.docker}/bin/docker compose down";
+      TimeoutStartSec = "600";
     };
   };
+
+  environment.systemPackages = with pkgs; [
+    docker-compose
+    curl
+    git
+    jq
+    etcd
+  ];
 }

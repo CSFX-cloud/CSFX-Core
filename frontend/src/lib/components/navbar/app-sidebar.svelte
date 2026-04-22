@@ -24,7 +24,7 @@
     },
     teams: [
       {
-        name: 'CSF Core',
+        name: 'CSFX Core',
         plan: 'Premium',
       },
     ],

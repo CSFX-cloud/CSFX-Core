@@ -135,6 +135,8 @@ pub struct HeartbeatRequest {
 pub struct HeartbeatResponse {
     pub success: bool,
     pub message: String,
+    pub desired_flake_rev: Option<String>,
+    pub post_update_heartbeats: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

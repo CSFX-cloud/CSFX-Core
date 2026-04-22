@@ -1,25 +1,25 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: csf-postgres
+    container_name: csfx-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-csf_core}
+      POSTGRES_DB: ${POSTGRES_DB:-csfx_core}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-csf_core}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-csfx_core}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - csf-internal
+      - csfx-internal
     restart: unless-stopped
 
   etcd:
     image: gcr.io/etcd-development/etcd:v3.5.21
-    container_name: csf-etcd
+    container_name: csfx-etcd
     command:
       - etcd
       - --advertise-client-urls=http://etcd:2379
@@ -28,7 +28,7 @@ services:
     volumes:
       - etcd_data:/etcd-data
     networks:
-      - csf-internal
+      - csfx-internal
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
@@ -37,23 +37,23 @@ services:
       retries: 5
 
   migrate:
-    image: ghcr.io/${GHCR_ORG}/csf-ce-api-gateway:${CSF_VERSION:-latest}
-    container_name: csf-migrate
-    command: ["/csf-migrate"]
+    image: ghcr.io/${GHCR_ORG}/csfx-ce-api-gateway:${CSFX_VERSION:-latest}
+    container_name: csfx-migrate
+    command: ["/csfx-migrate"]
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csfx_core}
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - csf-internal
+      - csfx-internal
     restart: "no"
 
   api-gateway:
-    image: ghcr.io/${GHCR_ORG}/csf-ce-api-gateway:${CSF_VERSION:-latest}
-    container_name: csf-api-gateway
+    image: ghcr.io/${GHCR_ORG}/csfx-ce-api-gateway:${CSFX_VERSION:-latest}
+    container_name: csfx-api-gateway
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csfx_core}
       RUST_LOG: ${RUST_LOG:-info}
       JWT_SECRET: ${JWT_SECRET}
       RSA_KEY_SIZE: "4096"
@@ -71,7 +71,7 @@ services:
       migrate:
         condition: service_completed_successfully
     networks:
-      - csf-internal
+      - csfx-internal
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/system/health"]
@@ -81,10 +81,10 @@ services:
       start_period: 15s
 
   registry:
-    image: ghcr.io/${GHCR_ORG}/csf-ce-registry:${CSF_VERSION:-latest}
-    container_name: csf-registry
+    image: ghcr.io/${GHCR_ORG}/csfx-ce-registry:${CSFX_VERSION:-latest}
+    container_name: csfx-registry
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csfx_core}
       ETCD_ENDPOINTS: http://etcd:2379
       REGISTRY_PORT: "8001"
       RUST_LOG: ${RUST_LOG:-info}
@@ -95,7 +95,7 @@ services:
       migrate:
         condition: service_completed_successfully
     networks:
-      - csf-internal
+      - csfx-internal
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
@@ -105,10 +105,10 @@ services:
       start_period: 15s
 
   scheduler:
-    image: ghcr.io/${GHCR_ORG}/csf-ce-scheduler:${CSF_VERSION:-latest}
-    container_name: csf-scheduler
+    image: ghcr.io/${GHCR_ORG}/csfx-ce-scheduler:${CSFX_VERSION:-latest}
+    container_name: csfx-scheduler
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csfx_core}
       ETCD_ENDPOINTS: http://etcd:2379
       SCHEDULER_PORT: "8002"
       RUST_LOG: ${RUST_LOG:-info}
@@ -118,14 +118,14 @@ services:
       migrate:
         condition: service_completed_successfully
     networks:
-      - csf-internal
+      - csfx-internal
     restart: unless-stopped
 
   volume-manager:
-    image: ghcr.io/${GHCR_ORG}/csf-ce-volume-manager:${CSF_VERSION:-latest}
-    container_name: csf-volume-manager
+    image: ghcr.io/${GHCR_ORG}/csfx-ce-volume-manager:${CSFX_VERSION:-latest}
+    container_name: csfx-volume-manager
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csfx_core}
       ETCD_ENDPOINTS: http://etcd:2379
       VOLUME_MANAGER_PORT: "8003"
       RUST_LOG: ${RUST_LOG:-info}
@@ -135,14 +135,14 @@ services:
       migrate:
         condition: service_completed_successfully
     networks:
-      - csf-internal
+      - csfx-internal
     restart: unless-stopped
 
   failover-controller:
-    image: ghcr.io/${GHCR_ORG}/csf-ce-failover-controller:${CSF_VERSION:-latest}
-    container_name: csf-failover-controller
+    image: ghcr.io/${GHCR_ORG}/csfx-ce-failover-controller:${CSFX_VERSION:-latest}
+    container_name: csfx-failover-controller
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csfx_core}
       FAILOVER_CONTROLLER_PORT: "8004"
       SCHEDULER_SERVICE_URL: http://scheduler:8002
       VOLUME_MANAGER_URL: http://volume-manager:8003
@@ -157,14 +157,14 @@ services:
       migrate:
         condition: service_completed_successfully
     networks:
-      - csf-internal
+      - csfx-internal
     restart: unless-stopped
 
   sdn-controller:
-    image: ghcr.io/${GHCR_ORG}/csf-ce-sdn-controller:${CSF_VERSION:-latest}
-    container_name: csf-sdn-controller
+    image: ghcr.io/${GHCR_ORG}/csfx-ce-sdn-controller:${CSFX_VERSION:-latest}
+    container_name: csfx-sdn-controller
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csf_core}
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-csfx_core}
       ETCD_URL: http://etcd:2379
       SDN_CONTROLLER_PORT: "8005"
       RUST_LOG: ${RUST_LOG:-info}
@@ -174,7 +174,7 @@ services:
       migrate:
         condition: service_completed_successfully
     networks:
-      - csf-internal
+      - csfx-internal
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
@@ -188,5 +188,5 @@ volumes:
   etcd_data:
 
 networks:
-  csf-internal:
+  csfx-internal:
     driver: bridge

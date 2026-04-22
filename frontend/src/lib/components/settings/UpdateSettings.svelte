@@ -103,7 +103,7 @@
   <Card.Root>
     <Card.Header>
       <Card.Title>Software-Updates</Card.Title>
-      <Card.Description>Überprüfen und installieren Sie CSF-Core Updates</Card.Description>
+      <Card.Description>Überprüfen und installieren Sie CSFX-Core Updates</Card.Description>
     </Card.Header>
     <Card.Content class="space-y-6">
       <!-- Current Version -->
@@ -295,7 +295,7 @@
       <div class="pt-4 border-t">
         <h4 class="text-sm font-semibold mb-2">Automatische Update-Prüfung</h4>
         <p class="text-sm text-muted-foreground mb-3">
-          CSF-Core prüft automatisch stündlich auf neue Updates. Updates werden nur angezeigt, wenn
+          CSFX-Core prüft automatisch stündlich auf neue Updates. Updates werden nur angezeigt, wenn
           sie verfügbar sind.
         </p>
         <Alert>

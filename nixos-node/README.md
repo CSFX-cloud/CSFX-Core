@@ -1,4 +1,4 @@
-# CSF-Core Docker Test ISO
+# CSFX-Core Docker Test ISO
 
 Diese Konfiguration erstellt ein bootfähiges NixOS ISO-Image mit Docker und Docker Compose für einfache Container-Tests.
 

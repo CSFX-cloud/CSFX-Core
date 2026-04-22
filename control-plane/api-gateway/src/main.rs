@@ -81,9 +81,9 @@ use routes::users::{
     ),
     modifiers(&SecurityAddon),
     info(
-        title = "CSF Control Plane API",
+        title = "CSFX Control Plane API",
         version = "0.2.0",
-        description = "CS-Foundry Control Plane — agent registry, workload scheduling, volume management, SDN, failover, RBAC",
+        description = "CSFX Control Plane — agent registry, workload scheduling, volume management, SDN, failover, RBAC",
         contact(
             name = "CS-Foundry Team",
             email = "support@cs-foundry.com"

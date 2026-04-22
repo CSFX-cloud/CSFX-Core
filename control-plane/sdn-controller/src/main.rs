@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     logger::init_logger();
 
     metrics::init();
-    log_info!("main", "CSF SDN Controller starting...");
+    log_info!("main", "CSFX SDN Controller starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
     log_info!("main", "Connecting to database...");
@@ -24,7 +24,8 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to database");
     log_info!("main", "Database connection established");
 
-    let etcd_url = std::env::var("ETCD_URL").unwrap_or_else(|_| "http://localhost:2379".to_string());
+    let etcd_url =
+        std::env::var("ETCD_URL").unwrap_or_else(|_| "http://localhost:2379".to_string());
     log_info!("main", &format!("Connecting to etcd url={}", etcd_url));
     let etcd = etcd_client::Client::connect([etcd_url.as_str()], None)
         .await

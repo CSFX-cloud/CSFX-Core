@@ -75,6 +75,7 @@ jobs:
           - volume-manager
           - failover-controller
           - sdn-controller
+          - patroni
         arch:
           - amd64
           - arm64
@@ -85,6 +86,9 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
             platform: linux/arm64
+          - service: patroni
+            dockerfile: deployments/docker/patroni/Dockerfile
+            context: deployments/docker/patroni
     steps:
       - uses: actions/checkout@v4
 
@@ -92,7 +96,21 @@ jobs:
         id: image
         run: |
           ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+          echo "name=ghcr.io/${ORG}/csfx-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+
+      - name: Resolve Dockerfile and context
+        id: dockerctx
+        run: |
+          if [ -n "${{ matrix.dockerfile }}" ]; then
+            echo "file=${{ matrix.dockerfile }}" >> $GITHUB_OUTPUT
+            echo "context=${{ matrix.context }}" >> $GITHUB_OUTPUT
+            echo "build_args=" >> $GITHUB_OUTPUT
+          else
+            echo "file=control-plane/Dockerfile.prod.shared" >> $GITHUB_OUTPUT
+            echo "context=." >> $GITHUB_OUTPUT
+            printf 'build_args=SERVICE_BIN=%s\nBUILD_JOBS=2\nCSFX_BUILD_VERSION=%s\n' \
+              "${{ matrix.service }}" "${{ needs.prepare.outputs.version }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -108,12 +126,9 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: .
-          file: control-plane/Dockerfile.prod.shared
-          build-args: |
-            SERVICE_BIN=${{ matrix.service }}
-            BUILD_JOBS=2
-            CSF_BUILD_VERSION=${{ needs.prepare.outputs.version }}
+          context: ${{ steps.dockerctx.outputs.context }}
+          file: ${{ steps.dockerctx.outputs.file }}
+          build-args: ${{ steps.dockerctx.outputs.build_args }}
           push: true
           outputs: type=registry,name=${{ steps.image.outputs.name }},push-by-digest=true
           platforms: ${{ matrix.platform }}
@@ -141,8 +156,8 @@ jobs:
       fail-fast: false
       matrix:
         binary:
-          - csf-updater
-          - csf-agent
+          - csfx-updater
+          - csfx-agent
         arch:
           - amd64
           - arm64
@@ -183,7 +198,7 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
-          CSF_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+          CSFX_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           cargo build --release --bin ${{ matrix.binary }} --target ${{ matrix.target }}
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.binary }}-${{ matrix.arch }}
@@ -211,12 +226,13 @@ jobs:
           - volume-manager
           - failover-controller
           - sdn-controller
+          - patroni
     steps:
       - name: Set image name
         id: image
         run: |
           ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "name=ghcr.io/${ORG}/csf-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
+          echo "name=ghcr.io/${ORG}/csfx-ce-${{ matrix.service }}" >> $GITHUB_OUTPUT
 
       - uses: actions/download-artifact@v4
         with:
@@ -262,7 +278,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          pattern: csf-*
+          pattern: csfx-*
           merge-multiple: true
 
       - name: Create or update release
@@ -271,31 +287,125 @@ jobs:
           TAG="v${VERSION}"
           if gh release view "${TAG}" &>/dev/null; then
             gh release upload "${TAG}" \
-              csf-updater-amd64 \
-              csf-updater-amd64.sha256 \
-              csf-updater-arm64 \
-              csf-updater-arm64.sha256 \
-              csf-agent-amd64 \
-              csf-agent-amd64.sha256 \
-              csf-agent-arm64 \
-              csf-agent-arm64.sha256 \
+              csfx-updater-amd64 \
+              csfx-updater-amd64.sha256 \
+              csfx-updater-arm64 \
+              csfx-updater-arm64.sha256 \
+              csfx-agent-amd64 \
+              csfx-agent-amd64.sha256 \
+              csfx-agent-arm64 \
+              csfx-agent-arm64.sha256 \
               --clobber
           else
             gh release create "${TAG}" \
               --title "v${VERSION}" \
               --prerelease \
               --notes "Alpha build ${VERSION}" \
-              csf-updater-amd64 \
-              csf-updater-amd64.sha256 \
-              csf-updater-arm64 \
-              csf-updater-arm64.sha256 \
-              csf-agent-amd64 \
-              csf-agent-amd64.sha256 \
-              csf-agent-arm64 \
-              csf-agent-arm64.sha256
+              csfx-updater-amd64 \
+              csfx-updater-amd64.sha256 \
+              csfx-updater-arm64 \
+              csfx-updater-arm64.sha256 \
+              csfx-agent-amd64 \
+              csfx-agent-amd64.sha256 \
+              csfx-agent-arm64 \
+              csfx-agent-arm64.sha256
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-infra:
+    name: Update CSFX-Infra versions.nix
+    runs-on: ubuntu-latest
+    needs: [prepare, manifest, build-binaries, attach-binaries-release]
+    if: needs.prepare.outputs.is_release == 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/CSFX-Infra
+          token: ${{ secrets.INFRA_REPO_TOKEN }}
+          path: infra
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: csfx-agent-*
+          path: /tmp/binaries
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write versions.nix
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          ORG=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          REPO="${{ github.repository }}"
+          RELEASE_BASE="https://github.com/${REPO}/releases/download/v${VERSION}"
+
+          get_manifest_digest() {
+            local svc=$1
+            local image="ghcr.io/${ORG}/csfx-ce-${svc}:${VERSION}"
+            docker buildx imagetools inspect "${image}" \
+              --format '{{json .Manifest}}' | jq -r '.digest'
+          }
+
+          get_sha256() {
+            local binary=$1
+            local arch=$2
+            awk '{print $1}' /tmp/binaries/${binary}-${arch}.sha256 2>/dev/null
+          }
+
+          cat > infra/versions.nix <<EOF
+          {
+            csfx = {
+              version = "${VERSION}";
+              images = {
+                api-gateway         = { digest = "$(get_manifest_digest api-gateway)"; };
+                registry            = { digest = "$(get_manifest_digest registry)"; };
+                scheduler           = { digest = "$(get_manifest_digest scheduler)"; };
+                volume-manager      = { digest = "$(get_manifest_digest volume-manager)"; };
+                failover-controller = { digest = "$(get_manifest_digest failover-controller)"; };
+                sdn-controller      = { digest = "$(get_manifest_digest sdn-controller)"; };
+                patroni             = { digest = "$(get_manifest_digest patroni)"; };
+              };
+              agent = {
+                amd64 = {
+                  url    = "${RELEASE_BASE}/csfx-agent-amd64";
+                  sha256 = "$(get_sha256 csfx-agent amd64)";
+                };
+                arm64 = {
+                  url    = "${RELEASE_BASE}/csfx-agent-arm64";
+                  sha256 = "$(get_sha256 csfx-agent arm64)";
+                };
+              };
+            };
+          }
+          EOF
+
+      - name: Commit and push versions.nix
+        run: |
+          VERSION="${{ needs.prepare.outputs.version }}"
+          cd infra
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add versions.nix
+          git diff --cached --quiet && echo "no changes" && exit 0
+          git commit -m "chore: update versions.nix for v${VERSION}"
+          git push origin main
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
 
   summary:
     name: Summary
@@ -313,13 +423,13 @@ jobs:
           echo "| Service | Image |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
           for svc in api-gateway registry scheduler volume-manager failover-controller sdn-controller; do
-            echo "| ${svc} | \`ghcr.io/${ORG}/csf-ce-${svc}:${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| ${svc} | \`ghcr.io/${ORG}/csfx-ce-${svc}:${VERSION}\` |" >> $GITHUB_STEP_SUMMARY
           done
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Binaries" >> $GITHUB_STEP_SUMMARY
           echo "| Binary | Arch | Artifact |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|------|----------|" >> $GITHUB_STEP_SUMMARY
-          for bin in csf-updater csf-agent; do
+          for bin in csfx-updater csfx-agent; do
             echo "| ${bin} | amd64 | \`${bin}-amd64\` |" >> $GITHUB_STEP_SUMMARY
             echo "| ${bin} | arm64 | \`${bin}-arm64\` |" >> $GITHUB_STEP_SUMMARY
           done

@@ -16,7 +16,7 @@ async fn main() -> anyhow::Result<()> {
     logger::init_logger();
 
     metrics::init();
-    log_info!("main", "CSF Registry Service starting...");
+    log_info!("main", "CSFX Registry Service starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
     log_info!("main", "Connecting to database...");
@@ -25,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to database");
     log_info!("main", "Database connection established");
 
-    let cert_ttl_hours: i64 = std::env::var("CSF_CERT_TTL_HOURS")
+    let cert_ttl_hours: i64 = std::env::var("CSFX_CERT_TTL_HOURS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(24);
@@ -34,7 +34,9 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to initialize PKI service");
 
     let token_manager = Arc::new(services::tokens::TokenManager::new(db_conn.clone()));
-    let bootstrap_token_manager = Arc::new(services::bootstrap_tokens::BootstrapTokenManager::new(db_conn.clone()));
+    let bootstrap_token_manager = Arc::new(services::bootstrap_tokens::BootstrapTokenManager::new(
+        db_conn.clone(),
+    ));
     let api_key_manager = Arc::new(services::api_keys::ApiKeyManager::new(db_conn.clone()));
     let agent_registry = Arc::new(services::registry::AgentRegistry::new(db_conn.clone()));
 
@@ -43,13 +45,16 @@ async fn main() -> anyhow::Result<()> {
     let scheduler_url = std::env::var("SCHEDULER_SERVICE_URL")
         .unwrap_or_else(|_| "http://localhost:8002".to_string());
 
-    let gateway_url = std::env::var("API_GATEWAY_URL")
-        .unwrap_or_else(|_| "http://localhost:8000".to_string());
+    let gateway_url =
+        std::env::var("API_GATEWAY_URL").unwrap_or_else(|_| "http://localhost:8000".to_string());
 
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .expect("Failed to build HTTP client");
+
+    let etcd_endpoints =
+        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://localhost:2379".to_string());
 
     let state = server::AppState {
         token_manager: token_manager.clone(),
@@ -61,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
         scheduler_url,
         gateway_url,
         http_client,
+        etcd_endpoints,
     };
 
     let token_cleanup_handle = {

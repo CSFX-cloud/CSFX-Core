@@ -68,7 +68,7 @@ pub fn routes() -> Router<AppState> {
 async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "healthy",
-        "service": "csf-core-backend"
+        "service": "csfx-core-backend"
     }))
 }
 

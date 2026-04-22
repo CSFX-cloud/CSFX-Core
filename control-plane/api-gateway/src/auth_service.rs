@@ -219,7 +219,7 @@ impl AuthService {
             1,
             30,
             secret.to_bytes().unwrap(),
-            Some("CSF-Core".to_string()),
+            Some("CSFX-Core".to_string()),
             user.name.clone(),
         )
         .unwrap();
@@ -284,7 +284,7 @@ impl AuthService {
                 1,
                 30,
                 Secret::Encoded(secret.clone()).to_bytes().unwrap(),
-                Some("CSF-Core".to_string()),
+                Some("CSFX-Core".to_string()),
                 user.name.clone(),
             )
             .unwrap();

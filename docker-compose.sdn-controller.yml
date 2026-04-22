@@ -9,32 +9,32 @@ x-rust-common: &rust-common
     - cargo_cache:/usr/local/cargo/registry
     - cargo_git:/usr/local/cargo/git
   networks:
-    - csf-network
+    - csfx-network
   restart: unless-stopped
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: csf-postgres-sdn
+    container_name: csfx-postgres-sdn
     environment:
-      POSTGRES_USER: csf_user
-      POSTGRES_PASSWORD: csf_password
-      POSTGRES_DB: csf_core
+      POSTGRES_USER: csfx_user
+      POSTGRES_PASSWORD: csfx_password
+      POSTGRES_DB: csfx_core
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U csf_user -d csf_core"]
+      test: ["CMD-SHELL", "pg_isready -U csfx_user -d csfx_core"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - csf-network
+      - csfx-network
 
   etcd:
     image: gcr.io/etcd-development/etcd:v3.5.21
-    container_name: csf-etcd-sdn
+    container_name: csfx-etcd-sdn
     command:
       - etcd
       - --advertise-client-urls=http://etcd:2379
@@ -42,13 +42,13 @@ services:
     ports:
       - "2379:2379"
     networks:
-      - csf-network
+      - csfx-network
 
   api-gateway:
     <<: *rust-common
-    container_name: csf-api-gateway-sdn
+    container_name: csfx-api-gateway-sdn
     environment:
-      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      DATABASE_URL: postgres://csfx_user:csfx_password@postgres:5432/csfx_core
       RUST_LOG: debug
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       RSA_KEY_SIZE: "2048"
@@ -74,9 +74,9 @@ services:
 
   registry:
     <<: *rust-common
-    container_name: csf-registry-sdn
+    container_name: csfx-registry-sdn
     environment:
-      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      DATABASE_URL: postgres://csfx_user:csfx_password@postgres:5432/csfx_core
       ETCD_ENDPOINTS: http://etcd:2379
       REGISTRY_PORT: "8001"
       RUST_LOG: debug
@@ -100,9 +100,9 @@ services:
 
   scheduler:
     <<: *rust-common
-    container_name: csf-scheduler-sdn
+    container_name: csfx-scheduler-sdn
     environment:
-      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      DATABASE_URL: postgres://csfx_user:csfx_password@postgres:5432/csfx_core
       ETCD_ENDPOINTS: http://etcd:2379
       SCHEDULER_PORT: "8002"
       RUST_LOG: debug
@@ -125,9 +125,9 @@ services:
 
   volume-manager:
     <<: *rust-common
-    container_name: csf-volume-manager-sdn
+    container_name: csfx-volume-manager-sdn
     environment:
-      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      DATABASE_URL: postgres://csfx_user:csfx_password@postgres:5432/csfx_core
       ETCD_ENDPOINTS: http://etcd:2379
       VOLUME_MANAGER_PORT: "8003"
       RUST_LOG: debug
@@ -150,9 +150,9 @@ services:
 
   failover-controller:
     <<: *rust-common
-    container_name: csf-failover-controller-sdn
+    container_name: csfx-failover-controller-sdn
     environment:
-      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      DATABASE_URL: postgres://csfx_user:csfx_password@postgres:5432/csfx_core
       FAILOVER_CONTROLLER_PORT: "8004"
       SCHEDULER_SERVICE_URL: http://scheduler:8002
       VOLUME_MANAGER_URL: http://volume-manager:8003
@@ -178,9 +178,9 @@ services:
 
   sdn-controller:
     <<: *rust-common
-    container_name: csf-sdn-controller
+    container_name: csfx-sdn-controller
     environment:
-      DATABASE_URL: postgres://csf_user:csf_password@postgres:5432/csf_core
+      DATABASE_URL: postgres://csfx_user:csfx_password@postgres:5432/csfx_core
       ETCD_URL: http://etcd:2379
       SDN_CONTROLLER_PORT: "8005"
       RUST_LOG: debug
@@ -227,5 +227,5 @@ volumes:
     driver: local
 
 networks:
-  csf-network:
+  csfx-network:
     driver: bridge

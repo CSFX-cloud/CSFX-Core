@@ -20,7 +20,7 @@ services:
       - ceph-mon1-data:/var/lib/ceph
       - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.21
     cap_add:
       - ALL
@@ -50,7 +50,7 @@ services:
       - ceph-mon2-data:/var/lib/ceph
       - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.22
     cap_add:
       - ALL
@@ -82,7 +82,7 @@ services:
       - ceph-mon3-data:/var/lib/ceph
       - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.23
     cap_add:
       - ALL
@@ -112,7 +112,7 @@ services:
       - ceph-osd1-data:/var/lib/ceph/osd
       - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.31
     cap_add:
       - ALL
@@ -138,7 +138,7 @@ services:
       - ceph-osd2-data:/var/lib/ceph/osd
       - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.32
     cap_add:
       - ALL
@@ -164,7 +164,7 @@ services:
       - ceph-osd3-data:/var/lib/ceph/osd
       - ./ceph-config/ceph.conf:/etc/ceph/ceph.conf:ro
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.33
     cap_add:
       - ALL
@@ -190,14 +190,14 @@ services:
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
       - ETCD_ADVERTISE_CLIENT_URLS=http://etcd1:2379
-      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csf
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csfx
       - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
     ports:
       - "2379:2379"
       - "2380:2380"
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.11
     volumes:
       - etcd1-data:/etcd-data
@@ -214,14 +214,14 @@ services:
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
       - ETCD_ADVERTISE_CLIENT_URLS=http://etcd2:2379
-      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csf
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csfx
       - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
     ports:
       - "2479:2379"
       - "2480:2380"
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.12
     volumes:
       - etcd2-data:/etcd-data
@@ -238,14 +238,14 @@ services:
       - ETCD_LISTEN_PEER_URLS=http://0.0.0.0:2380
       - ETCD_LISTEN_CLIENT_URLS=http://0.0.0.0:2379
       - ETCD_ADVERTISE_CLIENT_URLS=http://etcd3:2379
-      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csf
+      - ETCD_INITIAL_CLUSTER_TOKEN=etcd-cluster-csfx
       - ETCD_INITIAL_CLUSTER=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
       - ETCD_INITIAL_CLUSTER_STATE=new
     ports:
       - "2579:2379"
       - "2580:2380"
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.13
     volumes:
       - etcd3-data:/etcd-data
@@ -262,7 +262,7 @@ services:
     environment:
       - PATRONI_NAME=patroni1
       - ETCD_HOST=etcd1:2379
-      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_SCOPE=postgres-csfxx
       - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
       - PATRONI_ETCD3_PROTOCOL=http
       
@@ -281,9 +281,9 @@ services:
       
       # Application User
       - PATRONI_POSTGRESQL_PGPASS=/tmp/pgpass
-      - POSTGRES_USER=csf
-      - POSTGRES_PASSWORD=csfpassword
-      - POSTGRES_DB=csf_core
+      - POSTGRES_USER=csfx
+      - POSTGRES_PASSWORD=csfxpassword
+      - POSTGRES_DB=csfx_core
       
       # REST API
       - PATRONI_RESTAPI_LISTEN=0.0.0.0:8008
@@ -307,7 +307,7 @@ services:
     volumes:
       - patroni1-data:/home/postgres/pgdata
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.41
     ports:
       - "5441:5432"
@@ -334,7 +334,7 @@ services:
     environment:
       - ETCD_HOST=etcd1:2379
       - PATRONI_NAME=patroni2
-      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_SCOPE=postgres-csfxx
       - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
       - PATRONI_ETCD3_PROTOCOL=http
       
@@ -349,9 +349,9 @@ services:
       - PATRONI_SUPERUSER_PASSWORD=postgrespass
       
       - PATRONI_POSTGRESQL_PGPASS=/tmp/pgpass
-      - POSTGRES_USER=csf
-      - POSTGRES_PASSWORD=csfpassword
-      - POSTGRES_DB=csf_core
+      - POSTGRES_USER=csfx
+      - POSTGRES_PASSWORD=csfxpassword
+      - POSTGRES_DB=csfx_core
       
       - PATRONI_RESTAPI_LISTEN=0.0.0.0:8008
       - PATRONI_RESTAPI_CONNECT_ADDRESS=patroni2:8008
@@ -372,7 +372,7 @@ services:
     volumes:
       - patroni2-data:/home/postgres/pgdata
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.42
     ports:
       - "5442:5432"
@@ -399,7 +399,7 @@ services:
     environment:
       - ETCD_HOST=etcd1:2379
       - PATRONI_NAME=patroni3
-      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_SCOPE=postgres-csfxx
       - PATRONI_ETCD3_HOSTS=etcd1:2379,etcd2:2379,etcd3:2379
       - PATRONI_ETCD3_PROTOCOL=http
       
@@ -414,9 +414,9 @@ services:
       - PATRONI_SUPERUSER_PASSWORD=postgrespass
       
       - PATRONI_POSTGRESQL_PGPASS=/tmp/pgpass
-      - POSTGRES_USER=csf
-      - POSTGRES_PASSWORD=csfpassword
-      - POSTGRES_DB=csf_core
+      - POSTGRES_USER=csfx
+      - POSTGRES_PASSWORD=csfxpassword
+      - POSTGRES_DB=csfx_core
       
       - PATRONI_RESTAPI_LISTEN=0.0.0.0:8008
       - PATRONI_RESTAPI_CONNECT_ADDRESS=patroni3:8008
@@ -437,7 +437,7 @@ services:
     volumes:
       - patroni3-data:/home/postgres/pgdata
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.43
     ports:
       - "5443:5432"
@@ -471,7 +471,7 @@ services:
       - "5433:5433"   # Read Port (Replicas)
       - "8000:8000"   # HAProxy Stats
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.40
     depends_on:
       - patroni1
@@ -500,13 +500,13 @@ services:
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
       - NODE_ID=vm-1
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789
-      - CEPH_DEFAULT_POOL=csf-data
+      - CEPH_DEFAULT_POOL=csfx-data
       - CEPH_PG_NUM=128
       - CEPH_DEFAULT_REPLICATION=3
-      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_SCOPE=postgres-csfxx
       - PATRONI_NODES=patroni1:8008,patroni2:8008,patroni3:8008
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.51
     depends_on:
       - etcd1
@@ -532,13 +532,13 @@ services:
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
       - NODE_ID=vm-2
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789
-      - CEPH_DEFAULT_POOL=csf-data
+      - CEPH_DEFAULT_POOL=csfx-data
       - CEPH_PG_NUM=128
       - CEPH_DEFAULT_REPLICATION=3
-      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_SCOPE=postgres-csfxx
       - PATRONI_NODES=patroni1:8008,patroni2:8008,patroni3:8008
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.52
     depends_on:
       - etcd1
@@ -564,13 +564,13 @@ services:
       - ETCD_ENDPOINTS=http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
       - NODE_ID=vm-3
       - CEPH_MON_HOSTS=ceph-mon1:6789,ceph-mon2:6789,ceph-mon3:6789
-      - CEPH_DEFAULT_POOL=csf-data
+      - CEPH_DEFAULT_POOL=csfx-data
       - CEPH_PG_NUM=128
       - CEPH_DEFAULT_REPLICATION=3
-      - PATRONI_SCOPE=postgres-csf
+      - PATRONI_SCOPE=postgres-csfxx
       - PATRONI_NODES=patroni1:8008,patroni2:8008,patroni3:8008
     networks:
-      csf-test:
+      csfx-test:
         ipv4_address: 172.20.0.53
     depends_on:
       - etcd1
@@ -585,7 +585,7 @@ services:
     restart: unless-stopped
 
 networks:
-  csf-test:
+  csfx-test:
     driver: bridge
     ipam:
       config:

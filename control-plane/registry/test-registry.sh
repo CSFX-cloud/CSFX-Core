@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# CSF Registry Service Test Script
+# CSFX Registry Service Test Script
 
 set -e
 
 REGISTRY_URL="http://localhost:8001"
 
-echo "🧪 Testing CSF Registry Service"
+echo "🧪 Testing CSFX Registry Service"
 echo "================================"
 echo ""
 
@@ -137,7 +137,7 @@ echo ""
 
 # 11. Deregister Agent
 echo "1️⃣1️⃣  Deregistering agent..."
-curl -s -X POST "${REGISTRY_URL}/admin/agents/${AGENT_ID}" 
+curl -s -X POST "${REGISTRY_URL}/admin/agents/${AGENT_ID}"
 echo "✅ Agent deregistered"
 echo ""
 

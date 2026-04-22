@@ -36,7 +36,7 @@ impl Default for EtcdConfig {
             request_timeout: Duration::from_secs(10),
             keepalive_interval: Duration::from_secs(30),
             keepalive_timeout: Duration::from_secs(10),
-            namespace: "/csf/volume-manager".to_string(),
+            namespace: "/csfx/volume-manager".to_string(),
             username: None,
             password: None,
         }
@@ -53,7 +53,7 @@ impl EtcdConfig {
             .collect();
 
         let namespace =
-            std::env::var("ETCD_NAMESPACE").unwrap_or_else(|_| "/csf/volume-manager".to_string());
+            std::env::var("ETCD_NAMESPACE").unwrap_or_else(|_| "/csfx/volume-manager".to_string());
 
         let username = std::env::var("ETCD_USERNAME").ok();
         let password = std::env::var("ETCD_PASSWORD").ok();

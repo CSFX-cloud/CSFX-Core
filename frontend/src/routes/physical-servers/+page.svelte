@@ -99,7 +99,7 @@
 </script>
 
 <svelte:head>
-  <title>Physical Servers - CSF Core</title>
+  <title>Physical Servers - CSFX Core</title>
 </svelte:head>
 
 <div class="mb-6 mt-10 flex items-center justify-between">

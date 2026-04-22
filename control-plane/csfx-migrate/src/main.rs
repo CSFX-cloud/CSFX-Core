@@ -9,7 +9,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("csf_migrate=info".parse().unwrap()),
+                .add_directive("csfx_migrate=info".parse().unwrap()),
         )
         .init();
 

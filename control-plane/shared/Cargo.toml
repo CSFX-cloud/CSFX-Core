@@ -11,4 +11,4 @@ version = "0.2.2"
 edition = "2021"
 authors = ["CS-Foundry"]
 license = "SEE LICENSE IN LICENSE"
-repository = "https://github.com/CS-Foundry/CSF-Core"
+repository = "https://github.com/CS-Foundry/CSFX-Core"

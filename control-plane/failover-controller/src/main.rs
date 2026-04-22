@@ -15,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
     logger::init_logger();
 
     metrics::init();
-    log_info!("main", "CSF Failover Controller starting...");
+    log_info!("main", "CSFX Failover Controller starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
     log_info!("main", "Connecting to database...");
@@ -34,7 +34,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(8004);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    log_info!("main", &format!("Failover Controller listening port={}", port));
+    log_info!(
+        "main",
+        &format!("Failover Controller listening port={}", port)
+    );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 

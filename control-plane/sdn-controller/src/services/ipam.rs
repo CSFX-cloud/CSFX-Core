@@ -3,7 +3,7 @@ use etcd_client::Client;
 use std::net::Ipv4Addr;
 use uuid::Uuid;
 
-const IPAM_PREFIX: &str = "/csf/ipam/";
+const IPAM_PREFIX: &str = "/csfx/ipam/";
 
 #[derive(Clone)]
 pub struct IpamService {
@@ -58,7 +58,7 @@ impl IpamService {
         overlay_ip: &str,
         public_key: Option<&str>,
     ) -> Result<()> {
-        let base_key = format!("/csf/peers/{}/{}", network_id, node_id);
+        let base_key = format!("/csfx/peers/{}/{}", network_id, node_id);
         self.etcd
             .put(format!("{}/overlay_ip", base_key).as_str(), overlay_ip, None)
             .await
@@ -75,7 +75,7 @@ impl IpamService {
     }
 
     pub async fn remove_peer(&mut self, network_id: Uuid, node_id: &str) -> Result<()> {
-        let prefix = format!("/csf/peers/{}/{}", network_id, node_id);
+        let prefix = format!("/csfx/peers/{}/{}", network_id, node_id);
         self.etcd
             .delete(
                 prefix.as_str(),

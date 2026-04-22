@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y \
 COPY Cargo.toml Cargo.lock ./
 COPY agent/Cargo.toml ./agent/
 COPY control-plane/api-gateway/Cargo.toml ./control-plane/api-gateway/
-COPY control-plane/csf-migrate/Cargo.toml ./control-plane/csf-migrate/
-COPY control-plane/csf-updater/Cargo.toml ./control-plane/csf-updater/
+COPY control-plane/csfx-migrate/Cargo.toml ./control-plane/csfx-migrate/
+COPY control-plane/csfx-updater/Cargo.toml ./control-plane/csfx-updater/
 COPY control-plane/scheduler/Cargo.toml ./control-plane/scheduler/
 COPY control-plane/failover-controller/Cargo.toml ./control-plane/failover-controller/
 COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
@@ -27,14 +27,14 @@ COPY control-plane/shared/ ./control-plane/shared/
 
 RUN mkdir -p agent/src \
     control-plane/api-gateway/src \
-    control-plane/csf-migrate/src \
-    control-plane/csf-updater/src \
+    control-plane/csfx-migrate/src \
+    control-plane/csfx-updater/src \
     control-plane/scheduler/src \
     control-plane/failover-controller/src \
     control-plane/sdn-controller/src \
     control-plane/volume-manager/src \
     control-plane/registry/src \
-    && for d in agent control-plane/api-gateway control-plane/csf-migrate control-plane/csf-updater \
+    && for d in agent control-plane/api-gateway control-plane/csfx-migrate control-plane/csfx-updater \
        control-plane/scheduler control-plane/failover-controller control-plane/sdn-controller \
        control-plane/volume-manager control-plane/registry; do \
          echo "fn main() {}" > $d/src/main.rs; \
@@ -42,7 +42,7 @@ RUN mkdir -p agent/src \
 
 COPY . .
 
-RUN cargo build --release --bin csf-updater
+RUN cargo build --release --bin csfx-updater
 
 FROM scratch AS export
-COPY --from=builder /app/target/release/csf-updater /csf-updater
+COPY --from=builder /app/target/release/csfx-updater /csfx-updater
