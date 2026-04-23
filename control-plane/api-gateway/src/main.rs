@@ -162,7 +162,7 @@ async fn main() {
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
-    tracing::info!(addr = %addr, "listening");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), addr = %addr, "listening");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(
         listener,
