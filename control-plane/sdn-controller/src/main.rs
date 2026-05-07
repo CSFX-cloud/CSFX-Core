@@ -41,7 +41,8 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(8005);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let addr: SocketAddr = format!("{}:{}", listen_addr, port).parse().unwrap();
     log_info!("main", &format!("SDN Controller listening port={}", port));
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
