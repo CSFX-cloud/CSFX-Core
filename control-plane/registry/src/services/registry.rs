@@ -26,6 +26,7 @@ pub struct RegisterAgentParams {
     pub architecture: String,
     pub agent_version: String,
     pub tags: Option<HashMap<String, String>>,
+    pub allow_reregister: bool,
 }
 
 pub struct AgentRegistry {
@@ -112,11 +113,56 @@ impl AgentRegistry {
     pub async fn register_agent(
         &self,
         params: RegisterAgentParams,
-    ) -> Result<RegisteredAgent, String> {
+    ) -> Result<(RegisteredAgent, bool), String> {
         let tags_json = params
             .tags
             .as_ref()
             .and_then(|t| serde_json::to_value(t).ok());
+
+        if params.allow_reregister {
+            if let Some(existing) = crate::db::agents::get_by_hostname(&self.db, &params.hostname)
+                .await
+                .map_err(|e| format!("Failed to query existing agent: {}", e))?
+            {
+                let db_agent = crate::db::agents::update_registration(
+                    &self.db,
+                    existing.id,
+                    params.agent_version.clone(),
+                    params.os_type.clone(),
+                    params.os_version.clone(),
+                    params.architecture.clone(),
+                    tags_json,
+                    None,
+                )
+                .await
+                .map_err(|e| format!("Failed to update existing agent: {}", e))?;
+
+                crate::log_info!(
+                    "agent_registry",
+                    &format!(
+                        "Re-registered existing agent: {} id={}",
+                        params.name, db_agent.id
+                    )
+                );
+
+                let agent = RegisteredAgent {
+                    id: db_agent.id,
+                    name: db_agent.name,
+                    hostname: db_agent.hostname,
+                    ip_address: db_agent.ip_address,
+                    os_type: db_agent.os_type,
+                    os_version: db_agent.os_version,
+                    architecture: db_agent.architecture,
+                    agent_version: db_agent.agent_version,
+                    status: AgentStatus::Online,
+                    registered_at: db_agent.registered_at.and_utc(),
+                    last_heartbeat: db_agent.last_heartbeat.map(|dt: NaiveDateTime| dt.and_utc()),
+                    tags: params.tags,
+                };
+
+                return Ok((agent, true));
+            }
+        }
 
         let db_agent = crate::db::agents::create(
             &self.db,
@@ -136,6 +182,11 @@ impl AgentRegistry {
         .await
         .map_err(|e| format!("Failed to create agent in database: {}", e))?;
 
+        crate::log_info!(
+            "agent_registry",
+            &format!("Registered new agent: {} id={}", params.name, db_agent.id)
+        );
+
         let agent = RegisteredAgent {
             id: db_agent.id,
             name: db_agent.name.clone(),
@@ -151,12 +202,7 @@ impl AgentRegistry {
             tags: params.tags,
         };
 
-        crate::log_info!(
-            "agent_registry",
-            &format!("Registered new agent: {} id={}", params.name, agent.id)
-        );
-
-        Ok(agent)
+        Ok((agent, false))
     }
 
     pub async fn update_heartbeat(&self, agent_id: Uuid) -> Result<(), String> {

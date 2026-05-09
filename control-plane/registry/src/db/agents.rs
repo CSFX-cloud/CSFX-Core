@@ -5,6 +5,49 @@ use sea_orm::{
 };
 use uuid::Uuid;
 
+pub async fn get_by_hostname(
+    db: &DatabaseConnection,
+    hostname: &str,
+) -> Result<Option<agents::Model>> {
+    Ok(agents::Entity::find()
+        .filter(agents::Column::Hostname.eq(hostname))
+        .one(db)
+        .await?)
+}
+
+pub async fn update_registration(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+    agent_version: String,
+    os_type: String,
+    os_version: String,
+    architecture: String,
+    tags: Option<serde_json::Value>,
+    public_key_pem: Option<String>,
+) -> Result<agents::Model> {
+    let mut agent: agents::ActiveModel = agents::Entity::find_by_id(agent_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Agent not found"))?
+        .into();
+
+    agent.agent_version = Set(agent_version);
+    agent.os_type = Set(os_type);
+    agent.os_version = Set(os_version);
+    agent.architecture = Set(architecture);
+    agent.status = Set("Online".to_string());
+    agent.last_heartbeat = Set(Some(chrono::Utc::now().naive_utc()));
+    agent.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
+    if tags.is_some() {
+        agent.tags = Set(tags);
+    }
+    if public_key_pem.is_some() {
+        agent.public_key_pem = Set(public_key_pem);
+    }
+
+    Ok(agent.update(db).await?)
+}
+
 pub async fn create(
     db: &DatabaseConnection,
     id: Uuid,

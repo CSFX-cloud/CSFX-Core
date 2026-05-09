@@ -77,6 +77,10 @@ impl ApiKeyManager {
         }
     }
 
+    pub async fn revoke_all_keys(&self, agent_id: Uuid) -> Result<(), String> {
+        self.revoke_key(agent_id).await
+    }
+
     pub async fn revoke_key(&self, agent_id: Uuid) -> Result<(), String> {
         match crate::db::api_keys::revoke_by_agent(&self.db, agent_id).await {
             Ok(revoked) => {
