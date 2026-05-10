@@ -339,6 +339,16 @@ jobs:
                     sha256 = "$(get_cp_sha256 csfx-cp-sdn-controller-arm64)";
                   };
                 };
+                csfx-updater = {
+                  amd64 = {
+                    url    = "${RELEASE_BASE}/csfx-updater-amd64";
+                    sha256 = "$(get_sha256 csfx-updater-amd64)";
+                  };
+                  arm64 = {
+                    url    = "${RELEASE_BASE}/csfx-updater-arm64";
+                    sha256 = "$(get_sha256 csfx-updater-arm64)";
+                  };
+                };
               };
             };
           }
