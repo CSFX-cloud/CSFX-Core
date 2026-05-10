@@ -217,6 +217,13 @@ pub async fn heartbeat(
             let post_update_heartbeats =
                 increment_post_update_heartbeats(&state.etcd_endpoints, agent_id).await;
 
+            tracing::info!(
+                agent_id = %agent_id,
+                desired_flake_rev = ?desired_flake_rev,
+                post_update_heartbeats = ?post_update_heartbeats,
+                "heartbeat processed"
+            );
+
             Ok(Json(HeartbeatResponse {
                 success: true,
                 message: "Heartbeat recorded".to_string(),
