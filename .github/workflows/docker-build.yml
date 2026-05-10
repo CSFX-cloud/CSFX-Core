@@ -238,6 +238,12 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          pattern: csfx-updater-*
+          path: /tmp/binaries
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
           pattern: csfx-cp-*
           path: /tmp/cp-binaries
           merge-multiple: true
