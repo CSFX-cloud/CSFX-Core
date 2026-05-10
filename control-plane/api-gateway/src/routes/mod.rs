@@ -75,25 +75,27 @@ pub fn create_router() -> Router<AppState> {
         .allow_headers(vec![AUTHORIZATION, ACCEPT, CONTENT_TYPE])
         .allow_credentials(true);
 
+    let internal_api_router = Router::new()
+        .merge(registry::registry_routes());
+
     let api_router = Router::new()
         .merge(agents::agents_routes())
         .merge(networks::networks_routes())
         .merge(organizations::routes())
-        .merge(registry::registry_routes())
         .merge(system::routes())
         .merge(update::routes())
         .merge(users::users_routes())
         .merge(volumes::volumes_routes())
         .merge(workloads::workloads_routes())
-        .merge(events::events_routes());
+        .merge(events::events_routes())
+        .layer(GovernorLayer {
+            config: governor_config,
+        });
 
     Router::new()
         .route("/metrics", get(metrics::metrics_handler))
-        // API routes
         .logged_nest("/api", api_router)
-        .layer(GovernorLayer {
-            config: governor_config,
-        })
+        .logged_nest("/api", internal_api_router)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<Body>| {
