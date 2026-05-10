@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use uuid::Uuid;
 
-const STATE_DIR: &str = "/var/lib/csfx-daemon";
-const CREDENTIALS_FILE: &str = "/var/lib/csfx-daemon/credentials";
-const CONFIG_FILE: &str = "/var/lib/csfx-daemon/config.json";
+const STATE_DIR: &str = "/var/lib/csfx-agent";
+const CREDENTIALS_FILE: &str = "/var/lib/csfx-agent/credentials";
+const CONFIG_FILE: &str = "/var/lib/csfx-agent/config.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
