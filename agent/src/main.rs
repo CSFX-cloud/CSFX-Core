@@ -191,6 +191,12 @@ async fn run_heartbeat_loop(
                             failure_count = 0;
                         }
 
+                        info!(
+                            agent_id = %agent_id,
+                            desired_flake_rev = ?resp.desired_flake_rev,
+                            "heartbeat ok"
+                        );
+
                         if let Some(count) = resp.post_update_heartbeats {
                             update_watch::write_heartbeat_counter(count).await;
                         }
