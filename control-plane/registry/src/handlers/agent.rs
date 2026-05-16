@@ -15,69 +15,70 @@ pub async fn register_agent(
     State(state): State<AppState>,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let agent_id = if crate::services::bootstrap_tokens::BootstrapTokenManager::is_bootstrap_token(
-        &request.registration_token,
-    ) {
-        if let Err(e) = state
-            .bootstrap_token_manager
-            .validate_and_use(&request.registration_token)
-            .await
-        {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: format!("Invalid bootstrap token: {}", e),
-                }),
-            ));
-        }
-        uuid::Uuid::new_v4()
-    } else {
-        let token_data = match state
-            .token_manager
-            .validate_and_consume_token(&request.registration_token)
-            .await
-        {
-            Ok(token) => token,
-            Err(e) => {
+    let (agent_id, allow_reregister) =
+        if crate::services::bootstrap_tokens::BootstrapTokenManager::is_bootstrap_token(
+            &request.registration_token,
+        ) {
+            if let Err(e) = state
+                .bootstrap_token_manager
+                .validate_and_use(&request.registration_token)
+                .await
+            {
                 return Err((
                     StatusCode::UNAUTHORIZED,
                     Json(ErrorResponse {
-                        error: format!("Invalid registration token: {}", e),
+                        error: format!("Invalid bootstrap token: {}", e),
                     }),
-                ))
+                ));
             }
+            (uuid::Uuid::new_v4(), true)
+        } else {
+            let token_data = match state
+                .token_manager
+                .validate_and_consume_token(&request.registration_token)
+                .await
+            {
+                Ok(token) => token,
+                Err(e) => {
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(ErrorResponse {
+                            error: format!("Invalid registration token: {}", e),
+                        }),
+                    ))
+                }
+            };
+
+            if token_data.expected_name != request.name {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(ErrorResponse {
+                        error: format!(
+                            "Agent name mismatch. Expected '{}', got '{}'",
+                            token_data.expected_name, request.name
+                        ),
+                    }),
+                ));
+            }
+
+            if token_data.expected_hostname != request.hostname {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(ErrorResponse {
+                        error: format!(
+                            "Agent hostname mismatch. Expected '{}', got '{}'",
+                            token_data.expected_hostname, request.hostname
+                        ),
+                    }),
+                ));
+            }
+
+            (token_data.agent_id, false)
         };
-
-        if token_data.expected_name != request.name {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Agent name mismatch. Expected '{}', got '{}'",
-                        token_data.expected_name, request.name
-                    ),
-                }),
-            ));
-        }
-
-        if token_data.expected_hostname != request.hostname {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: format!(
-                        "Agent hostname mismatch. Expected '{}', got '{}'",
-                        token_data.expected_hostname, request.hostname
-                    ),
-                }),
-            ));
-        }
-
-        token_data.agent_id
-    };
 
     let csr_pem = request.csr_pem.clone();
 
-    let agent = match state
+    let (agent, reregistered) = match state
         .agent_registry
         .register_agent(RegisterAgentParams {
             agent_id,
@@ -88,10 +89,11 @@ pub async fn register_agent(
             architecture: request.architecture,
             agent_version: request.agent_version,
             tags: request.tags,
+            allow_reregister,
         })
         .await
     {
-        Ok(agent) => agent,
+        Ok(result) => result,
         Err(e) => {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -101,6 +103,15 @@ pub async fn register_agent(
             ))
         }
     };
+
+    if reregistered {
+        if let Err(e) = state.api_key_manager.revoke_all_keys(agent.id).await {
+            crate::log_warn!(
+                "agent_handler",
+                &format!("Failed to revoke old API keys for agent={}: {}", agent.id, e)
+            );
+        }
+    }
 
     let api_key = state.api_key_manager.create_key(agent.id).await;
 
@@ -205,6 +216,13 @@ pub async fn heartbeat(
             let desired_flake_rev = read_desired_flake_rev(&state.etcd_endpoints).await;
             let post_update_heartbeats =
                 increment_post_update_heartbeats(&state.etcd_endpoints, agent_id).await;
+
+            tracing::info!(
+                agent_id = %agent_id,
+                desired_flake_rev = ?desired_flake_rev,
+                post_update_heartbeats = ?post_update_heartbeats,
+                "heartbeat processed"
+            );
 
             Ok(Json(HeartbeatResponse {
                 success: true,

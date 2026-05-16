@@ -161,8 +161,13 @@ async fn main() {
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8000));
-    tracing::info!(addr = %addr, "listening");
+    let port = std::env::var("GATEWAY_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(8000);
+    let listen_addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let addr: SocketAddr = format!("{}:{}", listen_addr, port).parse().unwrap();
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), addr = %addr, "listening");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(
         listener,

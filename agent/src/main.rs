@@ -104,9 +104,9 @@ async fn perform_registration(
     heartbeat_interval_secs: u64,
     agent_pki: &pki::AgentPki,
 ) -> Result<(uuid::Uuid, String)> {
-    let token = match std::env::var("CSFX_REGISTRATION_TOKEN") {
-        Ok(t) => t,
-        Err(_) => {
+    let token = match std::env::var("CSFX_REGISTRATION_TOKEN").ok().filter(|t| !t.is_empty()) {
+        Some(t) => t,
+        None => {
             info!("CSFX_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
             client
                 .fetch_bootstrap_token()
@@ -190,6 +190,12 @@ async fn run_heartbeat_loop(
                             info!(agent_id = %agent_id, "Heartbeat recovered after {} failures", failure_count);
                             failure_count = 0;
                         }
+
+                        info!(
+                            agent_id = %agent_id,
+                            desired_flake_rev = ?resp.desired_flake_rev,
+                            "heartbeat ok"
+                        );
 
                         if let Some(count) = resp.post_update_heartbeats {
                             update_watch::write_heartbeat_counter(count).await;

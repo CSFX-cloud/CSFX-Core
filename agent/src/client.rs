@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -124,23 +125,38 @@ impl ApiClient {
             csr_pem,
         };
 
-        let resp = self
-            .client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to send registration request")?;
+        loop {
+            let resp = self
+                .client
+                .post(&url)
+                .json(&body)
+                .send()
+                .await
+                .context("Failed to send registration request")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Registration failed status={} body={}", status, body);
+            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let retry_after = resp
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(60);
+                tracing::warn!(retry_after, "Registration rate-limited, retrying");
+                tokio::time::sleep(Duration::from_secs(retry_after)).await;
+                continue;
+            }
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("Registration failed status={} body={}", status, body);
+            }
+
+            return resp
+                .json::<RegisterResponse>()
+                .await
+                .context("Failed to parse registration response");
         }
-
-        resp.json::<RegisterResponse>()
-            .await
-            .context("Failed to parse registration response")
     }
 
     pub async fn heartbeat(
