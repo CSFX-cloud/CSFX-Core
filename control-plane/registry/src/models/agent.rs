@@ -13,19 +13,18 @@ pub enum AgentStatus {
 impl std::fmt::Display for AgentStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AgentStatus::Online => write!(f, "online"),
-            AgentStatus::Offline => write!(f, "offline"),
-            AgentStatus::Degraded => write!(f, "degraded"),
+            AgentStatus::Online => write!(f, "Online"),
+            AgentStatus::Offline => write!(f, "Offline"),
+            AgentStatus::Degraded => write!(f, "Degraded"),
         }
     }
 }
 
 impl AgentStatus {
     pub fn from_str(s: &str) -> Self {
-        match s {
-            "Online" => AgentStatus::Online,
-            "Offline" => AgentStatus::Offline,
-            "Degraded" => AgentStatus::Degraded,
+        match s.to_ascii_lowercase().as_str() {
+            "online" => AgentStatus::Online,
+            "degraded" => AgentStatus::Degraded,
             _ => AgentStatus::Offline,
         }
     }
