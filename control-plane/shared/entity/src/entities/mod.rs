@@ -20,6 +20,7 @@ pub mod network_policies;
 pub mod networks;
 pub mod volume_snapshots;
 pub mod volumes;
+pub mod user_ssh_keys;
 pub mod workloads;
 
 pub use agent_api_keys::Entity as AgentApiKeys;
@@ -44,4 +45,5 @@ pub use network_policies::Entity as NetworkPolicies;
 pub use networks::Entity as Networks;
 pub use volume_snapshots::Entity as VolumeSnapshots;
 pub use volumes::Entity as Volumes;
+pub use user_ssh_keys::Entity as UserSshKeys;
 pub use workloads::Entity as Workloads;

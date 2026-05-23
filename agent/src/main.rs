@@ -3,6 +3,7 @@ mod config;
 mod docker;
 mod pki;
 mod rbd;
+mod ssh_keys;
 mod system;
 mod update_watch;
 
@@ -23,10 +24,19 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    info!(version = env!("CARGO_PKG_VERSION"), "csfx-agent starting");
-
     let gateway_url = std::env::var("CSFX_GATEWAY_URL")
         .context("CSFX_GATEWAY_URL environment variable is required")?;
+
+    if let Some(username) = std::env::args().nth(1).filter(|a| a == "--authorized-keys").and_then(|_| std::env::args().nth(2)) {
+        let agent_id = config::load_config()
+            .context("Failed to load daemon config")?
+            .agent_id;
+        ssh_keys::run_authorized_keys_command(&gateway_url, agent_id).await;
+        let _ = username;
+        return Ok(());
+    }
+
+    info!(version = env!("CARGO_PKG_VERSION"), "csfx-agent starting");
 
     let heartbeat_interval_secs: u64 = std::env::var("CSFX_HEARTBEAT_INTERVAL")
         .ok()

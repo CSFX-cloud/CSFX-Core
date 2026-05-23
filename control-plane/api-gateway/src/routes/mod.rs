@@ -18,6 +18,7 @@ pub mod events;
 pub mod networks;
 pub mod organizations;
 pub mod registry;
+pub mod ssh_keys;
 pub mod system;
 pub mod update;
 pub mod users;
@@ -76,12 +77,14 @@ pub fn create_router() -> Router<AppState> {
         .allow_credentials(true);
 
     let internal_api_router = Router::new()
-        .merge(registry::registry_routes());
+        .merge(registry::registry_routes())
+        .merge(ssh_keys::ssh_keys_internal_routes());
 
     let api_router = Router::new()
         .merge(agents::agents_routes())
         .merge(networks::networks_routes())
         .merge(organizations::routes())
+        .merge(ssh_keys::ssh_keys_routes())
         .merge(system::routes())
         .merge(update::routes())
         .merge(users::users_routes())
