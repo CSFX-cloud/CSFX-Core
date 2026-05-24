@@ -18,11 +18,6 @@ struct GitHubObject {
     kind: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct GitHubCommit {
-    sha: String,
-}
-
 pub async fn poll_and_update(
     cfg: &Config,
     etcd: &mut etcd::Client,
@@ -33,7 +28,10 @@ pub async fn poll_and_update(
         _ => return Ok(None),
     };
 
-    let sha = resolve_version_to_sha(cfg, &desired_version, last_etag).await?;
+    let sha = match resolve_version_to_sha(cfg, &desired_version, last_etag).await? {
+        Some(s) => s,
+        None => return Ok(None),
+    };
 
     let current = etcd.get(etcd::AVAILABLE_FLAKE_REV_KEY).await?;
     if current.as_deref() == Some(sha.as_str()) {
@@ -51,10 +49,10 @@ async fn resolve_version_to_sha(
     cfg: &Config,
     version: &str,
     last_etag: &mut Option<String>,
-) -> Result<String> {
+) -> Result<Option<String>> {
     let tag = format!("v{}", version.trim_start_matches('v'));
     let url = format!(
-        "https://api.github.com/repos/{}/git/ref/tags/{}",
+        "https://api.github.com/repos/{}/git/refs/tags/{}",
         cfg.infra_repo_github, tag
     );
 
@@ -71,15 +69,11 @@ async fn resolve_version_to_sha(
     let resp = req.send().await?;
 
     if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
-        bail!("tag not modified, no new sha available");
+        return Ok(None);
     }
 
     if !resp.status().is_success() {
-        bail!(
-            "GitHub API returned {} for tag {}",
-            resp.status(),
-            tag
-        );
+        bail!("GitHub API returned {} for tag {}", resp.status(), tag);
     }
 
     if let Some(etag) = resp.headers().get(ETAG) {
@@ -94,7 +88,7 @@ async fn resolve_version_to_sha(
         tag_ref.object.sha
     };
 
-    Ok(sha)
+    Ok(Some(sha))
 }
 
 async fn dereference_tag(cfg: &Config, tag_sha: &str) -> Result<String> {
