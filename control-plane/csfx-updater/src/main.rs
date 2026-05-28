@@ -131,7 +131,7 @@ async fn execute_once(cfg: &config::Config, last_applied: &str) -> anyhow::Resul
 
     let (_cancel_tx, cancel_rx) = watch::channel(false);
 
-    match nix_build::build(&cfg.infra_repo_mirror_dir, &desired, cancel_rx).await {
+    match nix_build::build(&cfg.infra_repo_mirror_dir, &desired, &cfg.nixos_config, cancel_rx).await {
         Ok(()) => {}
         Err(e) => {
             tracing::error!(error = %e, flake_rev = %desired, "nix build failed");

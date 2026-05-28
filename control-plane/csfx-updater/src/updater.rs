@@ -6,8 +6,8 @@ use crate::config::Config;
 
 pub async fn switch(cfg: &Config, flake_rev: &str) -> Result<()> {
     let flake_url = format!(
-        "git+file://{}?rev={}",
-        cfg.infra_repo_mirror_dir, flake_rev
+        "git+file://{}?rev={}#{}",
+        cfg.infra_repo_mirror_dir, flake_rev, cfg.nixos_config
     );
 
     info!(flake_rev = %flake_rev, "running nixos-rebuild switch");

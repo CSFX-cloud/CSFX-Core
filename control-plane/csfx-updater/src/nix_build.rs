@@ -3,10 +3,10 @@ use tokio::process::Command;
 use tokio::sync::watch;
 use tracing::info;
 
-pub async fn build(mirror_dir: &str, rev: &str, mut cancel: watch::Receiver<bool>) -> Result<()> {
-    let flake_url = format!("git+file://{}?rev={}", mirror_dir, rev);
+pub async fn build(mirror_dir: &str, rev: &str, nixos_config: &str, mut cancel: watch::Receiver<bool>) -> Result<()> {
+    let flake_url = format!("git+file://{}?rev={}#{}", mirror_dir, rev, nixos_config);
 
-    info!(flake_rev = %rev, "starting nix build");
+    info!(flake_rev = %rev, nixos_config = %nixos_config, "starting nix build");
 
     let mut child = Command::new("nixos-rebuild")
         .args(["build", "--flake", &flake_url])

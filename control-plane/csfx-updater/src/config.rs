@@ -8,6 +8,7 @@ pub struct Config {
     pub infra_repo_mirror_url: String,
     pub infra_repo_github: String,
     pub infra_repo_branch: String,
+    pub nixos_config: String,
 }
 
 impl Config {
@@ -30,6 +31,8 @@ impl Config {
                 .context("INFRA_REPO_GITHUB must be set (e.g. csfx-cloud/CSFX-Infra)")?,
             infra_repo_branch: env::var("INFRA_REPO_BRANCH")
                 .unwrap_or_else(|_| "main".to_string()),
+            nixos_config: env::var("NIXOS_CONFIG")
+                .unwrap_or_else(|_| "csfx-node".to_string()),
         })
     }
 }
