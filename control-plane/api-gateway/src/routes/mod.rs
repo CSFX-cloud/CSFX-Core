@@ -80,13 +80,12 @@ pub fn create_router() -> Router<AppState> {
         .merge(registry::registry_routes())
         .merge(ssh_keys::ssh_keys_internal_routes());
 
-    let api_router = Router::new()
+    let rate_limited_router = Router::new()
         .merge(agents::agents_routes())
         .merge(networks::networks_routes())
         .merge(organizations::routes())
         .merge(ssh_keys::ssh_keys_routes())
         .merge(system::routes())
-        .merge(update::routes())
         .merge(users::users_routes())
         .merge(volumes::volumes_routes())
         .merge(workloads::workloads_routes())
@@ -94,6 +93,10 @@ pub fn create_router() -> Router<AppState> {
         .layer(GovernorLayer {
             config: governor_config,
         });
+
+    let api_router = Router::new()
+        .merge(rate_limited_router)
+        .merge(update::routes());
 
     Router::new()
         .route("/metrics", get(metrics::metrics_handler))
