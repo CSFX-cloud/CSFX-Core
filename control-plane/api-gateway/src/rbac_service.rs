@@ -5,6 +5,7 @@ use entity::{
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
 };
+use tracing::info;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -122,13 +123,12 @@ impl RbacService {
             .await?;
 
         if let Some(existing) = existing {
-            // Update existing role
             let mut active: user_organization::ActiveModel = existing.clone().into();
             active.role_id = ActiveValue::Set(role_id);
             let updated = active.update(&self.db).await?;
+            info!(user_id = %user_id, organization_id = %organization_id, role_id = %role_id, "role updated");
             Ok(updated)
         } else {
-            // Create new user-organization relationship
             let new_user_org = user_organization::ActiveModel {
                 id: ActiveValue::Set(Uuid::new_v4()),
                 user_id: ActiveValue::Set(user_id),
@@ -138,6 +138,7 @@ impl RbacService {
             };
 
             let result = new_user_org.insert(&self.db).await?;
+            info!(user_id = %user_id, organization_id = %organization_id, role_id = %role_id, "role assigned");
             Ok(result)
         }
     }

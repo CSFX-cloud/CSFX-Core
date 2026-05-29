@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use entity::{invalid_jwt, key, user, InvalidJwt, Key, User};
+use tracing::warn;
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
 };
@@ -116,8 +117,8 @@ impl AuthService {
         // Decrypt the password
         let password = decrypt_password(&encrypted_password, &rsa_key.private_key)?;
 
-        // Verify password
         if !verify_password(&password, &user.salt, &user.password)? {
+            warn!(username = %username, "failed login attempt");
             return Err(AuthError::InvalidCredentials);
         }
 
