@@ -12,10 +12,13 @@ pub async fn switch(cfg: &Config, flake_rev: &str) -> Result<()> {
 
     info!(flake_rev = %flake_rev, "running nixos-rebuild switch");
 
-    let status = Command::new("nixos-rebuild")
+    let mut child = Command::new("nixos-rebuild")
         .args(["switch", "--flake", &flake_url])
-        .status()
-        .await?;
+        .spawn()?;
+
+    info!(flake_rev = %flake_rev, pid = child.id(), "nixos-rebuild switch spawned, activating configuration");
+
+    let status = child.wait().await?;
 
     if !status.success() {
         bail!("nixos-rebuild switch failed for rev {}", flake_rev);

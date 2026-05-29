@@ -13,6 +13,8 @@ pub async fn build(mirror_dir: &str, rev: &str, nixos_config: &str, mut cancel: 
         .current_dir("/tmp")
         .spawn()?;
 
+    info!(flake_rev = %rev, nixos_config = %nixos_config, pid = child.id(), "nix build spawned, waiting for completion");
+
     tokio::select! {
         result = child.wait() => {
             let status = result?;

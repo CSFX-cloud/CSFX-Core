@@ -25,16 +25,25 @@ pub async fn poll_and_update(
 ) -> Result<Option<String>> {
     let desired_version = match etcd.get(etcd::DESIRED_VERSION_KEY).await? {
         Some(v) if !v.is_empty() => v,
-        _ => return Ok(None),
+        _ => {
+            tracing::debug!("no desired version in etcd, skipping poll");
+            return Ok(None);
+        }
     };
+
+    info!(version = %desired_version, "polling GitHub for flake rev");
 
     let sha = match resolve_version_to_sha(cfg, &desired_version, last_etag).await? {
         Some(s) => s,
-        None => return Ok(None),
+        None => {
+            tracing::debug!(version = %desired_version, "GitHub returned 304 not modified");
+            return Ok(None);
+        }
     };
 
     let current = etcd.get(etcd::AVAILABLE_FLAKE_REV_KEY).await?;
     if current.as_deref() == Some(sha.as_str()) {
+        tracing::debug!(version = %desired_version, sha = %sha, "flake rev unchanged");
         return Ok(None);
     }
 

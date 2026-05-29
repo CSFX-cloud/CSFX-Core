@@ -97,15 +97,25 @@ async fn execute_once(cfg: &config::Config, last_applied: &str) -> anyhow::Resul
     let mut etcd = etcd::Client::connect(cfg).await?;
 
     if etcd.get(etcd::PAUSED_KEY).await?.as_deref() == Some("true") {
+        tracing::debug!("updater paused, skipping cycle");
         return Ok(None);
     }
 
     let desired = match etcd.get(etcd::DESIRED_FLAKE_REV_KEY).await? {
         Some(v) => v,
-        None => return Ok(None),
+        None => {
+            tracing::debug!("no desired flake rev in etcd, skipping cycle");
+            return Ok(None);
+        }
     };
 
-    if desired.is_empty() || desired == last_applied {
+    if desired.is_empty() {
+        tracing::debug!("desired flake rev is empty, skipping cycle");
+        return Ok(None);
+    }
+
+    if desired == last_applied {
+        tracing::debug!(flake_rev = %desired, "already on desired rev, nothing to do");
         return Ok(None);
     }
 
