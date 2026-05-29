@@ -9,7 +9,7 @@ pub async fn build(mirror_dir: &str, rev: &str, nixos_config: &str, mut cancel: 
     info!(flake_rev = %rev, nixos_config = %nixos_config, "starting nix build");
 
     let mut child = Command::new("nixos-rebuild")
-        .args(["build", "--flake", &flake_url])
+        .args(["build", "--no-out-link", "--flake", &flake_url])
         .spawn()?;
 
     tokio::select! {
