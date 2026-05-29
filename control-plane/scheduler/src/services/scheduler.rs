@@ -120,6 +120,8 @@ impl SchedulerService {
 
         delete_placement(&self.etcd, workload_id).await?;
 
+        crate::log_info!("scheduler", &format!("Workload deleted workload_id={}", workload_id));
+
         Ok(())
     }
 }
