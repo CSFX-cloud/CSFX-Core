@@ -212,6 +212,14 @@ async fn run_heartbeat_loop(
                         }
 
                         if let Some(rev) = resp.desired_flake_rev {
+                            if rev != current_flake_rev {
+                                info!(
+                                    agent_id = %agent_id,
+                                    current_flake_rev = %current_flake_rev,
+                                    desired_flake_rev = %rev,
+                                    "update signal received from gateway, scheduling update"
+                                );
+                            }
                             let rev_clone = rev.clone();
                             let current = current_flake_rev.clone();
                             tokio::spawn(async move {
