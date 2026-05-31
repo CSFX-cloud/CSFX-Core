@@ -33,10 +33,16 @@ pub async fn poll_and_update(
 
     info!(version = %desired_version, "polling GitHub for flake rev");
 
-    let sha = match resolve_version_to_sha(cfg, &desired_version, last_etag).await? {
-        Some(s) => s,
-        None => {
+    let sha = match resolve_version_to_sha(cfg, &desired_version, last_etag).await {
+        Ok(Some(s)) => s,
+        Ok(None) => {
             tracing::debug!(version = %desired_version, "GitHub returned 304 not modified");
+            return Ok(None);
+        }
+        Err(e) => {
+            tracing::error!(error = %e, version = %desired_version, "failed to resolve version to flake rev");
+            let _ = etcd.put(etcd::BUILD_STATUS_KEY, "failed").await;
+            let _ = etcd.put(etcd::RESULT_KEY, "failed").await;
             return Ok(None);
         }
     };
@@ -49,6 +55,8 @@ pub async fn poll_and_update(
 
     etcd.put(etcd::AVAILABLE_FLAKE_REV_KEY, &sha).await?;
     etcd.put(etcd::DESIRED_FLAKE_REV_KEY, &sha).await?;
+    etcd.put(etcd::BUILD_STATUS_KEY, "pending").await?;
+    let _ = etcd.put(etcd::RESULT_KEY, "").await;
     info!(version = %desired_version, sha = %sha, "resolved version to flake rev");
 
     Ok(Some(sha))
