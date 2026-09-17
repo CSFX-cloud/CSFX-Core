@@ -8,11 +8,14 @@
     import StatusBadge from "$lib/components/status-badge.svelte";
     import NodeDetailSheet from "$lib/components/nodes/NodeDetailSheet.svelte";
     import NodesFilterPanel from "$lib/components/nodes/nodes-filter-panel.svelte";
+    import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
     import SearchIcon from "@lucide/svelte/icons/search";
     import BellIcon from "@lucide/svelte/icons/bell";
     import LayoutListIcon from "@lucide/svelte/icons/layout-list";
     import ArrowUpDownIcon from "@lucide/svelte/icons/arrow-up-down";
     import DownloadIcon from "@lucide/svelte/icons/download";
+    import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+    import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 
     const FILTER_PANEL_WIDTH = "16rem";
     const SIDEBAR_RAIL_WIDTH = "3rem";
@@ -23,6 +26,13 @@
     let archFilter = $state<Set<string>>(new Set());
 
     type SortColumn = "hostname" | "status" | "cpu" | "memory" | "disk";
+    const SORT_LABELS: Record<SortColumn, string> = {
+        hostname: "Hostname",
+        status: "Status",
+        cpu: "CPU",
+        memory: "Memory",
+        disk: "Disk",
+    };
     let sortColumn = $state<SortColumn>("hostname");
     let sortAscending = $state(true);
 
@@ -44,6 +54,16 @@
             case "memory": return metricRatio(metrics?.memory_used_bytes ?? null, metrics?.memory_total_bytes ?? null);
             case "disk": return metricRatio(metrics?.disk_used_bytes ?? null, metrics?.disk_total_bytes ?? null);
         }
+    }
+
+    function toggleSet(set: Set<string>, value: string): Set<string> {
+        const next = new Set(set);
+        if (next.has(value)) {
+            next.delete(value);
+        } else {
+            next.add(value);
+        }
+        return next;
     }
 
     function toggleSort(column: SortColumn) {
@@ -428,15 +448,75 @@
                 <LayoutListIcon class="size-4 text-muted-foreground" />
                 <span class="text-sm font-semibold">Node Summary</span>
             </div>
-            <Button
-                variant="ghost"
-                size="icon-sm"
-                onclick={exportCsv}
-                disabled={filteredNodes.length === 0}
-                aria-label="Export as CSV"
-            >
-                <DownloadIcon class="size-4" />
-            </Button>
+            <div class="flex items-center gap-2">
+                <DropdownMenu.Root>
+                    <DropdownMenu.Trigger>
+                        {#snippet child({ props })}
+                            <Button {...props} variant="outline" size="sm">
+                                Status
+                                {#if statusFilter.size > 0}
+                                    <span class="text-xs text-muted-foreground">({statusFilter.size})</span>
+                                {/if}
+                                <ChevronDownIcon class="size-3.5" />
+                            </Button>
+                        {/snippet}
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content align="end">
+                        {#each [...new Set(nodes.map((n) => n.status))] as status (status)}
+                            <DropdownMenu.CheckboxItem
+                                checked={statusFilter.has(status)}
+                                onCheckedChange={() => (statusFilter = toggleSet(statusFilter, status))}
+                            >
+                                {status}
+                            </DropdownMenu.CheckboxItem>
+                        {/each}
+                    </DropdownMenu.Content>
+                </DropdownMenu.Root>
+
+                <DropdownMenu.Root>
+                    <DropdownMenu.Trigger>
+                        {#snippet child({ props })}
+                            <Button {...props} variant="outline" size="sm">
+                                Sort: {SORT_LABELS[sortColumn]}
+                                <ChevronDownIcon class="size-3.5" />
+                            </Button>
+                        {/snippet}
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content align="end">
+                        <DropdownMenu.RadioGroup value={sortColumn} onValueChange={(value) => (sortColumn = value as SortColumn)}>
+                            {#each Object.entries(SORT_LABELS) as [value, label] (value)}
+                                <DropdownMenu.RadioItem {value}>{label}</DropdownMenu.RadioItem>
+                            {/each}
+                        </DropdownMenu.RadioGroup>
+                        <DropdownMenu.Separator />
+                        <DropdownMenu.CheckboxItem
+                            checked={!sortAscending}
+                            onCheckedChange={(checked) => (sortAscending = !checked)}
+                        >
+                            Descending
+                        </DropdownMenu.CheckboxItem>
+                    </DropdownMenu.Content>
+                </DropdownMenu.Root>
+
+                <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={refresh}
+                    disabled={refreshing}
+                    aria-label="Refresh"
+                >
+                    <RefreshCwIcon class="size-4 {refreshing ? 'animate-spin' : ''}" />
+                </Button>
+                <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={exportCsv}
+                    disabled={filteredNodes.length === 0}
+                    aria-label="Export as CSV"
+                >
+                    <DownloadIcon class="size-4" />
+                </Button>
+            </div>
         </div>
         <table class="w-full text-sm">
             <thead class="bg-muted/50">
