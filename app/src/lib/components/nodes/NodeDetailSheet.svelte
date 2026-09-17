@@ -8,9 +8,10 @@
         node: Node | null;
         open: boolean;
         onClose: () => void;
+        style?: string;
     }
 
-    let { node, open, onClose }: Props = $props();
+    let { node, open, onClose, style }: Props = $props();
 
     let metrics = $state<NodeMetricsLatest | null>(null);
     let metricsError = $state<string | null>(null);
@@ -287,7 +288,11 @@
     open={open}
     onOpenChange={(v) => { if (!v) onClose(); }}
 >
-    <Sheet.Content side="right" class="w-[640px] sm:max-w-[640px] flex flex-col p-0 gap-0 overflow-hidden">
+    <Sheet.Content
+        side="right"
+        class="w-[640px] sm:max-w-[640px] flex flex-col p-0 gap-0 overflow-hidden"
+        {style}
+    >
         {#if node}
             <Sheet.Header class="px-6 pt-5 pb-0 shrink-0">
                 <div class="flex items-start gap-3 pr-8 mb-4">

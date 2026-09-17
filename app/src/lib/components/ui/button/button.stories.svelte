@@ -25,9 +25,9 @@
 	});
 </script>
 
-<Story name="Default" args={{ children: "Button" }}>
+<Story name="Default">
 	{#snippet template(args)}
-		<Button {...args}>{args.children}</Button>
+		<Button {...args}>Button</Button>
 	{/snippet}
 </Story>
 
@@ -51,8 +51,8 @@
 	</div>
 </Story>
 
-<Story name="Disabled" args={{ children: "Disabled", disabled: true }}>
+<Story name="Disabled" args={{ disabled: true }}>
 	{#snippet template(args)}
-		<Button {...args}>{args.children}</Button>
+		<Button {...args}>Disabled</Button>
 	{/snippet}
 </Story>

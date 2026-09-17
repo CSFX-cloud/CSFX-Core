@@ -20,9 +20,9 @@
 	});
 </script>
 
-<Story name="Default" args={{ children: "Badge" }}>
+<Story name="Default">
 	{#snippet template(args)}
-		<Badge {...args}>{args.children}</Badge>
+		<Badge {...args}>Badge</Badge>
 	{/snippet}
 </Story>
 
@@ -38,8 +38,8 @@
 	</div>
 </Story>
 
-<Story name="Loading" args={{ children: "Loading", loading: true }}>
+<Story name="Loading" args={{ loading: true }}>
 	{#snippet template(args)}
-		<Badge {...args}>{args.children}</Badge>
+		<Badge {...args}>Loading</Badge>
 	{/snippet}
 </Story>
