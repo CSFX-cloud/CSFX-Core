@@ -1,13 +1,13 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
     import { auth } from "$lib/auth/store.svelte";
-    import { listNodes, getClusterStats, getHealthHistory, type Node, type ClusterStats, type NodeMetrics, type HealthHistoryPoint } from "$lib/api/nodes";
+    import { listNodes, getClusterStats, type Node, type ClusterStats, type NodeMetrics } from "$lib/api/nodes";
     import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
     import { Input } from "$lib/components/ui/input/index.js";
     import StatusBadge from "$lib/components/status-badge.svelte";
     import NodeDetailSheet from "$lib/components/nodes/NodeDetailSheet.svelte";
-    import NodesFilterPanel from "$lib/components/nodes/nodes-filter-panel.svelte";
+    import NodesInfoPanel from "$lib/components/nodes/nodes-info-panel.svelte";
     import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
     import SearchIcon from "@lucide/svelte/icons/search";
     import BellIcon from "@lucide/svelte/icons/bell";
@@ -17,13 +17,11 @@
     import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
     import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 
-    const FILTER_PANEL_WIDTH = "16rem";
-    const SIDEBAR_RAIL_WIDTH = "3rem";
+    const INFO_PANEL_WIDTH = "16rem";
+    const SIDEBAR_WIDTH = "16rem";
 
     let nodes = $state<Node[]>([]);
     let statusFilter = $state<Set<string>>(new Set());
-    let osFilter = $state<Set<string>>(new Set());
-    let archFilter = $state<Set<string>>(new Set());
 
     type SortColumn = "hostname" | "status" | "cpu" | "memory" | "disk";
     const SORT_LABELS: Record<SortColumn, string> = {
@@ -79,8 +77,6 @@
         nodes
             .filter((node) => {
                 if (statusFilter.size > 0 && !statusFilter.has(node.status)) return false;
-                if (osFilter.size > 0 && !osFilter.has(node.os_type)) return false;
-                if (archFilter.size > 0 && !archFilter.has(node.architecture)) return false;
                 return true;
             })
             .sort((a, b) => {
@@ -98,54 +94,14 @@
     let selectedNode = $state<Node | null>(null);
     let sheetOpen = $state(false);
 
-    type HealthRange = '1h' | '7d' | '30d';
-
-    let onlineHistory = $state<number[]>([]);
-    let cpuHistory = $state<number[]>([]);
-    let memHistory = $state<number[]>([]);
-    let healthRange = $state<HealthRange>('1h');
-    let healthHistoryData = $state<Record<HealthRange, number[]>>({ '1h': [], '7d': [], '30d': [] });
-
     let pollInterval: ReturnType<typeof setInterval> | null = null;
     let refreshing = $state(false);
     let addNodePulsing = $state(false);
 
-    function sparklineValues(): number[] {
-        const hist = healthHistoryData[healthRange];
-        return hist.length >= 2 ? hist : onlineHistory;
-    }
-
-    async function fetchHealthHistory(range: HealthRange) {
-        if (!auth.token) return;
-        try {
-            const points = await getHealthHistory(auth.token, range);
-            healthHistoryData[range] = points.map((p: HealthHistoryPoint) => p.online_count);
-        } catch {
-            // non-fatal
-        }
-    }
-
-    $effect(() => {
-        fetchHealthHistory(healthRange);
-    });
-
     async function fetchStats() {
         if (!auth.token) return;
         try {
-            const s = await getClusterStats(auth.token);
-            stats = s;
-
-            const onlinePct = s.node_count > 0 ? (s.online_count / s.node_count) * 100 : 0;
-            onlineHistory = [...onlineHistory.slice(-23), onlinePct];
-            healthHistoryData['1h'] = [...healthHistoryData['1h'].slice(-11), s.online_count];
-
-            const cpuPct = s.avg_cpu_usage_percent ?? 0;
-            cpuHistory = [...cpuHistory.slice(-23), cpuPct];
-
-            const memPct = s.total_memory_bytes > 0
-                ? (s.used_memory_bytes / s.total_memory_bytes) * 100
-                : 0;
-            memHistory = [...memHistory.slice(-23), memPct];
+            stats = await getClusterStats(auth.token);
         } catch {
             // non-fatal poll failure
         }
@@ -204,33 +160,6 @@
     function closeSheet() {
         sheetOpen = false;
         selectedNode = null;
-    }
-
-    function bytesToGb(bytes: number | null): string {
-        if (bytes == null) return "-";
-        return (bytes / 1_073_741_824).toFixed(1) + " GB";
-    }
-
-    function sparklinePath(values: number[], width: number, height: number): string {
-        if (values.length < 2) return "";
-        const max = Math.max(...values, 1);
-        const step = width / (values.length - 1);
-        return values
-            .map((v, i) => {
-                const x = i * step;
-                const y = height - (v / max) * height;
-                return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-            })
-            .join(" ");
-    }
-
-    function memPct(): number {
-        if (!stats || stats.total_memory_bytes === 0) return 0;
-        return (stats.used_memory_bytes / stats.total_memory_bytes) * 100;
-    }
-
-    function cpuPct(): number {
-        return stats?.avg_cpu_usage_percent ?? 0;
     }
 
     function exportCsv() {
@@ -302,9 +231,9 @@
 <div class="flex min-h-0 flex-1">
     <div
         class="hidden shrink-0 border-r border-border md:block"
-        style="width: {FILTER_PANEL_WIDTH};"
+        style="width: {INFO_PANEL_WIDTH};"
     >
-        <NodesFilterPanel {nodes} bind:statusFilter bind:osFilter bind:archFilter />
+        <NodesInfoPanel {stats} />
     </div>
 
     <div class="flex min-w-0 flex-1 flex-col gap-6 p-6">
@@ -356,91 +285,6 @@
             </Button>
         </div>
     </div>
-
-    {#if stats}
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground mb-1">Total Nodes</p>
-                <p class="text-2xl font-semibold">{stats.node_count}</p>
-            </div>
-
-            <div class="border rounded-lg p-4 flex flex-col gap-2">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs text-muted-foreground">Healthy</p>
-                    <div class="flex items-center gap-0.5">
-                        {#each (['1h', '7d', '30d'] as HealthRange[]) as r}
-                            <button
-                                class="px-1.5 py-0.5 text-[10px] rounded transition-colors {healthRange === r ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'}"
-                                onclick={() => healthRange = r}
-                            >{r}</button>
-                        {/each}
-                    </div>
-                </div>
-                <div class="flex items-end justify-between gap-2">
-                    <div class="flex items-center gap-2">
-                        <span class="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0"></span>
-                        <p class="text-2xl font-semibold">{stats.online_count}</p>
-                    </div>
-                    {#if sparklineValues().length >= 2}
-                        <svg width="72" height="32" class="text-green-500 shrink-0">
-                            <path
-                                d={sparklinePath(sparklineValues(), 72, 28)}
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            />
-                        </svg>
-                    {/if}
-                </div>
-            </div>
-
-            <div class="border rounded-lg p-4 flex flex-col gap-2">
-                <p class="text-xs text-muted-foreground">vCPU Capacity</p>
-                <div class="flex items-end justify-between gap-2">
-                    <div>
-                        <p class="text-2xl font-semibold">{stats.total_cpu_cores}</p>
-                        <p class="text-xs text-muted-foreground mt-0.5">{cpuPct().toFixed(1)}% used</p>
-                    </div>
-                    {#if cpuHistory.length >= 2}
-                        <svg width="72" height="32" class="text-primary shrink-0">
-                            <path
-                                d={sparklinePath(cpuHistory, 72, 28)}
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            />
-                        </svg>
-                    {/if}
-                </div>
-            </div>
-
-            <div class="border rounded-lg p-4 flex flex-col gap-2">
-                <p class="text-xs text-muted-foreground">Memory</p>
-                <div class="flex items-end justify-between gap-2">
-                    <div>
-                        <p class="text-2xl font-semibold">{bytesToGb(stats.used_memory_bytes)}</p>
-                        <p class="text-xs text-muted-foreground mt-0.5">/ {bytesToGb(stats.total_memory_bytes)}</p>
-                    </div>
-                    {#if memHistory.length >= 2}
-                        <svg width="72" height="32" class="text-primary shrink-0">
-                            <path
-                                d={sparklinePath(memHistory, 72, 28)}
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            />
-                        </svg>
-                    {/if}
-                </div>
-            </div>
-        </div>
-    {/if}
 
     <div class="border rounded-lg overflow-hidden">
         <div class="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
@@ -639,5 +483,5 @@
     node={selectedNode}
     open={sheetOpen}
     onClose={closeSheet}
-    style="max-width: calc(100vw - {SIDEBAR_RAIL_WIDTH} - {FILTER_PANEL_WIDTH});"
+    style="max-width: calc(100vw - {SIDEBAR_WIDTH} - {INFO_PANEL_WIDTH});"
 />
