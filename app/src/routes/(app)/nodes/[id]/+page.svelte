@@ -2,7 +2,7 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { auth } from '$lib/auth/store.svelte';
-    import { getNode, getNodeMetricsLatest, openNodeMetricsSocket, rebootNode, powerOffNode, drainNode, uncordonNode, type LiveNodeMetrics, type Node, type NodeMetricsLatest } from '$lib/api/nodes';
+    import { getNode, getNodeMetricsLatest, openNodeMetricsSocket, rebootNode, powerOffNode, drainNode, uncordonNode, getNodeDisks, type LiveNodeMetrics, type Node, type NodeMetricsLatest, type DiskInfo } from '$lib/api/nodes';
     import { listEvents, setMaintenance, clearMaintenance, type AlertEvent } from '$lib/api/events';
     import { listWorkloads, type Workload } from '$lib/api/resource-groups';
     import { Button } from '$lib/components/ui/button/index.js';
@@ -28,7 +28,7 @@
     let metricsError = $state<string | null>(null);
     let metricsLoading = $state(false);
     let metricsLive = $state(false);
-    let activeTab = $state<'summary' | 'hardware' | 'workloads' | 'network' | 'alerts' | 'tasks'>('summary');
+    let activeTab = $state<'summary' | 'hardware' | 'storage' | 'workloads' | 'network' | 'alerts' | 'tasks'>('summary');
     let liveSocket: WebSocket | null = null;
     let powerActionBusy = $state(false);
     let powerActionError = $state<string | null>(null);
@@ -46,6 +46,11 @@
     let workloads = $state<Workload[]>([]);
     let workloadsLoading = $state(true);
     let workloadsError = $state<string | null>(null);
+
+    let disks = $state<DiskInfo[]>([]);
+    let disksLoading = $state(false);
+    let disksError = $state<string | null>(null);
+    let disksLoaded = false;
 
     let maintenanceDialog = $state<HTMLDialogElement | null>(null);
     let maintenanceMinutes = $state('60');
@@ -102,6 +107,23 @@
             workloadsLoading = false;
         }
     }
+
+    async function loadDisks() {
+        if (!auth.token || disksLoaded) return;
+        disksLoading = true;
+        try {
+            disks = await getNodeDisks(auth.token, nodeId);
+            disksLoaded = true;
+        } catch (e) {
+            disksError = e instanceof Error ? e.message : 'Failed to load disks';
+        } finally {
+            disksLoading = false;
+        }
+    }
+
+    $effect(() => {
+        if (activeTab === 'storage') loadDisks();
+    });
 
     async function handleSetMaintenance() {
         if (!auth.token || !node) return;
@@ -458,6 +480,7 @@
     const tabs: { id: typeof activeTab; label: string }[] = [
         { id: 'summary', label: 'Summary' },
         { id: 'hardware', label: 'Hardware' },
+        { id: 'storage', label: 'Storage' },
         { id: 'workloads', label: 'Workloads' },
         { id: 'network', label: 'Network' },
         { id: 'alerts', label: 'Alerts' },
