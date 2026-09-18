@@ -5,6 +5,7 @@ use tokio::time::{interval, Duration};
 use crate::db::agents as agent_db;
 use crate::db::events;
 use crate::services::failover::FailoverService;
+use crate::services::hardware_alerts;
 
 const POLL_INTERVAL_SECS: u64 = 30;
 const SOFT_THRESHOLD_SECS: i64 = 120;
@@ -16,6 +17,20 @@ pub async fn run(db: DatabaseConnection) {
 
     loop {
         tick.tick().await;
+
+        match agent_db::get_agents_for_alerting(&db).await {
+            Ok(agents) => {
+                for agent in &agents {
+                    hardware_alerts::check_agent(&db, agent).await;
+                }
+            }
+            Err(e) => {
+                crate::log_error!(
+                    "monitor",
+                    &format!("Failed to query agents for alerting err={}", e)
+                );
+            }
+        }
 
         let (degraded, offline) =
             match agent_db::get_stale_agents(&db, SOFT_THRESHOLD_SECS, HARD_THRESHOLD_SECS).await {

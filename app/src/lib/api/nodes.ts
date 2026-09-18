@@ -15,6 +15,7 @@ export interface Node {
     last_heartbeat: string | null;
     registered_at: string;
     cordoned: boolean;
+    maintenance_until: string | null;
 }
 
 export interface NodeMetrics {

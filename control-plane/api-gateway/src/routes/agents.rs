@@ -63,6 +63,7 @@ pub struct AgentResponse {
     pub last_heartbeat: Option<String>,
     pub registered_at: String,
     pub cordoned: bool,
+    pub maintenance_until: Option<String>,
 }
 
 impl From<agents::Model> for AgentResponse {
@@ -80,6 +81,7 @@ impl From<agents::Model> for AgentResponse {
             last_heartbeat: model.last_heartbeat.map(|dt| dt.to_string()),
             registered_at: model.registered_at.to_string(),
             cordoned: model.cordoned,
+            maintenance_until: model.maintenance_until.map(|dt| dt.and_utc().to_rfc3339()),
         }
     }
 }

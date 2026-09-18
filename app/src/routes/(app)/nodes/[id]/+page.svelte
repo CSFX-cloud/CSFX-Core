@@ -3,7 +3,7 @@
     import { goto } from '$app/navigation';
     import { auth } from '$lib/auth/store.svelte';
     import { getNode, getNodeMetricsLatest, openNodeMetricsSocket, rebootNode, powerOffNode, drainNode, uncordonNode, type LiveNodeMetrics, type Node, type NodeMetricsLatest } from '$lib/api/nodes';
-    import * as Sidebar from '$lib/components/ui/sidebar/index.js';
+    import { listEvents, setMaintenance, clearMaintenance, type AlertEvent } from '$lib/api/events';
     import { Button } from '$lib/components/ui/button/index.js';
     import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
@@ -11,6 +11,9 @@
     import PowerIcon from '@lucide/svelte/icons/power';
     import GlobeIcon from '@lucide/svelte/icons/globe';
     import TagIcon from '@lucide/svelte/icons/tag';
+    import WrenchIcon from '@lucide/svelte/icons/wrench';
+    import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+    import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
 
     const nodeId: string = $page.params.id;
 
@@ -22,7 +25,7 @@
     let metricsError = $state<string | null>(null);
     let metricsLoading = $state(false);
     let metricsLive = $state(false);
-    let activeTab = $state<'summary' | 'hardware' | 'workloads' | 'network' | 'tasks'>('summary');
+    let activeTab = $state<'summary' | 'hardware' | 'workloads' | 'network' | 'alerts' | 'tasks'>('summary');
     let liveSocket: WebSocket | null = null;
     let powerActionBusy = $state(false);
     let powerActionError = $state<string | null>(null);
@@ -31,6 +34,30 @@
     type HistoryPoint = { cpu: number; memory: number; rxBps: number; txBps: number };
     let history = $state<HistoryPoint[]>([]);
     let lastNetSample: { rx: number; tx: number; at: number } | null = null;
+
+    let alerts = $state<AlertEvent[]>([]);
+    let alertsLoading = $state(true);
+    let alertsError = $state<string | null>(null);
+    let openAlerts = $derived(alerts.filter((a) => a.status === 'open'));
+
+    let maintenanceDialog = $state<HTMLDialogElement | null>(null);
+    let maintenanceMinutes = $state('60');
+    let maintenanceBusy = $state(false);
+    let maintenanceError = $state<string | null>(null);
+    let nowTick = $state(Date.now());
+    let isInMaintenance = $derived(
+        node?.maintenance_until != null && new Date(node.maintenance_until).getTime() > nowTick,
+    );
+    let maintenanceRemaining = $derived.by(() => {
+        if (!node?.maintenance_until) return null;
+        const diffMs = new Date(node.maintenance_until).getTime() - nowTick;
+        if (diffMs <= 0) return null;
+        const totalMinutes = Math.ceil(diffMs / 60000);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        if (hours > 0) return `${hours}h ${minutes}m left`;
+        return `${minutes}m left`;
+    });
 
     async function loadNode() {
         if (!auth.token) return;
@@ -44,9 +71,53 @@
         }
     }
 
+    async function loadAlerts() {
+        if (!auth.token) return;
+        alertsLoading = true;
+        try {
+            alerts = await listEvents(auth.token, { agentId: nodeId });
+        } catch (e) {
+            alertsError = e instanceof Error ? e.message : 'Failed to load alerts';
+        } finally {
+            alertsLoading = false;
+        }
+    }
+
+    async function handleSetMaintenance() {
+        if (!auth.token || !node) return;
+        const minutes = parseInt(maintenanceMinutes);
+        if (!minutes || minutes < 1) return;
+        maintenanceBusy = true;
+        maintenanceError = null;
+        try {
+            await setMaintenance(auth.token, node.id, minutes);
+            node = await getNode(auth.token, nodeId);
+            maintenanceDialog?.close();
+        } catch (e) {
+            maintenanceError = e instanceof Error ? e.message : 'Failed to set maintenance';
+        } finally {
+            maintenanceBusy = false;
+        }
+    }
+
+    async function handleClearMaintenance() {
+        if (!auth.token || !node) return;
+        maintenanceBusy = true;
+        maintenanceError = null;
+        try {
+            await clearMaintenance(auth.token, node.id);
+            node = await getNode(auth.token, nodeId);
+        } catch (e) {
+            maintenanceError = e instanceof Error ? e.message : 'Failed to clear maintenance';
+        } finally {
+            maintenanceBusy = false;
+        }
+    }
+
     let loadStarted = false;
 
     let pollInterval: ReturnType<typeof setInterval> | null = null;
+    let tickInterval: ReturnType<typeof setInterval> | null = null;
 
     $effect(() => {
         if (auth.token && !loadStarted) {
@@ -54,14 +125,19 @@
             loadNode().then(() => {
                 loadMetrics(nodeId).then(() => openLiveMetrics(nodeId));
             });
+            loadAlerts();
             pollInterval = setInterval(() => {
                 if (!metricsLive) loadMetrics(nodeId);
             }, 5000);
+            tickInterval = setInterval(() => {
+                nowTick = Date.now();
+            }, 30000);
         }
 
         return () => {
             closeLiveMetrics();
             if (pollInterval) clearInterval(pollInterval);
+            if (tickInterval) clearInterval(tickInterval);
         };
     });
 
@@ -363,6 +439,7 @@
         { id: 'hardware', label: 'Hardware' },
         { id: 'workloads', label: 'Workloads' },
         { id: 'network', label: 'Network' },
+        { id: 'alerts', label: 'Alerts' },
         { id: 'tasks', label: 'Tasks' },
     ];
 </script>
@@ -465,7 +542,6 @@
 {/snippet}
 
 <header class="flex h-20 shrink-0 items-center gap-3 px-4">
-    <Sidebar.Trigger class="-ms-1" />
     <Button variant="ghost" size="icon-sm" onclick={() => goto('/nodes')} aria-label="Back to nodes">
         <ArrowLeftIcon class="size-4" />
     </Button>
@@ -483,6 +559,11 @@
                 {#if node.cordoned}
                     <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-yellow-500/15 text-yellow-600 border border-yellow-500/20 shrink-0">cordoned</span>
                 {/if}
+                {#if isInMaintenance}
+                    <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-500/15 text-amber-600 border border-amber-500/20 shrink-0">
+                        maintenance{maintenanceRemaining ? ` · ${maintenanceRemaining}` : ''}
+                    </span>
+                {/if}
             </div>
             <div class="flex items-center gap-3 text-xs text-muted-foreground leading-tight">
                 <span class="flex items-center gap-1">
@@ -497,6 +578,15 @@
         </div>
 
         <div class="ml-auto flex items-center gap-0.5 shrink-0">
+            {#if isInMaintenance}
+                <Button variant="ghost" size="icon-sm" onclick={handleClearMaintenance} disabled={maintenanceBusy} class="text-amber-500 hover:text-amber-500" aria-label="End maintenance" title="End maintenance">
+                    <WrenchIcon class="size-4" />
+                </Button>
+            {:else}
+                <Button variant="ghost" size="icon-sm" onclick={() => { maintenanceError = null; maintenanceDialog?.showModal(); }} aria-label="Start maintenance" title="Start maintenance">
+                    <WrenchIcon class="size-4" />
+                </Button>
+            {/if}
             <Button variant="ghost" size="icon-sm" onclick={handleReboot} disabled={powerActionBusy} aria-label="Reboot" title="Reboot">
                 <RotateCwIcon class="size-4" />
             </Button>
@@ -619,25 +709,87 @@
 
                     <div class="border-t mx-6"></div>
 
-                    <div class="px-6 py-4">
-                        <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">History</span>
-                        <div class="mt-3 border rounded-lg overflow-hidden">
-                            {#if history.length < 2}
-                                <p class="text-sm text-muted-foreground py-4 px-3">Collecting samples...</p>
-                            {:else}
-                                {@const cpuValues = history.map((h) => h.cpu)}
-                                {@const memValues = history.map((h) => h.memory)}
-                                {@const cpuMax = Math.max(20, ...cpuValues)}
-                                {@const memMax = Math.max(20, ...memValues)}
-                                {@const netMax = Math.max(1_048_576, ...history.map((h) => Math.max(h.rxBps, h.txBps)))}
-                                <div class="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-border">
-                                    {@render historyChart('CPU usage', cpuValues[cpuValues.length - 1], pctStr(cpuValues[cpuValues.length - 1]), sparklinePath(cpuValues, 440, 120, cpuMax), cpuValues, '#3b82f6', cpuMax)}
-                                    {@render historyChart('Memory usage', memValues[memValues.length - 1], pctStr(memValues[memValues.length - 1]), sparklinePath(memValues, 440, 120, memMax), memValues, '#a855f7', memMax)}
-                                </div>
-                                <div class="border-t">
-                                    {@render networkHistoryChart(history, netMax)}
-                                </div>
-                            {/if}
+                    <div class="px-6 py-4 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
+                        <div>
+                            <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">History</span>
+                            <div class="mt-3 border rounded-lg overflow-hidden">
+                                {#if history.length < 2}
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-border">
+                                        {#each [0, 1] as i (i)}
+                                            <div class="p-3">
+                                                <div class="flex items-center justify-between mb-2">
+                                                    <div class="h-3 w-20 rounded bg-muted animate-pulse"></div>
+                                                    <div class="h-4 w-10 rounded bg-muted animate-pulse"></div>
+                                                </div>
+                                                <div class="h-[120px] rounded bg-muted animate-pulse"></div>
+                                            </div>
+                                        {/each}
+                                    </div>
+                                    <div class="border-t p-3">
+                                        <div class="flex items-center justify-between mb-2">
+                                            <div class="h-3 w-16 rounded bg-muted animate-pulse"></div>
+                                            <div class="h-4 w-24 rounded bg-muted animate-pulse"></div>
+                                        </div>
+                                        <div class="h-[120px] rounded bg-muted animate-pulse"></div>
+                                    </div>
+                                {:else}
+                                    {@const cpuValues = history.map((h) => h.cpu)}
+                                    {@const memValues = history.map((h) => h.memory)}
+                                    {@const cpuMax = Math.max(20, ...cpuValues)}
+                                    {@const memMax = Math.max(20, ...memValues)}
+                                    {@const netMax = Math.max(1_048_576, ...history.map((h) => Math.max(h.rxBps, h.txBps)))}
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-border">
+                                        {@render historyChart('CPU usage', cpuValues[cpuValues.length - 1], pctStr(cpuValues[cpuValues.length - 1]), sparklinePath(cpuValues, 440, 120, cpuMax), cpuValues, '#3b82f6', cpuMax)}
+                                        {@render historyChart('Memory usage', memValues[memValues.length - 1], pctStr(memValues[memValues.length - 1]), sparklinePath(memValues, 440, 120, memMax), memValues, '#a855f7', memMax)}
+                                    </div>
+                                    <div class="border-t">
+                                        {@render networkHistoryChart(history, netMax)}
+                                    </div>
+                                {/if}
+                            </div>
+                        </div>
+
+                        <div class="flex flex-col h-full">
+                            <div class="flex items-center justify-between mb-3">
+                                <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Alerts</span>
+                                {#if openAlerts.length > 0}
+                                    <button class="text-xs text-muted-foreground hover:text-foreground" onclick={() => activeTab = 'alerts'}>
+                                        View all
+                                    </button>
+                                {/if}
+                            </div>
+                            <div class="border rounded-lg flex-1 min-h-0">
+                                {#if alertsLoading}
+                                    <div class="divide-y">
+                                        {#each [0, 1, 2] as i (i)}
+                                            <div class="flex items-start gap-2 px-2.5 py-1.5">
+                                                <div class="size-3.5 mt-0.5 shrink-0 rounded-full bg-muted animate-pulse"></div>
+                                                <div class="min-w-0 flex-1 flex flex-col gap-1">
+                                                    <div class="h-3 w-3/4 rounded bg-muted animate-pulse"></div>
+                                                    <div class="h-2.5 w-1/2 rounded bg-muted animate-pulse"></div>
+                                                </div>
+                                            </div>
+                                        {/each}
+                                    </div>
+                                {:else if openAlerts.length === 0}
+                                    <div class="flex flex-col items-center justify-center gap-1.5 h-full py-8 px-3 text-center">
+                                        <CircleCheckIcon class="size-5 text-muted-foreground" />
+                                        <p class="text-xs text-muted-foreground">No open alerts</p>
+                                    </div>
+                                {:else}
+                                    <div class="divide-y">
+                                        {#each openAlerts.slice(0, 5) as alert (alert.id)}
+                                            <div class="flex items-start gap-2 px-2.5 py-1.5">
+                                                <TriangleAlertIcon class="size-3.5 mt-0.5 shrink-0 text-amber-500" />
+                                                <div class="min-w-0 flex-1">
+                                                    <span class="text-xs font-medium leading-tight block truncate">{alert.message ?? alert.event_type}</span>
+                                                    <p class="text-[11px] text-muted-foreground leading-tight">{new Date(alert.created_at).toLocaleString()}</p>
+                                                </div>
+                                            </div>
+                                        {/each}
+                                    </div>
+                                {/if}
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -772,6 +924,49 @@
                     {/if}
                 </div>
 
+            {:else if activeTab === 'alerts'}
+                <div class="px-6 py-4">
+                    {#if alertsLoading}
+                        <div class="border rounded-lg divide-y w-full">
+                            {#each [0, 1, 2, 3] as i (i)}
+                                <div class="flex items-start gap-2 px-2.5 py-1.5">
+                                    <div class="size-3.5 mt-0.5 shrink-0 rounded-full bg-muted animate-pulse"></div>
+                                    <div class="min-w-0 flex-1 flex flex-col gap-1">
+                                        <div class="h-3 w-1/3 rounded bg-muted animate-pulse"></div>
+                                        <div class="h-2.5 w-1/4 rounded bg-muted animate-pulse"></div>
+                                    </div>
+                                </div>
+                            {/each}
+                        </div>
+                    {:else if alertsError}
+                        <p class="text-sm text-destructive">{alertsError}</p>
+                    {:else if alerts.length === 0}
+                        <p class="text-sm text-muted-foreground">No alerts for this node.</p>
+                    {:else}
+                        <div class="border rounded-lg divide-y w-full">
+                            {#each alerts as alert (alert.id)}
+                                <div class="flex items-start gap-2 px-2.5 py-1.5 w-full">
+                                    <TriangleAlertIcon class="size-3.5 mt-0.5 shrink-0 {alert.status === 'open' ? 'text-amber-500' : 'text-muted-foreground'}" />
+                                    <div class="min-w-0 flex-1">
+                                        <div class="flex items-center gap-1.5">
+                                            <span class="text-xs font-medium truncate">{alert.message ?? alert.event_type}</span>
+                                            <span class="text-[10px] px-1.5 py-px rounded font-medium shrink-0 {alert.status === 'open' ? 'bg-amber-500/15 text-amber-600' : 'bg-muted text-muted-foreground'}">
+                                                {alert.status}
+                                            </span>
+                                        </div>
+                                        <p class="text-[11px] text-muted-foreground leading-tight">
+                                            {new Date(alert.created_at).toLocaleString()}
+                                            {#if alert.resolved_at}
+                                                &nbsp;&middot;&nbsp;resolved {new Date(alert.resolved_at).toLocaleString()}
+                                            {/if}
+                                        </p>
+                                    </div>
+                                </div>
+                            {/each}
+                        </div>
+                    {/if}
+                </div>
+
             {:else if activeTab === 'tasks'}
                 <div class="px-6 py-4">
                     <p class="text-sm text-muted-foreground">No active tasks.</p>
@@ -780,3 +975,32 @@
         </div>
     {/if}
 </div>
+
+<dialog
+    bind:this={maintenanceDialog}
+    class="fixed inset-0 z-50 m-auto w-full max-w-sm rounded-xl border bg-background shadow-xl p-0 backdrop:bg-black/40"
+>
+    <div class="flex flex-col gap-4 p-6">
+        <h2 class="text-base font-semibold">Start maintenance</h2>
+        <p class="text-sm text-muted-foreground">Hardware alerts for this node are suppressed until maintenance ends.</p>
+        <div class="flex flex-col gap-1">
+            <label class="text-xs text-muted-foreground" for="maintenance-minutes">Duration (minutes)</label>
+            <input
+                id="maintenance-minutes"
+                type="number"
+                min="1"
+                class="border rounded px-3 py-1.5 text-sm bg-background"
+                bind:value={maintenanceMinutes}
+            />
+        </div>
+        {#if maintenanceError}
+            <p class="text-xs text-destructive">{maintenanceError}</p>
+        {/if}
+        <div class="flex gap-2 justify-end">
+            <Button size="sm" variant="outline" onclick={() => maintenanceDialog?.close()}>Cancel</Button>
+            <Button size="sm" onclick={handleSetMaintenance} disabled={maintenanceBusy}>
+                {maintenanceBusy ? 'Starting...' : 'Start maintenance'}
+            </Button>
+        </div>
+    </div>
+</dialog>

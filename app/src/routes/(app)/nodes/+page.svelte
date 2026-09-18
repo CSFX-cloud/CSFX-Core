@@ -3,7 +3,6 @@
     import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
     import { listNodes, getClusterStats, type Node, type ClusterStats, type NodeMetrics } from "$lib/api/nodes";
-    import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
     import { Input } from "$lib/components/ui/input/index.js";
     import StatusBadge from "$lib/components/status-badge.svelte";
@@ -35,6 +34,15 @@
 
     function nodeMetrics(node: Node): NodeMetrics | null {
         return stats?.nodes.find((m) => m.agent_id === node.id) ?? null;
+    }
+
+    function maintenanceRemainingLabel(maintenanceUntil: string): string {
+        const diffMs = new Date(maintenanceUntil).getTime() - Date.now();
+        if (diffMs <= 0) return "";
+        const totalMinutes = Math.ceil(diffMs / 60000);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        return hours > 0 ? `${hours}h ${minutes}m left` : `${minutes}m left`;
     }
 
     function metricRatio(bytesUsed: number | null, bytesTotal: number | null): number {
@@ -204,7 +212,6 @@
 {/snippet}
 
 <header class="flex h-16 shrink-0 items-center gap-3 px-4 border-b">
-    <Sidebar.Trigger class="-ms-1" />
     <div class="relative w-full max-w-sm">
         <SearchIcon class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input placeholder="Search anything" class="pl-8 pr-14" />
@@ -426,7 +433,11 @@
                             <td class="px-4 py-3 text-muted-foreground">{node.os_type} {node.os_version}</td>
                             <td class="px-4 py-3 text-muted-foreground">{node.architecture}</td>
                             <td class="px-4 py-3">
-                                <StatusBadge status={node.status} />
+                                {#if node.maintenance_until && new Date(node.maintenance_until).getTime() > Date.now()}
+                                    <StatusBadge status="degraded" label="Maintenance" title={maintenanceRemainingLabel(node.maintenance_until)} />
+                                {:else}
+                                    <StatusBadge status={node.status} />
+                                {/if}
                             </td>
                             <td class="px-4 py-3">
                                 {#if metrics}

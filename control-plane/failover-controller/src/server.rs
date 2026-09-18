@@ -1,4 +1,9 @@
-use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
+use axum::{
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{delete, get, post},
+    Router,
+};
 use sea_orm::DatabaseConnection;
 
 use crate::{handlers::events, metrics};
@@ -17,5 +22,13 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health_check))
         .route("/metrics", get(metrics::metrics_handler))
         .route("/events", get(events::list_events))
+        .route(
+            "/agents/{agent_id}/maintenance",
+            post(events::set_maintenance),
+        )
+        .route(
+            "/agents/{agent_id}/maintenance",
+            delete(events::clear_maintenance),
+        )
         .with_state(state)
 }
