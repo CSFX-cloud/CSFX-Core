@@ -25,7 +25,7 @@
     });
 </script>
 
-<Sidebar.Provider>
+<Sidebar.Provider open={false}>
     <AppSidebar />
     <Sidebar.Inset>
         {@render children()}

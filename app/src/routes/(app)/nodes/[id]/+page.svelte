@@ -6,6 +6,11 @@
     import * as Sidebar from '$lib/components/ui/sidebar/index.js';
     import { Button } from '$lib/components/ui/button/index.js';
     import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
+    import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
+    import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+    import PowerIcon from '@lucide/svelte/icons/power';
+    import GlobeIcon from '@lucide/svelte/icons/globe';
+    import TagIcon from '@lucide/svelte/icons/tag';
 
     const nodeId: string = $page.params.id;
 
@@ -22,6 +27,11 @@
     let powerActionBusy = $state(false);
     let powerActionError = $state<string | null>(null);
 
+    const HISTORY_LENGTH = 60;
+    type HistoryPoint = { cpu: number; memory: number; rxBps: number; txBps: number };
+    let history = $state<HistoryPoint[]>([]);
+    let lastNetSample: { rx: number; tx: number; at: number } | null = null;
+
     async function loadNode() {
         if (!auth.token) return;
         loading = true;
@@ -36,15 +46,23 @@
 
     let loadStarted = false;
 
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+
     $effect(() => {
         if (auth.token && !loadStarted) {
             loadStarted = true;
             loadNode().then(() => {
                 loadMetrics(nodeId).then(() => openLiveMetrics(nodeId));
             });
+            pollInterval = setInterval(() => {
+                if (!metricsLive) loadMetrics(nodeId);
+            }, 5000);
         }
 
-        return () => closeLiveMetrics();
+        return () => {
+            closeLiveMetrics();
+            if (pollInterval) clearInterval(pollInterval);
+        };
     });
 
     async function loadMetrics(id: string) {
@@ -52,6 +70,13 @@
         metricsLoading = true;
         try {
             metrics = await getNodeMetricsLatest(auth.token, id);
+            pushHistorySample(
+                metrics.cpu_usage_percent,
+                metrics.memory_used_bytes,
+                metrics.memory_total_bytes,
+                metrics.network_rx_bytes,
+                metrics.network_tx_bytes,
+            );
         } catch {
             metricsError = 'No metrics available';
         } finally {
@@ -87,6 +112,40 @@
             hostname: metrics?.hostname ?? null,
             uptime_seconds: sample.uptime_seconds,
         };
+        pushHistoryPoint(sample);
+    }
+
+    function pushHistoryPoint(sample: LiveNodeMetrics) {
+        pushHistorySample(sample.cpu_usage_percent, sample.memory_used_bytes, sample.memory_total_bytes, sample.network_rx_bytes, sample.network_tx_bytes);
+    }
+
+    function pushHistorySample(
+        cpuPercent: number | null,
+        memoryUsedBytes: number | null,
+        memoryTotalBytes: number | null,
+        networkRxBytes: number | null,
+        networkTxBytes: number | null,
+    ) {
+        const now = Date.now();
+        let rxBps = 0;
+        let txBps = 0;
+        if (lastNetSample && networkRxBytes != null && networkTxBytes != null) {
+            const elapsed = (now - lastNetSample.at) / 1000;
+            if (elapsed > 0) {
+                rxBps = Math.max(0, (networkRxBytes - lastNetSample.rx) / elapsed);
+                txBps = Math.max(0, (networkTxBytes - lastNetSample.tx) / elapsed);
+            }
+        }
+        if (networkRxBytes != null && networkTxBytes != null) {
+            lastNetSample = { rx: networkRxBytes, tx: networkTxBytes, at: now };
+        }
+
+        const memPercent = memoryTotalBytes != null && memoryTotalBytes > 0 && memoryUsedBytes != null
+            ? (memoryUsedBytes / memoryTotalBytes) * 100
+            : 0;
+
+        const next = [...history, { cpu: cpuPercent ?? 0, memory: memPercent, rxBps, txBps }];
+        history = next.length > HISTORY_LENGTH ? next.slice(next.length - HISTORY_LENGTH) : next;
     }
 
     async function openLiveMetrics(agentId: string) {
@@ -115,7 +174,12 @@
 
     function bytesToGb(bytes: number | null): string {
         if (bytes == null) return '-';
-        return (bytes / 1_073_741_824).toFixed(1) + ' GB';
+        const pb = 1_125_899_906_842_624;
+        const tb = 1_099_511_627_776;
+        const gb = 1_073_741_824;
+        if (bytes >= pb) return (bytes / pb).toFixed(1) + ' PB';
+        if (bytes >= tb) return (bytes / tb).toFixed(1) + ' TB';
+        return (bytes / gb).toFixed(1) + ' GB';
     }
 
     function formatUptime(seconds: number | null): string {
@@ -186,10 +250,18 @@
         }
     }
 
-    function gaugeArc(value: number, radius: number): { dasharray: string; circumference: number } {
+    const GAUGE_ARC_FRACTION = 0.7;
+    const GAUGE_ROTATION_DEG = 90 + (360 * (1 - GAUGE_ARC_FRACTION)) / 2;
+
+    function gaugeArc(value: number, radius: number): { dasharray: string; trackDasharray: string; circumference: number } {
         const circumference = 2 * Math.PI * radius;
-        const filled = (value / 100) * circumference;
-        return { dasharray: `${filled.toFixed(1)} ${circumference.toFixed(1)}`, circumference };
+        const arcLength = circumference * GAUGE_ARC_FRACTION;
+        const filled = (value / 100) * arcLength;
+        return {
+            dasharray: `${filled.toFixed(1)} ${circumference.toFixed(1)}`,
+            trackDasharray: `${arcLength.toFixed(1)} ${circumference.toFixed(1)}`,
+            circumference,
+        };
     }
 
     function gaugeColor(value: number): string {
@@ -198,9 +270,35 @@
         return 'currentColor';
     }
 
-    function refreshedLabel(timestamp: string): string {
-        const diff = Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000);
-        return diff < 60 ? `refreshed ${diff}s ago` : `refreshed ${Math.floor(diff / 60)}m ago`;
+    function formatBandwidth(bytesPerSecond: number): string {
+        if (bytesPerSecond >= 1_073_741_824) return (bytesPerSecond / 1_073_741_824).toFixed(1) + ' GB/s';
+        if (bytesPerSecond >= 1_048_576) return (bytesPerSecond / 1_048_576).toFixed(1) + ' MB/s';
+        if (bytesPerSecond >= 1024) return (bytesPerSecond / 1024).toFixed(1) + ' KB/s';
+        return bytesPerSecond.toFixed(0) + ' B/s';
+    }
+
+    function sparklineXRange(values: number[], width: number): { firstX: number; lastX: number } {
+        const step = width / (HISTORY_LENGTH - 1);
+        const offset = HISTORY_LENGTH - values.length;
+        return { firstX: offset * step, lastX: (HISTORY_LENGTH - 1) * step };
+    }
+
+    function sparklinePath(values: number[], width: number, height: number, max: number): string {
+        if (values.length < 2) return '';
+        const step = width / (HISTORY_LENGTH - 1);
+        const offset = HISTORY_LENGTH - values.length;
+        const points = values.map((v, i) => {
+            const x = (offset + i) * step;
+            const y = height - (Math.min(v, max) / max) * height;
+            return `${x.toFixed(1)},${y.toFixed(1)}`;
+        });
+        return `M${points.join(' L')}`;
+    }
+
+    function sparklineFillPath(linePath: string, values: number[], width: number, height: number): string {
+        if (!linePath) return '';
+        const { firstX, lastX } = sparklineXRange(values, width);
+        return `${linePath} L${lastX.toFixed(1)},${height} L${firstX.toFixed(1)},${height} Z`;
     }
 
     async function handleReboot() {
@@ -271,36 +369,156 @@
 
 {#snippet gaugeCard(value: number, label: string, detail: string)}
     {#if true}
-        {@const arc = gaugeArc(value, 20)}
-        <div class="border rounded-lg p-3 flex items-center gap-3">
+        {@const arc = gaugeArc(value, 44)}
+        <div class="p-3 flex flex-col items-center">
             <div class="relative shrink-0">
-                <svg width="52" height="52" viewBox="0 0 52 52" style="color: {gaugeColor(value)}">
-                    <circle cx="26" cy="26" r="20" fill="none" stroke="currentColor" stroke-width="4" stroke-opacity="0.12"/>
+                <svg width="112" height="112" viewBox="0 0 112 112" style="color: {gaugeColor(value)}">
                     <circle
-                        cx="26" cy="26" r="20" fill="none"
-                        stroke="currentColor" stroke-width="4"
+                        cx="56" cy="56" r="44" fill="none"
+                        stroke="currentColor" stroke-width="8" stroke-opacity="0.12"
+                        stroke-dasharray={arc.trackDasharray}
+                        stroke-linecap="round"
+                        transform="rotate({GAUGE_ROTATION_DEG} 56 56)"
+                    />
+                    <circle
+                        cx="56" cy="56" r="44" fill="none"
+                        stroke="currentColor" stroke-width="8"
                         stroke-dasharray={arc.dasharray}
                         stroke-linecap="round"
-                        transform="rotate(-180 26 26)"
+                        transform="rotate({GAUGE_ROTATION_DEG} 56 56)"
                     />
                 </svg>
-                <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold">{value.toFixed(0)}%</span>
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <span class="text-xl font-semibold leading-none">{value.toFixed(0)}%</span>
+                </div>
             </div>
-            <div class="min-w-0">
-                <p class="text-xs font-medium">{label}</p>
-                <p class="text-xs text-muted-foreground truncate leading-tight mt-0.5">{detail}</p>
+            <div class="flex flex-col items-center gap-0.5 mt-1 text-center">
+                <span class="text-xs font-medium leading-tight">{label}</span>
+                <span class="text-[11px] text-muted-foreground truncate leading-tight max-w-full">{detail}</span>
             </div>
         </div>
     {/if}
 {/snippet}
 
-<header class="flex h-16 shrink-0 items-center gap-3 px-4 border-b">
+{#snippet historyChart(label: string, currentValue: number, currentLabel: string, path: string, values: number[], color: string, maxValue: number)}
+    {@const fillPath = sparklineFillPath(path, values, 440, 120)}
+    {@const gradientId = 'fill-' + label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}
+    <div class="p-3">
+        <div class="flex items-center justify-between mb-2">
+            <p class="text-xs font-medium">{label}</p>
+            <p class="text-sm font-semibold tabular-nums" style="color: {color}">{currentLabel}</p>
+        </div>
+        <div class="flex gap-2">
+            <svg viewBox="0 0 440 120" width="100%" height="120" preserveAspectRatio="none" class="flex-1 min-w-0">
+                <defs>
+                    <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color={color} stop-opacity="0.25"/>
+                        <stop offset="100%" stop-color={color} stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+                <path d={fillPath} fill="url(#{gradientId})" stroke="none"/>
+                <path d={path} fill="none" stroke={color} stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+            </svg>
+            <div class="flex flex-col justify-between text-[11px] text-muted-foreground shrink-0 py-0.5">
+                <span>{maxValue.toFixed(0)}%</span>
+                <span>0%</span>
+            </div>
+        </div>
+    </div>
+{/snippet}
+
+{#snippet networkHistoryChart(points: { rxBps: number; txBps: number }[], max: number)}
+    {@const rxValues = points.map((p) => p.rxBps)}
+    {@const txValues = points.map((p) => p.txBps)}
+    {@const rxPath = sparklinePath(rxValues, 440, 120, max)}
+    {@const txPath = sparklinePath(txValues, 440, 120, max)}
+    {@const rxFillPath = sparklineFillPath(rxPath, rxValues, 440, 120)}
+    {@const lastRx = points[points.length - 1]?.rxBps ?? 0}
+    {@const lastTx = points[points.length - 1]?.txBps ?? 0}
+    <div class="p-3">
+        <div class="flex items-center justify-between mb-2">
+            <p class="text-xs font-medium">Network</p>
+            <p class="text-sm font-medium tabular-nums">
+                <span style="color: #3b82f6">RX {formatBandwidth(lastRx)}</span>
+                <span class="text-muted-foreground mx-1">/</span>
+                <span style="color: #a855f7">TX {formatBandwidth(lastTx)}</span>
+            </p>
+        </div>
+        <div class="flex gap-2">
+            <svg viewBox="0 0 440 120" width="100%" height="120" preserveAspectRatio="none" class="flex-1 min-w-0">
+                <defs>
+                    <linearGradient id="fill-net-rx" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.2"/>
+                        <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+                <path d={rxFillPath} fill="url(#fill-net-rx)" stroke="none"/>
+                <path d={rxPath} fill="none" stroke="#3b82f6" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+                <path d={txPath} fill="none" stroke="#a855f7" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+            </svg>
+            <div class="flex flex-col justify-between text-[11px] text-muted-foreground shrink-0 py-0.5">
+                <span>{formatBandwidth(max)}</span>
+                <span>0 B/s</span>
+            </div>
+        </div>
+    </div>
+{/snippet}
+
+<header class="flex h-20 shrink-0 items-center gap-3 px-4">
     <Sidebar.Trigger class="-ms-1" />
     <Button variant="ghost" size="icon-sm" onclick={() => goto('/nodes')} aria-label="Back to nodes">
         <ArrowLeftIcon class="size-4" />
     </Button>
-    <span class="text-sm font-medium">Nodes</span>
+    {#if node}
+        <div class="flex items-center justify-center w-10 h-10 rounded-lg border bg-muted shrink-0">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2"/>
+                <path d="M8 21h8M12 17v4"/>
+            </svg>
+        </div>
+        <div class="flex flex-col gap-0.5 min-w-0">
+            <div class="flex items-center gap-2 min-w-0">
+                <span class="text-base font-semibold leading-tight truncate">{node.hostname}</span>
+                <span class="inline-block w-2 h-2 rounded-full shrink-0 {statusDotClass(node.status)}" title={node.status.toLowerCase()}></span>
+                {#if node.cordoned}
+                    <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-yellow-500/15 text-yellow-600 border border-yellow-500/20 shrink-0">cordoned</span>
+                {/if}
+            </div>
+            <div class="flex items-center gap-3 text-xs text-muted-foreground leading-tight">
+                <span class="flex items-center gap-1">
+                    <GlobeIcon class="size-3" />
+                    {node.ip_address ?? 'no ip'}
+                </span>
+                <span class="flex items-center gap-1">
+                    <TagIcon class="size-3" />
+                    v{node.agent_version}
+                </span>
+            </div>
+        </div>
+
+        <div class="ml-auto flex items-center gap-0.5 shrink-0">
+            <Button variant="ghost" size="icon-sm" onclick={handleReboot} disabled={powerActionBusy} aria-label="Reboot" title="Reboot">
+                <RotateCwIcon class="size-4" />
+            </Button>
+            {#if node.cordoned}
+                <Button variant="ghost" size="icon-sm" onclick={handleUncordon} disabled={powerActionBusy} aria-label="Uncordon" title="Uncordon">
+                    <ArrowRightIcon class="size-4" />
+                </Button>
+            {:else}
+                <Button variant="ghost" size="icon-sm" onclick={handleDrain} disabled={powerActionBusy} aria-label="Drain" title="Drain">
+                    <ArrowRightIcon class="size-4" />
+                </Button>
+            {/if}
+            <Button variant="ghost" size="icon-sm" onclick={handlePowerOff} disabled={powerActionBusy} class="text-red-500 hover:text-red-500" aria-label="Power off" title="Power off">
+                <PowerIcon class="size-4" />
+            </Button>
+        </div>
+    {/if}
 </header>
+
+{#if node && powerActionError}
+    <p class="text-xs text-destructive px-4 pt-2">{powerActionError}</p>
+{/if}
 
 <div class="flex-1 overflow-y-auto">
     {#if loading}
@@ -308,69 +526,8 @@
     {:else if error}
         <p class="px-6 py-8 text-sm text-destructive">{error}</p>
     {:else if node}
-        <div class="px-6 pt-5 pb-0">
-            <div class="flex items-start gap-3 mb-4">
-                <div class="flex items-center justify-center w-10 h-10 rounded-lg border bg-muted shrink-0">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="2" y="3" width="20" height="14" rx="2"/>
-                        <path d="M8 21h8M12 17v4"/>
-                    </svg>
-                </div>
-                <div class="flex flex-col gap-0.5 min-w-0">
-                    <h1 class="text-base font-semibold leading-tight">{node.hostname}</h1>
-                    <span class="text-xs text-muted-foreground">{node.ip_address ?? 'no ip'}</span>
-                </div>
-                <div class="ml-auto flex items-center gap-1.5 shrink-0">
-                    {#if node.cordoned}
-                        <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-yellow-500/15 text-yellow-600">cordoned</span>
-                    {/if}
-                    <span class="inline-block w-2 h-2 rounded-full {statusDotClass(node.status)}"></span>
-                    <span class="text-xs font-medium">{node.status.toLowerCase()}</span>
-                </div>
-            </div>
-
-            <div class="flex flex-wrap gap-1 pb-0">
-                <Button variant="outline" size="sm" class="text-xs h-7 shrink-0 gap-1.5" disabled>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="3"/>
-                        <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
-                    </svg>
-                    BMC / iDRAC
-                </Button>
-                <Button variant="outline" size="sm" class="text-xs h-7 shrink-0 gap-1.5" onclick={handleReboot} disabled={powerActionBusy}>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
-                    </svg>
-                    Reboot
-                </Button>
-                {#if node.cordoned}
-                    <Button variant="outline" size="sm" class="text-xs h-7 shrink-0 gap-1.5" onclick={handleUncordon} disabled={powerActionBusy}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M5 12h14M12 5l7 7-7 7"/>
-                        </svg>
-                        Uncordon
-                    </Button>
-                {:else}
-                    <Button variant="outline" size="sm" class="text-xs h-7 shrink-0 gap-1.5" onclick={handleDrain} disabled={powerActionBusy}>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M5 12h14M12 5l7 7-7 7"/>
-                        </svg>
-                        Drain
-                    </Button>
-                {/if}
-                <Button variant="outline" size="sm" class="text-xs h-7 shrink-0 gap-1.5 text-red-500 hover:text-red-500" onclick={handlePowerOff} disabled={powerActionBusy}>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
-                    </svg>
-                    Power off
-                </Button>
-            </div>
-
-            {#if powerActionError}
-                <p class="text-xs text-destructive mt-1.5">{powerActionError}</p>
-            {/if}
-
-            <div class="flex gap-0 mt-3 border-b">
+        <div class="px-6 pt-4 pb-0">
+            <div class="flex gap-0 border-b">
                 {#each tabs as tab}
                     <button
                         class="px-3 py-2 text-xs font-medium border-b-2 transition-colors {activeTab === tab.id ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
@@ -386,22 +543,6 @@
             {#if activeTab === 'summary'}
                 <div class="flex flex-col gap-0">
                     <div class="px-6 py-4">
-                        <div class="flex items-center justify-between mb-3">
-                            <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Live Load</span>
-                            {#if metricsLoading}
-                                <span class="text-xs text-muted-foreground">Loading...</span>
-                            {:else if metricsLive}
-                                <span class="text-xs text-emerald-500 px-2 py-0.5 border border-emerald-500/30 rounded-md flex items-center gap-1.5">
-                                    <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                                    live
-                                </span>
-                            {:else if metrics?.timestamp}
-                                <span class="text-xs text-muted-foreground px-2 py-0.5 border rounded-md">
-                                    {refreshedLabel(metrics.timestamp)}
-                                </span>
-                            {/if}
-                        </div>
-
                         {#if metricsError}
                             <p class="text-sm text-muted-foreground py-4">{metricsError}</p>
                         {:else}
@@ -424,39 +565,51 @@
                                 {#if true}
                                     {@const rxPct = netRxPct()}
                                     {@const txPct = netTxPct()}
-                                    {@const outerR = 20}
-                                    {@const innerR = 13}
+                                    {@const outerR = 44}
+                                    {@const innerR = 33}
                                     {@const outerC = 2 * Math.PI * outerR}
                                     {@const innerC = 2 * Math.PI * innerR}
-                                    <div class="border rounded-lg p-3 flex items-center gap-3">
+                                    {@const outerArc = outerC * GAUGE_ARC_FRACTION}
+                                    {@const innerArc = innerC * GAUGE_ARC_FRACTION}
+                                    <div class="p-3 flex flex-col items-center">
                                         <div class="relative shrink-0">
-                                            <svg width="52" height="52" viewBox="0 0 52 52">
-                                                <circle cx="26" cy="26" r={outerR} fill="none" stroke="#3b82f6" stroke-width="4" stroke-opacity="0.12"/>
+                                            <svg width="112" height="112" viewBox="0 0 112 112">
                                                 <circle
-                                                    cx="26" cy="26" r={outerR} fill="none"
-                                                    stroke="#3b82f6" stroke-width="4"
-                                                    stroke-dasharray="{((rxPct / 100) * outerC).toFixed(1)} {outerC.toFixed(1)}"
+                                                    cx="56" cy="56" r={outerR} fill="none"
+                                                    stroke="#3b82f6" stroke-width="8" stroke-opacity="0.12"
+                                                    stroke-dasharray="{outerArc.toFixed(1)} {outerC.toFixed(1)}"
                                                     stroke-linecap="round"
-                                                    transform="rotate(-180 26 26)"
+                                                    transform="rotate({GAUGE_ROTATION_DEG} 56 56)"
                                                 />
-                                                <circle cx="26" cy="26" r={innerR} fill="none" stroke="#a855f7" stroke-width="4" stroke-opacity="0.12"/>
                                                 <circle
-                                                    cx="26" cy="26" r={innerR} fill="none"
-                                                    stroke="#a855f7" stroke-width="4"
-                                                    stroke-dasharray="{((txPct / 100) * innerC).toFixed(1)} {innerC.toFixed(1)}"
+                                                    cx="56" cy="56" r={outerR} fill="none"
+                                                    stroke="#3b82f6" stroke-width="8"
+                                                    stroke-dasharray="{((rxPct / 100) * outerArc).toFixed(1)} {outerC.toFixed(1)}"
                                                     stroke-linecap="round"
-                                                    transform="rotate(-180 26 26)"
+                                                    transform="rotate({GAUGE_ROTATION_DEG} 56 56)"
+                                                />
+                                                <circle
+                                                    cx="56" cy="56" r={innerR} fill="none"
+                                                    stroke="#a855f7" stroke-width="8" stroke-opacity="0.12"
+                                                    stroke-dasharray="{innerArc.toFixed(1)} {innerC.toFixed(1)}"
+                                                    stroke-linecap="round"
+                                                    transform="rotate({GAUGE_ROTATION_DEG} 56 56)"
+                                                />
+                                                <circle
+                                                    cx="56" cy="56" r={innerR} fill="none"
+                                                    stroke="#a855f7" stroke-width="8"
+                                                    stroke-dasharray="{((txPct / 100) * innerArc).toFixed(1)} {innerC.toFixed(1)}"
+                                                    stroke-linecap="round"
+                                                    transform="rotate({GAUGE_ROTATION_DEG} 56 56)"
                                                 />
                                             </svg>
+                                            <div class="absolute inset-0 flex items-center justify-center">
+                                                <span class="text-xs font-medium leading-tight">Network</span>
+                                            </div>
                                         </div>
-                                        <div class="min-w-0">
-                                            <p class="text-xs font-medium">Network</p>
-                                            <p class="text-xs leading-tight mt-0.5" style="color: #3b82f6">
-                                                <span class="font-medium">RX</span> {formatBytes(metrics?.network_rx_bytes ?? null)}
-                                            </p>
-                                            <p class="text-xs leading-tight" style="color: #a855f7">
-                                                <span class="font-medium">TX</span> {formatBytes(metrics?.network_tx_bytes ?? null)}
-                                            </p>
+                                        <div class="flex flex-col items-center gap-0.5 mt-1 text-center">
+                                            <span class="text-[11px] leading-tight" style="color: #3b82f6">RX {formatBytes(metrics?.network_rx_bytes ?? null)}</span>
+                                            <span class="text-[11px] leading-tight" style="color: #a855f7">TX {formatBytes(metrics?.network_tx_bytes ?? null)}</span>
                                         </div>
                                     </div>
                                 {/if}
@@ -467,46 +620,24 @@
                     <div class="border-t mx-6"></div>
 
                     <div class="px-6 py-4">
-                        <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Host & Lifecycle</span>
-                        <div class="mt-3 border rounded-lg divide-y text-sm">
-                            <div class="flex justify-between px-3 py-2">
-                                <span class="text-muted-foreground">Hostname</span>
-                                <span class="font-medium">{node.hostname}</span>
-                            </div>
-                            <div class="flex justify-between px-3 py-2">
-                                <span class="text-muted-foreground">IP address</span>
-                                <span class="font-mono text-xs">{node.ip_address ?? '-'}</span>
-                            </div>
-                            <div class="flex justify-between px-3 py-2">
-                                <span class="text-muted-foreground">OS</span>
-                                <span>{node.os_type} {node.os_version}</span>
-                            </div>
-                            {#if metrics?.kernel_version}
-                                <div class="flex justify-between px-3 py-2">
-                                    <span class="text-muted-foreground">Kernel</span>
-                                    <span class="font-mono text-xs">{metrics.kernel_version}</span>
+                        <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">History</span>
+                        <div class="mt-3 border rounded-lg overflow-hidden">
+                            {#if history.length < 2}
+                                <p class="text-sm text-muted-foreground py-4 px-3">Collecting samples...</p>
+                            {:else}
+                                {@const cpuValues = history.map((h) => h.cpu)}
+                                {@const memValues = history.map((h) => h.memory)}
+                                {@const cpuMax = Math.max(20, ...cpuValues)}
+                                {@const memMax = Math.max(20, ...memValues)}
+                                {@const netMax = Math.max(1_048_576, ...history.map((h) => Math.max(h.rxBps, h.txBps)))}
+                                <div class="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-border">
+                                    {@render historyChart('CPU usage', cpuValues[cpuValues.length - 1], pctStr(cpuValues[cpuValues.length - 1]), sparklinePath(cpuValues, 440, 120, cpuMax), cpuValues, '#3b82f6', cpuMax)}
+                                    {@render historyChart('Memory usage', memValues[memValues.length - 1], pctStr(memValues[memValues.length - 1]), sparklinePath(memValues, 440, 120, memMax), memValues, '#a855f7', memMax)}
+                                </div>
+                                <div class="border-t">
+                                    {@render networkHistoryChart(history, netMax)}
                                 </div>
                             {/if}
-                            <div class="flex justify-between px-3 py-2">
-                                <span class="text-muted-foreground">Architecture</span>
-                                <span>{node.architecture}</span>
-                            </div>
-                            <div class="flex justify-between px-3 py-2">
-                                <span class="text-muted-foreground">Agent version</span>
-                                <span class="font-mono text-xs">{node.agent_version}</span>
-                            </div>
-                            <div class="flex justify-between px-3 py-2">
-                                <span class="text-muted-foreground">Uptime</span>
-                                <span>{formatUptime(metrics?.uptime_seconds ?? null)}</span>
-                            </div>
-                            <div class="flex justify-between px-3 py-2">
-                                <span class="text-muted-foreground">Registered</span>
-                                <span class="text-xs">{node.registered_at.slice(0, 16)}</span>
-                            </div>
-                            <div class="flex justify-between px-3 py-2">
-                                <span class="text-muted-foreground">Last heartbeat</span>
-                                <span class="text-xs">{node.last_heartbeat ? node.last_heartbeat.slice(0, 16) : 'never'}</span>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -516,6 +647,41 @@
                     {#if metricsLoading}
                         <p class="text-sm text-muted-foreground">Loading...</p>
                     {:else if metrics}
+                        <div>
+                            <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Host</span>
+                            <div class="mt-2 border rounded-lg divide-y text-sm">
+                                <div class="flex justify-between px-3 py-2">
+                                    <span class="text-muted-foreground">Hostname</span>
+                                    <span class="font-medium">{node.hostname}</span>
+                                </div>
+                                <div class="flex justify-between px-3 py-2">
+                                    <span class="text-muted-foreground">OS</span>
+                                    <span>{node.os_type} {node.os_version}</span>
+                                </div>
+                                {#if metrics.kernel_version}
+                                    <div class="flex justify-between px-3 py-2">
+                                        <span class="text-muted-foreground">Kernel</span>
+                                        <span class="font-mono text-xs">{metrics.kernel_version}</span>
+                                    </div>
+                                {/if}
+                                <div class="flex justify-between px-3 py-2">
+                                    <span class="text-muted-foreground">Architecture</span>
+                                    <span>{node.architecture}</span>
+                                </div>
+                                <div class="flex justify-between px-3 py-2">
+                                    <span class="text-muted-foreground">Uptime</span>
+                                    <span>{formatUptime(metrics.uptime_seconds)}</span>
+                                </div>
+                                <div class="flex justify-between px-3 py-2">
+                                    <span class="text-muted-foreground">Registered</span>
+                                    <span class="text-xs">{node.registered_at.slice(0, 16)}</span>
+                                </div>
+                                <div class="flex justify-between px-3 py-2">
+                                    <span class="text-muted-foreground">Last heartbeat</span>
+                                    <span class="text-xs">{node.last_heartbeat ? node.last_heartbeat.slice(0, 16) : 'never'}</span>
+                                </div>
+                            </div>
+                        </div>
                         <div>
                             <span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">CPU</span>
                             <div class="mt-2 border rounded-lg divide-y text-sm">
@@ -593,11 +759,11 @@
                                 </div>
                                 <div class="flex justify-between px-3 py-2">
                                     <span class="text-muted-foreground">RX</span>
-                                    <span>{metrics.network_rx_bytes != null ? (metrics.network_rx_bytes / 1_048_576).toFixed(2) + ' MB/s' : '-'}</span>
+                                    <span>{metrics.network_rx_bytes != null ? formatBandwidth(history[history.length - 1]?.rxBps ?? 0) : '-'}</span>
                                 </div>
                                 <div class="flex justify-between px-3 py-2">
                                     <span class="text-muted-foreground">TX</span>
-                                    <span>{metrics.network_tx_bytes != null ? (metrics.network_tx_bytes / 1_048_576).toFixed(2) + ' MB/s' : '-'}</span>
+                                    <span>{metrics.network_tx_bytes != null ? formatBandwidth(history[history.length - 1]?.txBps ?? 0) : '-'}</span>
                                 </div>
                             </div>
                         </div>
