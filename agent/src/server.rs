@@ -26,6 +26,7 @@ use crate::system::LiveMetricsCollector;
 const TICKET_HEADER: &str = "X-Csfx-Proxy-Ticket";
 pub const METRICS_TICKET_SCOPE: &str = "__node_metrics__";
 pub const POWER_TICKET_SCOPE: &str = "__power__";
+pub const DISKS_TICKET_SCOPE: &str = "__disks__";
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -42,6 +43,7 @@ pub async fn run(state: ServerState, port: u16) -> Result<()> {
         .route("/vnc/{workload_id}", get(vnc_handler))
         .route("/metrics/stream", get(metrics_stream_handler))
         .route("/power", post(power_handler))
+        .route("/disks", get(disks_handler))
         .with_state(state);
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
@@ -443,6 +445,22 @@ impl PowerAction {
             PowerAction::Poweroff => "poweroff",
         }
     }
+}
+
+async fn disks_handler(
+    State(state): State<ServerState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::disks::DiskInfo>>, (StatusCode, String)> {
+    if !is_internal_source(&addr) {
+        warn!(source = %addr, "rejected agent inbound request from non-internal source");
+        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
+    }
+
+    verify_ticket(&headers, DISKS_TICKET_SCOPE, &state.agent_id.to_string())
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+
+    Ok(Json(crate::disks::collect_disks().await))
 }
 
 async fn power_handler(

@@ -18,6 +18,38 @@ pub async fn set_agent_status(db: &DatabaseConnection, agent_id: Uuid, status: &
     Ok(())
 }
 
+pub async fn set_maintenance(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+    until: Option<chrono::NaiveDateTime>,
+) -> Result<()> {
+    let agent = agents::Entity::find_by_id(agent_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Agent not found agent_id={}", agent_id))?;
+
+    let mut active: agents::ActiveModel = agent.into();
+    active.maintenance_until = Set(until);
+    active.update(db).await?;
+
+    Ok(())
+}
+
+pub async fn get_agents_for_alerting(db: &DatabaseConnection) -> Result<Vec<agents::Model>> {
+    let now = Utc::now().naive_utc();
+
+    let agents = agents::Entity::find()
+        .filter(
+            agents::Column::MaintenanceUntil
+                .is_null()
+                .or(agents::Column::MaintenanceUntil.lt(now)),
+        )
+        .all(db)
+        .await?;
+
+    Ok(agents)
+}
+
 pub async fn get_stale_agents(
     db: &DatabaseConnection,
     soft_threshold_secs: i64,
@@ -40,6 +72,10 @@ pub async fn get_stale_agents(
     let mut offline = Vec::new();
 
     for agent in all {
+        if agent.maintenance_until.is_some_and(|until| until > now) {
+            continue;
+        }
+
         let last_hb = match agent.last_heartbeat {
             Some(ts) => ts,
             None => continue,

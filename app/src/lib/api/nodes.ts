@@ -15,6 +15,7 @@ export interface Node {
     last_heartbeat: string | null;
     registered_at: string;
     cordoned: boolean;
+    maintenance_until: string | null;
 }
 
 export interface NodeMetrics {
@@ -121,6 +122,31 @@ export async function openNodeMetricsSocket(token: string, agentId: string): Pro
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${wsProtocol}//${window.location.host}${API_BASE}/agents/${agentId}/metrics/stream?ticket=${encodeURIComponent(ticket)}`;
     return new WebSocket(url);
+}
+
+export interface SmartInfo {
+    health: string;
+    power_on_hours: number | null;
+    temperature_celsius: number | null;
+    reallocated_sectors: number | null;
+}
+
+export interface DiskInfo {
+    device: string;
+    model: string | null;
+    media_type: string;
+    total_bytes: number;
+    used_bytes: number;
+    mount_point: string | null;
+    smart: SmartInfo | null;
+}
+
+export async function getNodeDisks(token: string, id: string): Promise<DiskInfo[]> {
+    const res = await authedFetch(`${API_BASE}/agents/${id}/disks`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`disks fetch failed: ${res.status}`);
+    return res.json();
 }
 
 export interface HealthHistoryPoint {

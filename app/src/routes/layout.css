@@ -85,6 +85,13 @@
 
 @theme inline {
     --font-sans: "Geist", sans-serif;
+    --text-label: 0.75rem;
+    --text-label--line-height: 1rem;
+    --text-label--letter-spacing: 0.02em;
+    --text-label--font-weight: 500;
+    --text-stat: 1.875rem;
+    --text-stat--line-height: 2.25rem;
+    --text-stat--font-weight: 600;
     --color-panel-foreground: var(--panel-foreground);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
