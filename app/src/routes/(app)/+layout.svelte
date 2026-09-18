@@ -1,6 +1,7 @@
 <script lang="ts">
     import AppSidebar from "$lib/components/sidebar/app-sidebar.svelte";
     import SettingsDialog from "$lib/components/settings/settings-dialog.svelte";
+    import CommandPalette from "$lib/components/command-palette/command-palette.svelte";
     import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import { auth } from "$lib/auth/store.svelte";
     import { validateSession } from "$lib/auth/api";
@@ -32,3 +33,4 @@
     </Sidebar.Inset>
 </Sidebar.Provider>
 <SettingsDialog />
+<CommandPalette />
