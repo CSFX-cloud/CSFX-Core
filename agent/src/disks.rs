@@ -128,7 +128,11 @@ fn parse_smart_json(json: &serde_json::Value) -> Option<SmartInfo> {
         .get("ata_smart_attributes")
         .and_then(|a| a.get("table"))
         .and_then(|t| t.as_array())
-        .and_then(|attrs| attrs.iter().find(|a| a.get("id").and_then(|i| i.as_u64()) == Some(5)))
+        .and_then(|attrs| {
+            attrs
+                .iter()
+                .find(|a| a.get("id").and_then(|i| i.as_u64()) == Some(5))
+        })
         .and_then(|a| a.get("raw"))
         .and_then(|r| r.get("value"))
         .and_then(|v| v.as_u64());
