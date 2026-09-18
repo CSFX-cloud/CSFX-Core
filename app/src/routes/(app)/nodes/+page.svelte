@@ -211,28 +211,31 @@
     </div>
 {/snippet}
 
-<header class="flex h-16 shrink-0 items-center gap-3 px-4 border-b">
-    <div class="relative w-full max-w-sm">
-        <SearchIcon class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input placeholder="Search anything" class="pl-8 pr-14" />
-        <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-            &#8984;K
-        </kbd>
-    </div>
-    <div class="ms-auto flex items-center gap-1">
-        <Button variant="ghost" size="icon-sm" aria-label="Notifications">
-            <BellIcon class="size-4" />
-        </Button>
-    </div>
-</header>
-
 <div class="flex min-h-0 flex-1">
     <div
-        class="hidden shrink-0 border-r border-border md:block"
+        class="hidden shrink-0 border-r border-border md:block pt-4"
         style="width: {INFO_PANEL_WIDTH};"
     >
         <NodesInfoPanel {stats} />
     </div>
+
+    <div class="flex min-w-0 flex-1 flex-col">
+        <header class="flex h-16 shrink-0 items-center gap-3 px-4">
+            <div class="flex-1 flex justify-center">
+                <div class="relative w-full max-w-sm">
+                    <SearchIcon class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input placeholder="Search anything" class="pl-8 pr-14" />
+                    <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        &#8984;K
+                    </kbd>
+                </div>
+            </div>
+            <div class="flex items-center gap-1">
+                <Button variant="ghost" size="icon-sm" aria-label="Notifications">
+                    <BellIcon class="size-4" />
+                </Button>
+            </div>
+        </header>
 
     <div class="flex min-w-0 flex-1 flex-col gap-6 p-6">
     <div class="flex items-center justify-between">
@@ -477,6 +480,7 @@
                 {/if}
             </tbody>
         </table>
+    </div>
     </div>
     </div>
 </div>
