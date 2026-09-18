@@ -250,6 +250,14 @@ export async function listResourceGroupWorkloads(token: string, rgId: string): P
     return res.json();
 }
 
+export async function listWorkloads(token: string): Promise<Workload[]> {
+    const res = await authedFetch(`${API_BASE}/workloads`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to list workloads: ${res.status}`);
+    return res.json();
+}
+
 export async function createWorkload(token: string, req: CreateWorkloadRequest): Promise<{ workload_id: string; status: string; assigned_agent_id: string | null; message: string }> {
     const res = await authedFetch(`${API_BASE}/workloads`, {
         method: 'POST',

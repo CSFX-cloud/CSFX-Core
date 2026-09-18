@@ -4,6 +4,7 @@
     import { auth } from '$lib/auth/store.svelte';
     import { getNode, getNodeMetricsLatest, openNodeMetricsSocket, rebootNode, powerOffNode, drainNode, uncordonNode, type LiveNodeMetrics, type Node, type NodeMetricsLatest } from '$lib/api/nodes';
     import { listEvents, setMaintenance, clearMaintenance, type AlertEvent } from '$lib/api/events';
+    import { listWorkloads, type Workload } from '$lib/api/resource-groups';
     import { Button } from '$lib/components/ui/button/index.js';
     import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
@@ -14,6 +15,8 @@
     import WrenchIcon from '@lucide/svelte/icons/wrench';
     import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
     import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+    import StatusBadge from '$lib/components/status-badge.svelte';
+    import BoxIcon from '@lucide/svelte/icons/box';
 
     const nodeId: string = $page.params.id;
 
@@ -39,6 +42,10 @@
     let alertsLoading = $state(true);
     let alertsError = $state<string | null>(null);
     let openAlerts = $derived(alerts.filter((a) => a.status === 'open'));
+
+    let workloads = $state<Workload[]>([]);
+    let workloadsLoading = $state(true);
+    let workloadsError = $state<string | null>(null);
 
     let maintenanceDialog = $state<HTMLDialogElement | null>(null);
     let maintenanceMinutes = $state('60');
@@ -80,6 +87,19 @@
             alertsError = e instanceof Error ? e.message : 'Failed to load alerts';
         } finally {
             alertsLoading = false;
+        }
+    }
+
+    async function loadWorkloads() {
+        if (!auth.token) return;
+        workloadsLoading = true;
+        try {
+            const all = await listWorkloads(auth.token);
+            workloads = all.filter((w) => w.assigned_agent_id === nodeId);
+        } catch (e) {
+            workloadsError = e instanceof Error ? e.message : 'Failed to load workloads';
+        } finally {
+            workloadsLoading = false;
         }
     }
 
@@ -126,6 +146,7 @@
                 loadMetrics(nodeId).then(() => openLiveMetrics(nodeId));
             });
             loadAlerts();
+            loadWorkloads();
             pollInterval = setInterval(() => {
                 if (!metricsLive) loadMetrics(nodeId);
             }, 5000);
@@ -896,7 +917,64 @@
 
             {:else if activeTab === 'workloads'}
                 <div class="px-6 py-4">
-                    <p class="text-sm text-muted-foreground">Workload scheduling coming soon.</p>
+                    {#if workloadsLoading}
+                        <div class="border rounded-lg overflow-hidden w-full">
+                            <table class="w-full text-sm">
+                                <thead class="bg-muted/50">
+                                    <tr>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">Name</th>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">Image</th>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">CPU</th>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">Memory</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    {#each [0, 1, 2] as i (i)}
+                                        <tr>
+                                            <td class="px-3 py-2.5"><div class="h-3.5 w-24 rounded bg-muted animate-pulse"></div></td>
+                                            <td class="px-3 py-2.5"><div class="h-3.5 w-32 rounded bg-muted animate-pulse"></div></td>
+                                            <td class="px-3 py-2.5"><div class="h-4 w-16 rounded-full bg-muted animate-pulse"></div></td>
+                                            <td class="px-3 py-2.5"><div class="h-3.5 w-10 rounded bg-muted animate-pulse"></div></td>
+                                            <td class="px-3 py-2.5"><div class="h-3.5 w-14 rounded bg-muted animate-pulse"></div></td>
+                                        </tr>
+                                    {/each}
+                                </tbody>
+                            </table>
+                        </div>
+                    {:else if workloadsError}
+                        <p class="text-sm text-destructive">{workloadsError}</p>
+                    {:else if workloads.length === 0}
+                        <div class="border rounded-lg flex flex-col items-center justify-center gap-1.5 py-10 px-3 text-center">
+                            <BoxIcon class="size-5 text-muted-foreground" />
+                            <p class="text-xs text-muted-foreground">No workloads scheduled on this node</p>
+                        </div>
+                    {:else}
+                        <div class="border rounded-lg overflow-hidden w-full">
+                            <table class="w-full text-sm">
+                                <thead class="bg-muted/50">
+                                    <tr>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">Name</th>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">Image</th>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">Status</th>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">CPU</th>
+                                        <th class="text-left px-3 py-2 font-medium text-muted-foreground">Memory</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    {#each workloads as workload (workload.id)}
+                                        <tr>
+                                            <td class="px-3 py-2 font-medium">{workload.name}</td>
+                                            <td class="px-3 py-2 text-muted-foreground font-mono text-xs">{workload.image}</td>
+                                            <td class="px-3 py-2"><StatusBadge status={workload.status} /></td>
+                                            <td class="px-3 py-2 text-muted-foreground">{workload.cpu_usage_percent != null ? `${workload.cpu_usage_percent.toFixed(0)}%` : '-'}</td>
+                                            <td class="px-3 py-2 text-muted-foreground">{formatBytes(workload.memory_usage_bytes)}</td>
+                                        </tr>
+                                    {/each}
+                                </tbody>
+                            </table>
+                        </div>
+                    {/if}
                 </div>
 
             {:else if activeTab === 'network'}
