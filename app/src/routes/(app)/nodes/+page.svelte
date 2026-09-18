@@ -1,12 +1,12 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
+    import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
     import { listNodes, getClusterStats, type Node, type ClusterStats, type NodeMetrics } from "$lib/api/nodes";
     import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
     import { Input } from "$lib/components/ui/input/index.js";
     import StatusBadge from "$lib/components/status-badge.svelte";
-    import NodeDetailSheet from "$lib/components/nodes/NodeDetailSheet.svelte";
     import NodesInfoPanel from "$lib/components/nodes/nodes-info-panel.svelte";
     import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
     import SearchIcon from "@lucide/svelte/icons/search";
@@ -18,7 +18,6 @@
     import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
 
     const INFO_PANEL_WIDTH = "16rem";
-    const SIDEBAR_WIDTH = "16rem";
 
     let nodes = $state<Node[]>([]);
     let statusFilter = $state<Set<string>>(new Set());
@@ -91,8 +90,6 @@
     let stats = $state<ClusterStats | null>(null);
     let loading = $state(true);
     let error = $state<string | null>(null);
-    let selectedNode = $state<Node | null>(null);
-    let sheetOpen = $state(false);
 
     let pollInterval: ReturnType<typeof setInterval> | null = null;
     let refreshing = $state(false);
@@ -153,13 +150,7 @@
     });
 
     function openNode(node: Node) {
-        selectedNode = node;
-        sheetOpen = true;
-    }
-
-    function closeSheet() {
-        sheetOpen = false;
-        selectedNode = null;
+        goto(`/nodes/${node.id}`);
     }
 
     function exportCsv() {
@@ -478,10 +469,3 @@
     </div>
     </div>
 </div>
-
-<NodeDetailSheet
-    node={selectedNode}
-    open={sheetOpen}
-    onClose={closeSheet}
-    style="max-width: calc(100vw - {SIDEBAR_WIDTH} - {INFO_PANEL_WIDTH});"
-/>
