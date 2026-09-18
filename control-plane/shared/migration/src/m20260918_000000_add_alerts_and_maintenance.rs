@@ -43,7 +43,9 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(Alias::new("agents"))
-                    .add_column_if_not_exists(ColumnDef::new(Alias::new("maintenance_until")).date_time())
+                    .add_column_if_not_exists(
+                        ColumnDef::new(Alias::new("maintenance_until")).date_time(),
+                    )
                     .to_owned(),
             )
             .await

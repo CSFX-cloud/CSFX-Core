@@ -133,7 +133,10 @@ pub async fn check_agent(db: &DatabaseConnection, agent: &agents::Model) {
                 }
                 crate::log_warn!(
                     "hardware_alerts",
-                    &format!("agent_id={} alert={} message={}", agent.id, rule.event_type, message)
+                    &format!(
+                        "agent_id={} alert={} message={}",
+                        agent.id, rule.event_type, message
+                    )
                 );
             }
             (false, Some(open_event)) => {
