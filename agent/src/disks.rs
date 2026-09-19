@@ -23,6 +23,10 @@ pub struct DiskInfo {
 }
 
 pub async fn collect_disks() -> Vec<DiskInfo> {
+    if std::env::var("CSFX_FAKE_DISKS").is_ok() {
+        return fake_disks();
+    }
+
     let block_devices = list_block_devices();
     let mounts = Disks::new_with_refreshed_list();
 
@@ -52,6 +56,53 @@ pub async fn collect_disks() -> Vec<DiskInfo> {
     }
 
     disks
+}
+
+fn fake_disks() -> Vec<DiskInfo> {
+    vec![
+        DiskInfo {
+            device: "nvme0n1".to_string(),
+            model: Some("Samsung SSD 990 PRO 2TB".to_string()),
+            media_type: "nvme".to_string(),
+            total_bytes: 2_000_398_934_016,
+            used_bytes: 812_000_000_000,
+            mount_point: Some("/".to_string()),
+            smart: Some(SmartInfo {
+                health: "healthy".to_string(),
+                power_on_hours: Some(3120),
+                temperature_celsius: Some(41.0),
+                reallocated_sectors: Some(0),
+            }),
+        },
+        DiskInfo {
+            device: "sda".to_string(),
+            model: Some("Seagate IronWolf 8TB".to_string()),
+            media_type: "hdd".to_string(),
+            total_bytes: 8_001_563_222_016,
+            used_bytes: 5_200_000_000_000,
+            mount_point: Some("/mnt/csfx-volumes".to_string()),
+            smart: Some(SmartInfo {
+                health: "healthy".to_string(),
+                power_on_hours: Some(18544),
+                temperature_celsius: Some(34.0),
+                reallocated_sectors: Some(0),
+            }),
+        },
+        DiskInfo {
+            device: "sdb".to_string(),
+            model: Some("Seagate IronWolf 8TB".to_string()),
+            media_type: "hdd".to_string(),
+            total_bytes: 8_001_563_222_016,
+            used_bytes: 7_600_000_000_000,
+            mount_point: None,
+            smart: Some(SmartInfo {
+                health: "failing".to_string(),
+                power_on_hours: Some(31022),
+                temperature_celsius: Some(52.0),
+                reallocated_sectors: Some(12),
+            }),
+        },
+    ]
 }
 
 fn list_block_devices() -> Vec<String> {

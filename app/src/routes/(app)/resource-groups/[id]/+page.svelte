@@ -7,6 +7,9 @@
         getResourceGroup,
         updateResourceGroup,
         deleteResourceGroup,
+        uploadResourceGroupIconImage,
+        deleteResourceGroupIconImage,
+        resourceGroupIconImageUrl,
         listResourceGroupWorkloads,
         listResourceGroupVolumes,
         createWorkload,
@@ -50,9 +53,11 @@
     import type { FitAddon } from "@xterm/addon-fit";
     import "@xterm/xterm/css/xterm.css";
     import Icon from "@iconify/svelte";
-    import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
     import IconPicker from "$lib/components/icon-picker.svelte";
+    import RgIcon from "$lib/components/rg-icon.svelte";
+    import { commandPalette } from "$lib/components/command-palette/command-palette-store.svelte.js";
+    import SearchIcon from "@lucide/svelte/icons/search";
     import StatusBadge from "$lib/components/status-badge.svelte";
     import VncConsole from "$lib/components/vnc-console.svelte";
     import { isTransientStatus } from "$lib/utils/status.js";
@@ -71,6 +76,8 @@
     let editColor = $state("#6366f1");
     let savingAppearance = $state(false);
     let appearanceError = $state<string | null>(null);
+    let uploadingIconImage = $state(false);
+    let iconImageError = $state<string | null>(null);
 
     let rgSettingsDialog = $state<HTMLDialogElement | null>(null);
     let editName = $state("");
@@ -1009,6 +1016,29 @@
         }
     }
 
+    async function handleUploadIconImage(file: File) {
+        if (!auth.token || !group) return;
+        uploadingIconImage = true;
+        iconImageError = null;
+        try {
+            group = await uploadResourceGroupIconImage(auth.token, group.id, file);
+        } catch (e) {
+            iconImageError = e instanceof Error ? e.message : "Failed to upload icon image";
+        } finally {
+            uploadingIconImage = false;
+        }
+    }
+
+    async function handleRemoveIconImage() {
+        if (!auth.token || !group) return;
+        iconImageError = null;
+        try {
+            group = await deleteResourceGroupIconImage(auth.token, group.id);
+        } catch (e) {
+            iconImageError = e instanceof Error ? e.message : "Failed to remove icon image";
+        }
+    }
+
     async function handleTogglePin() {
         if (!auth.token || !group) return;
         try {
@@ -1052,10 +1082,6 @@
             error = e instanceof Error ? e.message : "Failed to delete resource group";
         }
     }
-
-    let totalCpu = $derived(workloads.reduce((s, w) => s + w.cpu_millicores, 0));
-    let totalMem = $derived(workloads.reduce((s, w) => s + w.memory_bytes, 0));
-    let totalDisk = $derived(volumes.reduce((s, v) => s + v.size_gb, 0));
 
     let loadStarted = false;
 
@@ -1530,7 +1556,15 @@
                 <Icon icon="mdi:close" width={18} height={18} />
             </button>
         </div>
-        <IconPicker bind:icon={editIcon} bind:color={editColor} />
+        <IconPicker
+            bind:icon={editIcon}
+            bind:color={editColor}
+            imageUrl={group?.has_icon_image ? `${resourceGroupIconImageUrl(group.id)}?t=${group.updated_at}` : null}
+            uploadingImage={uploadingIconImage}
+            imageError={iconImageError}
+            onUploadImage={handleUploadIconImage}
+            onRemoveImage={handleRemoveIconImage}
+        />
         {#if appearanceError}
             <p class="text-xs text-destructive">{appearanceError}</p>
         {/if}
@@ -2006,20 +2040,104 @@
     {/if}
 </dialog>
 
-<header class="flex h-16 shrink-0 items-center gap-2 px-4 border-b">
-    <Sidebar.Trigger class="-ms-1" />
-    <span class="text-sm text-muted-foreground">/</span>
-    <button
-        class="text-sm text-muted-foreground hover:text-foreground transition-colors"
-        onclick={() => goto("/resource-groups")}
-    >
-        Resource Groups
-    </button>
-    <span class="text-sm text-muted-foreground">/</span>
-    <span class="text-sm font-medium">{group?.name ?? rgId.slice(0, 8)}</span>
-</header>
+<div class="flex min-h-0 flex-1">
+    <div class="hidden md:flex flex-col w-64 shrink-0 border-r border-border p-4">
+        {#if group}
+                <p class="text-lg font-light text-foreground/70 truncate">{group.name}</p>
+                <div class="flex items-center gap-2 mt-3">
+                    <button
+                        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border text-xs font-medium shadow-sm hover:shadow transition-shadow"
+                    >
+                        <Icon icon="mdi:share-variant-outline" width={13} height={13} />
+                        Share
+                    </button>
+                    <button
+                        class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md bg-white text-black text-xs font-medium hover:bg-white/90 transition-colors"
+                    >
+                        <Icon icon="mdi:open-in-new" width={13} height={13} />
+                        Visit
+                    </button>
+                </div>
 
-<div class="flex flex-col gap-6 p-6">
+                <div class="flex flex-col gap-3 mt-5 pb-5 border-b border-dashed border-border">
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Icon icon="mdi:pulse" width={14} height={14} />
+                            Status
+                        </span>
+                        <StatusBadge status={group.status} />
+                    </div>
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Icon icon="mdi:calendar-outline" width={14} height={14} />
+                            Created
+                        </span>
+                        <span class="text-xs">{group.created_at.slice(0, 10)}</span>
+                    </div>
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Icon icon="mdi:lan" width={14} height={14} />
+                            Network
+                        </span>
+                        <span class="text-xs font-mono px-1.5 py-0.5 rounded-full border">{group.internal_cidr}</span>
+                    </div>
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Icon icon="mdi:pin-outline" width={14} height={14} />
+                            Pinned
+                        </span>
+                        <span class="text-xs">{group.pinned ? "Yes" : "No"}</span>
+                    </div>
+                </div>
+
+                <div class="flex flex-col gap-3 mt-5">
+                    <h3 class="text-xs font-semibold">Resources</h3>
+                    {#each [
+                        { label: "Containers", running: workloads.filter((w) => w.status === "running").length, total: workloads.length },
+                        { label: "Volumes", running: volumes.filter((v) => v.status === "attached" || v.status === "in_use").length, total: volumes.length },
+                        { label: "Buckets", running: buckets.filter((b) => b.status === "active").length, total: buckets.length },
+                    ] as row}
+                        <div class="flex flex-col gap-1">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs text-muted-foreground">{row.label}</span>
+                                <span class="text-xs text-muted-foreground">{row.running}/{row.total}</span>
+                            </div>
+                            <div class="h-1.5 rounded-full bg-muted overflow-hidden">
+                                <div
+                                    class="h-full rounded-full bg-green-500"
+                                    style="width: {row.total === 0 ? 0 : (row.running / row.total) * 100}%"
+                                ></div>
+                            </div>
+                        </div>
+                    {/each}
+                </div>
+        {/if}
+    </div>
+
+    <div class="flex min-w-0 flex-1 flex-col">
+        <header class="flex h-16 shrink-0 items-center gap-3 px-4">
+            <Button variant="ghost" size="icon-sm" onclick={() => goto("/resource-groups")} aria-label="Back to resource groups">
+                <Icon icon="mdi:arrow-left" width={16} height={16} />
+            </Button>
+            <div class="flex-1 flex justify-center">
+                <button
+                    type="button"
+                    onclick={() => commandPalette.show()}
+                    class="relative w-full max-w-sm text-left"
+                >
+                    <SearchIcon class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <span class="flex items-center h-9 w-full rounded-md border border-input bg-background pl-8 pr-14 text-sm text-muted-foreground hover:bg-accent/50 transition-colors">
+                        Search anything
+                    </span>
+                    <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        &#8984;K
+                    </kbd>
+                </button>
+            </div>
+            <div class="w-9"></div>
+        </header>
+
+    <div class="flex min-w-0 flex-1 flex-col gap-6 p-6">
     {#if loading}
         <p class="text-sm text-muted-foreground">Loading...</p>
     {:else if error && !group}
@@ -2027,13 +2145,13 @@
     {:else if group}
         <div class="flex items-start gap-4">
             <button
-                class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border transition-opacity hover:opacity-80"
+                class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border transition-opacity hover:opacity-80 overflow-hidden"
                 style="background-color: {group.color}20; color: {group.color};"
                 onclick={openAppearanceDialog}
                 aria-label="Edit appearance"
                 title="Edit appearance"
             >
-                <Icon icon={group.icon} width={24} height={24} />
+                <RgIcon id={group.id} icon={group.icon} color={group.color} hasIconImage={group.has_icon_image} size={24} />
             </button>
             <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-3 flex-wrap">
@@ -2086,34 +2204,6 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                     Add Resource
                 </Button>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-2 sm:grid-cols-5 gap-3">
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">Containers</p>
-                <p class="text-2xl font-semibold mt-1">{workloads.length}</p>
-                <p class="text-xs text-muted-foreground mt-0.5">{workloads.filter(w => w.status === 'running').length} running</p>
-            </div>
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">Volumes</p>
-                <p class="text-2xl font-semibold mt-1">{volumes.length}</p>
-                <p class="text-xs text-muted-foreground mt-0.5">{totalDisk} GB total</p>
-            </div>
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">Buckets</p>
-                <p class="text-2xl font-semibold mt-1">{buckets.length}</p>
-                <p class="text-xs text-muted-foreground mt-0.5">{buckets.filter(b => b.exposure === 'external').length} external</p>
-            </div>
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">CPU Requested</p>
-                <p class="text-2xl font-semibold mt-1">{(totalCpu / 1000).toFixed(1)}</p>
-                <p class="text-xs text-muted-foreground mt-0.5">vCPU</p>
-            </div>
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">Memory Requested</p>
-                <p class="text-2xl font-semibold mt-1">{fmtBytes(totalMem)}</p>
-                <p class="text-xs text-muted-foreground mt-0.5">across containers</p>
             </div>
         </div>
 
@@ -2403,4 +2493,6 @@
             </table>
         </div>
     {/if}
+    </div>
+    </div>
 </div>

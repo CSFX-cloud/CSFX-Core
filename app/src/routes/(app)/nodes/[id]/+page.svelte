@@ -17,6 +17,14 @@
     import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
     import StatusBadge from '$lib/components/status-badge.svelte';
     import BoxIcon from '@lucide/svelte/icons/box';
+    import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+    import Disc2Icon from '@lucide/svelte/icons/disc-2';
+    import DatabaseIcon from '@lucide/svelte/icons/database';
+    import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+    import ShieldAlertIcon from '@lucide/svelte/icons/shield-alert';
+    import ShieldQuestionMarkIcon from '@lucide/svelte/icons/shield-question-mark';
+    import ThermometerIcon from '@lucide/svelte/icons/thermometer';
+    import ClockIcon from '@lucide/svelte/icons/clock';
 
     const nodeId: string = $page.params.id;
 
@@ -477,6 +485,35 @@
         }
     }
 
+    function diskIcon(mediaType: string) {
+        switch (mediaType.toLowerCase()) {
+            case 'nvme': return DatabaseIcon;
+            case 'ssd': return Disc2Icon;
+            default: return HardDriveIcon;
+        }
+    }
+
+    function diskUsagePct(disk: DiskInfo): number {
+        if (disk.total_bytes <= 0) return 0;
+        return Math.min(Math.max((disk.used_bytes / disk.total_bytes) * 100, 0), 100);
+    }
+
+    function smartIcon(health: string) {
+        switch (health.toLowerCase()) {
+            case 'healthy': return ShieldCheckIcon;
+            case 'failing': return ShieldAlertIcon;
+            default: return ShieldQuestionMarkIcon;
+        }
+    }
+
+    function smartBadgeClass(health: string): string {
+        switch (health.toLowerCase()) {
+            case 'healthy': return 'bg-green-500/15 text-green-600 border-green-500/20';
+            case 'failing': return 'bg-red-500/15 text-red-600 border-red-500/20';
+            default: return 'bg-muted text-muted-foreground border-transparent';
+        }
+    }
+
     const tabs: { id: typeof activeTab; label: string }[] = [
         { id: 'summary', label: 'Summary' },
         { id: 'hardware', label: 'Hardware' },
@@ -618,6 +655,12 @@
                     <TagIcon class="size-3" />
                     v{node.agent_version}
                 </span>
+                {#if metrics?.uptime_seconds != null}
+                    <span class="flex items-center gap-1">
+                        <ClockIcon class="size-3" />
+                        up {formatUptime(metrics.uptime_seconds)}
+                    </span>
+                {/if}
             </div>
         </div>
 
@@ -935,6 +978,92 @@
                         </div>
                     {:else}
                         <p class="text-sm text-muted-foreground">{metricsError ?? 'No data'}</p>
+                    {/if}
+                </div>
+
+            {:else if activeTab === 'storage'}
+                <div class="px-6 py-4">
+                    {#if disksLoading}
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {#each [0, 1, 2] as i (i)}
+                                <div class="border rounded-lg p-3 flex flex-col gap-3">
+                                    <div class="flex items-center gap-2">
+                                        <div class="size-8 rounded bg-muted animate-pulse shrink-0"></div>
+                                        <div class="flex flex-col gap-1 flex-1 min-w-0">
+                                            <div class="h-3.5 w-24 rounded bg-muted animate-pulse"></div>
+                                            <div class="h-2.5 w-16 rounded bg-muted animate-pulse"></div>
+                                        </div>
+                                    </div>
+                                    <div class="h-2 w-full rounded-full bg-muted animate-pulse"></div>
+                                </div>
+                            {/each}
+                        </div>
+                    {:else if disksError}
+                        <p class="text-sm text-destructive">{disksError}</p>
+                    {:else if disks.length === 0}
+                        <div class="border rounded-lg flex flex-col items-center justify-center gap-1.5 py-10 px-3 text-center">
+                            <HardDriveIcon class="size-5 text-muted-foreground" />
+                            <p class="text-xs text-muted-foreground">No disks detected on this node</p>
+                        </div>
+                    {:else}
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {#each disks as disk (disk.device)}
+                                {@const DiskIcon = diskIcon(disk.media_type)}
+                                {@const usagePct = diskUsagePct(disk)}
+                                <div class="border rounded-lg p-3 flex flex-col gap-3">
+                                    <div class="flex items-start gap-2">
+                                        <div class="flex items-center justify-center size-8 rounded bg-muted shrink-0">
+                                            <DiskIcon class="size-4" />
+                                        </div>
+                                        <div class="flex flex-col min-w-0 flex-1">
+                                            <span class="text-sm font-medium truncate">{disk.model ?? disk.device}</span>
+                                            <span class="text-[11px] text-muted-foreground font-mono truncate">
+                                                {disk.device}{disk.mount_point ? ` · ${disk.mount_point}` : ''}
+                                            </span>
+                                        </div>
+                                        {#if disk.smart}
+                                            {@const SmartIcon = smartIcon(disk.smart.health)}
+                                            <span class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium border shrink-0 {smartBadgeClass(disk.smart.health)}">
+                                                <SmartIcon class="size-3" />
+                                                {disk.smart.health}
+                                            </span>
+                                        {:else}
+                                            <span class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium border shrink-0 {smartBadgeClass('unknown')}">
+                                                <ShieldQuestionMarkIcon class="size-3" />
+                                                no smart data
+                                            </span>
+                                        {/if}
+                                    </div>
+
+                                    <div class="flex flex-col gap-1">
+                                        <div class="h-2 w-full rounded-full bg-muted overflow-hidden">
+                                            <div class="h-full rounded-full bg-foreground/70" style="width: {usagePct.toFixed(1)}%"></div>
+                                        </div>
+                                        <div class="flex justify-between text-[11px] text-muted-foreground">
+                                            <span>{formatBytes(disk.used_bytes)} used</span>
+                                            <span>{bytesToGb(disk.total_bytes)}</span>
+                                        </div>
+                                    </div>
+
+                                    {#if disk.smart && (disk.smart.power_on_hours != null || disk.smart.temperature_celsius != null)}
+                                        <div class="flex items-center gap-3 text-[11px] text-muted-foreground border-t pt-2">
+                                            {#if disk.smart.power_on_hours != null}
+                                                <span class="flex items-center gap-1">
+                                                    <ClockIcon class="size-3" />
+                                                    {disk.smart.power_on_hours.toLocaleString()}h
+                                                </span>
+                                            {/if}
+                                            {#if disk.smart.temperature_celsius != null}
+                                                <span class="flex items-center gap-1">
+                                                    <ThermometerIcon class="size-3" />
+                                                    {disk.smart.temperature_celsius}&deg;C
+                                                </span>
+                                            {/if}
+                                        </div>
+                                    {/if}
+                                </div>
+                            {/each}
+                        </div>
                     {/if}
                 </div>
 

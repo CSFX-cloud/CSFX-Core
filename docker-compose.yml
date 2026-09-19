@@ -307,6 +307,8 @@ services:
       CSFX_GATEWAY_URL: http://api-gateway:8000
       CSFX_HEARTBEAT_INTERVAL: "15"
       CSFX_SIMULATE_LOAD: "1"
+      CSFX_FAKE_DISKS: "1"
+      CSFX_AGENT_PORT: "7443"
       RUST_LOG: ${RUST_LOG:-debug}
     depends_on:
       api-gateway:
@@ -328,6 +330,8 @@ services:
       CSFX_GATEWAY_URL: http://api-gateway:8000
       CSFX_HEARTBEAT_INTERVAL: "15"
       CSFX_SIMULATE_LOAD: "1"
+      CSFX_FAKE_DISKS: "1"
+      CSFX_AGENT_PORT: "7443"
       RUST_LOG: ${RUST_LOG:-debug}
     depends_on:
       api-gateway:
@@ -349,6 +353,8 @@ services:
       CSFX_GATEWAY_URL: http://api-gateway:8000
       CSFX_HEARTBEAT_INTERVAL: "15"
       CSFX_SIMULATE_LOAD: "1"
+      CSFX_FAKE_DISKS: "1"
+      CSFX_AGENT_PORT: "7443"
       RUST_LOG: ${RUST_LOG:-debug}
     depends_on:
       api-gateway:
