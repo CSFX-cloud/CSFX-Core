@@ -368,7 +368,9 @@ pub async fn upload_resource_group_icon_image(
     if body.len() > MAX_ICON_IMAGE_BYTES {
         return Err((
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({ "error": format!("icon image must be under {} bytes", MAX_ICON_IMAGE_BYTES) })),
+            Json(
+                json!({ "error": format!("icon image must be under {} bytes", MAX_ICON_IMAGE_BYTES) }),
+            ),
         ));
     }
 

@@ -155,7 +155,10 @@ pub async fn get_avatar_fallback(
         .and_then(|s| s.value.as_str().map(str::to_string))
         .unwrap_or_else(|| "initials".to_string());
 
-    Ok((StatusCode::OK, Json(json!(AvatarFallbackResponse { style }))))
+    Ok((
+        StatusCode::OK,
+        Json(json!(AvatarFallbackResponse { style })),
+    ))
 }
 
 pub async fn update_avatar_fallback(
