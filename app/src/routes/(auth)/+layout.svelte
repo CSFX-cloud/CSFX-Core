@@ -6,9 +6,15 @@
 
 <div class="relative flex h-screen w-full items-center justify-start overflow-hidden">
     <img
-        src="/login/login-5120.avif"
+        src="/login/login_dark.avif"
         alt=""
-        class="absolute inset-0 h-full w-full object-cover"
+        class="absolute inset-0 hidden h-full w-full object-cover dark:block"
+        aria-hidden="true"
+    />
+    <img
+        src="/login/login_light.avif"
+        alt=""
+        class="absolute inset-0 block h-full w-full object-cover dark:hidden"
         aria-hidden="true"
     />
 
