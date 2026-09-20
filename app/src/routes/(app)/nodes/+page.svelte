@@ -1,66 +1,112 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
+    import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
-    import { listNodes, getClusterStats, getHealthHistory, type Node, type ClusterStats, type HealthHistoryPoint } from "$lib/api/nodes";
-    import * as Sidebar from "$lib/components/ui/sidebar/index.js";
+    import { listNodes, getClusterStats, type Node, type ClusterStats, type NodeMetrics } from "$lib/api/nodes";
     import { Button } from "$lib/components/ui/button/index.js";
-    import NodeDetailSheet from "$lib/components/nodes/NodeDetailSheet.svelte";
+    import { commandPalette } from "$lib/components/command-palette/command-palette-store.svelte.js";
+    import StatusBadge from "$lib/components/status-badge.svelte";
+    import NodesInfoPanel from "$lib/components/nodes/nodes-info-panel.svelte";
+    import * as DropdownMenu from "$lib/components/ui/dropdown-menu/index.js";
+    import SearchIcon from "@lucide/svelte/icons/search";
+    import BellIcon from "@lucide/svelte/icons/bell";
+    import LayoutListIcon from "@lucide/svelte/icons/layout-list";
+    import ArrowUpDownIcon from "@lucide/svelte/icons/arrow-up-down";
+    import DownloadIcon from "@lucide/svelte/icons/download";
+    import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+    import ChevronDownIcon from "@lucide/svelte/icons/chevron-down";
+
+    const INFO_PANEL_WIDTH = "16rem";
 
     let nodes = $state<Node[]>([]);
+    let statusFilter = $state<Set<string>>(new Set());
+
+    type SortColumn = "hostname" | "status" | "cpu" | "memory" | "disk";
+    const SORT_LABELS: Record<SortColumn, string> = {
+        hostname: "Hostname",
+        status: "Status",
+        cpu: "CPU",
+        memory: "Memory",
+        disk: "Disk",
+    };
+    let sortColumn = $state<SortColumn>("hostname");
+    let sortAscending = $state(true);
+
+    function nodeMetrics(node: Node): NodeMetrics | null {
+        return stats?.nodes.find((m) => m.agent_id === node.id) ?? null;
+    }
+
+    function maintenanceRemainingLabel(maintenanceUntil: string): string {
+        const diffMs = new Date(maintenanceUntil).getTime() - Date.now();
+        if (diffMs <= 0) return "";
+        const totalMinutes = Math.ceil(diffMs / 60000);
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        return hours > 0 ? `${hours}h ${minutes}m left` : `${minutes}m left`;
+    }
+
+    function metricRatio(bytesUsed: number | null, bytesTotal: number | null): number {
+        if (bytesUsed == null || bytesTotal == null || bytesTotal === 0) return 0;
+        return (bytesUsed / bytesTotal) * 100;
+    }
+
+    function sortValue(node: Node, column: SortColumn): number | string {
+        const metrics = nodeMetrics(node);
+        switch (column) {
+            case "hostname": return node.hostname.toLowerCase();
+            case "status": return node.status.toLowerCase();
+            case "cpu": return metrics?.cpu_usage_percent ?? -1;
+            case "memory": return metricRatio(metrics?.memory_used_bytes ?? null, metrics?.memory_total_bytes ?? null);
+            case "disk": return metricRatio(metrics?.disk_used_bytes ?? null, metrics?.disk_total_bytes ?? null);
+        }
+    }
+
+    function toggleSet(set: Set<string>, value: string): Set<string> {
+        const next = new Set(set);
+        if (next.has(value)) {
+            next.delete(value);
+        } else {
+            next.add(value);
+        }
+        return next;
+    }
+
+    function toggleSort(column: SortColumn) {
+        if (sortColumn === column) {
+            sortAscending = !sortAscending;
+        } else {
+            sortColumn = column;
+            sortAscending = true;
+        }
+    }
+
+    const filteredNodes = $derived(
+        nodes
+            .filter((node) => {
+                if (statusFilter.size > 0 && !statusFilter.has(node.status)) return false;
+                return true;
+            })
+            .sort((a, b) => {
+                const aValue = sortValue(a, sortColumn);
+                const bValue = sortValue(b, sortColumn);
+                const direction = sortAscending ? 1 : -1;
+                if (aValue < bValue) return -1 * direction;
+                if (aValue > bValue) return 1 * direction;
+                return 0;
+            })
+    );
     let stats = $state<ClusterStats | null>(null);
     let loading = $state(true);
     let error = $state<string | null>(null);
-    let selectedNode = $state<Node | null>(null);
-    let sheetOpen = $state(false);
-
-    type HealthRange = '1h' | '7d' | '30d';
-
-    let onlineHistory = $state<number[]>([]);
-    let cpuHistory = $state<number[]>([]);
-    let memHistory = $state<number[]>([]);
-    let healthRange = $state<HealthRange>('1h');
-    let healthHistoryData = $state<Record<HealthRange, number[]>>({ '1h': [], '7d': [], '30d': [] });
 
     let pollInterval: ReturnType<typeof setInterval> | null = null;
     let refreshing = $state(false);
     let addNodePulsing = $state(false);
 
-    function sparklineValues(): number[] {
-        const hist = healthHistoryData[healthRange];
-        return hist.length >= 2 ? hist : onlineHistory;
-    }
-
-    async function fetchHealthHistory(range: HealthRange) {
-        if (!auth.token) return;
-        try {
-            const points = await getHealthHistory(auth.token, range);
-            healthHistoryData[range] = points.map((p: HealthHistoryPoint) => p.online_count);
-        } catch {
-            // non-fatal
-        }
-    }
-
-    $effect(() => {
-        fetchHealthHistory(healthRange);
-    });
-
     async function fetchStats() {
         if (!auth.token) return;
         try {
-            const s = await getClusterStats(auth.token);
-            stats = s;
-
-            const onlinePct = s.node_count > 0 ? (s.online_count / s.node_count) * 100 : 0;
-            onlineHistory = [...onlineHistory.slice(-23), onlinePct];
-            healthHistoryData['1h'] = [...healthHistoryData['1h'].slice(-11), s.online_count];
-
-            const cpuPct = s.avg_cpu_usage_percent ?? 0;
-            cpuHistory = [...cpuHistory.slice(-23), cpuPct];
-
-            const memPct = s.total_memory_bytes > 0
-                ? (s.used_memory_bytes / s.total_memory_bytes) * 100
-                : 0;
-            memHistory = [...memHistory.slice(-23), memPct];
+            stats = await getClusterStats(auth.token);
         } catch {
             // non-fatal poll failure
         }
@@ -112,71 +158,98 @@
     });
 
     function openNode(node: Node) {
-        selectedNode = node;
-        sheetOpen = true;
+        goto(`/nodes/${node.id}`);
     }
 
-    function closeSheet() {
-        sheetOpen = false;
-        selectedNode = null;
+    function exportCsv() {
+        const header = ["ID", "Hostname", "IP", "OS", "Architecture", "Status", "CPU %", "Memory %", "Disk %", "Heartbeat"];
+        const rows = filteredNodes.map((node) => {
+            const metrics = nodeMetrics(node);
+            const cpu = metrics?.cpu_usage_percent ?? null;
+            const memory = metricRatio(metrics?.memory_used_bytes ?? null, metrics?.memory_total_bytes ?? null);
+            const disk = metricRatio(metrics?.disk_used_bytes ?? null, metrics?.disk_total_bytes ?? null);
+            return [
+                node.id,
+                node.hostname,
+                node.ip_address ?? "",
+                `${node.os_type} ${node.os_version}`,
+                node.architecture,
+                node.status,
+                cpu?.toFixed(1) ?? "",
+                metrics ? memory.toFixed(1) : "",
+                metrics ? disk.toFixed(1) : "",
+                node.last_heartbeat ?? "",
+            ];
+        });
+        const csv = [header, ...rows]
+            .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+            .join("\n");
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `nodes-${new Date().toISOString().slice(0, 10)}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
     }
 
-    function bytesToGb(bytes: number | null): string {
-        if (bytes == null) return "-";
-        return (bytes / 1_073_741_824).toFixed(1) + " GB";
-    }
-
-    function statusClass(status: string): string {
-        switch (status.toLowerCase()) {
-            case "online": return "text-green-500";
-            case "offline": return "text-red-500";
-            case "degraded": return "text-yellow-500";
-            default: return "text-muted-foreground";
-        }
-    }
-
-    function sparklinePath(values: number[], width: number, height: number): string {
-        if (values.length < 2) return "";
-        const max = Math.max(...values, 1);
-        const step = width / (values.length - 1);
-        return values
-            .map((v, i) => {
-                const x = i * step;
-                const y = height - (v / max) * height;
-                return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-            })
-            .join(" ");
-    }
-
-    function memPct(): number {
-        if (!stats || stats.total_memory_bytes === 0) return 0;
-        return (stats.used_memory_bytes / stats.total_memory_bytes) * 100;
-    }
-
-    function cpuPct(): number {
-        return stats?.avg_cpu_usage_percent ?? 0;
+    function barColor(percent: number): string {
+        if (percent >= 90) return "text-destructive";
+        if (percent >= 70) return "text-yellow-500";
+        return "text-green-500";
     }
 </script>
 
-<header class="flex h-16 shrink-0 items-center gap-2 px-4 border-b">
-    <Sidebar.Trigger class="-ms-1" />
-    <span class="text-sm text-muted-foreground">/</span>
-    <span class="text-sm font-medium">Nodes</span>
-</header>
+{#snippet metricBars(percent: number)}
+    <div class="flex items-end gap-0.5 h-3.5" title="{percent.toFixed(0)}%">
+        {#each [0.4, 0.7, 0.55, 1, 0.85] as heightRatio, i (i)}
+            <span
+                class="w-1 rounded-sm {barColor(percent)}"
+                style="height: {heightRatio * 100}%; background-color: currentColor; opacity: {(i + 1) * 20 <= percent ? 1 : 0.25};"
+            ></span>
+        {/each}
+    </div>
+{/snippet}
 
-<div class="flex flex-col gap-6 p-6">
+<div class="flex min-h-0 flex-1">
+    <div
+        class="hidden shrink-0 border-r border-border md:block pt-4"
+        style="width: {INFO_PANEL_WIDTH};"
+    >
+        <NodesInfoPanel {stats} />
+    </div>
+
+    <div class="flex min-w-0 flex-1 flex-col">
+        <header class="flex h-16 shrink-0 items-center gap-3 px-4">
+            <div class="flex-1 flex justify-center">
+                <button
+                    type="button"
+                    onclick={() => commandPalette.show()}
+                    class="relative w-full max-w-sm text-left"
+                >
+                    <SearchIcon class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <span class="flex items-center h-9 w-full rounded-md border border-input bg-background pl-8 pr-14 text-sm text-muted-foreground hover:bg-accent/50 transition-colors">
+                        Search anything
+                    </span>
+                    <kbd class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                        &#8984;K
+                    </kbd>
+                </button>
+            </div>
+            <div class="flex items-center gap-1">
+                <Button variant="ghost" size="icon-sm" aria-label="Notifications">
+                    <BellIcon class="size-4" />
+                </Button>
+            </div>
+        </header>
+
+    <div class="flex min-w-0 flex-1 flex-col gap-6 p-6">
     <div class="flex items-center justify-between">
         <div>
             <h1 class="text-xl font-semibold tracking-tight">Nodes</h1>
             <p class="text-sm text-muted-foreground mt-0.5">Manage and monitor your cluster nodes</p>
         </div>
         <div class="flex items-center gap-2">
-            <Button variant="outline" size="sm">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
-                </svg>
-                Filter
-            </Button>
             <Button
                 variant="outline"
                 size="sm"
@@ -220,120 +293,145 @@
         </div>
     </div>
 
-    {#if stats}
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground mb-1">Total Nodes</p>
-                <p class="text-2xl font-semibold">{stats.node_count}</p>
+    <div class="border rounded-lg overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
+            <div class="flex items-center gap-2">
+                <LayoutListIcon class="size-4 text-muted-foreground" />
+                <span class="text-sm font-semibold">Node Summary</span>
             </div>
-
-            <div class="border rounded-lg p-4 flex flex-col gap-2">
-                <div class="flex items-center justify-between">
-                    <p class="text-xs text-muted-foreground">Healthy</p>
-                    <div class="flex items-center gap-0.5">
-                        {#each (['1h', '7d', '30d'] as HealthRange[]) as r}
-                            <button
-                                class="px-1.5 py-0.5 text-[10px] rounded transition-colors {healthRange === r ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'}"
-                                onclick={() => healthRange = r}
-                            >{r}</button>
+            <div class="flex items-center gap-2">
+                <DropdownMenu.Root>
+                    <DropdownMenu.Trigger>
+                        {#snippet child({ props })}
+                            <Button {...props} variant="outline" size="sm">
+                                Status
+                                {#if statusFilter.size > 0}
+                                    <span class="text-xs text-muted-foreground">({statusFilter.size})</span>
+                                {/if}
+                                <ChevronDownIcon class="size-3.5" />
+                            </Button>
+                        {/snippet}
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content align="end">
+                        {#each [...new Set(nodes.map((n) => n.status))] as status (status)}
+                            <DropdownMenu.CheckboxItem
+                                checked={statusFilter.has(status)}
+                                onCheckedChange={() => (statusFilter = toggleSet(statusFilter, status))}
+                            >
+                                {status}
+                            </DropdownMenu.CheckboxItem>
                         {/each}
-                    </div>
-                </div>
-                <div class="flex items-end justify-between gap-2">
-                    <div class="flex items-center gap-2">
-                        <span class="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0"></span>
-                        <p class="text-2xl font-semibold">{stats.online_count}</p>
-                    </div>
-                    {#if sparklineValues().length >= 2}
-                        <svg width="72" height="32" class="text-green-500 shrink-0">
-                            <path
-                                d={sparklinePath(sparklineValues(), 72, 28)}
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            />
-                        </svg>
-                    {/if}
-                </div>
-            </div>
+                    </DropdownMenu.Content>
+                </DropdownMenu.Root>
 
-            <div class="border rounded-lg p-4 flex flex-col gap-2">
-                <p class="text-xs text-muted-foreground">vCPU Capacity</p>
-                <div class="flex items-end justify-between gap-2">
-                    <div>
-                        <p class="text-2xl font-semibold">{stats.total_cpu_cores}</p>
-                        <p class="text-xs text-muted-foreground mt-0.5">{cpuPct().toFixed(1)}% used</p>
-                    </div>
-                    {#if cpuHistory.length >= 2}
-                        <svg width="72" height="32" class="text-primary shrink-0">
-                            <path
-                                d={sparklinePath(cpuHistory, 72, 28)}
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            />
-                        </svg>
-                    {/if}
-                </div>
-            </div>
+                <DropdownMenu.Root>
+                    <DropdownMenu.Trigger>
+                        {#snippet child({ props })}
+                            <Button {...props} variant="outline" size="sm">
+                                Sort: {SORT_LABELS[sortColumn]}
+                                <ChevronDownIcon class="size-3.5" />
+                            </Button>
+                        {/snippet}
+                    </DropdownMenu.Trigger>
+                    <DropdownMenu.Content align="end">
+                        <DropdownMenu.RadioGroup value={sortColumn} onValueChange={(value) => (sortColumn = value as SortColumn)}>
+                            {#each Object.entries(SORT_LABELS) as [value, label] (value)}
+                                <DropdownMenu.RadioItem {value}>{label}</DropdownMenu.RadioItem>
+                            {/each}
+                        </DropdownMenu.RadioGroup>
+                        <DropdownMenu.Separator />
+                        <DropdownMenu.CheckboxItem
+                            checked={!sortAscending}
+                            onCheckedChange={(checked) => (sortAscending = !checked)}
+                        >
+                            Descending
+                        </DropdownMenu.CheckboxItem>
+                    </DropdownMenu.Content>
+                </DropdownMenu.Root>
 
-            <div class="border rounded-lg p-4 flex flex-col gap-2">
-                <p class="text-xs text-muted-foreground">Memory</p>
-                <div class="flex items-end justify-between gap-2">
-                    <div>
-                        <p class="text-2xl font-semibold">{bytesToGb(stats.used_memory_bytes)}</p>
-                        <p class="text-xs text-muted-foreground mt-0.5">/ {bytesToGb(stats.total_memory_bytes)}</p>
-                    </div>
-                    {#if memHistory.length >= 2}
-                        <svg width="72" height="32" class="text-primary shrink-0">
-                            <path
-                                d={sparklinePath(memHistory, 72, 28)}
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            />
-                        </svg>
-                    {/if}
-                </div>
+                <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={refresh}
+                    disabled={refreshing}
+                    aria-label="Refresh"
+                >
+                    <RefreshCwIcon class="size-4 {refreshing ? 'animate-spin' : ''}" />
+                </Button>
+                <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onclick={exportCsv}
+                    disabled={filteredNodes.length === 0}
+                    aria-label="Export as CSV"
+                >
+                    <DownloadIcon class="size-4" />
+                </Button>
             </div>
         </div>
-    {/if}
-
-    <div class="border rounded-lg overflow-hidden">
         <table class="w-full text-sm">
             <thead class="bg-muted/50">
                 <tr>
                     <th class="text-left px-4 py-3 font-medium text-muted-foreground">ID</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Hostname</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">
+                        <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("hostname")}>
+                            Hostname
+                            <ArrowUpDownIcon class="size-3 {sortColumn === 'hostname' ? 'text-foreground' : ''}" />
+                        </button>
+                    </th>
                     <th class="text-left px-4 py-3 font-medium text-muted-foreground">IP</th>
                     <th class="text-left px-4 py-3 font-medium text-muted-foreground">OS</th>
                     <th class="text-left px-4 py-3 font-medium text-muted-foreground">Arch</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Version</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">
+                        <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("status")}>
+                            Status
+                            <ArrowUpDownIcon class="size-3 {sortColumn === 'status' ? 'text-foreground' : ''}" />
+                        </button>
+                    </th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">
+                        <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("cpu")}>
+                            CPU
+                            <ArrowUpDownIcon class="size-3 {sortColumn === 'cpu' ? 'text-foreground' : ''}" />
+                        </button>
+                    </th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">
+                        <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("memory")}>
+                            Memory
+                            <ArrowUpDownIcon class="size-3 {sortColumn === 'memory' ? 'text-foreground' : ''}" />
+                        </button>
+                    </th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">
+                        <button class="flex items-center gap-1 hover:text-foreground" onclick={() => toggleSort("disk")}>
+                            Disk
+                            <ArrowUpDownIcon class="size-3 {sortColumn === 'disk' ? 'text-foreground' : ''}" />
+                        </button>
+                    </th>
                     <th class="text-left px-4 py-3 font-medium text-muted-foreground">Heartbeat</th>
                 </tr>
             </thead>
             <tbody>
                 {#if loading}
                     <tr>
-                        <td colspan="8" class="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                        <td colspan="10" class="px-4 py-8 text-center text-muted-foreground">Loading...</td>
                     </tr>
                 {:else if error}
                     <tr>
-                        <td colspan="8" class="px-4 py-8 text-center text-destructive">{error}</td>
+                        <td colspan="10" class="px-4 py-8 text-center text-destructive">{error}</td>
                     </tr>
                 {:else if nodes.length === 0}
                     <tr>
-                        <td colspan="8" class="px-4 py-8 text-center text-muted-foreground">No nodes registered</td>
+                        <td colspan="10" class="px-4 py-8 text-center text-muted-foreground">No nodes registered</td>
+                    </tr>
+                {:else if filteredNodes.length === 0}
+                    <tr>
+                        <td colspan="10" class="px-4 py-8 text-center text-muted-foreground">No nodes match the current filters</td>
                     </tr>
                 {:else}
-                    {#each nodes as node (node.id)}
+                    {#each filteredNodes as node (node.id)}
+                        {@const metrics = nodeMetrics(node)}
+                        {@const cpu = metrics?.cpu_usage_percent ?? 0}
+                        {@const memory = metricRatio(metrics?.memory_used_bytes ?? null, metrics?.memory_total_bytes ?? null)}
+                        {@const disk = metricRatio(metrics?.disk_used_bytes ?? null, metrics?.disk_total_bytes ?? null)}
                         <tr
                             class="border-t hover:bg-muted/30 transition-colors cursor-pointer"
                             onclick={() => openNode(node)}
@@ -343,9 +441,42 @@
                             <td class="px-4 py-3 text-muted-foreground">{node.ip_address ?? "-"}</td>
                             <td class="px-4 py-3 text-muted-foreground">{node.os_type} {node.os_version}</td>
                             <td class="px-4 py-3 text-muted-foreground">{node.architecture}</td>
-                            <td class="px-4 py-3 text-muted-foreground">{node.agent_version}</td>
                             <td class="px-4 py-3">
-                                <span class="font-medium {statusClass(node.status)}">{node.status}</span>
+                                {#if node.maintenance_until && new Date(node.maintenance_until).getTime() > Date.now()}
+                                    <StatusBadge status="degraded" label="Maintenance" title={maintenanceRemainingLabel(node.maintenance_until)} />
+                                {:else}
+                                    <StatusBadge status={node.status} />
+                                {/if}
+                            </td>
+                            <td class="px-4 py-3">
+                                {#if metrics}
+                                    <div class="flex items-center gap-2">
+                                        {@render metricBars(cpu)}
+                                        <span class="text-xs text-muted-foreground tabular-nums">{cpu.toFixed(0)}%</span>
+                                    </div>
+                                {:else}
+                                    <span class="text-xs text-muted-foreground">-</span>
+                                {/if}
+                            </td>
+                            <td class="px-4 py-3">
+                                {#if metrics}
+                                    <div class="flex items-center gap-2">
+                                        {@render metricBars(memory)}
+                                        <span class="text-xs text-muted-foreground tabular-nums">{memory.toFixed(0)}%</span>
+                                    </div>
+                                {:else}
+                                    <span class="text-xs text-muted-foreground">-</span>
+                                {/if}
+                            </td>
+                            <td class="px-4 py-3">
+                                {#if metrics}
+                                    <div class="flex items-center gap-2">
+                                        {@render metricBars(disk)}
+                                        <span class="text-xs text-muted-foreground tabular-nums">{disk.toFixed(0)}%</span>
+                                    </div>
+                                {:else}
+                                    <span class="text-xs text-muted-foreground">-</span>
+                                {/if}
                             </td>
                             <td class="px-4 py-3 text-muted-foreground text-xs">
                                 {node.last_heartbeat ? node.last_heartbeat.slice(0, 16) : "never"}
@@ -356,6 +487,6 @@
             </tbody>
         </table>
     </div>
+    </div>
+    </div>
 </div>
-
-<NodeDetailSheet node={selectedNode} open={sheetOpen} onClose={closeSheet} />

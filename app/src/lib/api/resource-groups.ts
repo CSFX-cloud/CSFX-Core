@@ -12,6 +12,7 @@ export interface ResourceGroup {
     icon: string;
     color: string;
     pinned: boolean;
+    has_icon_image: boolean;
     created_at: string;
     updated_at: string | null;
 }
@@ -234,6 +235,42 @@ export async function updateResourceGroup(
     return res.json();
 }
 
+export function resourceGroupIconImageUrl(id: string): string {
+    return `${API_BASE}/resource-groups/${id}/icon-image`;
+}
+
+export async function uploadResourceGroupIconImage(
+    token: string,
+    id: string,
+    file: File,
+): Promise<ResourceGroup> {
+    const res = await authedFetch(`${API_BASE}/resource-groups/${id}/icon-image`, {
+        method: 'PUT',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': file.type,
+        },
+        body: file,
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.status }));
+        throw new Error(err.error ?? `Failed to upload icon image: ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function deleteResourceGroupIconImage(token: string, id: string): Promise<ResourceGroup> {
+    const res = await authedFetch(`${API_BASE}/resource-groups/${id}/icon-image`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.status }));
+        throw new Error(err.error ?? `Failed to remove icon image: ${res.status}`);
+    }
+    return res.json();
+}
+
 export async function deleteResourceGroup(token: string, id: string): Promise<void> {
     const res = await authedFetch(`${API_BASE}/resource-groups/${id}`, {
         method: 'DELETE',
@@ -244,6 +281,14 @@ export async function deleteResourceGroup(token: string, id: string): Promise<vo
 
 export async function listResourceGroupWorkloads(token: string, rgId: string): Promise<Workload[]> {
     const res = await authedFetch(`${API_BASE}/resource-groups/${rgId}/workloads`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to list workloads: ${res.status}`);
+    return res.json();
+}
+
+export async function listWorkloads(token: string): Promise<Workload[]> {
+    const res = await authedFetch(`${API_BASE}/workloads`, {
         headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`Failed to list workloads: ${res.status}`);

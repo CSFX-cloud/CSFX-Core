@@ -562,6 +562,56 @@ pub async fn power_agent(
     Ok(StatusCode::NO_CONTENT)
 }
 
+const DISKS_TICKET_SCOPE: &str = "__disks__";
+
+pub async fn get_agent_disks(
+    CanViewAgents(_claims): CanViewAgents,
+    State(state): State<AppState>,
+    Path(agent_id): Path<Uuid>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let tunnel_ip = resolve_agent_tunnel_ip(&state, agent_id).await?;
+    let proxy_ticket = fetch_proxy_ticket(&state, agent_id, DISKS_TICKET_SCOPE).await?;
+
+    let agent_port: u16 = std::env::var(CSFX_AGENT_PORT_ENV)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(7443);
+
+    let url = format!("http://{}:{}/disks", tunnel_ip, agent_port);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("X-Csfx-Proxy-Ticket", proxy_ticket)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("failed to reach agent: {}", e) })),
+            )
+        })?;
+
+    if !resp.status().is_success() {
+        let agent_status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        tracing::warn!(agent_id = %agent_id, agent_status = %agent_status, body = %body, "agent refused disks request");
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": "agent refused disks request", "detail": body })),
+        ));
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("invalid agent response: {}", e) })),
+        )
+    })?;
+
+    Ok(Json(body))
+}
+
 pub fn agent_proxy_routes() -> Router<AppState> {
     Router::new()
         .route("/workloads/{id}/logs", get(stream_workload_logs))
@@ -581,4 +631,5 @@ pub fn agent_proxy_routes() -> Router<AppState> {
         )
         .route("/agents/{id}/metrics/stream", get(stream_node_metrics))
         .route("/agents/{id}/power", axum::routing::post(power_agent))
+        .route("/agents/{id}/disks", get(get_agent_disks))
 }

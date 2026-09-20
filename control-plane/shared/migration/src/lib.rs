@@ -35,6 +35,8 @@ mod m20260809_000000_add_user_gravatar_email;
 mod m20260816_000000_add_object_storage;
 mod m20260816_010000_add_bucket_master_key;
 mod m20260816_020000_garage_nodes_agent_id_nullable;
+mod m20260918_000000_add_alerts_and_maintenance;
+mod m20260919_000000_add_resource_group_icon_image;
 
 pub struct Migrator;
 
@@ -77,6 +79,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260816_000000_add_object_storage::Migration),
             Box::new(m20260816_010000_add_bucket_master_key::Migration),
             Box::new(m20260816_020000_garage_nodes_agent_id_nullable::Migration),
+            Box::new(m20260918_000000_add_alerts_and_maintenance::Migration),
+            Box::new(m20260919_000000_add_resource_group_icon_image::Migration),
         ]
     }
 }

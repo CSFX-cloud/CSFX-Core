@@ -26,6 +26,18 @@ pub struct CanViewLogs(pub Claims);
 pub struct CanManageLogs(pub Claims);
 pub struct CanViewBuckets(pub Claims);
 pub struct CanManageBuckets(pub Claims);
+pub struct AuthenticatedUser(pub Claims);
+
+impl FromRequestParts<AppState> for AuthenticatedUser {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        extract_claims(parts, state).await.map(Self)
+    }
+}
 
 async fn extract_claims(parts: &mut Parts, state: &AppState) -> Result<Claims, StatusCode> {
     let token = parts

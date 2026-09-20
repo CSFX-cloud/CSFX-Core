@@ -1,12 +1,13 @@
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Path, RawQuery, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
-    routing::get,
+    routing::{delete, get, post},
     Router,
 };
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::{auth::middleware::AuthenticatedUser, AppState};
 
@@ -48,6 +49,25 @@ pub async fn list_events(
     AuthenticatedUser(_claims): AuthenticatedUser,
     State(state): State<AppState>,
     headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let header_map = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+    let path = match query {
+        Some(q) => format!("/events?{}", q),
+        None => "/events".to_string(),
+    };
+    proxy_to_failover(&state, reqwest::Method::GET, &path, None, Some(header_map)).await
+}
+
+pub async fn set_maintenance(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(agent_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = headers
         .iter()
@@ -55,8 +75,28 @@ pub async fn list_events(
         .collect();
     proxy_to_failover(
         &state,
-        reqwest::Method::GET,
-        "/events",
+        reqwest::Method::POST,
+        &format!("/agents/{}/maintenance", agent_id),
+        Some(body),
+        Some(header_map),
+    )
+    .await
+}
+
+pub async fn clear_maintenance(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+    Path(agent_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let header_map = headers
+        .iter()
+        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
+        .collect();
+    proxy_to_failover(
+        &state,
+        reqwest::Method::DELETE,
+        &format!("/agents/{}/maintenance", agent_id),
         None,
         Some(header_map),
     )
@@ -64,5 +104,8 @@ pub async fn list_events(
 }
 
 pub fn events_routes() -> Router<AppState> {
-    Router::new().route("/events", get(list_events))
+    Router::new()
+        .route("/events", get(list_events))
+        .route("/agents/{agent_id}/maintenance", post(set_maintenance))
+        .route("/agents/{agent_id}/maintenance", delete(clear_maintenance))
 }
