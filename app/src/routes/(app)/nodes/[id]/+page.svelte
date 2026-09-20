@@ -627,11 +627,8 @@
         <ArrowLeftIcon class="size-4" />
     </Button>
     {#if node}
-        <div class="flex items-center justify-center w-10 h-10 rounded-lg border bg-muted shrink-0">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="3" width="20" height="14" rx="2"/>
-                <path d="M8 21h8M12 17v4"/>
-            </svg>
+        <div class="flex items-center justify-center w-16 h-16 rounded-lg shrink-0">
+            <img src="/node_icon/csfx_node_server.avif" alt="" class="w-full h-full object-contain" />
         </div>
         <div class="flex flex-col gap-0.5 min-w-0">
             <div class="flex items-center gap-2 min-w-0">
