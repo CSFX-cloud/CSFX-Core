@@ -3,26 +3,32 @@
     import { Label } from "$lib/components/ui/label/index.js";
     import { CircleCheck } from "@lucide/svelte";
     import { goto } from "$app/navigation";
-    import { page } from "$app/stores";
+    import { onDestroy, onMount } from "svelte";
     import * as InputOTP from "$lib/components/ui/input-otp/index.js";
     import { login } from "$lib/auth/api";
+    import { pendingLogin } from "$lib/auth/pending-login";
     import { auth } from "$lib/auth/store.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
     import { toast } from "svelte-sonner";
 
     type Status = "idle" | "loading" | "success";
 
-    const username = $derived($page.url.searchParams.get("username") ?? "");
-    const password = $derived($page.url.searchParams.get("password") ?? "");
-
     let otpValue = $state("");
     let status = $state<Status>("idle");
 
+    onMount(() => {
+        if (!pendingLogin.get()) goto("/login");
+    });
+
+    onDestroy(() => pendingLogin.clear());
+
     async function handleVerify() {
-        if (otpValue.length !== 6) return;
+        const credentials = pendingLogin.get();
+        if (otpValue.length !== 6 || !credentials) return;
         status = "loading";
         try {
-            const response = await login(username, password, otpValue);
+            const response = await login(credentials.username, credentials.password, otpValue);
+            pendingLogin.clear();
             auth.setSession(response);
             status = "success";
             const target = response.force_password_change ? "/pw_change" : "/";
