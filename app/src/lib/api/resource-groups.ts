@@ -13,6 +13,7 @@ export interface ResourceGroup {
     color: string;
     pinned: boolean;
     has_icon_image: boolean;
+    preview_url: string | null;
     created_at: string;
     updated_at: string | null;
 }
@@ -31,6 +32,7 @@ export interface UpdateResourceGroupRequest {
     icon?: string;
     color?: string;
     pinned?: boolean;
+    preview_url?: string;
 }
 
 export interface PortMapping {

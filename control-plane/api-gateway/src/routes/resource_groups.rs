@@ -49,6 +49,7 @@ pub struct UpdateResourceGroupRequest {
     pub icon: Option<String>,
     pub color: Option<String>,
     pub pinned: Option<bool>,
+    pub preview_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +64,7 @@ pub struct ResourceGroupResponse {
     pub color: String,
     pub pinned: bool,
     pub has_icon_image: bool,
+    pub preview_url: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: Option<chrono::NaiveDateTime>,
 }
@@ -80,10 +82,27 @@ impl From<resource_groups::Model> for ResourceGroupResponse {
             color: m.color,
             pinned: m.pinned,
             has_icon_image: m.icon_image.is_some(),
+            preview_url: m.preview_url,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
     }
+}
+
+fn normalize_preview_url(
+    raw: String,
+) -> Result<Option<String>, (StatusCode, Json<serde_json::Value>)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Ok(Some(trimmed.to_string()));
+    }
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "preview_url must start with http:// or https://" })),
+    ))
 }
 
 fn get_org_id(state: &AppState) -> Uuid {
@@ -179,6 +198,7 @@ pub async fn create_resource_group(
         pinned: Set(false),
         icon_image: Set(None),
         icon_image_mime: Set(None),
+        preview_url: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     };
@@ -327,6 +347,9 @@ pub async fn update_resource_group(
     }
     if let Some(pinned) = req.pinned {
         active.pinned = Set(pinned);
+    }
+    if let Some(preview_url) = req.preview_url {
+        active.preview_url = Set(normalize_preview_url(preview_url)?);
     }
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 

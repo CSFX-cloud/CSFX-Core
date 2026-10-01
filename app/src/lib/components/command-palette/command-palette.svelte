@@ -17,6 +17,8 @@
     import GaugeIcon from '@lucide/svelte/icons/gauge';
     import ScrollTextIcon from '@lucide/svelte/icons/scroll-text';
 
+    const PREVIEW_LIMIT = 2;
+
     type ResultItem = {
         id: string;
         label: string;
@@ -35,6 +37,7 @@
         { id: 'page-settings', label: 'Settings', icon: SettingsIcon, group: 'Pages', go: () => goto('/admin/settings') },
     ];
 
+    let query = $state('');
     let loading = $state(false);
     let nodes = $state<Node[]>([]);
     let workloads = $state<Workload[]>([]);
@@ -143,6 +146,17 @@
         Alerts: alertResults,
     });
 
+    let visibleResults = $derived<[string, ResultItem[]][]>(
+        Object.entries(groupedResults).map(([name, items]) => [
+            name,
+            query.trim() ? items : items.slice(0, PREVIEW_LIMIT),
+        ]),
+    );
+
+    $effect(() => {
+        if (!commandPalette.open) query = '';
+    });
+
     function handleSelect(item: ResultItem) {
         commandPalette.hide();
         item.go();
@@ -162,6 +176,7 @@
     <Dialog.Content class="w-[min(90vw,560px)] p-0 top-[20%] translate-y-0" showCloseButton={false}>
         <Command.Root class="flex flex-col overflow-hidden" loop>
             <Command.Input
+                bind:value={query}
                 placeholder="Search nodes, workloads, alerts, settings..."
                 class="w-full border-b px-4 py-3 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
             />
@@ -169,7 +184,7 @@
                 <Command.Empty class="py-8 text-center text-sm text-muted-foreground">
                     {loading ? 'Loading...' : 'No results found.'}
                 </Command.Empty>
-                {#each Object.entries(groupedResults) as [groupName, items] (groupName)}
+                {#each visibleResults as [groupName, items] (groupName)}
                     {#if items.length > 0}
                         <Command.Group>
                             <Command.GroupHeading class="px-2 py-1.5 text-xs font-medium text-muted-foreground">
