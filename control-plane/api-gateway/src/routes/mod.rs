@@ -9,6 +9,7 @@ use axum::http::{HeaderValue, Request, Response};
 use axum::routing::get;
 use axum::Router;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::PeerIpKeyExtractor, GovernorLayer,
 };
@@ -37,6 +38,10 @@ pub mod users;
 pub mod volumes;
 pub mod workloads;
 
+fn replenish_period(requests_per_second: u64) -> Duration {
+    Duration::from_secs_f64(1.0 / requests_per_second.max(1) as f64)
+}
+
 /// Creates the main application router and logs all registered routes.
 pub fn create_router() -> Router<AppState> {
     let rate_limit_per_second: u64 = std::env::var("RATE_LIMIT_PER_SECOND")
@@ -52,7 +57,7 @@ pub fn create_router() -> Router<AppState> {
     let governor_config = Arc::new(
         GovernorConfigBuilder::default()
             .key_extractor(JwtOrIpKeyExtractor::new())
-            .per_second(rate_limit_per_second)
+            .period(replenish_period(rate_limit_per_second))
             .burst_size(burst_size)
             .finish()
             .expect("invalid rate limit configuration"),
@@ -71,7 +76,7 @@ pub fn create_router() -> Router<AppState> {
     let login_governor_config = Arc::new(
         GovernorConfigBuilder::default()
             .key_extractor(PeerIpKeyExtractor)
-            .per_second(login_rate_limit_per_second)
+            .period(replenish_period(login_rate_limit_per_second))
             .burst_size(login_burst_size)
             .finish()
             .expect("invalid login rate limit configuration"),

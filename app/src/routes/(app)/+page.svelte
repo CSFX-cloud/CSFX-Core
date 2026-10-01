@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { untrack } from "svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { getClusterStats, getHealthHistory, listNodes, type ClusterStats, type Node } from "$lib/api/nodes";
     import {
@@ -89,7 +90,7 @@
             [refreshServices, SERVICES_INTERVAL_MS],
             [refreshUptime, UPTIME_INTERVAL_MS],
         ];
-        tasks.forEach(([task]) => task());
+        untrack(() => tasks.forEach(([task]) => task()));
         const timers = tasks.map(([task, interval]) => setInterval(task, interval));
         return () => timers.forEach(clearInterval);
     });
