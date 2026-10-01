@@ -81,6 +81,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260816_020000_garage_nodes_agent_id_nullable::Migration),
             Box::new(m20260918_000000_add_alerts_and_maintenance::Migration),
             Box::new(m20260919_000000_add_resource_group_icon_image::Migration),
-            Box::new(m20260920_000000_add_resource_group_preview_url::Migration),        ]
+            Box::new(m20260920_000000_add_resource_group_preview_url::Migration),
+        ]
     }
 }

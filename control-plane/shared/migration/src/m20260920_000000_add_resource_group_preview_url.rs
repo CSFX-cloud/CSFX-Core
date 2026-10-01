@@ -10,7 +10,9 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(Alias::new("resource_groups"))
-                    .add_column_if_not_exists(ColumnDef::new(Alias::new("preview_url")).string().null())
+                    .add_column_if_not_exists(
+                        ColumnDef::new(Alias::new("preview_url")).string().null(),
+                    )
                     .to_owned(),
             )
             .await
