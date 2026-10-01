@@ -154,7 +154,7 @@ export interface HealthHistoryPoint {
     online_count: number;
 }
 
-export async function getHealthHistory(token: string, range: '1h' | '7d' | '30d'): Promise<HealthHistoryPoint[]> {
+export async function getHealthHistory(token: string, range: '1h' | '24h' | '7d' | '30d'): Promise<HealthHistoryPoint[]> {
     const res = await authedFetch(`${API_BASE}/system/stats/history?range=${range}`, {
         headers: { Authorization: `Bearer ${token}` },
     });

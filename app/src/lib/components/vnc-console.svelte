@@ -2,7 +2,11 @@
     import { onDestroy, onMount } from "svelte";
     import { getWorkloadVncUrl } from "$lib/api/resource-groups";
 
-    let { token, workloadId }: { token: string; workloadId: string } = $props();
+    let {
+        token,
+        workloadId,
+        viewOnly = false,
+    }: { token: string; workloadId: string; viewOnly?: boolean } = $props();
 
     let container = $state<HTMLDivElement | null>(null);
     let error = $state<string | null>(null);
@@ -15,6 +19,7 @@
             const { default: RFB } = await import("@novnc/novnc");
             rfb = new RFB(container, url);
             rfb.scaleViewport = true;
+            rfb.viewOnly = viewOnly;
             rfb.addEventListener("disconnect", () => {
                 error = "Console disconnected";
             });

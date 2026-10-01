@@ -490,6 +490,14 @@ export async function listResourceGroupVolumes(token: string, rgId: string): Pro
     return res.json();
 }
 
+export async function listVolumes(token: string): Promise<Volume[]> {
+    const res = await authedFetch(`${API_BASE}/volumes`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to list volumes: ${res.status}`);
+    return res.json();
+}
+
 export async function createVolume(token: string, req: CreateVolumeRequest): Promise<Volume> {
     const res = await authedFetch(`${API_BASE}/volumes`, {
         method: 'POST',
