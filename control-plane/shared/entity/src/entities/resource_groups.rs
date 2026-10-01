@@ -14,6 +14,10 @@ pub struct Model {
     pub icon: String,
     pub color: String,
     pub pinned: bool,
+    #[serde(skip_serializing)]
+    pub icon_image: Option<Vec<u8>>,
+    pub icon_image_mime: Option<String>,
+    pub preview_url: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: Option<chrono::NaiveDateTime>,
 }

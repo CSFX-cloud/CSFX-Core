@@ -232,6 +232,7 @@ async fn get_health_history(
     let range = params.range.as_deref().unwrap_or("1h");
 
     let (interval_str, bucket_seconds, limit_n) = match range {
+        "24h" => ("24 hours", 3600i64, 24usize),
         "7d" => ("7 days", 3600i64, 168usize),
         "30d" => ("30 days", 21600i64, 120usize),
         _ => ("1 hour", 300i64, 12usize),

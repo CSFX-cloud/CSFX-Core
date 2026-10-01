@@ -108,7 +108,10 @@ impl QemuRuntime {
 
         match crate::runtime::Runtime::list_managed_workloads(self).await {
             Ok(recovered) => {
-                info!(count = recovered.len(), "Reconciled running vms from disk state");
+                info!(
+                    count = recovered.len(),
+                    "Reconciled running vms from disk state"
+                );
                 recovered
             }
             Err(e) => {

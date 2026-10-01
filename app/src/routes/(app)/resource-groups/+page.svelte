@@ -12,6 +12,7 @@
     import { Button } from "$lib/components/ui/button/index.js";
     import Icon from "@iconify/svelte";
     import IconPicker from "$lib/components/icon-picker.svelte";
+    import RgIcon from "$lib/components/rg-icon.svelte";
 
     let groups = $state<ResourceGroup[]>([]);
     let loading = $state(true);
@@ -20,6 +21,14 @@
     let createDialog = $state<HTMLDialogElement | null>(null);
     let searchText = $state("");
     let pinnedScroller = $state<HTMLDivElement | null>(null);
+    let viewMode = $state<"list" | "grid">(
+        (typeof localStorage !== "undefined" && localStorage.getItem("rg-view-mode") as "list" | "grid") || "list",
+    );
+
+    function setViewMode(mode: "list" | "grid") {
+        viewMode = mode;
+        localStorage.setItem("rg-view-mode", mode);
+    }
 
     function scrollPinned(direction: -1 | 1) {
         pinnedScroller?.scrollBy({ left: direction * 280, behavior: "smooth" });
@@ -213,10 +222,10 @@
                         onclick={() => goto(`/resource-groups/${group.id}`)}
                     >
                         <div
-                            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg overflow-hidden"
                             style="background-color: {group.color}20; color: {group.color};"
                         >
-                            <Icon icon={group.icon} width={18} height={18} />
+                            <RgIcon id={group.id} icon={group.icon} color={group.color} hasIconImage={group.has_icon_image} size={18} />
                         </div>
                         <div class="min-w-0 flex-1">
                             <div class="flex items-center gap-1.5">
@@ -249,11 +258,67 @@
         </div>
     {/if}
 
-    <div class="flex items-center gap-2 border rounded px-3 py-1.5 text-sm max-w-xs">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground shrink-0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input class="bg-transparent outline-none flex-1 text-sm" placeholder="Search resource groups..." bind:value={searchText} />
+    <div class="flex items-center justify-between gap-2">
+        <div class="flex items-center gap-2 border rounded px-3 py-1.5 text-sm max-w-xs w-full">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground shrink-0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input class="bg-transparent outline-none flex-1 text-sm" placeholder="Search resource groups..." bind:value={searchText} />
+        </div>
+        <div class="flex items-center border rounded overflow-hidden shrink-0">
+            <button
+                class="flex items-center justify-center w-8 h-8 transition-colors {viewMode === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+                onclick={() => setViewMode("list")}
+                aria-label="List view"
+                title="List view"
+            >
+                <Icon icon="mdi:view-list" width={16} height={16} />
+            </button>
+            <button
+                class="flex items-center justify-center w-8 h-8 transition-colors border-l {viewMode === 'grid' ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'}"
+                onclick={() => setViewMode("grid")}
+                aria-label="Grid view"
+                title="Grid view"
+            >
+                <Icon icon="mdi:view-grid" width={16} height={16} />
+            </button>
+        </div>
     </div>
 
+    {#if viewMode === "grid"}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {#if loading}
+                <p class="text-sm text-muted-foreground col-span-full text-center py-8">Loading...</p>
+            {:else if filteredGroups.length === 0}
+                <p class="text-sm text-muted-foreground col-span-full text-center py-8">
+                    {groups.length === 0 ? "No resource groups. Create one to get started." : "No resource groups match search."}
+                </p>
+            {:else}
+                {#each filteredGroups as group (group.id)}
+                    <button
+                        class="flex flex-col gap-3 border rounded-lg p-4 hover:bg-muted/30 transition-colors text-left"
+                        onclick={() => goto(`/resource-groups/${group.id}`)}
+                    >
+                        <div class="flex items-center justify-between">
+                            <div
+                                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg overflow-hidden"
+                                style="background-color: {group.color}20; color: {group.color};"
+                            >
+                                <RgIcon id={group.id} icon={group.icon} color={group.color} hasIconImage={group.has_icon_image} size={18} />
+                            </div>
+                            <span class="text-xs px-1.5 py-0.5 rounded-full font-medium {statusClass(group.status)}">{group.status}</span>
+                        </div>
+                        <div class="min-w-0">
+                            <p class="font-medium text-sm truncate">{group.name}</p>
+                            <p class="text-xs text-muted-foreground font-mono truncate mt-0.5">{group.internal_cidr}</p>
+                            {#if group.description}
+                                <p class="text-xs text-muted-foreground truncate mt-1">{group.description}</p>
+                            {/if}
+                        </div>
+                        <p class="text-xs text-muted-foreground mt-auto">{group.created_at.slice(0, 10)}</p>
+                    </button>
+                {/each}
+            {/if}
+        </div>
+    {:else}
     <div class="border rounded-lg overflow-hidden">
         <table class="w-full text-sm">
             <thead class="bg-muted/50">
@@ -285,10 +350,10 @@
                             <td class="px-4 py-3">
                                 <div class="flex items-center gap-2.5">
                                     <div
-                                        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+                                        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg overflow-hidden"
                                         style="background-color: {group.color}20; color: {group.color};"
                                     >
-                                        <Icon icon={group.icon} width={16} height={16} />
+                                        <RgIcon id={group.id} icon={group.icon} color={group.color} hasIconImage={group.has_icon_image} size={16} />
                                     </div>
                                     <span class="font-medium">{group.name}</span>
                                 </div>
@@ -305,4 +370,5 @@
             </tbody>
         </table>
     </div>
+    {/if}
 </div>

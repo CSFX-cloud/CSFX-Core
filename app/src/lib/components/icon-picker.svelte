@@ -1,7 +1,31 @@
 <script lang="ts">
     import Icon from "@iconify/svelte";
 
-    let { icon = $bindable(), color = $bindable() }: { icon: string; color: string } = $props();
+    let {
+        icon = $bindable(),
+        color = $bindable(),
+        imageUrl = null,
+        uploadingImage = false,
+        imageError = null,
+        onUploadImage,
+        onRemoveImage,
+    }: {
+        icon: string;
+        color: string;
+        imageUrl?: string | null;
+        uploadingImage?: boolean;
+        imageError?: string | null;
+        onUploadImage?: (file: File) => void;
+        onRemoveImage?: () => void;
+    } = $props();
+
+    let fileInput = $state<HTMLInputElement | null>(null);
+
+    function handleFileChange(event: Event) {
+        const file = (event.target as HTMLInputElement).files?.[0];
+        if (file) onUploadImage?.(file);
+        if (fileInput) fileInput.value = "";
+    }
 
     const SUGGESTED_ICONS = [
         "mdi:cube-outline",
@@ -32,10 +56,14 @@
 
 <div class="flex items-center gap-3">
     <div
-        class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border"
+        class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border overflow-hidden"
         style="background-color: {color}20; color: {color};"
     >
-        <Icon icon={icon || "mdi:cube-outline"} width={24} height={24} />
+        {#if imageUrl}
+            <img src={imageUrl} alt="" class="h-full w-full object-cover" />
+        {:else}
+            <Icon icon={icon || "mdi:cube-outline"} width={24} height={24} />
+        {/if}
     </div>
     <div class="flex flex-col gap-1 flex-1">
         <label class="text-xs text-muted-foreground" for="icon-name">Icon name</label>
@@ -44,9 +72,40 @@
             class="border rounded px-3 py-1.5 text-sm bg-background font-mono"
             placeholder="mdi:cube-outline"
             bind:value={icon}
+            disabled={!!imageUrl}
         />
     </div>
 </div>
+{#if onUploadImage}
+    <div class="flex items-center gap-2">
+        <input
+            bind:this={fileInput}
+            type="file"
+            accept="image/png,image/jpeg,image/svg+xml"
+            class="hidden"
+            id="icon-image-upload"
+            onchange={handleFileChange}
+        />
+        <label
+            for="icon-image-upload"
+            class="text-xs border rounded px-3 py-1.5 cursor-pointer hover:bg-muted transition-colors {uploadingImage ? 'opacity-50 pointer-events-none' : ''}"
+        >
+            {uploadingImage ? "Uploading..." : imageUrl ? "Replace image" : "Upload image"}
+        </label>
+        {#if imageUrl}
+            <button
+                type="button"
+                class="text-xs text-destructive hover:underline"
+                onclick={() => onRemoveImage?.()}
+            >
+                Remove
+            </button>
+        {/if}
+    </div>
+    {#if imageError}
+        <p class="text-xs text-destructive">{imageError}</p>
+    {/if}
+{/if}
 <div class="flex flex-wrap gap-1.5">
     {#each SUGGESTED_ICONS as suggestion (suggestion)}
         <button

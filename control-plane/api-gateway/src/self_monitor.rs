@@ -95,6 +95,7 @@ impl SelfMonitor {
                 wg_tunnel_ip: ActiveValue::Set(None),
                 kvm_capable: ActiveValue::Set(false),
                 cordoned: ActiveValue::Set(false),
+                maintenance_until: ActiveValue::Set(None),
             };
 
             let agent = new_agent.insert(db_conn.as_ref()).await?;

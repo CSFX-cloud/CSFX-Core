@@ -15,6 +15,7 @@ export interface Node {
     last_heartbeat: string | null;
     registered_at: string;
     cordoned: boolean;
+    maintenance_until: string | null;
 }
 
 export interface NodeMetrics {
@@ -123,12 +124,37 @@ export async function openNodeMetricsSocket(token: string, agentId: string): Pro
     return new WebSocket(url);
 }
 
+export interface SmartInfo {
+    health: string;
+    power_on_hours: number | null;
+    temperature_celsius: number | null;
+    reallocated_sectors: number | null;
+}
+
+export interface DiskInfo {
+    device: string;
+    model: string | null;
+    media_type: string;
+    total_bytes: number;
+    used_bytes: number;
+    mount_point: string | null;
+    smart: SmartInfo | null;
+}
+
+export async function getNodeDisks(token: string, id: string): Promise<DiskInfo[]> {
+    const res = await authedFetch(`${API_BASE}/agents/${id}/disks`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`disks fetch failed: ${res.status}`);
+    return res.json();
+}
+
 export interface HealthHistoryPoint {
     bucket: string;
     online_count: number;
 }
 
-export async function getHealthHistory(token: string, range: '1h' | '7d' | '30d'): Promise<HealthHistoryPoint[]> {
+export async function getHealthHistory(token: string, range: '1h' | '24h' | '7d' | '30d'): Promise<HealthHistoryPoint[]> {
     const res = await authedFetch(`${API_BASE}/system/stats/history?range=${range}`, {
         headers: { Authorization: `Bearer ${token}` },
     });

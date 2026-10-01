@@ -6,11 +6,12 @@
         status,
         label: labelOverride,
         class: className = "",
-    }: { status: string; label?: string; class?: string } = $props();
+        title,
+    }: { status: string; label?: string; class?: string; title?: string } = $props();
 
     const variant = $derived(statusVariant(status));
     const label = $derived(labelOverride ?? statusLabel(status));
     const loading = $derived(isTransientStatus(status));
 </script>
 
-<Badge {variant} {loading} class={className}>{label}</Badge>
+<Badge {variant} {loading} class={className} {title}>{label}</Badge>

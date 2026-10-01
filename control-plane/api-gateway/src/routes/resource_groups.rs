@@ -1,6 +1,7 @@
 use axum::{
+    body::Bytes,
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::get,
     Router,
@@ -29,6 +30,8 @@ use crate::{
 
 const DEFAULT_ICON: &str = "mdi:cube-outline";
 const DEFAULT_COLOR: &str = "#6366f1";
+const MAX_ICON_IMAGE_BYTES: usize = 512 * 1024;
+const ALLOWED_ICON_IMAGE_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/svg+xml"];
 
 #[derive(Debug, Deserialize)]
 pub struct CreateResourceGroupRequest {
@@ -46,6 +49,7 @@ pub struct UpdateResourceGroupRequest {
     pub icon: Option<String>,
     pub color: Option<String>,
     pub pinned: Option<bool>,
+    pub preview_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,6 +63,8 @@ pub struct ResourceGroupResponse {
     pub icon: String,
     pub color: String,
     pub pinned: bool,
+    pub has_icon_image: bool,
+    pub preview_url: Option<String>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: Option<chrono::NaiveDateTime>,
 }
@@ -75,10 +81,28 @@ impl From<resource_groups::Model> for ResourceGroupResponse {
             icon: m.icon,
             color: m.color,
             pinned: m.pinned,
+            has_icon_image: m.icon_image.is_some(),
+            preview_url: m.preview_url,
             created_at: m.created_at,
             updated_at: m.updated_at,
         }
     }
+}
+
+fn normalize_preview_url(
+    raw: String,
+) -> Result<Option<String>, (StatusCode, Json<serde_json::Value>)> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return Ok(Some(trimmed.to_string()));
+    }
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "preview_url must start with http:// or https://" })),
+    ))
 }
 
 fn get_org_id(state: &AppState) -> Uuid {
@@ -172,6 +196,9 @@ pub async fn create_resource_group(
         icon: Set(req.icon.unwrap_or_else(|| DEFAULT_ICON.to_string())),
         color: Set(req.color.unwrap_or_else(|| DEFAULT_COLOR.to_string())),
         pinned: Set(false),
+        icon_image: Set(None),
+        icon_image_mime: Set(None),
+        preview_url: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
     };
@@ -312,6 +339,8 @@ pub async fn update_resource_group(
     }
     if let Some(icon) = req.icon {
         active.icon = Set(icon);
+        active.icon_image = Set(None);
+        active.icon_image_mime = Set(None);
     }
     if let Some(color) = req.color {
         active.color = Set(color);
@@ -319,10 +348,159 @@ pub async fn update_resource_group(
     if let Some(pinned) = req.pinned {
         active.pinned = Set(pinned);
     }
+    if let Some(preview_url) = req.preview_url {
+        active.preview_url = Set(normalize_preview_url(preview_url)?);
+    }
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
     let updated = active.update(&state.db_conn).await.map_err(|e| {
         tracing::error!(error = %e, "failed to update resource group");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "database error" })),
+        )
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(json!(ResourceGroupResponse::from(updated))),
+    ))
+}
+
+pub async fn upload_resource_group_icon_image(
+    CanManageResourceGroups(_claims): CanManageResourceGroups,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let org_id = get_org_id(&state);
+
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !ALLOWED_ICON_IMAGE_TYPES.contains(&content_type) {
+        return Err((
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(json!({ "error": "icon image must be png, jpeg or svg" })),
+        ));
+    }
+
+    if body.len() > MAX_ICON_IMAGE_BYTES {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(
+                json!({ "error": format!("icon image must be under {} bytes", MAX_ICON_IMAGE_BYTES) }),
+            ),
+        ));
+    }
+
+    let group = ResourceGroups::find_by_id(id)
+        .filter(resource_groups::Column::OrganizationId.eq(org_id))
+        .one(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to find resource group");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "resource group not found" })),
+            )
+        })?;
+
+    let mut active: resource_groups::ActiveModel = group.into();
+    active.icon_image = Set(Some(body.to_vec()));
+    active.icon_image_mime = Set(Some(content_type.to_string()));
+    active.updated_at = Set(Some(Utc::now().naive_utc()));
+
+    let updated = active.update(&state.db_conn).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to store resource group icon image");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "database error" })),
+        )
+    })?;
+
+    Ok((
+        StatusCode::OK,
+        Json(json!(ResourceGroupResponse::from(updated))),
+    ))
+}
+
+pub async fn get_resource_group_icon_image(
+    CanViewResourceGroups(_claims): CanViewResourceGroups,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    let org_id = get_org_id(&state);
+
+    let group = ResourceGroups::find_by_id(id)
+        .filter(resource_groups::Column::OrganizationId.eq(org_id))
+        .one(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to find resource group");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "resource group not found" })),
+            )
+        })?;
+
+    let (Some(image), Some(mime)) = (group.icon_image, group.icon_image_mime) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "resource group has no icon image" })),
+        ));
+    };
+
+    Ok((StatusCode::OK, [(header::CONTENT_TYPE, mime)], image).into_response())
+}
+
+pub async fn delete_resource_group_icon_image(
+    CanManageResourceGroups(_claims): CanManageResourceGroups,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let org_id = get_org_id(&state);
+
+    let group = ResourceGroups::find_by_id(id)
+        .filter(resource_groups::Column::OrganizationId.eq(org_id))
+        .one(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to find resource group");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "resource group not found" })),
+            )
+        })?;
+
+    let mut active: resource_groups::ActiveModel = group.into();
+    active.icon_image = Set(None);
+    active.icon_image_mime = Set(None);
+    active.updated_at = Set(Some(Utc::now().naive_utc()));
+
+    let updated = active.update(&state.db_conn).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to clear resource group icon image");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "database error" })),
@@ -983,6 +1161,12 @@ pub fn resource_groups_routes() -> Router<AppState> {
             get(get_resource_group)
                 .patch(update_resource_group)
                 .delete(delete_resource_group),
+        )
+        .route(
+            "/resource-groups/{id}/icon-image",
+            get(get_resource_group_icon_image)
+                .put(upload_resource_group_icon_image)
+                .delete(delete_resource_group_icon_image),
         )
         .route(
             "/resource-groups/{id}/workloads",

@@ -11,6 +11,10 @@ pub struct Model {
     pub affected_workloads: Option<Json>,
     pub duration_ms: Option<i64>,
     pub created_at: DateTime,
+    pub severity: String,
+    pub status: String,
+    pub resolved_at: Option<DateTime>,
+    pub message: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

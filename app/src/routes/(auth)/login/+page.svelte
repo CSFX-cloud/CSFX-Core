@@ -5,6 +5,7 @@
     import { Lock, User, CircleCheck } from "@lucide/svelte";
     import { goto } from "$app/navigation";
     import { login, TwoFactorRequiredError } from "$lib/auth/api";
+    import { pendingLogin } from "$lib/auth/pending-login";
     import { auth } from "$lib/auth/store.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
     import { toast } from "svelte-sonner";
@@ -26,9 +27,8 @@
         } catch (err) {
             status = "idle";
             if (err instanceof TwoFactorRequiredError) {
-                goto(
-                    `/otp?username=${encodeURIComponent(err.username)}&password=${encodeURIComponent(err.password)}`,
-                );
+                pendingLogin.set(err.username, err.password);
+                goto("/otp");
             } else {
                 toast.error("Invalid credentials", {
                     description:

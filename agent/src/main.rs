@@ -1,6 +1,7 @@
 mod agent_stream;
 mod client;
 mod config;
+mod disks;
 mod firecracker;
 mod nftables;
 mod pki;

@@ -186,6 +186,29 @@ export async function gravatarUrl(email: string, size = 80): Promise<string> {
     return `https://www.gravatar.com/avatar/${hash}?s=${size}&d=404`;
 }
 
+export type AvatarFallbackStyle = 'initials' | 'blobatar';
+
+export async function getAvatarFallbackStyle(token: string): Promise<AvatarFallbackStyle> {
+    const res = await fetch(`${API_BASE}/settings/avatar-fallback`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`get avatar fallback failed: ${res.status}`);
+    const data = await res.json();
+    return data.style === 'blobatar' ? 'blobatar' : 'initials';
+}
+
+export async function setAvatarFallbackStyle(token: string, style: AvatarFallbackStyle): Promise<void> {
+    const res = await fetch(`${API_BASE}/settings/avatar-fallback`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ style }),
+    });
+    if (!res.ok) throw new Error(`set avatar fallback failed: ${res.status}`);
+}
+
 export interface Setup2FAResponse {
     secret: string;
     qr_code: string;

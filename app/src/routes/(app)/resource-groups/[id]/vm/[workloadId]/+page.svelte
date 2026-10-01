@@ -11,10 +11,35 @@
         type Workload,
     } from "$lib/api/resource-groups";
     import { getNode } from "$lib/api/nodes";
-    import VncConsole from "$lib/components/vnc-console.svelte";
-    import Icon from "@iconify/svelte";
+    import { fmtBytes } from "$lib/utils/format";
     import { Button } from "$lib/components/ui/button/index.js";
-    import StatusBadge from "$lib/components/status-badge.svelte";
+    import VncConsole from "$lib/components/vnc-console.svelte";
+    import VmConsolePreview from "$lib/components/vm/vm-console-preview.svelte";
+    import VmDetailsTab from "$lib/components/vm/vm-details-tab.svelte";
+    import VmSummaryTab from "$lib/components/vm/vm-summary-tab.svelte";
+    import ArrowLeftIcon from "@lucide/svelte/icons/arrow-left";
+    import CpuIcon from "@lucide/svelte/icons/cpu";
+    import GlobeIcon from "@lucide/svelte/icons/globe";
+    import MemoryStickIcon from "@lucide/svelte/icons/memory-stick";
+    import RotateCwIcon from "@lucide/svelte/icons/rotate-cw";
+    import SquareIcon from "@lucide/svelte/icons/square";
+    import Trash2Icon from "@lucide/svelte/icons/trash-2";
+
+    type Tab = "summary" | "console" | "details";
+
+    const POLL_INTERVAL_MS = 5000;
+    const TABS: { id: Tab; label: string }[] = [
+        { id: "summary", label: "Summary" },
+        { id: "console", label: "Console" },
+        { id: "details", label: "Details" },
+    ];
+    const STATUS_DOT: Record<string, string> = {
+        running: "bg-green-500",
+        failed: "bg-red-500",
+        error: "bg-red-500",
+        pending: "bg-yellow-500",
+        starting: "bg-yellow-500",
+    };
 
     const rgId: string = $page.params.id;
     const workloadId: string = $page.params.workloadId;
@@ -25,21 +50,25 @@
     let actionError = $state<string | null>(null);
     let actionBusy = $state(false);
     let nodeIp = $state<string | null>(null);
+    let activeTab = $state<Tab>("summary");
+
+    const statusDot = $derived(STATUS_DOT[workload?.status.toLowerCase() ?? ""] ?? "bg-muted-foreground");
+
+    async function loadNodeIp(agentId: string | null) {
+        if (!agentId || !auth.token) return;
+        try {
+            nodeIp = (await getNode(auth.token, agentId)).ip_address;
+        } catch {
+            nodeIp = null;
+        }
+    }
 
     async function load() {
         if (!auth.token) return;
         try {
             const workloads = await listResourceGroupWorkloads(auth.token, rgId);
-            const found = workloads.find((w) => w.id === workloadId) ?? null;
-            workload = found;
-            if (found?.assigned_agent_id) {
-                try {
-                    const node = await getNode(auth.token, found.assigned_agent_id);
-                    nodeIp = node.ip_address;
-                } catch {
-                    nodeIp = null;
-                }
-            }
+            workload = workloads.find((w) => w.id === workloadId) ?? null;
+            await loadNodeIp(workload?.assigned_agent_id ?? null);
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load vm";
         } finally {
@@ -47,35 +76,15 @@
         }
     }
 
-    function fmtBytes(bytes: number): string {
-        if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
-        if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(0)} MB`;
-        return `${bytes} B`;
-    }
-
-    async function handleStop() {
+    async function runAction(action: (token: string, id: string) => Promise<unknown>, failure: string) {
         if (!auth.token || !workload) return;
         actionBusy = true;
         actionError = null;
         try {
-            await stopWorkload(auth.token, workload.id);
+            await action(auth.token, workload.id);
             await load();
         } catch (e) {
-            actionError = e instanceof Error ? e.message : "Failed to stop vm";
-        } finally {
-            actionBusy = false;
-        }
-    }
-
-    async function handleRestart() {
-        if (!auth.token || !workload) return;
-        actionBusy = true;
-        actionError = null;
-        try {
-            await restartWorkload(auth.token, workload.id);
-            await load();
-        } catch (e) {
-            actionError = e instanceof Error ? e.message : "Failed to restart vm";
+            actionError = e instanceof Error ? e.message : failure;
         } finally {
             actionBusy = false;
         }
@@ -106,9 +115,7 @@
     let pollInterval: ReturnType<typeof setInterval> | null = null;
 
     $effect(() => {
-        if (workload && !pollInterval) {
-            pollInterval = setInterval(load, 5000);
-        }
+        if (workload && !pollInterval) pollInterval = setInterval(load, POLL_INTERVAL_MS);
     });
 
     onDestroy(() => {
@@ -116,140 +123,94 @@
     });
 </script>
 
-<header class="flex h-16 shrink-0 items-center gap-2 px-4 border-b">
-    <button
-        class="flex items-center justify-center w-8 h-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-        onclick={() => goto(`/resource-groups/${rgId}`)}
-        aria-label="Back"
-        title="Back"
-    >
-        <Icon icon="mdi:arrow-left" width={18} height={18} />
-    </button>
-    <span class="text-sm text-muted-foreground">/</span>
-    <button
-        class="text-sm text-muted-foreground hover:text-foreground transition-colors"
-        onclick={() => goto("/resource-groups")}
-    >
-        Resource Groups
-    </button>
-    <span class="text-sm text-muted-foreground">/</span>
-    <button
-        class="text-sm text-muted-foreground hover:text-foreground transition-colors"
-        onclick={() => goto(`/resource-groups/${rgId}`)}
-    >
-        {rgId.slice(0, 8)}
-    </button>
-    <span class="text-sm text-muted-foreground">/</span>
-    <span class="text-sm font-medium">{workload?.service_name ?? workload?.name ?? workloadId.slice(0, 8)}</span>
-</header>
-
-<div class="flex flex-col gap-6 p-6">
-    {#if loading}
-        <p class="text-sm text-muted-foreground">Loading...</p>
-    {:else if error}
-        <p class="text-sm text-destructive">{error}</p>
-    {:else if !workload}
-        <p class="text-sm text-muted-foreground">VM not found.</p>
-    {:else}
-        <div class="flex items-start justify-between gap-4">
-            <div class="flex items-center gap-3">
-                <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border bg-muted/40">
-                    <Icon icon="mdi:monitor" width={24} height={24} />
-                </div>
-                <div>
-                    <div class="flex items-center gap-3 flex-wrap">
-                        <h1 class="text-xl font-semibold tracking-tight">{workload.service_name ?? workload.name}</h1>
-                        <StatusBadge status={workload.status} />
-                        {#if workload.restart_count > 0}
-                            <span
-                                class="text-xs px-1.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-600"
-                                title="Restarted {workload.restart_count} time{workload.restart_count === 1 ? '' : 's'}"
-                            >
-                                ↻ {workload.restart_count}
-                            </span>
-                        {/if}
-                    </div>
-                    <p class="text-xs text-muted-foreground font-mono mt-0.5">
-                        {workload.cpu_millicores}m vCPU · {fmtBytes(workload.memory_bytes)} RAM · {fmtBytes(workload.disk_bytes)} disk
-                        {#if workload.assigned_agent_id}
-                            · node {nodeIp ?? workload.assigned_agent_id.slice(0, 8)}
-                        {/if}
-                    </p>
-                </div>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-                <Button size="sm" variant="outline" onclick={handleRestart} disabled={actionBusy}>
-                    <Icon icon="mdi:restart" width={16} height={16} class="mr-1.5" />
-                    Restart
-                </Button>
-                <Button
-                    size="sm"
-                    variant="outline"
-                    onclick={handleStop}
-                    disabled={actionBusy || workload.desired_state === "stopped"}
-                >
-                    <Icon icon="mdi:stop-circle-outline" width={16} height={16} class="mr-1.5" />
-                    Stop
-                </Button>
-                <Button size="sm" variant="destructive" onclick={handleDelete} disabled={actionBusy}>
-                    <Icon icon="mdi:trash-can-outline" width={16} height={16} class="mr-1.5" />
-                    Delete
-                </Button>
-            </div>
-        </div>
-
-        {#if actionError}
-            <p class="text-xs text-destructive">{actionError}</p>
-        {/if}
-
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">CPU Usage</p>
-                <p class="text-2xl font-semibold mt-1">
-                    {workload.cpu_usage_percent !== null ? `${workload.cpu_usage_percent.toFixed(1)}%` : "-"}
-                </p>
-                <p class="text-xs text-muted-foreground mt-0.5">{workload.cpu_millicores}m requested</p>
-            </div>
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">Memory Usage</p>
-                <p class="text-2xl font-semibold mt-1">
-                    {workload.memory_usage_bytes !== null ? fmtBytes(workload.memory_usage_bytes) : "-"}
-                </p>
-                <p class="text-xs text-muted-foreground mt-0.5">{fmtBytes(workload.memory_bytes)} requested</p>
-            </div>
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">Network RX</p>
-                <p class="text-2xl font-semibold mt-1">
-                    {workload.network_rx_bytes !== null ? fmtBytes(workload.network_rx_bytes) : "-"}
-                </p>
-            </div>
-            <div class="border rounded-lg p-4">
-                <p class="text-xs text-muted-foreground">Network TX</p>
-                <p class="text-2xl font-semibold mt-1">
-                    {workload.network_tx_bytes !== null ? fmtBytes(workload.network_tx_bytes) : "-"}
-                </p>
-            </div>
-        </div>
-        <p class="text-xs text-muted-foreground -mt-3">
-            {workload.stats_updated_at ? `Last updated ${new Date(workload.stats_updated_at).toLocaleTimeString()}` : "No stats reported yet."}
-        </p>
-
-        <div class="flex flex-col gap-2">
-            <div class="flex items-center gap-2">
-                <Icon icon="mdi:monitor-dashboard" width={16} height={16} class="text-muted-foreground" />
-                <p class="text-sm font-medium">Console</p>
-            </div>
-            <div class="border rounded-lg overflow-hidden h-[36rem]">
-                {#if workload.status !== "running" || !auth.token}
-                    <div class="flex items-center justify-center h-full">
-                        <p class="text-sm text-muted-foreground">Console is only available while the vm is running.</p>
-                    </div>
-                {:else}
-                    {#key workload.id}
-                        <VncConsole token={auth.token} workloadId={workload.id} />
-                    {/key}
+<header class="flex shrink-0 items-start gap-3 px-4 py-4">
+    <Button variant="ghost" size="icon-sm" onclick={() => goto(`/resource-groups/${rgId}`)} aria-label="Back to resource group">
+        <ArrowLeftIcon class="size-4" />
+    </Button>
+    {#if workload}
+        <VmConsolePreview {workload} onOpen={() => (activeTab = "console")} />
+        <div class="flex flex-col gap-0.5 min-w-0">
+            <div class="flex items-center gap-2 min-w-0">
+                <span class="text-base font-semibold leading-tight truncate">{workload.service_name ?? workload.name}</span>
+                <span class="inline-block w-2 h-2 rounded-full shrink-0 {statusDot}" title={workload.status}></span>
+                {#if workload.restart_count > 0}
+                    <span class="text-xs px-1.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-600 shrink-0">
+                        ↻ {workload.restart_count}
+                    </span>
                 {/if}
             </div>
+            <div class="flex items-center gap-3 text-xs text-muted-foreground leading-tight">
+                <span class="flex items-center gap-1">
+                    <GlobeIcon class="size-3" />
+                    {nodeIp ?? "no node"}
+                </span>
+                <span class="flex items-center gap-1">
+                    <CpuIcon class="size-3" />
+                    {workload.cpu_millicores / 1000} vCPU
+                </span>
+                <span class="flex items-center gap-1">
+                    <MemoryStickIcon class="size-3" />
+                    {fmtBytes(workload.memory_bytes)}
+                </span>
+            </div>
         </div>
+        <div class="ml-auto flex items-center gap-0.5 shrink-0">
+            <Button variant="ghost" size="icon-sm" onclick={() => runAction(restartWorkload, "Failed to restart vm")} disabled={actionBusy} aria-label="Restart" title="Restart">
+                <RotateCwIcon class="size-4" />
+            </Button>
+            <Button variant="ghost" size="icon-sm" onclick={() => runAction(stopWorkload, "Failed to stop vm")} disabled={actionBusy || workload.desired_state === "stopped"} aria-label="Stop" title="Stop">
+                <SquareIcon class="size-4" />
+            </Button>
+            <Button variant="ghost" size="icon-sm" onclick={handleDelete} disabled={actionBusy} class="text-red-500 hover:text-red-500" aria-label="Delete" title="Delete">
+                <Trash2Icon class="size-4" />
+            </Button>
+        </div>
+    {/if}
+</header>
+
+{#if actionError}
+    <p class="text-xs text-destructive px-4 pt-2">{actionError}</p>
+{/if}
+
+<div class="flex-1 overflow-y-auto">
+    {#if loading}
+        <p class="px-6 py-8 text-sm text-muted-foreground">Loading...</p>
+    {:else if error}
+        <p class="px-6 py-8 text-sm text-destructive">{error}</p>
+    {:else if !workload}
+        <p class="px-6 py-8 text-sm text-muted-foreground">VM not found.</p>
+    {:else}
+        <div class="px-6 pt-4 pb-0">
+            <div class="flex gap-0 border-b">
+                {#each TABS as tab (tab.id)}
+                    <button
+                        class="px-3 py-2 text-xs font-medium border-b-2 transition-colors {activeTab === tab.id ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
+                        onclick={() => (activeTab = tab.id)}
+                    >
+                        {tab.label}
+                    </button>
+                {/each}
+            </div>
+        </div>
+
+        {#if activeTab === "summary"}
+            <VmSummaryTab {workload} />
+        {:else if activeTab === "console"}
+            <div class="px-6 py-4">
+                <div class="border rounded-lg overflow-hidden h-[36rem]">
+                    {#if workload.status !== "running" || !auth.token}
+                        <div class="flex items-center justify-center h-full">
+                            <p class="text-sm text-muted-foreground">Console is only available while the vm is running.</p>
+                        </div>
+                    {:else}
+                        {#key workload.id}
+                            <VncConsole token={auth.token} workloadId={workload.id} />
+                        {/key}
+                    {/if}
+                </div>
+            </div>
+        {:else}
+            <VmDetailsTab {workload} {nodeIp} />
+        {/if}
     {/if}
 </div>

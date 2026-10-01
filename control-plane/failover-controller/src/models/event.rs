@@ -10,4 +10,8 @@ pub struct FailoverEvent {
     pub affected_workloads: Option<Vec<Uuid>>,
     pub duration_ms: Option<i64>,
     pub created_at: DateTime<Utc>,
+    pub severity: String,
+    pub status: String,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub message: Option<String>,
 }
