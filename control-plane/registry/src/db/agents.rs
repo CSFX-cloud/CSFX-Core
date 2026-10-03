@@ -120,8 +120,11 @@ pub async fn update_heartbeat(
     if wg_public_key.is_some() {
         agent.wg_public_key = Set(wg_public_key);
     }
-    if wg_endpoint.is_some() {
-        agent.wg_endpoint = Set(wg_endpoint);
+    if let Some(wg_endpoint) = wg_endpoint {
+        if let Some((host, _port)) = wg_endpoint.rsplit_once(':') {
+            agent.ip_address = Set(Some(host.to_string()));
+        }
+        agent.wg_endpoint = Set(Some(wg_endpoint));
     }
     if wg_tunnel_ip.is_some() {
         agent.wg_tunnel_ip = Set(wg_tunnel_ip);

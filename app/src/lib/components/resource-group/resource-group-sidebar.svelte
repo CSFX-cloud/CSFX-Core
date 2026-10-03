@@ -4,7 +4,6 @@
     import { updateResourceGroup, type ResourceGroup } from "$lib/api/resource-groups";
     import RgIcon from "$lib/components/rg-icon.svelte";
     import StatusBadge from "$lib/components/status-badge.svelte";
-    import ResourceGroupPreview from "./resource-group-preview.svelte";
 
     interface ResourceSummary {
         label: string;
@@ -108,25 +107,6 @@
                 title="Edit description"
             >{group.description || "Add description"}</button>
         {/if}
-        <div class="mb-3 mt-5">
-            <ResourceGroupPreview {group} onSave={(url) => patch({ preview_url: url })} />
-        </div>
-        <div class="flex items-center gap-2 mt-3">
-            <button
-                class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border text-xs font-medium shadow-sm hover:shadow transition-shadow"
-            >
-                <Icon icon="mdi:share-variant-outline" width={13} height={13} />
-                Share
-            </button>
-            <button
-                class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md bg-white text-black text-xs font-medium hover:bg-white/90 transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                onclick={() => window.open(group.preview_url ?? "", "_blank", "noopener")}
-                disabled={!group.preview_url}
-            >
-                <Icon icon="mdi:open-in-new" width={13} height={13} />
-                Visit
-            </button>
-        </div>
 
         <div class="flex flex-col gap-3 mt-5 pb-5 border-b border-dashed border-border">
             <div class="flex items-center justify-between gap-2">

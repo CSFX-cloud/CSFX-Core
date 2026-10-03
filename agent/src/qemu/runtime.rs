@@ -60,8 +60,6 @@ fn short_id(workload_id: &str) -> String {
 }
 
 struct VmHandle {
-    workload_id: String,
-    tap_device: String,
     qmp_socket_path: PathBuf,
     vnc_socket_path: PathBuf,
     resource_group_id: Option<String>,
@@ -256,6 +254,7 @@ impl crate::runtime::Runtime for QemuRuntime {
         .await;
 
         if let Err(e) = boot_result {
+            stop_unit(&spec.workload_id).await;
             let _ = remove_tap_device(&tap_device).await;
             return Err(e);
         }
@@ -263,8 +262,6 @@ impl crate::runtime::Runtime for QemuRuntime {
         self.handles.lock().await.insert(
             spec.workload_id.clone(),
             VmHandle {
-                workload_id: spec.workload_id.clone(),
-                tap_device,
                 qmp_socket_path,
                 vnc_socket_path,
                 resource_group_id: spec.resource_group_id.clone(),
@@ -298,32 +295,35 @@ impl crate::runtime::Runtime for QemuRuntime {
     }
 
     async fn stop_workload(&self, workload_handle: &str) -> Result<()> {
-        let mut handles = self.handles.lock().await;
-        let Some(handle) = handles.remove(workload_handle) else {
-            return Ok(());
+        let handle = self.handles.lock().await.remove(workload_handle);
+
+        stop_unit(workload_handle).await;
+
+        let tap_device = format!("{}{}", TAP_DEVICE_PREFIX, short_id(workload_handle));
+        if let Err(e) = remove_tap_device(&tap_device).await {
+            warn!(workload_id = %workload_handle, error = %e, "Failed to remove tap device");
+        }
+
+        let dir = vm_dir(workload_handle);
+        let resource_group_id = match handle {
+            Some(handle) => handle.resource_group_id,
+            None => read_sidecar_metadata(&dir)
+                .await
+                .and_then(|sidecar| sidecar.resource_group_id),
         };
 
-        let _ = Command::new("systemctl")
-            .args(["stop", &unit_name(&handle.workload_id)])
-            .status()
-            .await;
-
-        if let Err(e) = remove_tap_device(&handle.tap_device).await {
-            warn!(workload_id = %handle.workload_id, error = %e, "Failed to remove tap device");
-        }
-
-        if let Some(resource_group_id) = &handle.resource_group_id {
+        if let Some(resource_group_id) = &resource_group_id {
             self.dhcp_supervisor
-                .remove_reservation(resource_group_id, &handle.workload_id)
+                .remove_reservation(resource_group_id, workload_handle)
                 .await;
-            crate::rg_ipam::release(resource_group_id, &handle.workload_id).await;
+            crate::rg_ipam::release(resource_group_id, workload_handle).await;
         }
 
-        let _ = tokio::fs::remove_file(&handle.qmp_socket_path).await;
-        let _ = tokio::fs::remove_file(&handle.vnc_socket_path).await;
-        let _ = tokio::fs::remove_file(vm_dir(&handle.workload_id).join("qemu.pid")).await;
+        let _ = tokio::fs::remove_file(dir.join(QMP_SOCKET_NAME)).await;
+        let _ = tokio::fs::remove_file(dir.join(VNC_SOCKET_NAME)).await;
+        let _ = tokio::fs::remove_file(dir.join("qemu.pid")).await;
 
-        info!(workload_id = %handle.workload_id, "QEMU VM stopped");
+        info!(workload_id = %workload_handle, "QEMU VM stopped");
 
         Ok(())
     }
@@ -358,8 +358,6 @@ impl crate::runtime::Runtime for QemuRuntime {
             let sidecar = read_sidecar_metadata(&dir).await;
 
             let handle = VmHandle {
-                workload_id: workload_id.clone(),
-                tap_device: format!("{}{}", TAP_DEVICE_PREFIX, short_id(&workload_id)),
                 qmp_socket_path: dir.join(QMP_SOCKET_NAME),
                 vnc_socket_path: dir.join(VNC_SOCKET_NAME),
                 resource_group_id: sidecar.and_then(|s| s.resource_group_id),
@@ -374,6 +372,23 @@ impl crate::runtime::Runtime for QemuRuntime {
         }
 
         Ok(recovered)
+    }
+}
+
+async fn stop_unit(workload_id: &str) {
+    let unit = unit_name(workload_id);
+    match Command::new("systemctl")
+        .args(["stop", &unit])
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => warn!(
+            unit = %unit,
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "Failed to stop qemu unit"
+        ),
+        Err(e) => warn!(unit = %unit, error = %e, "Failed to execute systemctl stop"),
     }
 }
 

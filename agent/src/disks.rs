@@ -38,7 +38,9 @@ pub async fn collect_disks() -> Vec<DiskInfo> {
             .iter()
             .find(|d| d.name().to_string_lossy().contains(&device));
 
-        let total_bytes = mount.map(|d| d.total_space()).unwrap_or(0);
+        let total_bytes = block_device_bytes(&device)
+            .or_else(|| mount.map(|d| d.total_space()))
+            .unwrap_or(0);
         let used_bytes = mount
             .map(|d| d.total_space() - d.available_space())
             .unwrap_or(0);
@@ -123,6 +125,15 @@ fn read_sys_string(device: &str, relative_path: &str) -> Option<String> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
+}
+
+fn block_device_bytes(device: &str) -> Option<u64> {
+    const SECTOR_BYTES: u64 = 512;
+    read_sys_string(device, "size")?
+        .parse::<u64>()
+        .ok()
+        .map(|sectors| sectors * SECTOR_BYTES)
+        .filter(|bytes| *bytes > 0)
 }
 
 fn detect_media_type(device: &str) -> String {

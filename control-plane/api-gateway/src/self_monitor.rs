@@ -10,6 +10,16 @@ use sysinfo::{Disks, Networks, System};
 use tokio::time::{interval, Duration};
 use uuid::Uuid;
 
+fn detect_local_ip() -> String {
+    std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| {
+            socket.connect("8.8.8.8:80")?;
+            socket.local_addr()
+        })
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalSystemMetrics {
     pub agent_id: Uuid,
@@ -64,16 +74,22 @@ impl SelfMonitor {
             .one(db_conn.as_ref())
             .await?;
 
+        let local_ip = detect_local_ip();
+
         let agent_id = if let Some(agent) = existing_agent {
             tracing::info!("🔄 Using existing local agent: {}", agent.id);
-            agent.id
+            let id = agent.id;
+            let mut active: agents::ActiveModel = agent.into();
+            active.ip_address = ActiveValue::Set(Some(local_ip));
+            active.update(db_conn.as_ref()).await?;
+            id
         } else {
             // Create new agent
             let new_agent = agents::ActiveModel {
                 id: ActiveValue::Set(Uuid::new_v4()),
                 name: ActiveValue::Set(agent_name.clone()),
                 hostname: ActiveValue::Set(hostname.clone()),
-                ip_address: ActiveValue::Set(Some("127.0.0.1".to_string())),
+                ip_address: ActiveValue::Set(Some(local_ip)),
                 agent_version: ActiveValue::Set(env!("CARGO_PKG_VERSION").to_string()),
                 os_type: ActiveValue::Set(System::name().unwrap_or_else(|| "Unknown".to_string())),
                 os_version: ActiveValue::Set(

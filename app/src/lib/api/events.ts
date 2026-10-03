@@ -30,6 +30,17 @@ export async function listEvents(
     return res.json();
 }
 
+export async function resolveEvent(token: string, eventId: string): Promise<void> {
+    const res = await authedFetch(`${API_BASE}/events/${eventId}/resolve`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.status }));
+        throw new Error(err.error ?? `Failed to resolve alert: ${res.status}`);
+    }
+}
+
 export async function setMaintenance(token: string, agentId: string, minutes: number): Promise<void> {
     const res = await authedFetch(`${API_BASE}/agents/${agentId}/maintenance`, {
         method: 'POST',

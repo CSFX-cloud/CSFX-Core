@@ -22,6 +22,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health_check))
         .route("/metrics", get(metrics::metrics_handler))
         .route("/events", get(events::list_events))
+        .route("/events/{event_id}/resolve", post(events::resolve_event))
         .route(
             "/agents/{agent_id}/maintenance",
             post(events::set_maintenance),

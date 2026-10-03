@@ -26,6 +26,7 @@ use crate::{
 };
 
 const CSFX_AGENT_PORT_ENV: &str = "CSFX_AGENT_PORT";
+const CSFX_AGENT_DIRECT_ENV: &str = "CSFX_AGENT_DIRECT_HOSTNAME";
 const METRICS_TICKET_SCOPE: &str = "__node_metrics__";
 const POWER_TICKET_SCOPE: &str = "__power__";
 
@@ -48,6 +49,10 @@ async fn resolve_agent_tunnel_ip(
                 Json(json!({ "error": "agent not found" })),
             )
         })?;
+
+    if std::env::var(CSFX_AGENT_DIRECT_ENV).is_ok() {
+        return Ok(agent.hostname);
+    }
 
     agent.wg_tunnel_ip.ok_or_else(|| {
         (
