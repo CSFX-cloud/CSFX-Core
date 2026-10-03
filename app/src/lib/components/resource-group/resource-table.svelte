@@ -106,7 +106,6 @@
                 <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Resource</th>
                 <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Kind</th>
                 <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Host / Size</th>
-                <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Load</th>
                 <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Status</th>
                 <th class="px-4 py-2.5"></th>
             </tr>
@@ -114,7 +113,7 @@
         <tbody>
                     {#if filteredResources.length === 0}
                         <tr>
-                            <td colspan="6" class="px-4 py-10 text-center text-muted-foreground text-sm">
+                            <td colspan="5" class="px-4 py-10 text-center text-muted-foreground text-sm">
                                 {allResources.length === 0 ? "No resources yet. Deploy a container or create a volume." : "No resources match filter."}
                             </td>
                         </tr>

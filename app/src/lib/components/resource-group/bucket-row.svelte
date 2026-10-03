@@ -2,7 +2,6 @@
     import Icon from "@iconify/svelte";
     import { goto } from "$app/navigation";
     import type { Bucket } from "$lib/api/resource-groups";
-    import { Button } from "$lib/components/ui/button/index.js";
     import StatusBadge from "$lib/components/status-badge.svelte";
     import { fmtBytes } from "$lib/utils/format";
 
@@ -26,32 +25,29 @@
         <span class="text-xs px-2 py-0.5 rounded border font-medium">Bucket</span>
     </td>
     <td class="px-4 py-3 text-xs text-muted-foreground">
-        {b.quota_max_size ? fmtBytes(b.quota_max_size) : "unlimited"}
-    </td>
-    <td class="px-4 py-3 text-xs text-muted-foreground">
-        {b.exposure}
+        {b.quota_max_size ? fmtBytes(b.quota_max_size) : "unlimited"} · {b.exposure}
     </td>
     <td class="px-4 py-3">
         <StatusBadge status={b.status} />
     </td>
     <td class="px-4 py-3 text-right">
         <div class="flex items-center justify-end gap-1">
-            <Button
-                size="sm"
-                variant="ghost"
-                class="h-7 px-2 text-xs"
+            <button
+                class="flex items-center justify-center w-7 h-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                 onclick={(e) => { e.stopPropagation(); goto(`/buckets/${b.id}`); }}
+                aria-label="Browse"
+                title="Browse"
             >
-                Browse
-            </Button>
-            <Button
-                size="sm"
-                variant="ghost"
-                class="text-destructive hover:text-destructive h-7 px-2 text-xs"
+                <Icon icon="mdi:folder-open-outline" width={16} height={16} />
+            </button>
+            <button
+                class="flex items-center justify-center w-7 h-7 rounded-full text-destructive hover:bg-destructive/10 transition-colors"
                 onclick={(e) => { e.stopPropagation(); onDelete(); }}
+                aria-label="Delete"
+                title="Delete"
             >
-                Delete
-            </Button>
+                <Icon icon="mdi:trash-can-outline" width={16} height={16} />
+            </button>
         </div>
     </td>
 </tr>

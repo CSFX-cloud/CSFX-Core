@@ -51,7 +51,6 @@
     <td class="px-4 py-3 text-xs text-muted-foreground font-mono">
         {stack.children[0]?.assigned_agent_id ? stack.children[0].assigned_agent_id!.slice(0, 8) : "-"}
     </td>
-    <td class="px-4 py-3 text-xs text-muted-foreground">-</td>
     <td class="px-4 py-3">
         <StatusBadge
             status={stackStatus(stack.children)}

@@ -29,6 +29,7 @@
 
     let editingField = $state<"name" | "description" | null>(null);
     let editValue = $state("");
+    let downloadingVpn = $state(false);
 
     async function patch(changes: Parameters<typeof updateResourceGroup>[2]) {
         if (!auth.token) return;
@@ -52,6 +53,31 @@
         if (field === "name" && !value) return;
         if (value === (field === "name" ? group.name : (group.description ?? ""))) return;
         await patch({ [field]: value });
+    }
+
+    async function downloadVpnConfig() {
+        if (!auth.token) return;
+        downloadingVpn = true;
+        try {
+            const response = await fetch(`/api/resource-groups/${group.id}/vpn-config`, {
+                headers: { Authorization: `Bearer ${auth.token}` },
+            });
+            if (!response.ok) {
+                const body = await response.json().catch(() => ({}));
+                throw new Error(body.error ?? `HTTP ${response.status}`);
+            }
+            const url = URL.createObjectURL(await response.blob());
+            const link = document.createElement("a");
+            const disposition = response.headers.get("content-disposition") ?? "";
+            link.href = url;
+            link.download = disposition.match(/filename="([^"]+)"/)?.[1] ?? "csfx-vpn.conf";
+            link.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            onError(e instanceof Error ? e.message : "VPN config download failed");
+        } finally {
+            downloadingVpn = false;
+        }
     }
 
     function focusOnMount(node: HTMLInputElement) {
@@ -163,7 +189,16 @@
         </div>
 
         <button
-            class="mt-auto flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-destructive/40 text-destructive text-xs font-medium hover:bg-destructive/10 transition-colors"
+            class="mt-auto flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
+            onclick={downloadVpnConfig}
+            disabled={downloadingVpn}
+        >
+            <Icon icon="mdi:shield-outline" width={14} height={14} />
+            {downloadingVpn ? "Generating..." : "Connect VPN"}
+        </button>
+
+        <button
+            class="mt-2 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md border border-destructive/40 text-destructive text-xs font-medium hover:bg-destructive/10 transition-colors"
             onclick={onDelete}
         >
             <Icon icon="mdi:trash-can-outline" width={14} height={14} />

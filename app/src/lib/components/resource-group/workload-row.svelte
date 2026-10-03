@@ -40,14 +40,6 @@
         {w.assigned_agent_id ? w.assigned_agent_id.slice(0, 8) : "-"}
     </td>
     <td class="px-4 py-3">
-        <div class="flex items-center gap-2 min-w-[120px]">
-            <span class="text-xs text-muted-foreground w-8">{w.cpu_millicores}m</span>
-            <div class="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-                <div class="h-full rounded-full bg-foreground/60" style="width: {Math.min(100, w.cpu_millicores / 10)}%"></div>
-            </div>
-        </div>
-    </td>
-    <td class="px-4 py-3">
         <div class="flex items-center gap-1.5">
             <StatusBadge status={w.status} />
             {#if w.restart_count > 0}

@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { onMount } from "svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { createWorkloadStack, getStack, redeployStack } from "$lib/api/resource-groups";
     import { parseComposePreview } from "$lib/utils/compose-preview";
@@ -7,9 +8,12 @@
     import { Button } from "$lib/components/ui/button/index.js";
     import Icon from "@iconify/svelte";
 
-    let { rgId, onDeployed }: { rgId: string; onDeployed: () => Promise<void> } = $props();
+    let {
+        rgId,
+        stackId = null,
+        onDone,
+    }: { rgId: string; stackId?: string | null; onDone: () => Promise<void> | void } = $props();
 
-    let dialog = $state<HTMLDialogElement | null>(null);
     let deployingStack = $state(false);
     let composeError = $state<string | null>(null);
     let composeStackName = $state("");
@@ -31,10 +35,9 @@
         }
     }
 
-    export function open(stackId?: string) {
-        dialog?.showModal();
+    onMount(() => {
         if (stackId) loadStack(stackId);
-    }
+    });
 
     async function handleDeployStack() {
         if (!auth.token || !composeYaml.trim()) return;
@@ -51,21 +54,12 @@
                     compose_yaml: composeYaml,
                 });
             }
-            dialog?.close();
-            resetComposeForm();
-            await onDeployed();
+            await onDone();
         } catch (e) {
             composeError = e instanceof Error ? e.message : "Failed to deploy stack";
         } finally {
             deployingStack = false;
         }
-    }
-
-    function resetComposeForm() {
-        composeStackName = "";
-        composeYaml = "";
-        composeError = null;
-        editingStackId = null;
     }
 
     async function loadStack(stackId: string) {
@@ -93,23 +87,9 @@
     }
 </script>
 
-<dialog
-    bind:this={dialog}
-    class="fixed inset-0 z-50 m-auto w-full max-w-6xl rounded-xl border bg-background shadow-xl p-0 backdrop:bg-black/40"
-    onclose={() => resetComposeForm()}
->
+<div>
     <div class="flex flex-col gap-4 p-6">
-        <div class="flex items-center justify-between">
-            <h2 class="text-base font-semibold">{editingStackId ? "Edit Compose Stack" : "Deploy Docker Compose Stack"}</h2>
-            <button
-                class="flex items-center justify-center w-8 h-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                onclick={() => dialog?.close()}
-                aria-label="Close"
-                title="Close"
-            >
-                <Icon icon="mdi:close" width={18} height={18} />
-            </button>
-        </div>
+        <h2 class="text-base font-semibold">{editingStackId ? "Edit Compose Stack" : "Deploy Docker Compose Stack"}</h2>
         <div class="flex flex-col gap-1">
             <label class="text-xs text-muted-foreground" for="c-name">Stack Name</label>
             <input id="c-name" class="border rounded px-3 py-1.5 text-sm bg-background disabled:opacity-60" placeholder="my-stack" bind:value={composeStackName} disabled={!!editingStackId} />
@@ -182,7 +162,7 @@
             <p class="text-xs text-destructive">{composeError}</p>
         {/if}
         <div class="flex gap-2 justify-end">
-            <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
+            <Button size="sm" variant="outline" onclick={() => onDone()}>Cancel</Button>
             <Button size="sm" onclick={handleDeployStack} disabled={deployingStack || (!editingStackId && !composeStackName) || !composeYaml.trim()}>
                 {#if deployingStack}
                     {editingStackId ? "Redeploying..." : "Deploying..."}
@@ -192,4 +172,4 @@
             </Button>
         </div>
     </div>
-</dialog>
+</div>
