@@ -81,6 +81,7 @@ services:
       OBJECT_STORAGE_URL: http://object-storage:8006
       FRONTEND_URL: http://localhost:5173
       CSFX_INCLUDE_CONTAINERS: "true"
+      CSFX_AGENT_DIRECT_HOSTNAME: "1"
       TLS_ENABLED: "false"
       RATE_LIMIT_PER_SECOND: "100000"
       RATE_LIMIT_BURST: "100000"
