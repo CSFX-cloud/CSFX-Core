@@ -410,6 +410,7 @@ async fn run_heartbeat_loop(
                     warn!(agent_id = %agent_id, "assignment signal channel closed");
                     continue;
                 }
+                while assignment_signal.try_recv().is_ok() {}
                 info!(agent_id = %agent_id, "assignment push received, reconciling immediately");
                 interval.reset();
                 reconcile_tick(client, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
@@ -628,7 +629,7 @@ async fn process_workloads(
     )
     .await;
 
-    for workload in workloads {
+    futures_util::future::join_all(workloads.into_iter().map(|workload| async move {
         let workload_id = workload.id.clone();
         let runtime: &dyn runtime::Runtime = if workload.runtime_class == "vm" {
             qemu.as_ref()
@@ -653,7 +654,8 @@ async fn process_workloads(
                 warn!(workload_id = %workload_id, error = %e, "Failed to ack workload restart");
             }
         }
-    }
+    }))
+    .await;
 
     resource_group_ids
 }
