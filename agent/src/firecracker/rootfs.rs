@@ -8,7 +8,9 @@ use oci_spec::runtime::{
     get_default_namespaces, Capabilities, Capability, LinuxBuilder, LinuxCapabilitiesBuilder,
     LinuxNamespaceType, ProcessBuilder, RootBuilder, Spec, SpecBuilder, User, UserBuilder,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use tokio::process::Command;
 use tracing::{debug, info};
 
@@ -24,6 +26,15 @@ const GZIP_LAYER_MEDIA_TYPES: &[&str] = &[
 ];
 const WHITEOUT_PREFIX: &str = ".wh.";
 const WHITEOUT_OPAQUE_MARKER: &str = ".wh..wh..opq";
+
+fn build_lock(cache_key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks.entry(cache_key.to_string()).or_default().clone()
+}
 
 pub struct RootfsBuilder {
     client: Client,
@@ -92,6 +103,13 @@ impl RootfsBuilder {
 
         if image_path.exists() {
             info!(image = %image, digest = %digest, path = ?image_path, "Rootfs cache hit");
+            return Ok(image_path);
+        }
+
+        let lock = build_lock(&cache_key);
+        let _guard = lock.lock().await;
+        if image_path.exists() {
+            info!(image = %image, digest = %digest, path = ?image_path, "Rootfs cache hit after wait");
             return Ok(image_path);
         }
 

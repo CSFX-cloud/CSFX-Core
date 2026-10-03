@@ -350,6 +350,7 @@ impl SchedulerService {
                         runtime_class: req.runtime_class.as_str().to_string(),
                     };
                     put_placement(&self.etcd, &record).await?;
+                    tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
 
                     CreateWorkloadResponse {
                         workload_id: workload.id,
@@ -534,6 +535,7 @@ impl SchedulerService {
                         runtime_class: workload.runtime_class.clone(),
                     };
                     put_placement(&self.etcd, &record).await?;
+                    tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
 
                     if let Some(agent) = agents.iter_mut().find(|a| a.agent_id == agent_id) {
                         agent.free_cpu_millicores -= workload.cpu_millicores;
@@ -635,6 +637,7 @@ impl SchedulerService {
                 runtime_class: workload.runtime_class.clone(),
             };
             put_placement(&self.etcd, &record).await?;
+            tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
 
             if let Some(agent) = agents.iter_mut().find(|a| a.agent_id == agent_id) {
                 agent.free_cpu_millicores -= workload.cpu_millicores;
