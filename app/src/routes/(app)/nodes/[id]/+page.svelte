@@ -3,7 +3,7 @@
     import { goto } from '$app/navigation';
     import { auth } from '$lib/auth/store.svelte';
     import { getNode, getNodeMetricsLatest, openNodeMetricsSocket, rebootNode, powerOffNode, drainNode, uncordonNode, getNodeDisks, type LiveNodeMetrics, type Node, type NodeMetricsLatest, type DiskInfo } from '$lib/api/nodes';
-    import { listEvents, setMaintenance, clearMaintenance, type AlertEvent } from '$lib/api/events';
+    import { listEvents, resolveEvent, setMaintenance, clearMaintenance, type AlertEvent } from '$lib/api/events';
     import { listWorkloads, type Workload } from '$lib/api/resource-groups';
     import { Button } from '$lib/components/ui/button/index.js';
     import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
@@ -15,6 +15,7 @@
     import WrenchIcon from '@lucide/svelte/icons/wrench';
     import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
     import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
+    import CheckIcon from '@lucide/svelte/icons/check';
     import StatusBadge from '$lib/components/status-badge.svelte';
     import BoxIcon from '@lucide/svelte/icons/box';
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
@@ -100,6 +101,16 @@
             alertsError = e instanceof Error ? e.message : 'Failed to load alerts';
         } finally {
             alertsLoading = false;
+        }
+    }
+
+    async function handleResolveAlert(eventId: string) {
+        if (!auth.token) return;
+        try {
+            await resolveEvent(auth.token, eventId);
+            await loadAlerts();
+        } catch (e) {
+            alertsError = e instanceof Error ? e.message : 'Failed to resolve alert';
         }
     }
 
@@ -1188,6 +1199,11 @@
                                             {/if}
                                         </p>
                                     </div>
+                                    {#if alert.status === 'open'}
+                                        <Button variant="ghost" size="icon-sm" class="size-6 shrink-0 text-muted-foreground hover:text-emerald-500" onclick={() => handleResolveAlert(alert.id)} aria-label="Mark as resolved" title="Mark as resolved">
+                                            <CheckIcon class="size-3.5" />
+                                        </Button>
+                                    {/if}
                                 </div>
                             {/each}
                         </div>

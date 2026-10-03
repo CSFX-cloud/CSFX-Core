@@ -36,6 +36,20 @@ pub async fn list_events(
     }
 }
 
+pub async fn resolve_event(
+    State(state): State<AppState>,
+    Path(event_id): Path<Uuid>,
+) -> impl IntoResponse {
+    match crate::db::events::resolve(&state.db, event_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SetMaintenanceRequest {
     minutes: i64,
