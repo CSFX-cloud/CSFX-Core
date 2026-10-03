@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { Volume } from "$lib/api/resource-groups";
-    import { Button } from "$lib/components/ui/button/index.js";
+    import Icon from "@iconify/svelte";
     import StatusBadge from "$lib/components/status-badge.svelte";
 
     let { v, onDelete }: { v: Volume; onDelete: () => void } = $props();
@@ -25,25 +25,17 @@
         {v.size_gb} GB
     </td>
     <td class="px-4 py-3">
-        <div class="flex items-center gap-2 min-w-[120px]">
-            <span class="text-xs text-muted-foreground w-8">{v.size_gb}G</span>
-            <div class="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-                <div class="h-full rounded-full bg-foreground/30" style="width: {Math.min(100, v.size_gb)}%"></div>
-            </div>
-        </div>
-    </td>
-    <td class="px-4 py-3">
         <StatusBadge status={v.status} />
     </td>
     <td class="px-4 py-3 text-right">
-        <Button
-            size="sm"
-            variant="ghost"
-            class="text-destructive hover:text-destructive h-7 px-2 text-xs"
+        <button
+            class="inline-flex items-center justify-center w-7 h-7 rounded-full text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-40 disabled:pointer-events-none"
             onclick={() => onDelete()}
             disabled={v.status === "in_use"}
+            aria-label="Delete"
+            title="Delete"
         >
-            Delete
-        </Button>
+            <Icon icon="mdi:trash-can-outline" width={16} height={16} />
+        </button>
     </td>
 </tr>
