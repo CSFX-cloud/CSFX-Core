@@ -597,7 +597,7 @@ async fn spawn_vm(
         args.push("-cdrom".to_string());
         args.push(iso_path.display().to_string());
         args.push("-boot".to_string());
-        args.push("once=d".to_string());
+        args.push("order=cd".to_string());
     }
 
     debug!(workload_id = %workload_id, args = ?args, stage = "spawn_vm", "Launching qemu-system-x86_64");
