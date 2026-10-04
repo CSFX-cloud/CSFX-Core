@@ -11,6 +11,7 @@ fn http_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(NOTIFY_TIMEOUT)
+            .danger_accept_invalid_certs(true)
             .build()
             .unwrap_or_default()
     })
@@ -24,7 +25,19 @@ pub async fn notify_assignment(agent_id: Uuid) {
         base_url, agent_id
     );
 
-    if let Err(e) = http_client().post(&url).send().await {
-        tracing::warn!(agent_id = %agent_id, error = %e, "failed to notify gateway of assignment");
+    let result = http_client()
+        .post(&url)
+        .send()
+        .await
+        .and_then(|response| response.error_for_status());
+
+    if let Err(e) = result {
+        crate::log_warn!(
+            "gateway_notify",
+            &format!(
+                "Failed to notify gateway of assignment agent_id={} url={} err={}",
+                agent_id, url, e
+            )
+        );
     }
 }
