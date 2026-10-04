@@ -29,6 +29,7 @@ chrono = { workspace = true, features = ["serde"] }
 sea-orm = { workspace = true }
 etcd-client = { workspace = true }
 reqwest = { workspace = true }
+rustls = { workspace = true }
 prometheus = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }

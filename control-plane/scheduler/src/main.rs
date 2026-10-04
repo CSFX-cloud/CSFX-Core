@@ -12,6 +12,10 @@ mod services;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("failed to install ring crypto provider");
+
     dotenvy::dotenv().ok();
 
     let log_receiver = logger::init_logger();
@@ -56,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
 
     let retry_scheduler = state.scheduler.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
         loop {
             interval.tick().await;
             match retry_scheduler.retry_pending().await {
