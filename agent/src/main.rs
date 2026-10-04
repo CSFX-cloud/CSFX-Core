@@ -627,22 +627,27 @@ async fn process_workloads(
 
     let recovered_microvms = firecracker.reconcile_once().await;
     let recovered_vms = qemu.reconcile_once().await;
-    if !recovered_microvms.is_empty() || !recovered_vms.is_empty() {
-        let mut containers = running_containers.lock().await;
-        for (workload_id, handle) in recovered_microvms.into_iter().chain(recovered_vms) {
-            containers.insert(workload_id, handle);
-        }
-    }
 
     {
         let mut vm_ids = vm_workload_ids.lock().await;
-        vm_ids.clear();
+        vm_ids.extend(
+            recovered_vms
+                .iter()
+                .map(|(workload_id, _)| workload_id.clone()),
+        );
         vm_ids.extend(
             workloads
                 .iter()
                 .filter(|w| w.runtime_class == "vm")
                 .map(|w| w.id.clone()),
         );
+    }
+
+    if !recovered_microvms.is_empty() || !recovered_vms.is_empty() {
+        let mut containers = running_containers.lock().await;
+        for (workload_id, handle) in recovered_microvms.into_iter().chain(recovered_vms) {
+            containers.insert(workload_id, handle);
+        }
     }
 
     reap_stale_containers(
