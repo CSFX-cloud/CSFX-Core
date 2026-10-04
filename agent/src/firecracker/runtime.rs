@@ -845,11 +845,11 @@ async fn spawn_jailer(
         anyhow::bail!("systemd-run failed to start jailer unit {}", unit_name);
     }
 
-    for _ in 0..50 {
+    for _ in 0..250 {
         if let Some(pid) = find_live_jailer_pid(jailer_id).await {
             return Ok(pid);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 
     anyhow::bail!("jailer process for id {} did not appear", jailer_id)
@@ -891,16 +891,28 @@ async fn stage_kernel_into_jail(vm_root_dir: &Path) -> Result<()> {
     let source = tokio::fs::canonicalize(GUEST_KERNEL_PATH)
         .await
         .context("Failed to resolve kernel image path")?;
-    tokio::fs::copy(&source, vm_root_dir.join(JAIL_KERNEL_NAME))
+    reflink_copy(&source, &vm_root_dir.join(JAIL_KERNEL_NAME))
         .await
-        .context("Failed to copy kernel image into jailer chroot")?;
-    Ok(())
+        .context("Failed to copy kernel image into jailer chroot")
 }
 
 async fn stage_rootfs_into_jail(rootfs_path: &Path, vm_root_dir: &Path) -> Result<()> {
-    tokio::fs::copy(rootfs_path, vm_root_dir.join(JAIL_ROOTFS_NAME))
+    reflink_copy(rootfs_path, &vm_root_dir.join(JAIL_ROOTFS_NAME))
         .await
-        .context("Failed to copy rootfs image into jailer chroot")?;
+        .context("Failed to copy rootfs image into jailer chroot")
+}
+
+async fn reflink_copy(source: &Path, destination: &Path) -> Result<()> {
+    let status = Command::new("cp")
+        .args(["--reflink=auto", "--sparse=always"])
+        .arg(source)
+        .arg(destination)
+        .status()
+        .await
+        .context("Failed to execute cp")?;
+    if !status.success() {
+        anyhow::bail!("cp failed from {:?} to {:?}", source, destination);
+    }
     Ok(())
 }
 

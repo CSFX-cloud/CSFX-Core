@@ -23,11 +23,30 @@ mod wireguard;
 
 use anyhow::{Context, Result};
 use runtime::Runtime;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tracing::{error, info, warn};
+
+#[derive(Clone, Default)]
+struct StartTracker {
+    in_flight: Arc<Mutex<HashSet<String>>>,
+    completed: Arc<Notify>,
+}
+
+impl StartTracker {
+    async fn try_begin(&self, workload_id: &str) -> bool {
+        self.in_flight.lock().await.insert(workload_id.to_string())
+    }
+
+    async fn finish(&self, workload_id: &str, state_changed: bool) {
+        self.in_flight.lock().await.remove(workload_id);
+        if state_changed {
+            self.completed.notify_one();
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -121,6 +140,7 @@ async fn main() -> Result<()> {
     } else {
         api_client
     };
+    let api_client = Arc::new(api_client);
 
     info!(agent_id = %agent_id, "Agent registered, starting heartbeat loop");
 
@@ -189,7 +209,7 @@ async fn main() -> Result<()> {
     let assignment_signal = agent_stream::spawn(gateway_url.clone(), api_key.clone(), agent_id);
 
     run_heartbeat_loop(
-        &api_client,
+        api_client,
         agent_id,
         &api_key,
         heartbeat_interval_secs,
@@ -282,7 +302,8 @@ async fn perform_registration(
 
 #[allow(clippy::too_many_arguments)]
 async fn reconcile_tick(
-    client: &client::ApiClient,
+    client: &Arc<client::ApiClient>,
+    starts: &StartTracker,
     agent_id: uuid::Uuid,
     api_key: &str,
     firecracker: &Arc<firecracker::runtime::FirecrackerRuntime>,
@@ -293,13 +314,14 @@ async fn reconcile_tick(
     mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
     restart_counts: &Arc<Mutex<HashMap<String, u32>>>,
     service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
-    rg_dns_registry: &rg_dns::RgDnsRegistry,
+    rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
     failure_count: &mut u32,
     current_flake_rev: &mut String,
 ) {
     process_volumes(client, agent_id, api_key, mounted_volumes).await;
     let resource_group_ids = process_workloads(
         client,
+        starts,
         api_key,
         firecracker,
         qemu,
@@ -381,7 +403,7 @@ async fn reconcile_tick(
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 async fn run_heartbeat_loop(
-    client: &client::ApiClient,
+    client: Arc<client::ApiClient>,
     agent_id: uuid::Uuid,
     api_key: &str,
     interval_secs: u64,
@@ -399,11 +421,13 @@ async fn run_heartbeat_loop(
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
     let mut current_flake_rev = String::new();
+    let starts = StartTracker::default();
+    let completed = Arc::clone(&starts.completed);
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                reconcile_tick(client, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
             }
             signal = assignment_signal.recv() => {
                 if signal.is_none() {
@@ -413,7 +437,11 @@ async fn run_heartbeat_loop(
                 while assignment_signal.try_recv().is_ok() {}
                 info!(agent_id = %agent_id, "assignment push received, reconciling immediately");
                 interval.reset();
-                reconcile_tick(client, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+            }
+            _ = completed.notified() => {
+                interval.reset();
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal received");
@@ -566,7 +594,8 @@ async fn should_restart_after_crash(
 
 #[allow(clippy::too_many_arguments)]
 async fn process_workloads(
-    client: &client::ApiClient,
+    client: &Arc<client::ApiClient>,
+    starts: &StartTracker,
     api_key: &str,
     firecracker: &Arc<firecracker::runtime::FirecrackerRuntime>,
     qemu: &Arc<qemu::runtime::QemuRuntime>,
@@ -576,7 +605,7 @@ async fn process_workloads(
     mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
     restart_counts: &Arc<Mutex<HashMap<String, u32>>>,
     service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
-    rg_dns_registry: &rg_dns::RgDnsRegistry,
+    rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
 ) -> Vec<String> {
     let workloads = match client.fetch_assigned_workloads(api_key).await {
         Ok(w) => w,
@@ -629,35 +658,89 @@ async fn process_workloads(
     )
     .await;
 
-    futures_util::future::join_all(workloads.into_iter().map(|workload| async move {
-        let workload_id = workload.id.clone();
-        let runtime: &dyn runtime::Runtime = if workload.runtime_class == "vm" {
-            qemu.as_ref()
-        } else {
-            firecracker.as_ref()
-        };
+    let context = WorkloadStartContext {
+        client: Arc::clone(client),
+        api_key: Arc::from(api_key),
+        starts: starts.clone(),
+        firecracker: Arc::clone(firecracker),
+        qemu: Arc::clone(qemu),
+        running_containers: Arc::clone(running_containers),
+        workload_phases: Arc::clone(workload_phases),
+        mounted_volumes: Arc::clone(mounted_volumes),
+        restart_counts: Arc::clone(restart_counts),
+        service_dns_registry: Arc::clone(service_dns_registry),
+        rg_dns_registry: Arc::clone(rg_dns_registry),
+    };
 
-        let restart_fulfilled = start_or_restart_workload(
-            runtime,
-            workload,
-            running_containers,
-            workload_phases,
-            mounted_volumes,
-            restart_counts,
-            service_dns_registry,
-            rg_dns_registry,
-        )
-        .await;
-
-        if restart_fulfilled {
-            if let Err(e) = client.ack_workload_restart(api_key, &workload_id).await {
-                warn!(workload_id = %workload_id, error = %e, "Failed to ack workload restart");
-            }
+    for workload in workloads {
+        if starts.try_begin(&workload.id).await {
+            tokio::spawn(run_workload_start(context.clone(), workload));
         }
-    }))
-    .await;
+    }
 
     resource_group_ids
+}
+
+#[derive(Clone)]
+struct WorkloadStartContext {
+    client: Arc<client::ApiClient>,
+    api_key: Arc<str>,
+    starts: StartTracker,
+    firecracker: Arc<firecracker::runtime::FirecrackerRuntime>,
+    qemu: Arc<qemu::runtime::QemuRuntime>,
+    running_containers: Arc<Mutex<HashMap<String, String>>>,
+    workload_phases: Arc<Mutex<HashMap<String, String>>>,
+    mounted_volumes: Arc<Mutex<HashMap<String, String>>>,
+    restart_counts: Arc<Mutex<HashMap<String, u32>>>,
+    service_dns_registry: Arc<Mutex<HashMap<String, (String, String)>>>,
+    rg_dns_registry: Arc<rg_dns::RgDnsRegistry>,
+}
+
+async fn run_workload_start(context: WorkloadStartContext, workload: client::AssignedWorkload) {
+    let workload_id = workload.id.clone();
+    let runtime: &dyn runtime::Runtime = if workload.runtime_class == "vm" {
+        context.qemu.as_ref()
+    } else {
+        context.firecracker.as_ref()
+    };
+    let handle_before = context
+        .running_containers
+        .lock()
+        .await
+        .get(&workload_id)
+        .cloned();
+
+    let restart_fulfilled = start_or_restart_workload(
+        runtime,
+        workload,
+        &context.running_containers,
+        &context.workload_phases,
+        &context.mounted_volumes,
+        &context.restart_counts,
+        &context.service_dns_registry,
+        &context.rg_dns_registry,
+    )
+    .await;
+
+    if restart_fulfilled {
+        if let Err(e) = context
+            .client
+            .ack_workload_restart(&context.api_key, &workload_id)
+            .await
+        {
+            warn!(workload_id = %workload_id, error = %e, "Failed to ack workload restart");
+        }
+    }
+
+    let handle_after = context
+        .running_containers
+        .lock()
+        .await
+        .get(&workload_id)
+        .cloned();
+    let state_changed =
+        restart_fulfilled || (handle_after.is_some() && handle_after != handle_before);
+    context.starts.finish(&workload_id, state_changed).await;
 }
 
 #[allow(clippy::too_many_arguments)]

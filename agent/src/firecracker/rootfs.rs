@@ -11,6 +11,7 @@ use oci_spec::runtime::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::{debug, info};
 
@@ -19,6 +20,8 @@ const CONTAINER_ROOTFS_DIR: &str = "rootfs";
 
 const ROOTFS_CACHE_DIR: &str = "/var/lib/csfx-agent/rootfs";
 const ROOTFS_SIZE_MB: u64 = 2048;
+const MAX_CONCURRENT_LAYER_DOWNLOADS: usize = 8;
+const DIGEST_CACHE_TTL: Duration = Duration::from_secs(120);
 const GUEST_INIT_BINARY_PATH: &str = "/var/lib/csfx-agent/csfx-guest-init";
 const GZIP_LAYER_MEDIA_TYPES: &[&str] = &[
     "application/vnd.oci.image.layer.v1.tar+gzip",
@@ -34,6 +37,26 @@ fn build_lock(cache_key: &str) -> Arc<tokio::sync::Mutex<()>> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     locks.entry(cache_key.to_string()).or_default().clone()
+}
+
+fn digest_cache() -> &'static Mutex<HashMap<String, (String, Instant)>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, (String, Instant)>>> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+fn cached_digest(reference: &str) -> Option<String> {
+    let cache = digest_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (digest, stored_at) = cache.get(reference)?;
+    (stored_at.elapsed() < DIGEST_CACHE_TTL).then(|| digest.clone())
+}
+
+fn store_digest(reference: &str, digest: &str) {
+    digest_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(reference.to_string(), (digest.to_string(), Instant::now()));
 }
 
 pub struct RootfsBuilder {
@@ -61,7 +84,7 @@ impl RootfsBuilder {
         Self {
             client: Client::new(ClientConfig {
                 protocol,
-                max_concurrent_download: 1,
+                max_concurrent_download: MAX_CONCURRENT_LAYER_DOWNLOADS,
                 ..Default::default()
             }),
             registry_mirror,
@@ -83,15 +106,27 @@ impl RootfsBuilder {
         mirrored.parse().context("Invalid mirrored image reference")
     }
 
+    async fn resolve_digest(&self, reference: &Reference, auth: &RegistryAuth) -> Result<String> {
+        if let Some(digest) = reference.digest() {
+            return Ok(digest.to_string());
+        }
+        let key = reference.whole();
+        if let Some(digest) = cached_digest(&key) {
+            return Ok(digest);
+        }
+        let (_, digest) = self
+            .client
+            .pull_manifest(reference, auth)
+            .await
+            .context("Failed to resolve image manifest")?;
+        store_digest(&key, &digest);
+        Ok(digest)
+    }
+
     pub async fn ensure_rootfs(&self, image: &str) -> Result<PathBuf> {
         let reference = self.resolve_reference(image)?;
         let auth = RegistryAuth::Anonymous;
-
-        let (_, digest) = self
-            .client
-            .pull_manifest(&reference, &auth)
-            .await
-            .context("Failed to resolve image manifest")?;
+        let digest = self.resolve_digest(&reference, &auth).await?;
 
         let guest_init_version = guest_init_binary_version().await?;
         let cache_key = format!(
@@ -479,7 +514,12 @@ async fn build_ext4_image(source_dir: &Path, image_path: &Path) -> Result<()> {
     }
 
     let status = Command::new("mkfs.ext4")
-        .args(["-F", "-d"])
+        .args([
+            "-F",
+            "-E",
+            "lazy_itable_init=1,lazy_journal_init=1,nodiscard",
+            "-d",
+        ])
         .arg(source_dir)
         .arg(image_path)
         .status()
