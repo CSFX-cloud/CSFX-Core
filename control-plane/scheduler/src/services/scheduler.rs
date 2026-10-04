@@ -131,7 +131,15 @@ impl SchedulerService {
             None => {
                 crate::log_warn!(
                     "scheduler",
-                    &format!("No suitable agent found workload_id={}", workload.id)
+                    &format!(
+                        "No suitable agent found workload_id={} required_cpu={} required_memory={} required_disk={} requires_kvm={} {}",
+                        workload.id,
+                        req.cpu_millicores,
+                        req.memory_bytes,
+                        req.disk_bytes,
+                        req.runtime_class.requires_kvm(),
+                        describe_agents(&agents)
+                    )
                 );
 
                 Ok(CreateWorkloadResponse {
@@ -617,6 +625,18 @@ impl SchedulerService {
                 runtime_class.requires_kvm(),
                 &agents,
             ) else {
+                crate::log_debug!(
+                    "scheduler",
+                    &format!(
+                        "Pending workload not placeable workload_id={} required_cpu={} required_memory={} required_disk={} requires_kvm={} {}",
+                        workload.id,
+                        workload.cpu_millicores,
+                        workload.memory_bytes,
+                        workload.disk_bytes,
+                        runtime_class.requires_kvm(),
+                        describe_agents(&agents)
+                    )
+                );
                 continue;
             };
 
@@ -673,6 +693,26 @@ impl SchedulerService {
 
         Ok(())
     }
+}
+
+fn describe_agents(agents: &[AgentResources]) -> String {
+    if agents.is_empty() {
+        return "agents=none_online_with_metrics".to_string();
+    }
+    let entries: Vec<String> = agents
+        .iter()
+        .map(|agent| {
+            format!(
+                "agent={}(free_cpu={} free_memory={} free_disk={} kvm={})",
+                agent.agent_id,
+                agent.free_cpu_millicores,
+                agent.free_memory_bytes,
+                agent.free_disk_bytes,
+                agent.kvm_capable
+            )
+        })
+        .collect();
+    format!("agents=[{}]", entries.join(" "))
 }
 
 fn format_compose_error(error: &ComposeParseError) -> String {
