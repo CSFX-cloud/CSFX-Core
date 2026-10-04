@@ -481,7 +481,7 @@ async fn power_handler(
     info!(agent_id = %state.agent_id, action = verb, "power action requested");
 
     let output = Command::new("systemctl")
-        .arg(verb)
+        .args([verb, "-i"])
         .output()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
