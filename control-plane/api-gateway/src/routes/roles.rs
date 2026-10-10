@@ -6,12 +6,12 @@ use axum::{
     Router,
 };
 use entity::{
-    idp_group_mappings, permission, role, user_organization, IdpGroupMappings,
-    Permission, Role, RolePermission, UserOrganization,
+    idp_group_mappings, permission, role, user_organization, IdpGroupMappings, Permission, Role,
+    RolePermission, UserOrganization,
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait,
-    QueryFilter, QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -57,9 +57,12 @@ fn internal(context: &'static str) -> impl Fn(sea_orm::DbErr) -> ApiError {
 }
 
 fn organization_id(state: &AppState) -> Result<Uuid, ApiError> {
-    state
-        .default_org_id
-        .ok_or_else(|| error(StatusCode::INTERNAL_SERVER_ERROR, "organization not initialized"))
+    state.default_org_id.ok_or_else(|| {
+        error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "organization not initialized",
+        )
+    })
 }
 
 async fn load_role(
@@ -153,7 +156,10 @@ async fn list_roles(
         .map_err(internal("failed to list role permissions"))?;
     let mut by_role: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
     for grant in grants {
-        by_role.entry(grant.role_id).or_default().push(grant.permission_id);
+        by_role
+            .entry(grant.role_id)
+            .or_default()
+            .push(grant.permission_id);
     }
     Ok(Json(
         roles
@@ -186,7 +192,10 @@ async fn create_role(
         .await
         .map_err(|cause| internal_rbac(cause.to_string()))?;
     tracing::info!(role_id = %created.id, actor = %claims.user_id, "role created");
-    Ok((StatusCode::CREATED, Json(detail(created, payload.permission_ids))))
+    Ok((
+        StatusCode::CREATED,
+        Json(detail(created, payload.permission_ids)),
+    ))
 }
 
 fn internal_rbac(cause: String) -> ApiError {
@@ -213,7 +222,10 @@ async fn update_role(
     let organization_id = organization_id(&state)?;
     let existing = load_role(&state.db_conn, id, organization_id).await?;
     if existing.is_system_role {
-        return Err(error(StatusCode::CONFLICT, "system roles cannot be modified"));
+        return Err(error(
+            StatusCode::CONFLICT,
+            "system roles cannot be modified",
+        ));
     }
     let payload = validated_payload(&state.db_conn, payload).await?;
     ensure_unique_name(&state.db_conn, organization_id, &payload.name, Some(id)).await?;
@@ -253,10 +265,16 @@ async fn delete_role(
 ) -> Result<StatusCode, ApiError> {
     let existing = load_role(&state.db_conn, id, organization_id(&state)?).await?;
     if existing.is_system_role {
-        return Err(error(StatusCode::CONFLICT, "system roles cannot be deleted"));
+        return Err(error(
+            StatusCode::CONFLICT,
+            "system roles cannot be deleted",
+        ));
     }
     if role_in_use(&state.db_conn, id).await? {
-        return Err(error(StatusCode::CONFLICT, "role is still assigned or mapped"));
+        return Err(error(
+            StatusCode::CONFLICT,
+            "role is still assigned or mapped",
+        ));
     }
     Role::delete_by_id(id)
         .exec(&state.db_conn)

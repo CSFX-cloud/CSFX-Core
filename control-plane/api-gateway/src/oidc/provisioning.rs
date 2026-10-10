@@ -53,7 +53,10 @@ async fn available_username(
     provider: &identity_providers::Model,
     username: &str,
 ) -> Result<String, OidcError> {
-    for candidate in [username.to_string(), format!("{username}@{}", provider.slug)] {
+    for candidate in [
+        username.to_string(),
+        format!("{username}@{}", provider.slug),
+    ] {
         let taken = User::find()
             .filter(user::Column::Name.eq(&candidate))
             .one(db)

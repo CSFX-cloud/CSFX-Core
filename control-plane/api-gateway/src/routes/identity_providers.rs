@@ -15,6 +15,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::net::IpAddr;
 use uuid::Uuid;
 
 use crate::{
@@ -31,7 +32,10 @@ const MAX_SLUG_LENGTH: usize = 40;
 pub fn identity_provider_routes() -> Router<AppState> {
     Router::new()
         .route("/identity-providers", get(list).post(create))
-        .route("/identity-providers/{id}", axum::routing::put(update).delete(remove))
+        .route(
+            "/identity-providers/{id}",
+            axum::routing::put(update).delete(remove),
+        )
         .route("/identity-providers/{id}/test", post(test_connection))
         .route(
             "/identity-providers/{id}/group-mappings",
@@ -144,9 +148,12 @@ fn internal(context: &'static str) -> impl Fn(sea_orm::DbErr) -> ApiError {
 }
 
 fn organization_id(state: &AppState) -> Result<Uuid, ApiError> {
-    state
-        .default_org_id
-        .ok_or_else(|| error(StatusCode::INTERNAL_SERVER_ERROR, "organization not initialized"))
+    state.default_org_id.ok_or_else(|| {
+        error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "organization not initialized",
+        )
+    })
 }
 
 fn valid_slug(slug: &str) -> bool {
@@ -157,10 +164,21 @@ fn valid_slug(slug: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+fn is_local_address(host: &str) -> bool {
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(address)) => address.is_private() || address.is_loopback(),
+        Ok(IpAddr::V6(address)) => address.is_loopback(),
+        Err(_) => host == "localhost",
+    }
+}
+
 fn secure_issuer(url: &str) -> bool {
-    url.starts_with("https://")
-        || url.starts_with("http://localhost")
-        || url.starts_with("http://127.0.0.1")
+    if url.starts_with("https://") {
+        return true;
+    }
+    url.strip_prefix("http://")
+        .and_then(|rest| rest.split(['/', ':']).next())
+        .is_some_and(is_local_address)
 }
 
 async fn ensure_role_in_organization(
@@ -184,10 +202,16 @@ async fn validate_payload(
     organization_id: Uuid,
 ) -> Result<(), ApiError> {
     if payload.display_name.trim().is_empty() || payload.client_id.trim().is_empty() {
-        return Err(error(StatusCode::BAD_REQUEST, "display_name and client_id are required"));
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "display_name and client_id are required",
+        ));
     }
     if !secure_issuer(&payload.issuer_url) {
-        return Err(error(StatusCode::BAD_REQUEST, "issuer_url must use https"));
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "issuer_url must use https, http is only allowed for local or private addresses",
+        ));
     }
     match payload.default_role_id {
         Some(role_id) => ensure_role_in_organization(db, role_id, organization_id).await,
@@ -202,7 +226,10 @@ fn encrypt_secret(secret: &str) -> Result<String, ApiError> {
     })
 }
 
-async fn load_provider(db: &DatabaseConnection, id: Uuid) -> Result<identity_providers::Model, ApiError> {
+async fn load_provider(
+    db: &DatabaseConnection,
+    id: Uuid,
+) -> Result<identity_providers::Model, ApiError> {
     IdentityProviders::find_by_id(id)
         .one(db)
         .await
@@ -231,7 +258,10 @@ async fn create(
     let payload = request.payload;
     validate_payload(&state.db_conn, &payload, organization_id).await?;
     if !valid_slug(&request.slug) {
-        return Err(error(StatusCode::BAD_REQUEST, "slug must be lowercase alphanumeric with dashes"));
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "slug must be lowercase alphanumeric with dashes",
+        ));
     }
     let secret = payload
         .client_secret
@@ -360,7 +390,8 @@ async fn replace_mappings(
 ) -> Result<StatusCode, ApiError> {
     let provider = load_provider(&state.db_conn, id).await?;
     for mapping in &mappings {
-        ensure_role_in_organization(&state.db_conn, mapping.role_id, provider.organization_id).await?;
+        ensure_role_in_organization(&state.db_conn, mapping.role_id, provider.organization_id)
+            .await?;
     }
     let rows: Vec<idp_group_mappings::ActiveModel> = mappings
         .into_iter()

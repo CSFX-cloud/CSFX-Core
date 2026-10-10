@@ -1,5 +1,7 @@
 <script lang="ts">
+    import Icon from "@iconify/svelte";
     import { auth } from "$lib/auth/store.svelte";
+    import { PROVIDER_PRESETS, type ProviderPreset } from "./identity-provider-presets";
     import {
         createIdentityProvider,
         listGroupMappings,
@@ -35,6 +37,13 @@
     let mappings = $state<GroupMapping[]>([]);
     let saving = $state(false);
     let error = $state<string | null>(null);
+    let step = $state<"pick" | "form">("pick");
+    let preset = $state<ProviderPreset | null>(null);
+
+    const redirectUri = $derived(
+        editing?.redirect_uri ??
+            `${typeof location === "undefined" ? "" : location.origin}/api/auth/oidc/${slug || "<slug>"}/callback`,
+    );
 
     const valid = $derived(
         displayName.trim() !== "" &&
@@ -60,6 +69,18 @@
         enabled = provider?.enabled ?? true;
         mappings = [];
         error = null;
+        preset = null;
+        step = provider ? "form" : "pick";
+    }
+
+    function choose(selected: ProviderPreset) {
+        preset = selected;
+        slug = selected.slug;
+        displayName = selected.id === "generic" ? "" : selected.label;
+        scopes = selected.scopes;
+        usernameClaim = selected.usernameClaim;
+        groupsClaim = selected.groupsClaim;
+        step = "form";
     }
 
     export async function open(provider: IdentityProvider | null) {
@@ -124,12 +145,37 @@
 
 <ModalDialog
     bind:this={dialog}
-    title={editing ? "Edit identity provider" : "Add identity provider"}
+    title={editing ? "Edit identity provider" : preset ? `Set up ${preset.label}` : "Add identity provider"}
     subtitle={editing?.slug}
     width="max-w-2xl"
     onclose={() => (error = null)}
 >
-    <div class="grid max-h-[65vh] grid-cols-2 gap-3 overflow-y-auto pr-1">
+    {#if step === "pick"}
+        <p class="text-xs text-muted-foreground">
+            Choose your identity provider. Any OpenID Connect compatible service works.
+        </p>
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {#each PROVIDER_PRESETS as option (option.id)}
+                <button
+                    class="flex flex-col items-center gap-3 rounded-xl border bg-card px-4 py-5 transition-colors hover:border-primary/50 hover:bg-muted/50"
+                    onclick={() => choose(option)}
+                >
+                    <Icon icon={option.icon} width={32} height={32} color={option.iconColor} />
+                    <span class="text-sm font-medium">{option.label}</span>
+                </button>
+            {/each}
+        </div>
+        <div class="flex justify-end">
+            <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
+        </div>
+    {:else}
+    {#if preset}
+        <div class="flex items-start gap-3 rounded-lg border bg-muted/30 p-3">
+            <Icon icon={preset.icon} width={22} height={22} color={preset.iconColor} class="mt-0.5 shrink-0" />
+            <p class="text-xs text-muted-foreground">{preset.hint}</p>
+        </div>
+    {/if}
+    <div class="grid max-h-[55vh] grid-cols-2 gap-3 overflow-y-auto pr-1">
         <div class="flex flex-col gap-1">
             <label class="text-xs text-muted-foreground" for="idp-name">Display name</label>
             <input id="idp-name" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="Authentik" bind:value={displayName} />
@@ -149,7 +195,7 @@
             <input
                 id="idp-issuer"
                 class="border rounded px-3 py-1.5 text-sm font-mono bg-background"
-                placeholder="https://auth.example.com/application/o/csfx/"
+                placeholder={preset?.issuerPlaceholder ?? "https://idp.example.com"}
                 bind:value={issuerUrl}
             />
         </div>
@@ -168,12 +214,10 @@
                 bind:value={clientSecret}
             />
         </div>
-        {#if editing}
-            <div class="col-span-2 flex flex-col gap-1">
-                <span class="text-xs text-muted-foreground">Redirect URI</span>
-                <code class="rounded border bg-muted/40 px-3 py-1.5 text-xs break-all">{editing.redirect_uri}</code>
-            </div>
-        {/if}
+        <div class="col-span-2 flex flex-col gap-1">
+            <span class="text-xs text-muted-foreground">Redirect URI (enter this in your identity provider)</span>
+            <code class="rounded border bg-muted/40 px-3 py-1.5 text-xs break-all">{redirectUri}</code>
+        </div>
         <div class="col-span-2 flex flex-col gap-1">
             <label class="text-xs text-muted-foreground" for="idp-scopes">Scopes</label>
             <input id="idp-scopes" class="border rounded px-3 py-1.5 text-sm font-mono bg-background" bind:value={scopes} />
@@ -247,10 +291,18 @@
     {#if error}
         <p class="text-xs text-destructive">{error}</p>
     {/if}
-    <div class="flex gap-2 justify-end">
-        <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
-        <Button size="sm" onclick={save} disabled={saving || !valid}>
-            {saving ? "Saving..." : "Save"}
-        </Button>
+    <div class="flex items-center justify-between gap-2">
+        {#if editing}
+            <span></span>
+        {:else}
+            <Button size="sm" variant="ghost" onclick={() => (step = "pick")}>Back</Button>
+        {/if}
+        <div class="flex gap-2">
+            <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
+            <Button size="sm" onclick={save} disabled={saving || !valid}>
+                {saving ? "Saving..." : "Save"}
+            </Button>
+        </div>
     </div>
+    {/if}
 </ModalDialog>

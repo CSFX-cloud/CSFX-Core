@@ -79,9 +79,14 @@ pub async fn complete_login(
         &stored.pkce_verifier,
     )
     .await?;
-    let claims =
-        client::verify_id_token(&endpoints, provider, &client_secret, &id_token, &stored.nonce)
-            .await?;
+    let claims = client::verify_id_token(
+        &endpoints,
+        provider,
+        &client_secret,
+        &id_token,
+        &stored.nonce,
+    )
+    .await?;
     let identity = extract_identity(&claims, provider)?;
     provisioning::sign_in(db, provider, &identity).await
 }
@@ -115,7 +120,9 @@ pub async fn redeem_exchange_code(
         .one(db)
         .await?
         .ok_or(OidcError::InvalidState)?;
-    let deleted = OidcExchangeCodes::delete_by_id(hash.as_str()).exec(db).await?;
+    let deleted = OidcExchangeCodes::delete_by_id(hash.as_str())
+        .exec(db)
+        .await?;
     if deleted.rows_affected != 1 || stored.expires_at <= Utc::now().naive_utc() {
         return Err(OidcError::InvalidState);
     }
