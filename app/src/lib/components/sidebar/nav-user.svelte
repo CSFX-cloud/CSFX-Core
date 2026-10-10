@@ -12,7 +12,6 @@
     import { gaze } from "@blobatar/svelte/gaze";
     import "blobatar/motion.css";
     import "blobatar/gaze.css";
-    import { settingsDialog } from "$lib/components/settings/settings-store.svelte.js";
     import { goto } from "$app/navigation";
 
     const sidebar = useSidebar();
@@ -107,7 +106,7 @@
                 </DropdownMenu.Label>
                 <DropdownMenu.Separator />
                 <DropdownMenu.Group>
-                    <DropdownMenu.Item onclick={() => settingsDialog.show()}>
+                    <DropdownMenu.Item onclick={() => goto("/admin/settings/account")}>
                         <UserIcon />
                         Profile
                     </DropdownMenu.Item>

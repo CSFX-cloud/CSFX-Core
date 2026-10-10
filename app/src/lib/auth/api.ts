@@ -119,6 +119,31 @@ export async function login(
     return res.json();
 }
 
+export interface SsoProvider {
+    slug: string;
+    display_name: string;
+}
+
+export async function listSsoProviders(): Promise<SsoProvider[]> {
+    const res = await fetch(`${API_BASE}/auth/providers`);
+    if (!res.ok) throw new Error(`sso providers fetch failed: ${res.status}`);
+    return res.json();
+}
+
+export function ssoStartUrl(slug: string): string {
+    return `${API_BASE}/auth/oidc/${encodeURIComponent(slug)}/start`;
+}
+
+export async function exchangeSsoCode(code: string): Promise<AuthResponse> {
+    const res = await fetch(`${API_BASE}/auth/oidc/exchange`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+    });
+    if (!res.ok) throw new Error(`sso exchange failed: ${res.status}`);
+    return res.json();
+}
+
 export async function changePassword(
     token: string,
     oldPassword: string,
