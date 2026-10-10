@@ -47,7 +47,7 @@ pub fn verify_jwt(token: &str) -> Result<TokenData<Claims>, jsonwebtoken::errors
     )
 }
 
-fn get_jwt_secret() -> String {
+pub fn get_jwt_secret() -> String {
     env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string())
 }
 

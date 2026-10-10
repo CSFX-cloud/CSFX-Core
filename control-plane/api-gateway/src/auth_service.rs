@@ -87,6 +87,7 @@ impl AuthService {
             two_factor_secret: ActiveValue::NotSet,
             two_factor_enabled: ActiveValue::Set(false),
             force_password_change: ActiveValue::Set(false),
+            auth_source: ActiveValue::Set("local".to_string()),
         };
 
         // Insert without retrieving last_insert_id (which doesn't work with UUID PKs in SQLite)
@@ -111,6 +112,10 @@ impl AuthService {
             .one(&self.db)
             .await?
             .ok_or(AuthError::UserNotFound)?;
+
+        if user.auth_source != "local" {
+            return Err(AuthError::InvalidCredentials);
+        }
 
         // Get RSA private key for password decryption
         let rsa_key = self.get_or_create_rsa_key("main").await?;

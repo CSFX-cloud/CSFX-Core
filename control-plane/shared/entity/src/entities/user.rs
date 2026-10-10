@@ -14,6 +14,7 @@ pub struct Model {
     pub two_factor_secret: Option<String>,
     pub two_factor_enabled: bool,
     pub force_password_change: bool,
+    pub auth_source: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

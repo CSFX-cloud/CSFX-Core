@@ -354,6 +354,7 @@ async fn create_user(
         two_factor_secret: ActiveValue::NotSet,
         two_factor_enabled: ActiveValue::Set(false),
         force_password_change: ActiveValue::Set(req.force_password_change),
+        auth_source: ActiveValue::Set("local".to_string()),
     };
 
     let new_user = new_user

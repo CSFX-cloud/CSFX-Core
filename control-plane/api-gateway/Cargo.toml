@@ -70,7 +70,7 @@ cookie = { workspace = true }
 qrcode = { workspace = true }
 image = { workspace = true }
 sysinfo = { workspace = true }
-reqwest = { workspace = true, features = ["stream"] }
+reqwest = { workspace = true, features = ["stream", "form"] }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 prometheus = { workspace = true }
