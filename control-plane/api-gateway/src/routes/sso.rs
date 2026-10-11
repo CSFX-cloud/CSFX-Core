@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json, Redirect},
     routing::{get, post},
     Router,
@@ -54,12 +54,8 @@ async fn find_enabled_provider(
         .ok_or(OidcError::AccessDenied("unknown_provider"))
 }
 
-fn login_failure_redirect(error: &OidcError) -> Redirect {
-    Redirect::to(&format!(
-        "{}/login?sso_error={}",
-        oidc::frontend_url(),
-        error.code()
-    ))
+fn login_failure_redirect(origin: &str, error: &OidcError) -> Redirect {
+    Redirect::to(&format!("{origin}/login?sso_error={}", error.code()))
 }
 
 async fn list_providers(
@@ -85,17 +81,23 @@ async fn list_providers(
     ))
 }
 
-async fn start(State(state): State<AppState>, Path(slug): Path<String>) -> Redirect {
+async fn start(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+) -> Redirect {
+    let origin = oidc::public_origin(&headers);
     let result = async {
         let provider = find_enabled_provider(&state.db_conn, &slug).await?;
-        flow::begin_login(&state.db_conn, &provider).await
+        let redirect_uri = oidc::redirect_uri(&origin, &slug);
+        flow::begin_login(&state.db_conn, &provider, &redirect_uri).await
     }
     .await;
     match result {
         Ok(url) => Redirect::to(&url),
         Err(error) => {
             tracing::warn!(error = %error, provider = %slug, "oidc login start failed");
-            login_failure_redirect(&error)
+            login_failure_redirect(&origin, &error)
         }
     }
 }
@@ -103,6 +105,7 @@ async fn start(State(state): State<AppState>, Path(slug): Path<String>) -> Redir
 async fn finish_callback(
     db: &DatabaseConnection,
     slug: &str,
+    redirect_uri: &str,
     query: CallbackQuery,
 ) -> Result<String, OidcError> {
     if query.error.is_some() {
@@ -112,7 +115,7 @@ async fn finish_callback(
         return Err(OidcError::InvalidState);
     };
     let provider = find_enabled_provider(db, slug).await?;
-    let user = flow::complete_login(db, &provider, &code, &login_state).await?;
+    let user = flow::complete_login(db, &provider, redirect_uri, &code, &login_state).await?;
     flow::issue_exchange_code(db, user.id).await
 }
 
@@ -120,16 +123,15 @@ async fn callback(
     State(state): State<AppState>,
     Path(slug): Path<String>,
     Query(query): Query<CallbackQuery>,
+    headers: HeaderMap,
 ) -> Redirect {
-    match finish_callback(&state.db_conn, &slug, query).await {
-        Ok(code) => Redirect::to(&format!(
-            "{}/login/callback?code={}",
-            oidc::frontend_url(),
-            code
-        )),
+    let origin = oidc::public_origin(&headers);
+    let redirect_uri = oidc::redirect_uri(&origin, &slug);
+    match finish_callback(&state.db_conn, &slug, &redirect_uri, query).await {
+        Ok(code) => Redirect::to(&format!("{origin}/login/callback?code={code}")),
         Err(error) => {
             tracing::warn!(error = %error, provider = %slug, "oidc login failed");
-            login_failure_redirect(&error)
+            login_failure_redirect(&origin, &error)
         }
     }
 }

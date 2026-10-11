@@ -8,8 +8,8 @@ use sea_orm::{
 };
 
 use super::{
-    client, error::OidcError, identity::extract_identity, provisioning, random_token, redirect_uri,
-    secrets, sha256_base64url,
+    client, error::OidcError, identity::extract_identity, provisioning, random_token, secrets,
+    sha256_base64url,
 };
 
 const LOGIN_STATE_TTL_MINUTES: i64 = 10;
@@ -18,6 +18,7 @@ const EXCHANGE_CODE_TTL_SECONDS: i64 = 60;
 pub async fn begin_login(
     db: &DatabaseConnection,
     provider: &identity_providers::Model,
+    redirect_uri: &str,
 ) -> Result<String, OidcError> {
     let endpoints = client::discover(&provider.issuer_url).await?;
     let (state, nonce, verifier) = (random_token(), random_token(), random_token());
@@ -38,7 +39,7 @@ pub async fn begin_login(
     Ok(client::authorization_url(
         &endpoints,
         provider,
-        &redirect_uri(&provider.slug),
+        redirect_uri,
         &state,
         &nonce,
         &sha256_base64url(&verifier),
@@ -64,6 +65,7 @@ async fn consume_state(
 pub async fn complete_login(
     db: &DatabaseConnection,
     provider: &identity_providers::Model,
+    redirect_uri: &str,
     code: &str,
     state: &str,
 ) -> Result<user::Model, OidcError> {
@@ -74,7 +76,7 @@ pub async fn complete_login(
         &endpoints,
         provider,
         &client_secret,
-        &redirect_uri(&provider.slug),
+        redirect_uri,
         code,
         &stored.pkce_verifier,
     )
