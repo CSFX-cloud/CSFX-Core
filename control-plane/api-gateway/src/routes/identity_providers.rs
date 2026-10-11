@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::Json,
     routing::{get, post},
     Router,
@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::{
     auth::rbac::CanManageIdentityProviders,
     auth_service::AuthService,
-    oidc::{client, redirect_uri, secrets},
+    oidc::{client, public_origin, redirect_uri, secrets},
     AppState,
 };
 
@@ -118,11 +118,11 @@ impl ProviderResponse {
     }
 }
 
-impl From<identity_providers::Model> for ProviderResponse {
-    fn from(provider: identity_providers::Model) -> Self {
+impl ProviderResponse {
+    fn new(provider: identity_providers::Model, origin: &str) -> Self {
         Self {
             user_count: 0,
-            redirect_uri: redirect_uri(&provider.slug),
+            redirect_uri: redirect_uri(origin, &provider.slug),
             id: provider.id,
             slug: provider.slug,
             display_name: provider.display_name,
@@ -251,7 +251,9 @@ async fn load_provider(
 async fn list(
     CanManageIdentityProviders(_claims): CanManageIdentityProviders,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<Json<Vec<ProviderResponse>>, ApiError> {
+    let origin = public_origin(&headers);
     let providers = IdentityProviders::find()
         .order_by_asc(identity_providers::Column::DisplayName)
         .all(&state.db_conn)
@@ -260,7 +262,7 @@ async fn list(
     let mut response = Vec::with_capacity(providers.len());
     for provider in providers {
         let user_count = linked_user_ids(&state.db_conn, provider.id).await?.len();
-        response.push(ProviderResponse::from(provider).with_user_count(user_count));
+        response.push(ProviderResponse::new(provider, &origin).with_user_count(user_count));
     }
     Ok(Json(response))
 }
@@ -283,6 +285,7 @@ async fn linked_user_ids(
 async fn create(
     CanManageIdentityProviders(claims): CanManageIdentityProviders,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), ApiError> {
     let organization_id = organization_id(&state)?;
@@ -323,12 +326,16 @@ async fn create(
         false => internal("failed to create identity provider")(cause),
     })?;
     tracing::info!(provider = %created.slug, actor = %claims.user_id, "identity provider created");
-    Ok((StatusCode::CREATED, Json(created.into())))
+    Ok((
+        StatusCode::CREATED,
+        Json(ProviderResponse::new(created, &public_origin(&headers))),
+    ))
 }
 
 async fn update(
     CanManageIdentityProviders(claims): CanManageIdentityProviders,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(payload): Json<ProviderPayload>,
 ) -> Result<Json<ProviderResponse>, ApiError> {
@@ -355,7 +362,7 @@ async fn update(
     tracing::info!(provider = %updated.slug, actor = %claims.user_id, "identity provider updated");
     let user_count = linked_user_ids(&state.db_conn, id).await?.len();
     Ok(Json(
-        ProviderResponse::from(updated).with_user_count(user_count),
+        ProviderResponse::new(updated, &public_origin(&headers)).with_user_count(user_count),
     ))
 }
 
