@@ -98,7 +98,7 @@ async fn create_user(
         password: Set(String::new()),
         salt: Set(String::new()),
         email: Set(email),
-        gravatar_email: Set(None),
+        gravatar_email: Set(identity.avatar_email.clone()),
         two_factor_secret: Set(None),
         two_factor_enabled: Set(false),
         force_password_change: Set(false),
@@ -120,6 +120,19 @@ async fn create_user(
     Ok(created)
 }
 
+async fn backfill_gravatar(
+    db: &DatabaseConnection,
+    user: user::Model,
+    identity: &ExternalIdentity,
+) -> Result<user::Model, OidcError> {
+    if user.gravatar_email.is_some() || identity.avatar_email.is_none() {
+        return Ok(user);
+    }
+    let mut active: user::ActiveModel = user.into();
+    active.gravatar_email = Set(identity.avatar_email.clone());
+    Ok(active.update(db).await?)
+}
+
 pub async fn sign_in(
     db: &DatabaseConnection,
     provider: &identity_providers::Model,
@@ -127,7 +140,7 @@ pub async fn sign_in(
 ) -> Result<user::Model, OidcError> {
     let role_id = resolve_role(db, provider, &identity.groups).await?;
     let user = match existing_user(db, provider, &identity.subject).await? {
-        Some(user) => user,
+        Some(user) => backfill_gravatar(db, user, identity).await?,
         None if provider.auto_provision => create_user(db, provider, identity).await?,
         None => return Err(OidcError::AccessDenied("not_provisioned")),
     };

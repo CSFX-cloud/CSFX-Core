@@ -1,5 +1,7 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import Icon from "@iconify/svelte";
+    import { presetFor } from "$lib/components/settings/identity-provider-presets";
     import { toast } from "svelte-sonner";
     import PlusIcon from "@lucide/svelte/icons/plus";
     import CopyIcon from "@lucide/svelte/icons/copy";
@@ -12,6 +14,7 @@
     } from "$lib/api/identity-providers";
     import { listRoles, type Role } from "$lib/api/roles";
     import { Button } from "$lib/components/ui/button/index.js";
+    import { Switch } from "$lib/components/ui/switch/index.js";
     import * as Card from "$lib/components/ui/card/index.js";
     import StatusBadge from "$lib/components/status-badge.svelte";
     import IdentityProviderDialog from "$lib/components/settings/identity-provider-dialog.svelte";
@@ -21,6 +24,7 @@
     let loading = $state(true);
     let error = $state<string | null>(null);
     let pendingDeleteId = $state<string | null>(null);
+    let deleteUsers = $state(false);
     let testingId = $state<string | null>(null);
     let dialog = $state<IdentityProviderDialog | null>(null);
 
@@ -57,10 +61,11 @@
     async function remove(provider: IdentityProvider) {
         if (!auth.token) return;
         try {
-            await deleteIdentityProvider(auth.token, provider.id);
+            await deleteIdentityProvider(auth.token, provider.id, deleteUsers);
             pendingDeleteId = null;
             await load();
         } catch (e) {
+            pendingDeleteId = null;
             error = e instanceof Error ? e.message : "Failed to delete identity provider";
         }
     }
@@ -112,6 +117,14 @@
                     <div class="flex items-center justify-between gap-3">
                         <div class="min-w-0">
                             <Card.Title class="flex items-center gap-2">
+                                {@const preset = presetFor(provider.slug, provider.display_name)}
+                                <Icon
+                                    icon={preset.icon}
+                                    width={18}
+                                    height={18}
+                                    color={preset.iconColor}
+                                    class={provider.enabled ? "" : "opacity-40 grayscale"}
+                                />
                                 {provider.display_name}
                                 <StatusBadge
                                     status={provider.enabled ? "active" : "disabled"}
@@ -129,7 +142,16 @@
                                 <Button size="sm" variant="destructive" onclick={() => remove(provider)}>Confirm</Button>
                                 <Button size="sm" variant="ghost" onclick={() => (pendingDeleteId = null)}>Cancel</Button>
                             {:else}
-                                <Button size="sm" variant="ghost" onclick={() => (pendingDeleteId = provider.id)}>Delete</Button>
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onclick={() => {
+                                        deleteUsers = false;
+                                        pendingDeleteId = provider.id;
+                                    }}
+                                >
+                                    Delete
+                                </Button>
                             {/if}
                         </div>
                     </div>
@@ -154,6 +176,22 @@
                         <span class="text-muted-foreground">Create users on first sign-in</span>
                         <span>{provider.auto_provision ? "Yes" : "No"}</span>
                     </div>
+                    <div class="flex items-center justify-between gap-2">
+                        <span class="text-muted-foreground">Users signed in through this provider</span>
+                        <span>{provider.user_count}</span>
+                    </div>
+                    {#if pendingDeleteId === provider.id}
+                        <div class="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+                            <span class="text-sm">
+                                {#if provider.user_count > 0}
+                                    Also delete {provider.user_count} {provider.user_count === 1 ? "user" : "users"} and their SSH keys
+                                {:else}
+                                    No users belong to this provider
+                                {/if}
+                            </span>
+                            <Switch bind:checked={deleteUsers} disabled={provider.user_count === 0} />
+                        </div>
+                    {/if}
                 </Card.Content>
             </Card.Root>
         {/each}

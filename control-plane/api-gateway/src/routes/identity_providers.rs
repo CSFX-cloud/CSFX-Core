@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
@@ -7,7 +7,8 @@ use axum::{
 };
 use chrono::Utc;
 use entity::{
-    identity_providers, idp_group_mappings, role, IdentityProviders, IdpGroupMappings, Role,
+    identity_providers, idp_group_mappings, role, user_identities, IdentityProviders,
+    IdpGroupMappings, Role, UserIdentities,
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -20,6 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::rbac::CanManageIdentityProviders,
+    auth_service::AuthService,
     oidc::{client, redirect_uri, secrets},
     AppState,
 };
@@ -106,11 +108,20 @@ struct ProviderResponse {
     auto_provision: bool,
     enabled: bool,
     redirect_uri: String,
+    user_count: usize,
+}
+
+impl ProviderResponse {
+    fn with_user_count(mut self, user_count: usize) -> Self {
+        self.user_count = user_count;
+        self
+    }
 }
 
 impl From<identity_providers::Model> for ProviderResponse {
     fn from(provider: identity_providers::Model) -> Self {
         Self {
+            user_count: 0,
             redirect_uri: redirect_uri(&provider.slug),
             id: provider.id,
             slug: provider.slug,
@@ -246,7 +257,27 @@ async fn list(
         .all(&state.db_conn)
         .await
         .map_err(internal("failed to list identity providers"))?;
-    Ok(Json(providers.into_iter().map(Into::into).collect()))
+    let mut response = Vec::with_capacity(providers.len());
+    for provider in providers {
+        let user_count = linked_user_ids(&state.db_conn, provider.id).await?.len();
+        response.push(ProviderResponse::from(provider).with_user_count(user_count));
+    }
+    Ok(Json(response))
+}
+
+async fn linked_user_ids(
+    db: &DatabaseConnection,
+    provider_id: Uuid,
+) -> Result<Vec<Uuid>, ApiError> {
+    let identities = UserIdentities::find()
+        .filter(user_identities::Column::ProviderId.eq(provider_id))
+        .all(db)
+        .await
+        .map_err(internal("failed to list provider users"))?;
+    Ok(identities
+        .into_iter()
+        .map(|identity| identity.user_id)
+        .collect())
 }
 
 async fn create(
@@ -322,14 +353,51 @@ async fn update(
         .await
         .map_err(internal("failed to update identity provider"))?;
     tracing::info!(provider = %updated.slug, actor = %claims.user_id, "identity provider updated");
-    Ok(Json(updated.into()))
+    let user_count = linked_user_ids(&state.db_conn, id).await?.len();
+    Ok(Json(
+        ProviderResponse::from(updated).with_user_count(user_count),
+    ))
+}
+
+#[derive(Deserialize)]
+struct RemoveQuery {
+    #[serde(default)]
+    delete_users: bool,
+}
+
+async fn delete_linked_users(
+    state: &AppState,
+    provider_id: Uuid,
+    actor: Uuid,
+) -> Result<usize, ApiError> {
+    let user_ids = linked_user_ids(&state.db_conn, provider_id).await?;
+    if user_ids.contains(&actor) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "your own account belongs to this provider",
+        ));
+    }
+    AuthService::new(state.db_conn.clone())
+        .delete_users(&user_ids)
+        .await
+        .map_err(|cause| {
+            tracing::error!(error = %cause, "failed to delete provider users");
+            error(StatusCode::INTERNAL_SERVER_ERROR, "failed to delete users")
+        })?;
+    Ok(user_ids.len())
 }
 
 async fn remove(
     CanManageIdentityProviders(claims): CanManageIdentityProviders,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Query(query): Query<RemoveQuery>,
 ) -> Result<StatusCode, ApiError> {
+    load_provider(&state.db_conn, id).await?;
+    if query.delete_users {
+        let deleted = delete_linked_users(&state, id, claims.user_id).await?;
+        tracing::info!(provider_id = %id, actor = %claims.user_id, deleted, "provider users deleted");
+    }
     let result = IdentityProviders::delete_by_id(id)
         .exec(&state.db_conn)
         .await

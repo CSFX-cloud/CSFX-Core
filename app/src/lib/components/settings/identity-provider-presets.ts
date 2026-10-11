@@ -1,3 +1,5 @@
+import "./provider-icons";
+
 export interface ProviderPreset {
     id: string;
     label: string;
@@ -38,7 +40,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
         id: "keycloak",
         label: "Keycloak",
         icon: "simple-icons:keycloak",
-        iconColor: "#4d4d4d",
         slug: "keycloak",
         issuerPlaceholder: "https://keycloak.example.com/realms/csfx",
         scopes: "openid profile email",

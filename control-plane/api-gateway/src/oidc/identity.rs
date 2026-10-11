@@ -8,6 +8,7 @@ pub struct ExternalIdentity {
     pub subject: String,
     pub username: String,
     pub email: Option<String>,
+    pub avatar_email: Option<String>,
     pub groups: Vec<String>,
 }
 
@@ -31,15 +32,9 @@ fn group_claim(claims: &Map<String, Value>, name: &str) -> Vec<String> {
     }
 }
 
-fn verified_email(
-    claims: &Map<String, Value>,
-    provider: &identity_providers::Model,
-) -> Option<String> {
+fn verified_email(claims: &Map<String, Value>, email: Option<&String>) -> Option<String> {
     let verified = claims.get("email_verified").and_then(Value::as_bool) == Some(true);
-    if !verified {
-        return None;
-    }
-    string_claim(claims, &provider.email_claim)
+    email.filter(|_| verified).cloned()
 }
 
 pub fn extract_identity(
@@ -48,7 +43,8 @@ pub fn extract_identity(
 ) -> Result<ExternalIdentity, OidcError> {
     let subject =
         string_claim(claims, "sub").ok_or(OidcError::InvalidProvider("missing subject"))?;
-    let email = verified_email(claims, provider);
+    let avatar_email = string_claim(claims, &provider.email_claim);
+    let email = verified_email(claims, avatar_email.as_ref());
     let username = string_claim(claims, &provider.username_claim)
         .or_else(|| email.clone())
         .unwrap_or_else(|| subject.clone());
@@ -56,6 +52,7 @@ pub fn extract_identity(
         subject,
         username,
         email,
+        avatar_email,
         groups: group_claim(claims, &provider.groups_claim),
     })
 }
@@ -103,6 +100,7 @@ mod tests {
         let unverified = claims(json!({ "sub": "abc", "email": "a@x.io" }));
         let identity = extract_identity(&unverified, &provider()).unwrap();
         assert_eq!(identity.email, None);
+        assert_eq!(identity.avatar_email.as_deref(), Some("a@x.io"));
         assert_eq!(identity.username, "abc");
     }
 }

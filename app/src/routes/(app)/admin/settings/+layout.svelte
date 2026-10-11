@@ -6,6 +6,7 @@
     import DownloadIcon from "@lucide/svelte/icons/download";
     import ScrollTextIcon from "@lucide/svelte/icons/scroll-text";
     import KeyRoundIcon from "@lucide/svelte/icons/key-round";
+    import UsersIcon from "@lucide/svelte/icons/users";
     import ShieldCheckIcon from "@lucide/svelte/icons/shield-check";
     import RgTopbar from "$lib/components/resource-group/rg-topbar.svelte";
 
@@ -38,6 +39,7 @@
         {
             title: "Access",
             links: [
+                { href: `${BASE}/users`, label: "Users", icon: UsersIcon },
                 { href: `${BASE}/identity-providers`, label: "Identity providers", icon: KeyRoundIcon },
                 { href: `${BASE}/roles`, label: "Roles", icon: ShieldCheckIcon },
             ],

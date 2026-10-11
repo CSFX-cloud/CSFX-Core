@@ -16,6 +16,7 @@ export interface IdentityProvider {
     auto_provision: boolean;
     enabled: boolean;
     redirect_uri: string;
+    user_count: number;
 }
 
 export interface IdentityProviderInput {
@@ -88,8 +89,12 @@ export async function updateIdentityProvider(
     return res.json();
 }
 
-export async function deleteIdentityProvider(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/identity-providers/${id}`, {
+export async function deleteIdentityProvider(
+    token: string,
+    id: string,
+    deleteUsers: boolean,
+): Promise<void> {
+    const res = await authedFetch(`${API_BASE}/identity-providers/${id}?delete_users=${deleteUsers}`, {
         method: 'DELETE',
         headers: authHeaders(token),
     });
