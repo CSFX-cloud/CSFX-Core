@@ -38,6 +38,24 @@ export async function listOrganizationRoles(token: string): Promise<Organization
     return res.json();
 }
 
+export interface CreateUserInput {
+    username: string;
+    email: string | null;
+    password: string;
+    role_id: string;
+    force_password_change: boolean;
+}
+
+export async function createUser(token: string, input: CreateUserInput): Promise<OrganizationUser> {
+    const res = await authedFetch(`${API_BASE}/organization/users`, {
+        method: 'POST',
+        headers: authHeaders(token),
+        body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error(res.status === 409 ? 'Username or email already in use' : `Failed to create user: ${res.status}`);
+    return res.json();
+}
+
 export async function updateUserRole(token: string, userId: string, roleId: string): Promise<void> {
     const res = await authedFetch(`${API_BASE}/organization/users/${userId}/role`, {
         method: 'PUT',

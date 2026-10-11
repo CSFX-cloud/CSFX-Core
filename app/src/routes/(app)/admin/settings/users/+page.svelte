@@ -1,5 +1,8 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import PlusIcon from "@lucide/svelte/icons/plus";
+    import UsersIcon from "@lucide/svelte/icons/users";
+    import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
     import { auth } from "$lib/auth/store.svelte";
     import {
         deleteUser,
@@ -11,18 +14,24 @@
     } from "$lib/api/users";
     import { Badge } from "$lib/components/ui/badge/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
-    import * as Card from "$lib/components/ui/card/index.js";
+    import CreateUserDialog from "$lib/components/settings/create-user-dialog.svelte";
     import UserAvatar from "$lib/components/settings/user-avatar.svelte";
+    import UserDrawer from "$lib/components/settings/user-drawer.svelte";
 
     let users = $state<OrganizationUser[]>([]);
     let roles = $state<OrganizationRole[]>([]);
     let loading = $state(true);
+    let refreshing = $state(false);
+    let busy = $state(false);
     let error = $state<string | null>(null);
-    let pendingDeleteId = $state<string | null>(null);
-    let savingId = $state<string | null>(null);
+    let selectedId = $state<string | null>(null);
+    let createDialog = $state<CreateUserDialog | null>(null);
+
+    const selected = $derived(users.find((user) => user.id === selectedId) ?? null);
 
     async function load() {
         if (!auth.token) return;
+        refreshing = true;
         try {
             [users, roles] = await Promise.all([listUsers(auth.token), listOrganizationRoles(auth.token)]);
             error = null;
@@ -30,120 +39,128 @@
             error = e instanceof Error ? e.message : "Failed to load users";
         } finally {
             loading = false;
+            refreshing = false;
         }
     }
 
-    async function changeRole(user: OrganizationUser, roleId: string) {
-        if (!auth.token || roleId === user.role_id) return;
-        savingId = user.id;
+    async function changeRole(roleId: string) {
+        if (!auth.token || !selected || roleId === selected.role_id) return;
+        busy = true;
         try {
-            await updateUserRole(auth.token, user.id, roleId);
+            await updateUserRole(auth.token, selected.id, roleId);
             await load();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to update role";
         } finally {
-            savingId = null;
+            busy = false;
         }
     }
 
-    async function remove(user: OrganizationUser) {
-        if (!auth.token) return;
+    async function removeSelected() {
+        if (!auth.token || !selected) return;
+        busy = true;
         try {
-            await deleteUser(auth.token, user.id);
-            pendingDeleteId = null;
+            await deleteUser(auth.token, selected.id);
+            selectedId = null;
             await load();
         } catch (e) {
-            pendingDeleteId = null;
             error = e instanceof Error ? e.message : "Failed to delete user";
+        } finally {
+            busy = false;
         }
-    }
-
-    function sourceLabel(source: string): string {
-        return source === "local" ? "Local" : "SSO";
     }
 
     onMount(load);
 </script>
 
-<div class="flex max-w-4xl flex-col gap-6">
-    <div>
-        <h2 class="text-lg font-light text-foreground/70">Users</h2>
-        <p class="text-xs text-muted-foreground">
-            Everyone who can sign in, including users created through single sign-on.
-        </p>
+<CreateUserDialog bind:this={createDialog} {roles} onCreated={load} />
+<UserDrawer
+    user={selected}
+    {roles}
+    isSelf={selected?.id === auth.user?.id}
+    {busy}
+    onClose={() => (selectedId = null)}
+    onRoleChange={changeRole}
+    onDelete={removeSelected}
+/>
+
+<div class="flex min-w-0 flex-1 flex-col gap-6">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-xl font-semibold tracking-tight">Users</h1>
+            <p class="text-sm text-muted-foreground mt-0.5">Manage everyone who can sign in</p>
+        </div>
+        <Button size="sm" onclick={() => createDialog?.open()}>
+            <PlusIcon class="size-3.5" />
+            Create user
+        </Button>
     </div>
 
-    {#if error}
-        <p class="px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-sm text-destructive">{error}</p>
-    {/if}
-
-    {#if loading}
-        <div class="h-24 rounded-lg bg-muted animate-pulse"></div>
-    {:else}
-        <Card.Root>
-            <Card.Content class="p-0">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b text-left text-xs text-muted-foreground">
-                            <th class="px-4 py-2.5 font-medium">User</th>
-                            <th class="px-4 py-2.5 font-medium">Role</th>
-                            <th class="px-4 py-2.5 font-medium">Sign-in</th>
-                            <th class="px-4 py-2.5 font-medium">2FA</th>
-                            <th class="px-4 py-2.5 font-medium">Joined</th>
-                            <th class="px-4 py-2.5"></th>
+    <div class="border rounded-lg overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
+            <div class="flex items-center gap-2">
+                <UsersIcon class="size-4 text-muted-foreground" />
+                <span class="text-sm font-semibold">User Summary</span>
+            </div>
+            <Button variant="ghost" size="icon-sm" onclick={load} disabled={refreshing} aria-label="Refresh">
+                <RefreshCwIcon class="size-4 {refreshing ? 'animate-spin' : ''}" />
+            </Button>
+        </div>
+        <table class="w-full text-sm">
+            <thead class="bg-muted/50">
+                <tr>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">ID</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">User</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Email</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Role</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Sign-in</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">2FA</th>
+                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Joined</th>
+                </tr>
+            </thead>
+            <tbody>
+                {#if loading}
+                    <tr>
+                        <td colspan="7" class="px-4 py-8 text-center text-muted-foreground">Loading...</td>
+                    </tr>
+                {:else if error}
+                    <tr>
+                        <td colspan="7" class="px-4 py-8 text-center text-destructive">{error}</td>
+                    </tr>
+                {:else if users.length === 0}
+                    <tr>
+                        <td colspan="7" class="px-4 py-8 text-center text-muted-foreground">No users</td>
+                    </tr>
+                {:else}
+                    {#each users as user (user.id)}
+                        <tr
+                            class="border-t hover:bg-muted/30 transition-colors cursor-pointer"
+                            onclick={() => (selectedId = user.id)}
+                        >
+                            <td class="px-4 py-3 font-mono text-xs text-muted-foreground">{user.id.slice(0, 8)}</td>
+                            <td class="px-4 py-3">
+                                <div class="flex items-center gap-3">
+                                    <UserAvatar name={user.username} gravatarEmail={user.gravatar_email} />
+                                    <span class="font-medium">{user.username}</span>
+                                </div>
+                            </td>
+                            <td class="px-4 py-3 text-muted-foreground">{user.email ?? user.gravatar_email ?? "-"}</td>
+                            <td class="px-4 py-3">{user.role_name}</td>
+                            <td class="px-4 py-3">
+                                <Badge variant={user.auth_source === "local" ? "secondary" : "pending"}>
+                                    {user.auth_source === "local" ? "Local" : "SSO"}
+                                </Badge>
+                            </td>
+                            <td class="px-4 py-3">
+                                <Badge variant={user.two_factor_enabled ? "success" : "outline"}>
+                                    {user.two_factor_enabled ? "On" : "Off"}
+                                </Badge>
+                            </td>
+                            <td class="px-4 py-3 text-muted-foreground">{user.joined_at.slice(0, 10)}</td>
                         </tr>
-                    </thead>
-                    <tbody>
-                        {#each users as user (user.id)}
-                            <tr class="border-b last:border-0">
-                                <td class="px-4 py-3">
-                                    <div class="flex items-center gap-3">
-                                        <UserAvatar name={user.username} gravatarEmail={user.gravatar_email} />
-                                        <div class="min-w-0">
-                                            <div class="truncate font-medium">{user.username}</div>
-                                            <div class="truncate text-xs text-muted-foreground">{user.email ?? "No email"}</div>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td class="px-4 py-3">
-                                    <select
-                                        class="border rounded px-2 py-1 text-xs bg-background disabled:opacity-60"
-                                        value={user.role_id}
-                                        disabled={savingId === user.id || user.id === auth.user?.id}
-                                        onchange={(event) => changeRole(user, event.currentTarget.value)}
-                                        aria-label="Role of {user.username}"
-                                    >
-                                        {#each roles as role (role.id)}
-                                            <option value={role.id}>{role.name}</option>
-                                        {/each}
-                                    </select>
-                                </td>
-                                <td class="px-4 py-3">
-                                    <Badge variant={user.auth_source === "local" ? "secondary" : "pending"}>
-                                        {sourceLabel(user.auth_source)}
-                                    </Badge>
-                                </td>
-                                <td class="px-4 py-3">
-                                    <Badge variant={user.two_factor_enabled ? "success" : "outline"}>
-                                        {user.two_factor_enabled ? "On" : "Off"}
-                                    </Badge>
-                                </td>
-                                <td class="px-4 py-3 text-xs text-muted-foreground">{user.joined_at.slice(0, 10)}</td>
-                                <td class="px-4 py-3 text-right">
-                                    {#if user.id !== auth.user?.id}
-                                        {#if pendingDeleteId === user.id}
-                                            <Button size="sm" variant="destructive" onclick={() => remove(user)}>Confirm</Button>
-                                            <Button size="sm" variant="ghost" onclick={() => (pendingDeleteId = null)}>Cancel</Button>
-                                        {:else}
-                                            <Button size="sm" variant="ghost" onclick={() => (pendingDeleteId = user.id)}>Delete</Button>
-                                        {/if}
-                                    {/if}
-                                </td>
-                            </tr>
-                        {/each}
-                    </tbody>
-                </table>
-            </Card.Content>
-        </Card.Root>
-    {/if}
+                    {/each}
+                {/if}
+            </tbody>
+        </table>
+    </div>
 </div>
