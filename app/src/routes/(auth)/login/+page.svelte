@@ -4,6 +4,8 @@
     import { Label } from "$lib/components/ui/label/index.js";
     import { Lock, User, CircleCheck } from "@lucide/svelte";
     import { onMount } from "svelte";
+    import Icon from "@iconify/svelte";
+    import { presetFor } from "$lib/components/settings/identity-provider-presets";
     import { goto } from "$app/navigation";
     import { page } from "$app/state";
     import {
@@ -143,7 +145,9 @@
     </div>
     <div class="flex flex-col gap-2">
         {#each ssoProviders as provider (provider.slug)}
-            <Button variant="outline" class="w-full" href={ssoStartUrl(provider.slug)}>
+            {@const preset = presetFor(provider.slug, provider.display_name)}
+            <Button variant="outline" class="w-full gap-2" href={ssoStartUrl(provider.slug)}>
+                <Icon icon={preset.icon} width={16} height={16} color={preset.iconColor} />
                 Continue with {provider.display_name}
             </Button>
         {/each}

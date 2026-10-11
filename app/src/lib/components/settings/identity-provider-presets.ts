@@ -11,6 +11,16 @@ export interface ProviderPreset {
     hint: string;
 }
 
+const GENERIC_PRESET_ID = "generic";
+
+export function presetFor(slug: string, displayName: string): ProviderPreset {
+    const name = displayName.toLowerCase();
+    const known = PROVIDER_PRESETS.find(
+        (preset) => preset.id !== GENERIC_PRESET_ID && (preset.id === slug || name.includes(preset.id)),
+    );
+    return known ?? PROVIDER_PRESETS[PROVIDER_PRESETS.length - 1];
+}
+
 export const PROVIDER_PRESETS: ProviderPreset[] = [
     {
         id: "authentik",
