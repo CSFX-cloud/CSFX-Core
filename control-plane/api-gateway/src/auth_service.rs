@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
-use entity::{invalid_jwt, key, user, InvalidJwt, Key, User};
+use entity::{invalid_jwt, key, user, user_ssh_keys, InvalidJwt, Key, User, UserSshKeys};
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    TransactionTrait,
 };
 use thiserror::Error;
 use totp_rs::{Algorithm, Secret, TOTP};
@@ -87,6 +88,7 @@ impl AuthService {
             two_factor_secret: ActiveValue::NotSet,
             two_factor_enabled: ActiveValue::Set(false),
             force_password_change: ActiveValue::Set(false),
+            auth_source: ActiveValue::Set("local".to_string()),
         };
 
         // Insert without retrieving last_insert_id (which doesn't work with UUID PKs in SQLite)
@@ -111,6 +113,10 @@ impl AuthService {
             .one(&self.db)
             .await?
             .ok_or(AuthError::UserNotFound)?;
+
+        if user.auth_source != "local" {
+            return Err(AuthError::InvalidCredentials);
+        }
 
         // Get RSA private key for password decryption
         let rsa_key = self.get_or_create_rsa_key("main").await?;
@@ -152,6 +158,23 @@ impl AuthService {
         InvalidJwt::insert(invalid_jwt)
             .exec_without_returning(&self.db)
             .await?;
+        Ok(())
+    }
+
+    pub async fn delete_users(&self, user_ids: &[Uuid]) -> AuthResult<()> {
+        if user_ids.is_empty() {
+            return Ok(());
+        }
+        let txn = self.db.begin().await?;
+        UserSshKeys::delete_many()
+            .filter(user_ssh_keys::Column::UserId.is_in(user_ids.iter().copied()))
+            .exec(&txn)
+            .await?;
+        User::delete_many()
+            .filter(user::Column::Id.is_in(user_ids.iter().copied()))
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
         Ok(())
     }
 

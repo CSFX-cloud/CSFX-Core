@@ -3,8 +3,18 @@
     import { Input } from "$lib/components/ui/input/index.js";
     import { Label } from "$lib/components/ui/label/index.js";
     import { Lock, User, CircleCheck } from "@lucide/svelte";
+    import { onMount } from "svelte";
+    import Icon from "@iconify/svelte";
+    import { presetFor } from "$lib/components/settings/identity-provider-presets";
     import { goto } from "$app/navigation";
-    import { login, TwoFactorRequiredError } from "$lib/auth/api";
+    import { page } from "$app/state";
+    import {
+        listSsoProviders,
+        login,
+        ssoStartUrl,
+        TwoFactorRequiredError,
+        type SsoProvider,
+    } from "$lib/auth/api";
     import { pendingLogin } from "$lib/auth/pending-login";
     import { auth } from "$lib/auth/store.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
@@ -15,6 +25,31 @@
     let username = $state("");
     let password = $state("");
     let status = $state<Status>("idle");
+    let ssoProviders = $state<SsoProvider[]>([]);
+
+    const SSO_ERROR_MESSAGES: Record<string, string> = {
+        no_role: "Your account has no role assigned for this application",
+        not_provisioned: "Your account is not allowed to sign in here",
+        username_conflict: "A user with this name already exists",
+        provider_denied: "The identity provider denied the sign-in",
+        provider_unavailable: "The identity provider is unavailable",
+        invalid_state: "The sign-in session expired, try again",
+        unknown_provider: "This identity provider is not available",
+    };
+
+    onMount(async () => {
+        const ssoError = page.url.searchParams.get("sso_error");
+        if (ssoError) {
+            toast.error("Single sign-on failed", {
+                description: SSO_ERROR_MESSAGES[ssoError] ?? "Sign-in could not be completed",
+            });
+        }
+        try {
+            ssoProviders = await listSsoProviders();
+        } catch {
+            ssoProviders = [];
+        }
+    });
 
     async function handleSubmit() {
         status = "loading";
@@ -101,3 +136,20 @@
         {/if}
     </Button>
 </form>
+
+{#if ssoProviders.length > 0}
+    <div class="flex items-center gap-3 my-6 text-xs text-muted-foreground">
+        <div class="h-px flex-1 bg-border"></div>
+        or
+        <div class="h-px flex-1 bg-border"></div>
+    </div>
+    <div class="flex flex-col gap-2">
+        {#each ssoProviders as provider (provider.slug)}
+            {@const preset = presetFor(provider.slug, provider.display_name)}
+            <Button variant="outline" class="w-full gap-2" href={ssoStartUrl(provider.slug)}>
+                <Icon icon={preset.icon} width={16} height={16} color={preset.iconColor} />
+                Continue with {provider.display_name}
+            </Button>
+        {/each}
+    </div>
+{/if}

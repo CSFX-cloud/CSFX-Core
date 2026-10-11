@@ -26,6 +26,8 @@ pub struct CanViewLogs(pub Claims);
 pub struct CanManageLogs(pub Claims);
 pub struct CanViewBuckets(pub Claims);
 pub struct CanManageBuckets(pub Claims);
+pub struct CanManageRoles(pub Claims);
+pub struct CanManageIdentityProviders(pub Claims);
 pub struct AuthenticatedUser(pub Claims);
 
 impl FromRequestParts<AppState> for AuthenticatedUser {
@@ -137,3 +139,5 @@ impl_extractor!(CanViewLogs, "logs", "view");
 impl_extractor!(CanManageLogs, "logs", "manage");
 impl_extractor!(CanViewBuckets, "buckets", "view");
 impl_extractor!(CanManageBuckets, "buckets", "manage");
+impl_extractor!(CanManageRoles, "roles", "manage");
+impl_extractor!(CanManageIdentityProviders, "idp", "manage");

@@ -23,15 +23,18 @@ pub mod agent_stream;
 pub mod agents;
 pub mod buckets;
 pub mod events;
+pub mod identity_providers;
 pub mod logs;
 pub mod networks;
 pub mod organizations;
 pub mod registry;
 pub mod releases;
 pub mod resource_groups;
+pub mod roles;
 pub mod s3_proxy;
 pub mod settings;
 pub mod ssh_keys;
+pub mod sso;
 pub mod system;
 pub mod update;
 pub mod users;
@@ -128,6 +131,8 @@ pub fn create_router() -> Router<AppState> {
         .merge(agent_proxy::agent_proxy_routes())
         .merge(agents::agents_routes())
         .merge(buckets::buckets_routes())
+        .merge(identity_providers::identity_provider_routes())
+        .merge(roles::roles_routes())
         .merge(networks::networks_routes())
         .merge(organizations::routes())
         .merge(ssh_keys::ssh_keys_routes())
@@ -144,6 +149,7 @@ pub fn create_router() -> Router<AppState> {
 
     let login_rate_limited_router = Router::new()
         .merge(users::public_users_routes())
+        .merge(sso::sso_routes())
         .layer(GovernorLayer::new(login_governor_config));
 
     let api_router = Router::new()

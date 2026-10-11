@@ -89,6 +89,8 @@ pub struct UserResponse {
     pub role_name: String,
     pub force_password_change: bool,
     pub two_factor_enabled: bool,
+    pub gravatar_email: Option<String>,
+    pub auth_source: String,
     pub joined_at: String,
 }
 
@@ -242,6 +244,8 @@ async fn list_users(
             role_name: role.name,
             force_password_change: user.force_password_change,
             two_factor_enabled: user.two_factor_enabled,
+            gravatar_email: user.gravatar_email,
+            auth_source: user.auth_source,
             joined_at: user_org.joined_at.to_string(),
         });
     }
@@ -306,6 +310,8 @@ async fn get_user(
         role_name: role.name,
         force_password_change: user.force_password_change,
         two_factor_enabled: user.two_factor_enabled,
+        gravatar_email: user.gravatar_email,
+        auth_source: user.auth_source,
         joined_at: user_org.joined_at.to_string(),
     }))
 }
@@ -354,6 +360,7 @@ async fn create_user(
         two_factor_secret: ActiveValue::NotSet,
         two_factor_enabled: ActiveValue::Set(false),
         force_password_change: ActiveValue::Set(req.force_password_change),
+        auth_source: ActiveValue::Set("local".to_string()),
     };
 
     let new_user = new_user
@@ -381,6 +388,8 @@ async fn create_user(
         role_name: role.name,
         force_password_change: req.force_password_change,
         two_factor_enabled: false,
+        gravatar_email: new_user.gravatar_email,
+        auth_source: new_user.auth_source,
         joined_at: chrono::Utc::now().naive_utc().to_string(),
     }))
 }
@@ -457,6 +466,8 @@ async fn update_user(
         role_name: role.name,
         force_password_change: updated.force_password_change,
         two_factor_enabled: updated.two_factor_enabled,
+        gravatar_email: updated.gravatar_email,
+        auth_source: updated.auth_source,
         joined_at: user_org.joined_at.to_string(),
     }))
 }
@@ -497,9 +508,8 @@ async fn delete_user(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Delete user
-    User::delete_by_id(user_id)
-        .exec(db)
+    crate::auth_service::AuthService::new(state.db_conn.clone())
+        .delete_users(&[user_id])
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

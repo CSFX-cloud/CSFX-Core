@@ -8,6 +8,7 @@ mod auth_service;
 mod db;
 mod init;
 mod metrics;
+mod oidc;
 mod prune;
 mod rbac_service;
 mod routes;

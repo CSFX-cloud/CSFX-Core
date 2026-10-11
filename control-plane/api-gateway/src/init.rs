@@ -179,6 +179,18 @@ pub async fn initialize_database(
             "manage",
             "Create, update and delete buckets and access keys",
         ),
+        (
+            "roles.manage",
+            "roles",
+            "manage",
+            "Create, update and delete roles and their permissions",
+        ),
+        (
+            "idp.manage",
+            "idp",
+            "manage",
+            "Manage identity providers and group mappings",
+        ),
     ];
 
     let mut permission_map = std::collections::HashMap::new();
@@ -387,6 +399,7 @@ pub async fn initialize_database(
             two_factor_secret: ActiveValue::NotSet,
             two_factor_enabled: ActiveValue::Set(false),
             force_password_change: ActiveValue::Set(true),
+            auth_source: ActiveValue::Set("local".to_string()),
         };
 
         User::insert(admin_user).exec_without_returning(db).await?;
