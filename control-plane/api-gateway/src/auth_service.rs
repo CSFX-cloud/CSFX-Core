@@ -51,56 +51,6 @@ impl AuthService {
         Self { db }
     }
 
-    pub async fn register_user(
-        &self,
-        username: String,
-        encrypted_password: String,
-    ) -> AuthResult<String> {
-        // Check if user already exists
-        let existing_user = User::find()
-            .filter(user::Column::Name.eq(&username))
-            .one(&self.db)
-            .await?;
-
-        if existing_user.is_some() {
-            return Err(AuthError::UserAlreadyExists);
-        }
-
-        // Get RSA private key for password decryption
-        let rsa_key = self.get_or_create_rsa_key("main").await?;
-
-        // Decrypt the password
-        let password = decrypt_password(&encrypted_password, &rsa_key.private_key)?;
-
-        // Generate salt and hash password
-        let salt = generate_salt();
-        let hashed_password = hash_password(&password, &salt)?;
-
-        // Create user with pre-generated UUID (SQLite can't auto-generate UUIDs)
-        let user_id = Uuid::new_v4();
-        let new_user = user::ActiveModel {
-            id: ActiveValue::Set(user_id),
-            name: ActiveValue::Set(username.clone()),
-            password: ActiveValue::Set(hashed_password),
-            salt: ActiveValue::Set(salt),
-            email: ActiveValue::NotSet,
-            gravatar_email: ActiveValue::NotSet,
-            two_factor_secret: ActiveValue::NotSet,
-            two_factor_enabled: ActiveValue::Set(false),
-            force_password_change: ActiveValue::Set(false),
-            auth_source: ActiveValue::Set("local".to_string()),
-        };
-
-        // Insert without retrieving last_insert_id (which doesn't work with UUID PKs in SQLite)
-        User::insert(new_user)
-            .exec_without_returning(&self.db)
-            .await?;
-
-        // Create JWT token using our pre-generated user ID
-        let token = create_jwt(user_id, username)?;
-        Ok(token)
-    }
-
     pub async fn login_user(
         &self,
         username: String,
@@ -212,6 +162,11 @@ impl AuthService {
             .await?;
 
         Ok(key_pair)
+    }
+
+    pub async fn decrypt_client_password(&self, encrypted_password: &str) -> AuthResult<String> {
+        let rsa_key = self.get_or_create_rsa_key("main").await?;
+        Ok(decrypt_password(encrypted_password, &rsa_key.private_key)?)
     }
 
     pub async fn get_public_key(&self, key_name: &str) -> AuthResult<String> {

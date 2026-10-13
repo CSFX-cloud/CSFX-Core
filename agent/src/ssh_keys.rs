@@ -7,7 +7,11 @@ struct AuthorizedKeysResponse {
     keys: Vec<String>,
 }
 
-pub async fn fetch_authorized_keys(gateway_url: &str, agent_id: Uuid) -> Result<Vec<String>> {
+pub async fn fetch_authorized_keys(
+    gateway_url: &str,
+    agent_id: Uuid,
+    username: &str,
+) -> Result<Vec<String>> {
     let url = format!("{}/api/agents/{}/authorized-keys", gateway_url, agent_id);
 
     let client = reqwest::Client::builder()
@@ -17,6 +21,7 @@ pub async fn fetch_authorized_keys(gateway_url: &str, agent_id: Uuid) -> Result<
 
     let resp = client
         .get(&url)
+        .query(&[("user", username)])
         .send()
         .await
         .context("failed to fetch authorized keys")?;
@@ -33,8 +38,8 @@ pub async fn fetch_authorized_keys(gateway_url: &str, agent_id: Uuid) -> Result<
     Ok(body.keys)
 }
 
-pub async fn run_authorized_keys_command(gateway_url: &str, agent_id: Uuid) {
-    match fetch_authorized_keys(gateway_url, agent_id).await {
+pub async fn run_authorized_keys_command(gateway_url: &str, agent_id: Uuid, username: &str) {
+    match fetch_authorized_keys(gateway_url, agent_id, username).await {
         Ok(keys) => {
             for key in keys {
                 println!("{}", key);
