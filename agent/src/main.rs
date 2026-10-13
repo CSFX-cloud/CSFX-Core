@@ -15,6 +15,7 @@ mod rg_network;
 mod runtime;
 mod server;
 mod spec;
+mod ssh_control;
 mod ssh_keys;
 mod system;
 mod update_watch;
@@ -73,8 +74,7 @@ async fn main() -> Result<()> {
         let agent_id = config::load_config()
             .context("Failed to load daemon config")?
             .agent_id;
-        ssh_keys::run_authorized_keys_command(&gateway_url, agent_id).await;
-        let _ = username;
+        ssh_keys::run_authorized_keys_command(&gateway_url, agent_id, &username).await;
         return Ok(());
     }
 
@@ -366,6 +366,10 @@ async fn reconcile_tick(
                 desired_flake_rev = ?resp.desired_flake_rev,
                 "heartbeat ok"
             );
+
+            if ssh_control::control_enabled() {
+                ssh_control::apply(resp.ssh_enabled).await;
+            }
 
             if let Some(count) = resp.post_update_heartbeats {
                 update_watch::write_heartbeat_counter(count).await;

@@ -250,6 +250,7 @@ pub async fn heartbeat(
                 message: "Heartbeat recorded".to_string(),
                 desired_flake_rev,
                 post_update_heartbeats,
+                ssh_enabled: read_ssh_enabled(&state).await,
             }))
         }
         Err(e) => Err((
@@ -258,6 +259,16 @@ pub async fn heartbeat(
                 error: format!("Agent not found: {}", e),
             }),
         )),
+    }
+}
+
+async fn read_ssh_enabled(state: &AppState) -> bool {
+    match shared::ssh_access::load(&state.db).await {
+        Ok(access) => access.is_open(),
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to read ssh access setting, keeping ssh closed");
+            false
+        }
     }
 }
 
