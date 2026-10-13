@@ -33,6 +33,8 @@ pub mod resource_groups;
 pub mod roles;
 pub mod s3_proxy;
 pub mod settings;
+pub mod setup;
+pub mod ssh_access;
 pub mod ssh_keys;
 pub mod sso;
 pub mod system;
@@ -135,6 +137,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(roles::roles_routes())
         .merge(networks::networks_routes())
         .merge(organizations::routes())
+        .merge(ssh_access::routes())
         .merge(ssh_keys::ssh_keys_routes())
         .merge(system::routes())
         .merge(users::users_routes())
@@ -149,6 +152,7 @@ pub fn create_router() -> Router<AppState> {
 
     let login_rate_limited_router = Router::new()
         .merge(users::public_users_routes())
+        .merge(setup::routes())
         .merge(sso::sso_routes())
         .layer(GovernorLayer::new(login_governor_config));
 

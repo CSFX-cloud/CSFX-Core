@@ -3,17 +3,21 @@ use std::net::SocketAddr;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+mod admins;
 mod auth;
 mod auth_service;
+mod console_pin;
 mod db;
 mod init;
 mod metrics;
 mod oidc;
 mod prune;
 mod rbac_service;
+mod recovery;
 mod routes;
 mod self_monitor;
 mod service_client;
+mod setup;
 mod system_collector;
 mod telemetry;
 mod tls;
@@ -23,14 +27,11 @@ use routes::registry::{
     AgentStatistics, ErrorResponse as RegistryErrorResponse, HeartbeatRequest,
     PreRegisterAgentRequest, PreRegisterAgentResponse, RegisterAgentRequest, RegisterAgentResponse,
 };
-use routes::users::{
-    AuthResponse, LoginRequest, PublicKeyResponse, RegisterRequest, UserProfileResponse,
-};
+use routes::users::{AuthResponse, LoginRequest, PublicKeyResponse, UserProfileResponse};
 
 #[derive(OpenApi)]
 #[openapi(
     paths(
-        routes::users::register_user,
         routes::users::login_user,
         routes::users::logout_user,
         routes::users::get_public_key,
@@ -54,7 +55,6 @@ use routes::users::{
     ),
     components(
         schemas(
-            RegisterRequest,
             LoginRequest,
             AuthResponse,
             PublicKeyResponse,
@@ -134,6 +134,11 @@ pub struct AppState {
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(exit_code) = recovery::dispatch(&args).await {
+        std::process::exit(exit_code);
+    }
 
     rustls::crypto::ring::default_provider()
         .install_default()

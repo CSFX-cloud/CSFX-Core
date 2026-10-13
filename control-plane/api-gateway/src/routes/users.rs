@@ -14,14 +14,6 @@ use utoipa::ToSchema;
 use crate::{auth::middleware::AuthenticatedUser, auth_service::AuthService, AppState};
 
 #[derive(Deserialize, ToSchema)]
-pub struct RegisterRequest {
-    /// Username for registration
-    pub username: String,
-    /// RSA encrypted password
-    pub encrypted_password: String,
-}
-
-#[derive(Deserialize, ToSchema)]
 pub struct LoginRequest {
     /// Username for login
     pub username: String,
@@ -84,67 +76,39 @@ pub fn users_routes() -> Router<AppState> {
 // Define the public, unauthenticated routes for the users module
 pub fn public_users_routes() -> Router<AppState> {
     Router::new()
-        .route("/register", post(register_user))
         .route("/login", post(login_user))
         .route("/public-key", get(get_public_key))
 }
 
-/// Register a new user
-#[utoipa::path(
-    post,
-    path = "/api/register",
-    request_body = RegisterRequest,
-    responses(
-        (status = 200, description = "User registered successfully", body = AuthResponse),
-        (status = 409, description = "User already exists"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "Authentication"
-)]
-pub async fn register_user(
-    State(state): State<AppState>,
-    Json(payload): Json<RegisterRequest>,
+pub fn session_parts(
+    token: String,
+    two_factor_enabled: bool,
+    force_password_change: bool,
+) -> Result<(String, AuthResponse), StatusCode> {
+    let token_data =
+        crate::auth::jwt::verify_jwt(&token).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let cookie = Cookie::build(("auth_token", token.clone()))
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::Strict)
+        .build();
+    let body = AuthResponse {
+        token,
+        user_id: token_data.claims.user_id.to_string(),
+        username: token_data.claims.username,
+        two_factor_enabled,
+        force_password_change,
+    };
+    Ok((cookie.to_string(), body))
+}
+
+fn session_response(
+    token: String,
+    two_factor_enabled: bool,
+    force_password_change: bool,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let auth_service = AuthService::new(state.db_conn.clone());
-
-    match auth_service
-        .register_user(payload.username.clone(), payload.encrypted_password)
-        .await
-    {
-        Ok(token) => {
-            // Extract user info from token for response
-            match crate::auth::jwt::verify_jwt(&token) {
-                Ok(token_data) => {
-                    let cookie = Cookie::build(("auth_token", token.clone()))
-                        .path("/")
-                        .http_only(true)
-                        .same_site(SameSite::Strict)
-                        .build();
-
-                    let response = (
-                        StatusCode::OK,
-                        [(header::SET_COOKIE, cookie.to_string())],
-                        Json(AuthResponse {
-                            token,
-                            user_id: token_data.claims.user_id.to_string(),
-                            username: token_data.claims.username,
-                            two_factor_enabled: false,
-                            force_password_change: false,
-                        }),
-                    );
-                    Ok(response)
-                }
-                Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-            }
-        }
-        Err(err) => {
-            tracing::error!("Registration failed: {}", err);
-            match err {
-                crate::auth_service::AuthError::UserAlreadyExists => Err(StatusCode::CONFLICT),
-                _ => Err(StatusCode::INTERNAL_SERVER_ERROR),
-            }
-        }
-    }
+    let (cookie, body) = session_parts(token, two_factor_enabled, force_password_change)?;
+    Ok((StatusCode::OK, [(header::SET_COOKIE, cookie)], Json(body)))
 }
 
 /// Login user
@@ -175,30 +139,7 @@ pub async fn login_user(
         .await
     {
         Ok((token, two_factor_enabled, force_password_change)) => {
-            // Extract user info from token for response
-            match crate::auth::jwt::verify_jwt(&token) {
-                Ok(token_data) => {
-                    let cookie = Cookie::build(("auth_token", token.clone()))
-                        .path("/")
-                        .http_only(true)
-                        .same_site(SameSite::Strict)
-                        .build();
-
-                    let response = (
-                        StatusCode::OK,
-                        [(header::SET_COOKIE, cookie.to_string())],
-                        Json(AuthResponse {
-                            token,
-                            user_id: token_data.claims.user_id.to_string(),
-                            username: token_data.claims.username,
-                            two_factor_enabled,
-                            force_password_change,
-                        }),
-                    );
-                    Ok(response)
-                }
-                Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-            }
+            session_response(token, two_factor_enabled, force_password_change)
         }
         Err(err) => {
             tracing::error!("Login failed: {}", err);

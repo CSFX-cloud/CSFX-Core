@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{delete, get, post},
@@ -11,9 +11,10 @@ use entity::entities::{user_ssh_keys, UserSshKeys};
 use sea_orm::{ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use shared::ssh_access;
 use uuid::Uuid;
 
-use crate::{auth::middleware::AuthenticatedUser, AppState};
+use crate::{admins::admin_users, auth::middleware::AuthenticatedUser, AppState};
 
 #[derive(Deserialize)]
 pub struct AddSshKeyRequest {
@@ -131,25 +132,46 @@ pub async fn delete_ssh_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
+const SSH_LOGIN_USER: &str = "csfx";
+
+#[derive(Debug, Deserialize)]
+pub struct AuthorizedKeysQuery {
+    pub user: Option<String>,
+}
+
 pub async fn get_keys_for_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
+    Query(query): Query<AuthorizedKeysQuery>,
 ) -> Result<Json<SshKeysForAgentResponse>, StatusCode> {
-    let now = Utc::now().naive_utc();
+    let internal = |_| StatusCode::INTERNAL_SERVER_ERROR;
+    let login_allowed = query
+        .user
+        .as_deref()
+        .is_none_or(|user| user == SSH_LOGIN_USER);
+    let access = ssh_access::load(&state.db_conn).await.map_err(internal)?;
+    if !login_allowed || !access.is_open() {
+        return Ok(Json(SshKeysForAgentResponse { keys: Vec::new() }));
+    }
 
-    let all_keys = UserSshKeys::find()
+    let admin_ids: Vec<Uuid> = admin_users(&state.db_conn)
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .map(|admin| admin.id)
+        .collect();
+    let now = Utc::now().naive_utc();
+    let keys: Vec<String> = UserSshKeys::find()
+        .filter(user_ssh_keys::Column::UserId.is_in(admin_ids))
         .all(&state.db_conn)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let keys: Vec<String> = all_keys
+        .map_err(internal)?
         .into_iter()
-        .filter(|k| k.expires_at.is_none_or(|exp| exp > now))
-        .map(|k| k.public_key)
+        .filter(|key| key.expires_at.is_none_or(|expires_at| expires_at > now))
+        .map(|key| key.public_key)
         .collect();
 
     tracing::debug!(agent_id = %agent_id, count = keys.len(), "serving authorized keys");
-
     Ok(Json(SshKeysForAgentResponse { keys }))
 }
 

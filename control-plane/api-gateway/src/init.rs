@@ -1,11 +1,11 @@
 use entity::{
-    key, organization, permission, role, role_permission, user, user_organization, Key,
-    Organization, Permission, Role, RolePermission, User, UserOrganization,
+    key, organization, permission, role, role_permission, Key, Organization, Permission, Role,
+    RolePermission,
 };
-use sea_orm::{ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use uuid::Uuid;
 
-use crate::auth::crypto::{generate_salt, hash_password, RsaKeyPair};
+use crate::auth::crypto::RsaKeyPair;
 
 pub async fn initialize_database(
     db: &DatabaseConnection,
@@ -36,7 +36,7 @@ pub async fn initialize_database(
 
     // 2. Create default organization
     let default_org_exists = Organization::find()
-        .filter(organization::Column::Name.eq("Default Organization"))
+        .order_by_asc(organization::Column::CreatedAt)
         .one(db)
         .await?;
 
@@ -49,8 +49,8 @@ pub async fn initialize_database(
         let now = chrono::Utc::now().naive_utc();
         let new_org = organization::ActiveModel {
             id: ActiveValue::Set(org_id),
-            name: ActiveValue::Set("Default Organization".to_string()),
-            description: ActiveValue::Set(Some("Default organization for all users".to_string())),
+            name: ActiveValue::Set("csfx".to_string()),
+            description: ActiveValue::NotSet,
             created_at: ActiveValue::Set(now),
             updated_at: ActiveValue::Set(now),
         };
@@ -374,60 +374,7 @@ pub async fn initialize_database(
         tracing::info!("Viewer role created");
     }
 
-    // 5. Create admin user if not exists
-    let admin_exists = User::find()
-        .filter(user::Column::Name.eq("admin@local.com"))
-        .one(db)
-        .await?;
-
-    let admin_user_id = if let Some(existing_admin) = admin_exists {
-        tracing::info!("Admin user already exists");
-        existing_admin.id
-    } else {
-        tracing::info!("Creating default admin user...");
-        let salt = generate_salt();
-        let hashed_password = hash_password("admin", &salt)?;
-        let user_id = Uuid::new_v4();
-
-        let admin_user = user::ActiveModel {
-            id: ActiveValue::Set(user_id),
-            name: ActiveValue::Set("admin@local.com".to_string()),
-            password: ActiveValue::Set(hashed_password),
-            salt: ActiveValue::Set(salt),
-            email: ActiveValue::Set(Some("admin@local.com".to_string())),
-            gravatar_email: ActiveValue::NotSet,
-            two_factor_secret: ActiveValue::NotSet,
-            two_factor_enabled: ActiveValue::Set(false),
-            force_password_change: ActiveValue::Set(true),
-            auth_source: ActiveValue::Set("local".to_string()),
-        };
-
-        User::insert(admin_user).exec_without_returning(db).await?;
-        tracing::info!("Default admin user created: admin@local.com / admin - Password change required on first login");
-        user_id
-    };
-
-    // Ensure admin user is in the default organization with Admin role
-    let admin_org_exists = UserOrganization::find()
-        .filter(user_organization::Column::UserId.eq(admin_user_id))
-        .filter(user_organization::Column::OrganizationId.eq(default_org_id))
-        .one(db)
-        .await?;
-
-    if admin_org_exists.is_none() {
-        tracing::info!("Assigning admin user to default organization with Admin role...");
-        let user_org = user_organization::ActiveModel {
-            id: ActiveValue::Set(Uuid::new_v4()),
-            user_id: ActiveValue::Set(admin_user_id),
-            organization_id: ActiveValue::Set(default_org_id),
-            role_id: ActiveValue::Set(admin_role_id),
-            joined_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
-        };
-        UserOrganization::insert(user_org)
-            .exec_without_returning(db)
-            .await?;
-        tracing::info!("Admin user assigned to default organization");
-    }
+    crate::setup::reconcile_legacy(db).await?;
 
     tracing::info!("Database initialization completed");
     Ok(default_org_id)
