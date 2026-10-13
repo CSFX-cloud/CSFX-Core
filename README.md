@@ -38,17 +38,20 @@ CSFX runs on **NixOS**. The full stack is distributed as a bootable ISO image.
 
 **Installation:**
 1. Download the latest ISO from [CSFX-Infra Releases](https://github.com/csfx-cloud/CSFX-Infra/releases)
-2. Boot the target machine from the ISO and wait for installation to complete
-3. Access the web interface at `http://<device-ip>:8000`
+2. Boot the target machine from the ISO, confirm the target disk by typing `ERASE`, and wait for the reboot
+3. Read the setup URL, setup code, and CA fingerprint from the node console
+4. Open `https://<device-ip>:8000/setup`, compare the fingerprint with the browser certificate warning, and enter the setup code
+5. Choose the organization name, administrator email and password, and a console PIN, then store the recovery key shown at the end
 
-### Default Credentials
+There are no default credentials. Setup can be completed once; use `csfx setup <url>` for the same flow from the CLI.
 
-| Field    | Value           |
-|----------|-----------------|
-| Email    | admin@local.com |
-| Password | admin           |
+### SSH access
 
-After first login you will be prompted to set a new password.
+SSH is off by default. An administrator opens it for all nodes in Settings or with `csfx ssh enable [--hours <n> | --unlimited]` (default 8 hours). Only public keys of administrators are accepted, and the login user is `csfx`. `csfx ssh connect <node>` creates a short-lived key and connects.
+
+### Console recovery
+
+The node console offers a PIN-protected menu to show service status, reset an administrator password, disable SSH, and reboot. The recovery key shown during setup replaces the PIN if it is lost.
 
 ---
 
