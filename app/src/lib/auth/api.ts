@@ -89,6 +89,11 @@ async function encryptPassword(password: string, publicKey: CryptoKey): Promise<
     return btoa(binary);
 }
 
+export async function encryptForServer(...values: string[]): Promise<string[]> {
+    const publicKey = await importRsaKey(await fetchPublicKeyPem());
+    return Promise.all(values.map((value) => encryptPassword(value, publicKey)));
+}
+
 export async function login(
     username: string,
     password: string,
@@ -279,4 +284,93 @@ export class TwoFactorRequiredError extends Error {
     ) {
         super('2fa_required');
     }
+}
+
+export interface SetupStatus {
+    state: 'setup_required' | 'ready';
+    version: string;
+    ca_fingerprint: string | null;
+}
+
+export interface SetupInput {
+    setupCode: string;
+    organizationName: string;
+    adminEmail: string;
+    password: string;
+    consolePin: string;
+}
+
+export interface SetupResult extends AuthResponse {
+    recovery_key: string;
+}
+
+export class SetupError extends Error {
+    constructor(
+        readonly status: number,
+        message: string,
+    ) {
+        super(message);
+    }
+}
+
+export const SETUP_CA_URL = `${API_BASE}/setup/ca.crt`;
+
+export async function getSetupStatus(): Promise<SetupStatus> {
+    const res = await fetch(`${API_BASE}/setup/status`);
+    if (!res.ok) throw new Error(`setup status failed: ${res.status}`);
+    return res.json();
+}
+
+export async function completeSetup(input: SetupInput): Promise<SetupResult> {
+    const [encryptedPassword, encryptedConsolePin] = await encryptForServer(
+        input.password,
+        input.consolePin,
+    );
+    const res = await fetch(`${API_BASE}/setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            setup_code: input.setupCode,
+            organization_name: input.organizationName,
+            admin_email: input.adminEmail,
+            encrypted_password: encryptedPassword,
+            encrypted_console_pin: encryptedConsolePin,
+        }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'setup failed' }));
+        throw new SetupError(res.status, body.error ?? 'setup failed');
+    }
+    return res.json();
+}
+
+export interface SshAccess {
+    enabled: boolean;
+    expires_at: string | null;
+    effective: boolean;
+}
+
+export async function getSshAccess(token: string): Promise<SshAccess> {
+    const res = await fetch(`${API_BASE}/admin/settings/ssh`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`get ssh access failed: ${res.status}`);
+    return res.json();
+}
+
+export async function setSshAccess(
+    token: string,
+    enabled: boolean,
+    durationHours: number | null,
+): Promise<SshAccess> {
+    const res = await fetch(`${API_BASE}/admin/settings/ssh`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ enabled, duration_hours: durationHours }),
+    });
+    if (!res.ok) throw new Error(`set ssh access failed: ${res.status}`);
+    return res.json();
 }

@@ -9,6 +9,7 @@
     import { goto } from "$app/navigation";
     import { page } from "$app/state";
     import {
+        getSetupStatus,
         listSsoProviders,
         login,
         ssoStartUrl,
@@ -37,7 +38,21 @@
         unknown_provider: "This identity provider is not available",
     };
 
+    let starting = $state(false);
+
+    async function redirectToSetupWhenRequired() {
+        try {
+            const setup = await getSetupStatus();
+            starting = false;
+            if (setup.state === "setup_required") goto("/setup");
+        } catch {
+            starting = true;
+            setTimeout(redirectToSetupWhenRequired, 5000);
+        }
+    }
+
     onMount(async () => {
+        redirectToSetupWhenRequired();
         const ssoError = page.url.searchParams.get("sso_error");
         if (ssoError) {
             toast.error("Single sign-on failed", {
@@ -80,6 +95,12 @@
     class="size-20 mb-6 rounded-md p-2 invert dark:invert-0"
 />
 <h1 class="text-2xl font-light mb-10">Sign in</h1>
+
+{#if starting}
+    <div class="mb-6 flex items-center gap-2 rounded-md border bg-muted px-3 py-2 text-sm text-muted-foreground">
+        <Spinner /> Control plane is starting, this can take a few minutes.
+    </div>
+{/if}
 
 <form
     onsubmit={(e) => {
