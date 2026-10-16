@@ -2,6 +2,7 @@ mod agent_stream;
 mod client;
 mod config;
 mod disks;
+mod fence;
 mod firecracker;
 mod join;
 mod nftables;
@@ -339,6 +340,7 @@ async fn reconcile_tick(
     service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
     rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
     failure_count: &mut u32,
+    fence_guard: &mut fence::FenceGuard,
     current_flake_rev: &mut String,
 ) {
     process_volumes(client, agent_id, api_key, mounted_volumes).await;
@@ -379,6 +381,7 @@ async fn reconcile_tick(
         .await
     {
         Ok(resp) => {
+            fence_guard.record_success();
             if *failure_count > 0 {
                 info!(agent_id = %agent_id, "Heartbeat recovered after {} failures", failure_count);
                 *failure_count = 0;
@@ -423,6 +426,21 @@ async fn reconcile_tick(
                 error = %e,
                 "Heartbeat failed"
             );
+            if fence_guard.record_failure(std::time::Instant::now()) {
+                warn!(agent_id = %agent_id, "Control plane unreachable, self-fencing all workloads");
+                reap_stale_containers(
+                    firecracker.as_ref(),
+                    qemu.as_ref(),
+                    vm_workload_ids,
+                    running_containers,
+                    workload_phases,
+                    restart_counts,
+                    service_dns_registry,
+                    rg_dns_registry,
+                    &[],
+                )
+                .await;
+            }
         }
     }
 }
@@ -447,6 +465,7 @@ async fn run_heartbeat_loop(
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
+    let mut fence_guard = fence::FenceGuard::from_env();
     let mut current_flake_rev = String::new();
     let starts = StartTracker::default();
     let completed = Arc::clone(&starts.completed);
@@ -454,7 +473,7 @@ async fn run_heartbeat_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
             }
             signal = assignment_signal.recv() => {
                 if signal.is_none() {
@@ -464,11 +483,11 @@ async fn run_heartbeat_loop(
                 while assignment_signal.try_recv().is_ok() {}
                 info!(agent_id = %agent_id, "assignment push received, reconciling immediately");
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
             }
             _ = completed.notified() => {
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal received");
