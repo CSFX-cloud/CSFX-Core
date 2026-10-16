@@ -71,17 +71,6 @@ pub fn database_password(database_url: &str) -> Option<&str> {
     (!password.is_empty()).then_some(password)
 }
 
-pub fn client_endpoints(peer_urls: &[String]) -> Vec<String> {
-    peer_urls
-        .iter()
-        .filter_map(|url| {
-            let authority = url.strip_prefix("http://")?;
-            let (host, _) = authority.rsplit_once(':')?;
-            Some(format!("http://{host}:2379"))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,18 +96,5 @@ mod tests {
         assert_eq!(database_password("postgres://csfx@localhost/csfx"), None);
         assert_eq!(database_password("postgres://csfx:@localhost/csfx"), None);
         assert_eq!(database_password("not a url"), None);
-    }
-
-    #[test]
-    fn client_endpoints_follow_peer_hosts() {
-        let peers = vec![
-            "http://10.100.0.1:2380".to_string(),
-            "http://10.100.0.2:2380".to_string(),
-            "https://other:2380".to_string(),
-        ];
-        assert_eq!(
-            client_endpoints(&peers),
-            vec!["http://10.100.0.1:2379", "http://10.100.0.2:2379"]
-        );
     }
 }

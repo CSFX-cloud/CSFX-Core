@@ -151,7 +151,6 @@ pub struct MasterBundle {
     pub patroni_replication_password: String,
     pub etcd_name: String,
     pub etcd_initial_cluster: String,
-    pub etcd_endpoints: Vec<String>,
 }
 
 pub async fn fetch_cluster_ca(gateway_url: &str) -> Result<String> {

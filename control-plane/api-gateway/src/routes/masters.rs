@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::cluster::{error, internal, ApiError};
 use crate::{
     auth::{agent::AgentApiKey, rbac::CanManageSystem},
-    cluster_bundle::{client_endpoints, BundleError, ClusterSecrets},
+    cluster_bundle::{BundleError, ClusterSecrets},
     etcd_members::{self, EtcdMember},
     tls, AppState,
 };
@@ -35,7 +35,6 @@ pub struct JoinBundle {
     etcd_member_id: u64,
     etcd_name: String,
     etcd_initial_cluster: String,
-    etcd_endpoints: Vec<String>,
 }
 
 async fn etcd_client() -> Result<Client, ApiError> {
@@ -113,11 +112,6 @@ pub async fn join_master(
     let plan = etcd_members::add_learner(&mut etcd, &node.hostname, &url)
         .await
         .map_err(internal)?;
-    let voter_peers: Vec<String> = members
-        .iter()
-        .filter(|member| !member.is_learner)
-        .flat_map(|member| member.peer_urls.clone())
-        .collect();
 
     tracing::info!(agent_id = %node.id, member_id = plan.member_id, "master join bundle issued");
 
@@ -128,7 +122,6 @@ pub async fn join_master(
         etcd_member_id: plan.member_id,
         etcd_name: node.hostname,
         etcd_initial_cluster: plan.initial_cluster,
-        etcd_endpoints: client_endpoints(&voter_peers),
     }))
 }
 

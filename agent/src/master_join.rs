@@ -19,7 +19,6 @@ const CA_KEY_PATH: &str = "/var/lib/csfx-cp/ca.key";
 const CP_ENV_PATH: &str = "/etc/csfx/cp.env";
 const GARAGE_ENV_PATH: &str = "/etc/csfx/garage.env";
 const ETCD_JOIN_ENV_PATH: &str = "/etc/csfx/etcd-join.env";
-const PATRONI_ETCD_HOSTS_PATH: &str = "/etc/csfx/patroni-etcd-hosts";
 const PATRONI_SUPERUSER_PATH: &str = "/etc/csfx/patroni-superuser-password";
 const PATRONI_REPLICATION_PATH: &str = "/etc/csfx/patroni-replication-password";
 const PATRONI_GROUP: &str = "patroni";
@@ -90,7 +89,6 @@ async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
     write_file(CP_ENV_PATH, &render_cp_env(bundle), 0o600)?;
     write_file(GARAGE_ENV_PATH, &render_garage_env(bundle), 0o600)?;
     write_file(ETCD_JOIN_ENV_PATH, &render_etcd_env(bundle), 0o600)?;
-    write_file(PATRONI_ETCD_HOSTS_PATH, &render_etcd_hosts(bundle), 0o644)?;
     write_file(
         PATRONI_SUPERUSER_PATH,
         &bundle.patroni_superuser_password,
@@ -181,15 +179,6 @@ fn render_etcd_env(bundle: &MasterBundle) -> String {
     )
 }
 
-fn render_etcd_hosts(bundle: &MasterBundle) -> String {
-    bundle
-        .etcd_endpoints
-        .iter()
-        .map(|endpoint| endpoint.trim_start_matches("http://"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,10 +197,6 @@ mod tests {
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),
-            etcd_endpoints: vec![
-                "http://10.100.0.1:2379".into(),
-                "http://10.100.0.3:2379".into(),
-            ],
         }
     }
 
@@ -232,14 +217,6 @@ mod tests {
         assert!(env.contains(
             "ETCD_INITIAL_CLUSTER=node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380\n"
         ));
-    }
-
-    #[test]
-    fn patroni_hosts_strip_scheme() {
-        assert_eq!(
-            render_etcd_hosts(&bundle()),
-            "10.100.0.1:2379,10.100.0.3:2379"
-        );
     }
 
     #[test]
