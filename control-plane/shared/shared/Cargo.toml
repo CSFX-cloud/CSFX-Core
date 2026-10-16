@@ -10,6 +10,7 @@ sea-orm = { workspace = true }
 entity = { path = "../entity" }
 
 # Async
+etcd-client = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 

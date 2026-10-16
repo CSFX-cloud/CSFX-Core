@@ -1,6 +1,5 @@
 pub mod client;
 pub mod layout;
-pub mod leader;
 pub mod s3_client;
 
 pub use client::GarageClient;
