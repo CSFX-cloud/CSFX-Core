@@ -9,6 +9,7 @@ pub struct JoinTicket {
     pub gateway_url: String,
     pub token: String,
     pub ca_fingerprint: String,
+    pub role: String,
 }
 
 impl JoinTicket {
@@ -17,15 +18,16 @@ impl JoinTicket {
             .trim()
             .strip_prefix(JOIN_PREFIX)
             .context("join string must start with csfx-join.")?;
-        let mut parts = body.splitn(3, '#');
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some(host), Some(token), Some(fingerprint))
+        let mut parts = body.splitn(4, '#');
+        match (parts.next(), parts.next(), parts.next(), parts.next()) {
+            (Some(host), Some(token), Some(fingerprint), role)
                 if !host.is_empty() && !token.is_empty() && !fingerprint.is_empty() =>
             {
                 Ok(Self {
                     gateway_url: format!("https://{host}"),
                     token: token.to_string(),
                     ca_fingerprint: normalize_fingerprint(fingerprint),
+                    role: parse_role(role)?,
                 })
             }
             _ => bail!("malformed join string"),
@@ -42,6 +44,14 @@ impl JoinTicket {
             );
         }
         Ok(())
+    }
+}
+
+fn parse_role(value: Option<&str>) -> Result<String> {
+    match value {
+        None | Some("worker") => Ok("worker".to_string()),
+        Some("master") => Ok("master".to_string()),
+        Some(other) => bail!("unknown role in join string role={other}"),
     }
 }
 
@@ -76,11 +86,19 @@ mod tests {
 
     #[test]
     fn parses_ticket_and_normalizes_fingerprint() {
-        let ticket = JoinTicket::parse("csfx-join.10.0.0.5:8000#csfx-bootstrap.abc#03:90:58:C6")
-            .unwrap();
+        let ticket =
+            JoinTicket::parse("csfx-join.10.0.0.5:8000#csfx-bootstrap.abc#03:90:58:C6").unwrap();
         assert_eq!(ticket.gateway_url, "https://10.0.0.5:8000");
         assert_eq!(ticket.token, "csfx-bootstrap.abc");
         assert_eq!(ticket.ca_fingerprint, "039058c6");
+        assert_eq!(ticket.role, "worker");
+    }
+
+    #[test]
+    fn parses_explicit_role() {
+        let master = JoinTicket::parse("csfx-join.h:1#t#aa#master").unwrap();
+        assert_eq!(master.role, "master");
+        assert!(JoinTicket::parse("csfx-join.h:1#t#aa#admin").is_err());
     }
 
     #[test]

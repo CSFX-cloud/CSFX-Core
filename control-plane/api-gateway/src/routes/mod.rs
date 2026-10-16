@@ -26,6 +26,7 @@ pub mod cluster;
 pub mod events;
 pub mod identity_providers;
 pub mod logs;
+pub mod masters;
 pub mod networks;
 pub mod organizations;
 pub mod registry;
@@ -135,6 +136,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(agents::agents_routes())
         .merge(buckets::buckets_routes())
         .merge(cluster::cluster_routes())
+        .merge(masters::masters_routes())
         .merge(identity_providers::identity_provider_routes())
         .merge(roles::roles_routes())
         .merge(networks::networks_routes())

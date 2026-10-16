@@ -6,6 +6,7 @@ use utoipa_swagger_ui::SwaggerUi;
 mod admins;
 mod auth;
 mod auth_service;
+mod cluster_bundle;
 mod console_pin;
 mod db;
 mod etcd_members;

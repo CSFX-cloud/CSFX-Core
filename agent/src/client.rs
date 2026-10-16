@@ -131,11 +131,27 @@ fn build_http_client(ca_pem: Option<&str>) -> Result<Client> {
     let builder = Client::builder().timeout(std::time::Duration::from_secs(30));
     let builder = match ca_pem {
         Some(pem) => builder.tls_certs_only([
-            reqwest::Certificate::from_pem(pem.as_bytes()).context("Invalid cluster CA")?,
+            reqwest::Certificate::from_pem(pem.as_bytes()).context("Invalid cluster CA")?
         ]),
         None => builder.danger_accept_invalid_certs(true),
     };
     builder.build().context("Failed to build HTTP client")
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MasterBundle {
+    pub ca_cert_pem: String,
+    pub ca_key_pem: String,
+    pub jwt_secret: String,
+    pub garage_admin_token: String,
+    pub object_storage_encryption_key: String,
+    pub db_password: String,
+    pub garage_rpc_secret: String,
+    pub patroni_superuser_password: String,
+    pub patroni_replication_password: String,
+    pub etcd_name: String,
+    pub etcd_initial_cluster: String,
+    pub etcd_endpoints: Vec<String>,
 }
 
 pub async fn fetch_cluster_ca(gateway_url: &str) -> Result<String> {
@@ -186,6 +202,51 @@ impl ApiClient {
     pub fn with_certificate(mut self, cert_pem: String) -> Self {
         self.cert_pem = Some(cert_pem);
         self
+    }
+
+    pub async fn request_master_bundle(&self, api_key: &str) -> Result<MasterBundle> {
+        let url = format!("{}/api/cluster/masters/join", self.gateway_url);
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("Failed to request master join bundle")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!(
+                "Master join bundle request failed status={} {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            );
+        }
+
+        resp.json()
+            .await
+            .context("Failed to parse master join bundle")
+    }
+
+    pub async fn promote_master(&self, api_key: &str) -> Result<bool> {
+        let url = format!("{}/api/cluster/masters/promote", self.gateway_url);
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("Failed to request master promotion")?;
+
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            return Ok(false);
+        }
+        if !resp.status().is_success() {
+            anyhow::bail!("Master promotion failed status={}", resp.status());
+        }
+        Ok(true)
     }
 
     pub async fn set_wg_tunnel_ip(&self, ip: String) {

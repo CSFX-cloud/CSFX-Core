@@ -5,6 +5,7 @@ mod disks;
 mod fence;
 mod firecracker;
 mod join;
+mod master_join;
 mod nftables;
 mod pki;
 mod qemu;
@@ -87,6 +88,10 @@ async fn main() -> Result<()> {
             .agent_id;
         ssh_keys::run_authorized_keys_command(&gateway_url, agent_id, &username).await;
         return Ok(());
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("--join-master") {
+        return master_join::run(&gateway_url).await;
     }
 
     info!(version = env!("CARGO_PKG_VERSION"), "csfx-agent starting");

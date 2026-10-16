@@ -11,25 +11,38 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use super::masters::{self, ROLE_MASTER};
 use crate::{auth::rbac::CanManageSystem, setup::ca_fingerprint, AppState};
 
 const DEFAULT_TTL_HOURS: i64 = 1;
 const MAX_TTL_HOURS: i64 = 24 * 7;
-const JOIN_ROLE: &str = "worker";
+const ROLE_WORKER: &str = "worker";
 const ACTIVE_WORKLOAD_STATUSES: [&str; 3] = ["pending", "scheduled", "running"];
 
-type ApiError = (StatusCode, Json<Value>);
+pub(super) type ApiError = (StatusCode, Json<Value>);
 
 #[derive(Debug, Deserialize)]
 pub struct CreateJoinTokenRequest {
     pub ttl_hours: Option<i64>,
+    pub role: Option<String>,
 }
 
-fn error(status: StatusCode, message: &str) -> ApiError {
+fn join_role(requested: Option<String>) -> Result<String, ApiError> {
+    match requested.as_deref() {
+        None | Some(ROLE_WORKER) => Ok(ROLE_WORKER.to_string()),
+        Some(ROLE_MASTER) => Ok(ROLE_MASTER.to_string()),
+        Some(_) => Err(error(
+            StatusCode::BAD_REQUEST,
+            "role must be worker or master",
+        )),
+    }
+}
+
+pub(super) fn error(status: StatusCode, message: &str) -> ApiError {
     (status, Json(json!({ "error": message })))
 }
 
-fn internal(err: impl std::fmt::Display) -> ApiError {
+pub(super) fn internal(err: impl std::fmt::Display) -> ApiError {
     tracing::error!(error = %err, "cluster request failed");
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
@@ -83,6 +96,7 @@ pub async fn create_join_token(
             "ttl_hours must be between 1 and 168",
         ));
     }
+    let role = join_role(request.role)?;
     let host = gateway_host(&headers)?;
     let fingerprint = ca_fingerprint()
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "cluster CA unavailable"))?;
@@ -91,7 +105,7 @@ pub async fn create_join_token(
         "description": "cluster join token",
         "ttl_hours": ttl_hours,
         "max_uses": 1,
-        "role": JOIN_ROLE,
+        "role": role,
     });
     let token = forward_to_registry(
         &state,
@@ -113,7 +127,10 @@ pub async fn create_join_token(
     );
 
     Ok(Json(json!({
-        "join_string": format!("csfx-join.{host}#{value}#{}", compact_fingerprint(&fingerprint)),
+        "join_string": format!(
+            "csfx-join.{host}#{value}#{}#{role}",
+            compact_fingerprint(&fingerprint)
+        ),
         "role": token["role"],
         "expires_at": token["expires_at"],
     })))
@@ -148,6 +165,8 @@ pub async fn remove_node(
         ));
     }
 
+    let etcd_member = masters::plan_removal(&agent).await?;
+
     forward_to_registry(
         &state,
         reqwest::Method::DELETE,
@@ -155,6 +174,10 @@ pub async fn remove_node(
         None,
     )
     .await?;
+
+    if let Some(member_id) = etcd_member {
+        masters::finish_removal(member_id, &agent.hostname).await?;
+    }
 
     tracing::warn!(user_id = %claims.user_id, agent_id = %agent_id, "node removed");
     Ok(StatusCode::NO_CONTENT)
