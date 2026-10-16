@@ -127,6 +127,33 @@ pub struct VpnPeer {
     pub client_tunnel_ip: String,
 }
 
+fn build_http_client(ca_pem: Option<&str>) -> Result<Client> {
+    let builder = Client::builder().timeout(std::time::Duration::from_secs(30));
+    let builder = match ca_pem {
+        Some(pem) => builder.tls_certs_only([
+            reqwest::Certificate::from_pem(pem.as_bytes()).context("Invalid cluster CA")?,
+        ]),
+        None => builder.danger_accept_invalid_certs(true),
+    };
+    builder.build().context("Failed to build HTTP client")
+}
+
+pub async fn fetch_cluster_ca(gateway_url: &str) -> Result<String> {
+    let url = format!("{}/api/setup/ca.crt", gateway_url);
+
+    let resp = build_http_client(None)?
+        .get(&url)
+        .send()
+        .await
+        .context("Failed to fetch cluster CA")?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("Cluster CA fetch failed status={}", resp.status());
+    }
+
+    resp.text().await.context("Failed to read cluster CA")
+}
+
 pub struct ApiClient {
     client: Client,
     gateway_url: String,
@@ -142,12 +169,9 @@ impl ApiClient {
         wg_public_key: String,
         wg_endpoint: Option<String>,
         wg_tunnel_ip: Option<String>,
+        ca_pem: Option<&str>,
     ) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .danger_accept_invalid_certs(true)
-            .build()
-            .context("Failed to build HTTP client")?;
+        let client = build_http_client(ca_pem)?;
 
         Ok(Self {
             client,
@@ -475,23 +499,6 @@ impl ApiClient {
         }
 
         Ok(())
-    }
-
-    pub async fn fetch_ca_pem(&self) -> Result<String> {
-        let url = format!("{}/api/setup/ca.crt", self.gateway_url);
-
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to fetch cluster CA")?;
-
-        if !resp.status().is_success() {
-            anyhow::bail!("Cluster CA fetch failed status={}", resp.status());
-        }
-
-        resp.text().await.context("Failed to read cluster CA")
     }
 
     pub async fn fetch_bootstrap_token(&self) -> Result<String> {

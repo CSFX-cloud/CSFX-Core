@@ -111,11 +111,13 @@ async fn main() -> Result<()> {
     let wg_identity =
         wg_identity::load_or_generate().context("Failed to initialize WireGuard identity")?;
 
+    let ca_pem = resolve_trust_anchor(&gateway_url, join_ticket.as_ref()).await?;
     let api_client = client::ApiClient::new(
         gateway_url.clone(),
         wg_identity.public_key_b64.clone(),
         wg_endpoint,
         wg_tunnel_ip,
+        ca_pem.as_deref(),
     )
     .context("Failed to initialize API client")?;
 
@@ -241,14 +243,27 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn resolve_trust_anchor(
+    gateway_url: &str,
+    join_ticket: Option<&join::JoinTicket>,
+) -> Result<Option<String>> {
+    if let Ok(ca_pem) = pki::AgentPki::load_ca_pem() {
+        return Ok(Some(ca_pem));
+    }
+    let Some(ticket) = join_ticket else {
+        return Ok(None);
+    };
+    let ca_pem = client::fetch_cluster_ca(gateway_url).await?;
+    ticket.verify_ca(&ca_pem)?;
+    info!("Cluster CA fingerprint verified, pinning gateway certificate to cluster CA");
+    Ok(Some(ca_pem))
+}
+
 async fn resolve_registration_token(
     client: &client::ApiClient,
     join_ticket: Option<&join::JoinTicket>,
 ) -> Result<String> {
     if let Some(ticket) = join_ticket {
-        let ca_pem = client.fetch_ca_pem().await?;
-        ticket.verify_ca(&ca_pem)?;
-        info!("Cluster CA fingerprint verified");
         return Ok(ticket.token.clone());
     }
     if let Some(token) = std::env::var("CSFX_REGISTRATION_TOKEN")

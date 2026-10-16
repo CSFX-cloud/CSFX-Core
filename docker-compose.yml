@@ -128,6 +128,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./control-plane/registry:/app/control-plane/registry
+      - ./control-plane/shared:/app/control-plane/shared
       - cargo_target_registry:/app/target
     command: cargo watch -x "run -p registry"
     healthcheck:
@@ -292,6 +293,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./control-plane/sdn-controller:/app/control-plane/sdn-controller
+      - ./control-plane/shared:/app/control-plane/shared
       - cargo_target_sdn_controller:/app/target
     command: cargo watch -x "run -p sdn-controller"
     healthcheck:
