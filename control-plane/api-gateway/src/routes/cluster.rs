@@ -48,11 +48,23 @@ pub(super) fn internal(err: impl std::fmt::Display) -> ApiError {
 }
 
 fn gateway_host(headers: &HeaderMap) -> Result<&str, ApiError> {
-    headers
+    let host = headers
         .get(HOST)
         .and_then(|value| value.to_str().ok())
         .filter(|host| !host.is_empty())
-        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "host header required"))
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "host header required"))?;
+    if is_loopback_host(host) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "open the web UI through the node address instead of localhost to create a join string",
+        ));
+    }
+    Ok(host)
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
+    name.eq_ignore_ascii_case("localhost") || name.starts_with("127.") || name == "[::1]"
 }
 
 fn compact_fingerprint(fingerprint: &str) -> String {
