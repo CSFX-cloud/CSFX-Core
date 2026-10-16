@@ -10,6 +10,8 @@ mod server;
 mod services;
 
 const LEADER_KEY: &str = "/csfx/leaders/registry-health";
+const DEGRADED_AFTER_SECS: i64 = 75;
+const OFFLINE_AFTER_SECS: i64 = 120;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -104,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
                 if !leader.is_leader() {
                     continue;
                 }
-                registry.check_agent_health(30, 60).await;
+                registry.check_agent_health(DEGRADED_AFTER_SECS, OFFLINE_AFTER_SECS).await;
             }
         })
     };
