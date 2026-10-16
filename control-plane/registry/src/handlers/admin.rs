@@ -115,11 +115,27 @@ pub async fn get_agent(
     }
 }
 
+fn internal_error(message: String) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse { error: message }),
+    )
+}
+
 pub async fn deregister_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let _ = state.api_key_manager.revoke_key(agent_id).await;
+    state
+        .api_key_manager
+        .revoke_key(agent_id)
+        .await
+        .map_err(internal_error)?;
+    state
+        .pki_service
+        .revoke_active_certificate(agent_id, "deregistered".to_string())
+        .await
+        .map_err(|e| internal_error(e.to_string()))?;
 
     match state
         .agent_registry

@@ -234,6 +234,16 @@ impl PkiService {
         Ok(())
     }
 
+    pub async fn revoke_active_certificate(&self, agent_id: Uuid, reason: String) -> Result<()> {
+        let active = crate::db::certificates::get_active_certificate(&self.db, agent_id)
+            .await
+            .map_err(|e| anyhow!("DB error: {}", e))?;
+        if active.is_none() {
+            return Ok(());
+        }
+        self.revoke_agent_certificate(agent_id, reason).await
+    }
+
     pub async fn build_crl(&self) -> Result<Vec<i64>> {
         crate::db::certificates::get_revoked_serials(&self.db)
             .await
