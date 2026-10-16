@@ -10,6 +10,7 @@
     ];
 
     let dialog = $state<HTMLDialogElement | null>(null);
+    let role = $state<JoinToken['role']>('worker');
     let ttlHours = $state(1);
     let busy = $state(false);
     let error = $state<string | null>(null);
@@ -28,7 +29,7 @@
         busy = true;
         error = null;
         try {
-            result = await createJoinToken(auth.token, ttlHours);
+            result = await createJoinToken(auth.token, role, ttlHours);
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to create join token';
         } finally {
@@ -59,7 +60,13 @@
                 <Button size="sm" onclick={() => dialog?.close()}>Done</Button>
             </div>
         {:else}
-            <p class="text-sm text-muted-foreground">Creates a single-use join string for a new worker node.</p>
+            <div class="flex flex-col gap-1">
+                <label class="text-xs text-muted-foreground" for="join-role">Role</label>
+                <select id="join-role" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={role}>
+                    <option value="worker">Worker</option>
+                    <option value="master">Master (control plane)</option>
+                </select>
+            </div>
             <div class="flex flex-col gap-1">
                 <label class="text-xs text-muted-foreground" for="join-ttl">Valid for</label>
                 <select id="join-ttl" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={ttlHours}>
