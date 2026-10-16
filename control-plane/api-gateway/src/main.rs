@@ -15,7 +15,6 @@ mod prune;
 mod rbac_service;
 mod recovery;
 mod routes;
-mod self_monitor;
 mod service_client;
 mod setup;
 mod system_collector;
@@ -177,9 +176,6 @@ async fn main() {
 
     tracing::info!("starting log prune job");
     prune::spawn_log_prune_job(state.clone());
-
-    tracing::info!("starting self-monitoring service");
-    self_monitor::start_self_monitoring(std::sync::Arc::new(db_conn)).await;
 
     let app = routes::create_router()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
