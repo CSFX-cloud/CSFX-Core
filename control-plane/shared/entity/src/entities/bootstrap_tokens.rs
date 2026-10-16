@@ -15,6 +15,7 @@ pub struct Model {
     pub use_count: i32,
     pub revoked: bool,
     pub revoked_at: Option<DateTime>,
+    pub role: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

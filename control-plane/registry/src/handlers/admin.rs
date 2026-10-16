@@ -9,7 +9,10 @@ use uuid::Uuid;
 use crate::{
     models::agent::{ErrorResponse, PreRegisterRequest, PreRegisterResponse},
     server::AppState,
-    services::registry::PreRegisterParams,
+    services::{
+        bootstrap_tokens::{is_valid_role, ROLE_WORKER},
+        registry::PreRegisterParams,
+    },
 };
 
 #[derive(Debug, Deserialize)]
@@ -17,6 +20,7 @@ pub struct CreateBootstrapTokenRequest {
     pub description: Option<String>,
     pub ttl_hours: Option<i64>,
     pub max_uses: Option<i32>,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -167,6 +171,15 @@ pub async fn create_bootstrap_token(
 > {
     let ttl_hours = request.ttl_hours.unwrap_or(24 * 30);
     let max_uses = request.max_uses.unwrap_or(100);
+    let role = request.role.unwrap_or_else(|| ROLE_WORKER.to_string());
+    if !is_valid_role(&role) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!("Invalid role '{}', expected master or worker", role),
+            }),
+        ));
+    }
 
     state
         .bootstrap_token_manager
@@ -175,6 +188,7 @@ pub async fn create_bootstrap_token(
             "admin".to_string(),
             ttl_hours,
             max_uses,
+            role,
         )
         .await
         .map(Json)

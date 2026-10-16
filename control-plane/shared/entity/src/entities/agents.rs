@@ -27,6 +27,7 @@ pub struct Model {
     pub kvm_capable: bool,
     pub cordoned: bool,
     pub maintenance_until: Option<DateTime>,
+    pub role: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

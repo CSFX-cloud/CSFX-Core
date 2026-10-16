@@ -39,6 +39,7 @@ mod m20260918_000000_add_alerts_and_maintenance;
 mod m20260919_000000_add_resource_group_icon_image;
 mod m20260920_000000_add_resource_group_preview_url;
 mod m20261010_000000_add_identity_providers;
+mod m20261020_000000_add_node_roles;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -84,6 +85,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260919_000000_add_resource_group_icon_image::Migration),
             Box::new(m20260920_000000_add_resource_group_preview_url::Migration),
             Box::new(m20261010_000000_add_identity_providers::Migration),
+            Box::new(m20261020_000000_add_node_roles::Migration),
         ]
     }
 }
