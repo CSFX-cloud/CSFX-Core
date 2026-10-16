@@ -8,6 +8,7 @@ mod auth;
 mod auth_service;
 mod console_pin;
 mod db;
+mod etcd_members;
 mod init;
 mod metrics;
 mod oidc;
