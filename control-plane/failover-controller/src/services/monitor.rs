@@ -1,4 +1,5 @@
 use sea_orm::DatabaseConnection;
+use shared::leader::LeaderLease;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 
@@ -11,12 +12,16 @@ const POLL_INTERVAL_SECS: u64 = 30;
 const SOFT_THRESHOLD_SECS: i64 = 120;
 const HARD_THRESHOLD_SECS: i64 = 300;
 
-pub async fn run(db: DatabaseConnection) {
+pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
     let failover = Arc::new(FailoverService::new(db.clone()));
     let mut tick = interval(Duration::from_secs(POLL_INTERVAL_SECS));
 
     loop {
         tick.tick().await;
+
+        if !leader.is_leader() {
+            continue;
+        }
 
         match agent_db::get_agents_for_alerting(&db).await {
             Ok(agents) => {

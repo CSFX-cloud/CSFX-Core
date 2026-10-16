@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
+const DEFAULT_ETCD_ENDPOINTS: &str = "http://localhost:2379";
 const LEASE_TTL_SECONDS: i64 = 10;
 const RENEW_INTERVAL: Duration = Duration::from_secs(3);
 const RENEW_TIMEOUT: Duration = Duration::from_secs(LEASE_TTL_SECONDS as u64);
@@ -27,6 +29,15 @@ impl LeaderLease {
             node_id: node_id.into(),
             is_leader: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub async fn connect(key: &str) -> Result<Self> {
+        let endpoints = std::env::var("ETCD_ENDPOINTS")
+            .unwrap_or_else(|_| DEFAULT_ETCD_ENDPOINTS.to_string());
+        let etcd = Client::connect(endpoints.split(',').collect::<Vec<_>>(), None)
+            .await
+            .context("failed to connect to etcd")?;
+        Ok(Self::new(etcd, key, Uuid::new_v4().to_string()).spawn())
     }
 
     pub fn is_leader(&self) -> bool {
