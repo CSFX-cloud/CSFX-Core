@@ -1,4 +1,5 @@
-use crate::log_warn;
+use crate::log_info;
+use entity::entities::volumes;
 use etcd_client::Client as EtcdClient;
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
@@ -6,11 +7,14 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::ceph::ops::CephManager;
+use crate::ceph::storage::types::CephVolume;
 use crate::db::volumes as db;
 use crate::models::volume::{
     AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest, SnapshotResponse,
     VolumeResponse,
 };
+
+const IMAGE_FEATURES: [&str; 2] = ["layering", "exclusive-lock"];
 
 pub struct VolumeService {
     db: DatabaseConnection,
@@ -37,16 +41,18 @@ impl VolumeService {
             .map_err(|e| e.to_string())?;
 
         if let Some(ceph) = &self.ceph {
-            let volume = crate::ceph::storage::types::CephVolume {
+            let volume = CephVolume {
                 name: model.image_name.clone(),
                 pool: model.pool.clone(),
                 size_mb: (model.size_gb as u64) * 1024,
-                features: vec!["layering".to_string(), "exclusive-lock".to_string()],
-                encrypted: false,
+                features: IMAGE_FEATURES.iter().map(|f| f.to_string()).collect(),
             };
 
             if let Err(e) = ceph.rbd_manager.create_image(&volume).await {
-                log_warn!("volume_service", &format!("Ceph RBD create failed: {}", e));
+                db::delete(&self.db, model.id)
+                    .await
+                    .map_err(|rollback| format!("{:#}; rollback failed: {}", e, rollback))?;
+                return Err(format!("{:#}", e));
             }
         }
 
@@ -71,12 +77,15 @@ impl VolumeService {
             .ok_or_else(|| format!("Volume {} not found", id))?;
 
         if let Some(ceph) = &self.ceph {
-            if let Err(e) = ceph
-                .rbd_manager
-                .delete_image(&model.pool, &model.image_name)
+            let rbd = &ceph.rbd_manager;
+            let exists = rbd
+                .image_exists(&model.pool, &model.image_name)
                 .await
-            {
-                log_warn!("volume_service", &format!("Ceph RBD delete failed: {}", e));
+                .map_err(|e| format!("{:#}", e))?;
+            if exists {
+                rbd.delete_image(&model.pool, &model.image_name)
+                    .await
+                    .map_err(|e| format!("{:#}", e))?;
             }
         }
 
@@ -88,28 +97,12 @@ impl VolumeService {
         volume_id: Uuid,
         req: AttachVolumeRequest,
     ) -> Result<VolumeResponse, String> {
-        let model = db::get_by_id(&self.db, volume_id)
+        db::get_by_id(&self.db, volume_id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Volume {} not found", volume_id))?;
 
-        let device = if let Some(ceph) = &self.ceph {
-            match ceph
-                .rbd_manager
-                .map_device(&model.pool, &model.image_name)
-                .await
-            {
-                Ok(dev) => Some(dev),
-                Err(e) => {
-                    log_warn!("volume_service", &format!("Ceph RBD map failed: {}", e));
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        let updated = db::attach(&self.db, volume_id, req.agent_id, req.workload_id, device)
+        let updated = db::attach(&self.db, volume_id, req.agent_id, req.workload_id)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -117,18 +110,10 @@ impl VolumeService {
     }
 
     pub async fn detach_volume(&self, volume_id: Uuid) -> Result<VolumeResponse, String> {
-        let model = db::get_by_id(&self.db, volume_id)
+        db::get_by_id(&self.db, volume_id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Volume {} not found", volume_id))?;
-
-        if let Some(ceph) = &self.ceph {
-            if let Some(ref device) = model.mapped_device {
-                if let Err(e) = ceph.rbd_manager.unmap_device(device).await {
-                    log_warn!("volume_service", &format!("Ceph RBD unmap failed: {}", e));
-                }
-            }
-        }
 
         let updated = db::detach(&self.db, volume_id)
             .await
@@ -148,16 +133,10 @@ impl VolumeService {
             .ok_or_else(|| format!("Volume {} not found", volume_id))?;
 
         if let Some(ceph) = &self.ceph {
-            if let Err(e) = ceph
-                .rbd_manager
+            ceph.rbd_manager
                 .create_snapshot(&model.pool, &model.image_name, &req.name)
                 .await
-            {
-                log_warn!(
-                    "volume_service",
-                    &format!("Ceph snapshot create failed: {}", e)
-                );
-            }
+                .map_err(|e| format!("{:#}", e))?;
         }
 
         let snap = db::create_snapshot(&self.db, volume_id, &req.name)
@@ -187,16 +166,7 @@ impl VolumeService {
         let mut detached_ids = Vec::with_capacity(attached.len());
 
         for volume in attached {
-            if let Some(ceph) = &self.ceph {
-                if let Some(ref device) = volume.mapped_device {
-                    if let Err(e) = ceph.rbd_manager.unmap_device(device).await {
-                        log_warn!(
-                            "volume_service",
-                            &format!("Ceph RBD unmap failed volume_id={} err={}", volume.id, e)
-                        );
-                    }
-                }
-            }
+            self.fence_volume(&volume).await?;
 
             db::detach(&self.db, volume.id)
                 .await
@@ -206,5 +176,33 @@ impl VolumeService {
         }
 
         Ok(detached_ids)
+    }
+
+    async fn fence_volume(&self, volume: &volumes::Model) -> Result<(), String> {
+        let Some(ceph) = &self.ceph else {
+            return Ok(());
+        };
+
+        let addresses = ceph
+            .rbd_manager
+            .watcher_addresses(&volume.pool, &volume.image_name)
+            .await
+            .map_err(|e| format!("{:#}", e))?;
+
+        for address in addresses {
+            ceph.client
+                .blocklist_add(&address)
+                .await
+                .map_err(|e| format!("{:#}", e))?;
+            log_info!(
+                "volume_service",
+                &format!(
+                    "Fenced RBD client volume_id={} address={}",
+                    volume.id, address
+                )
+            );
+        }
+
+        Ok(())
     }
 }

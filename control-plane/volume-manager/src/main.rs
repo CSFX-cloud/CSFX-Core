@@ -47,18 +47,13 @@ async fn main() -> anyhow::Result<()> {
 
     let etcd = Arc::new(tokio::sync::Mutex::new(etcd));
 
-    let ceph_manager = match ceph::ops::init_ceph().await {
-        Ok(manager) => {
-            log_info!("main", "Ceph storage initialized");
-            Some(Arc::new(manager))
-        }
-        Err(e) => {
-            log_warn!(
-                "main",
-                &format!("Ceph not available (continuing without): {}", e)
-            );
-            None
-        }
+    let ceph_manager = if std::env::var("CEPH_MON_HOSTS").is_ok() {
+        let manager = ceph::ops::init_ceph().await?;
+        log_info!("main", "Ceph storage initialized");
+        Some(Arc::new(manager))
+    } else {
+        log_info!("main", "CEPH_MON_HOSTS not set, running without Ceph");
+        None
     };
 
     let volume_service = Arc::new(services::volume::VolumeService::new(

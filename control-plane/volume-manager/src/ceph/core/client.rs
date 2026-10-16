@@ -14,46 +14,46 @@ impl CephClient {
         Self { config }
     }
 
-    /// Führt ein Ceph-Kommando aus
     pub async fn execute(&self, cmd: CephCommand) -> Result<String> {
+        self.run("ceph", cmd, true).await
+    }
+
+    pub async fn execute_rbd(&self, cmd: CephCommand) -> Result<String> {
+        self.run("rbd", cmd, false).await
+    }
+
+    async fn run(&self, program: &str, cmd: CephCommand, json_output: bool) -> Result<String> {
         let cmd_vec = cmd.to_vec();
         crate::log_debug!(
             "ceph_client",
-            &format!("Executing ceph command: {}", cmd_vec.join(" "))
+            &format!("Executing {} command: {}", program, cmd_vec.join(" "))
         );
 
-        let mut command = AsyncCommand::new("ceph");
-
-        // Monitoring hosts hinzufügen
+        let mut command = AsyncCommand::new(program);
         command.arg("-m").arg(self.config.mon_host_string());
-
-        // Keyring falls vorhanden
         if let Some(ref keyring) = self.config.keyring_path {
             command.arg("--keyring").arg(keyring);
         }
-
-        // Client name
         command
             .arg("--name")
             .arg(format!("client.{}", self.config.client_name));
-
-        // Das eigentliche Kommando
-        for arg in cmd_vec {
-            command.arg(arg);
+        command.args(cmd_vec);
+        if json_output {
+            command.arg("--format").arg("json");
         }
-
-        // JSON Format für strukturierte Ausgabe
-        command.arg("--format").arg("json");
 
         let output = command
             .output()
             .await
-            .context("Failed to execute ceph command")?;
+            .with_context(|| format!("Failed to execute {} command", program))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            crate::log_error!("ceph_client", &format!("Ceph command failed: {}", stderr));
-            return Err(anyhow!("Ceph command failed: {}", stderr));
+            crate::log_error!(
+                "ceph_client",
+                &format!("{} command failed: {}", program, stderr)
+            );
+            return Err(anyhow!("{} command failed: {}", program, stderr));
         }
 
         Ok(String::from_utf8(output.stdout)?)
@@ -138,6 +138,17 @@ impl CephClient {
             osds,
             pgs,
         })
+    }
+
+    pub async fn blocklist_add(&self, address: &str) -> Result<()> {
+        let cmd = CephCommand::new("osd")
+            .arg("blocklist")
+            .arg("add")
+            .arg(address);
+        self.execute(cmd)
+            .await
+            .with_context(|| format!("Failed to blocklist client address={}", address))?;
+        Ok(())
     }
 
     /// Prüft ob Ceph-Cluster erreichbar ist

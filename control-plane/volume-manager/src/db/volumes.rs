@@ -56,7 +56,6 @@ pub async fn attach(
     volume_id: Uuid,
     agent_id: Uuid,
     workload_id: Option<Uuid>,
-    device: Option<String>,
 ) -> Result<volumes::Model, sea_orm::DbErr> {
     let volume = volumes::Entity::find_by_id(volume_id)
         .one(db)
@@ -66,7 +65,6 @@ pub async fn attach(
     let mut active: volumes::ActiveModel = volume.into();
     active.attached_to_agent = Set(Some(agent_id));
     active.attached_to_workload = Set(workload_id);
-    active.mapped_device = Set(device);
     active.status = Set(VolumeStatus::InUse.as_str().to_string());
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
