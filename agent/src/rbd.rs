@@ -34,7 +34,11 @@ pub async fn map_device(pool: &str, image: &str) -> Result<String> {
 
     let ceph_args = CephClientArgs::from_env();
     let mut command = Command::new("rbd");
-    command.arg("map").arg(format!("{}/{}", pool, image));
+    command
+        .arg("map")
+        .arg(format!("{}/{}", pool, image))
+        .arg("-o")
+        .arg("exclusive");
     ceph_args.apply(&mut command);
 
     let output = command
@@ -55,4 +59,25 @@ pub async fn map_device(pool: &str, image: &str) -> Result<String> {
 
     info!(device = %device, "RBD device mapped");
     Ok(device)
+}
+
+pub async fn unmap_device(device: &str) -> Result<()> {
+    info!(device = %device, "Unmapping RBD device");
+
+    let ceph_args = CephClientArgs::from_env();
+    let mut command = Command::new("rbd");
+    command.arg("unmap").arg(device);
+    ceph_args.apply(&mut command);
+
+    let output = command
+        .output()
+        .await
+        .context("Failed to execute rbd unmap")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("rbd unmap failed: {}", stderr));
+    }
+
+    Ok(())
 }

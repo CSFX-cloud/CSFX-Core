@@ -440,6 +440,7 @@ async fn reconcile_tick(
                     &[],
                 )
                 .await;
+                release_unassigned_volumes(mounted_volumes, &[]).await;
             }
         }
     }
@@ -504,6 +505,30 @@ async fn run_heartbeat_loop(
     }
 }
 
+async fn release_unassigned_volumes(
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+    assigned: &[client::AssignedVolume],
+) {
+    let assigned_ids: HashSet<&str> = assigned.iter().map(|v| v.id.as_str()).collect();
+
+    let stale: Vec<(String, String)> = mounted_volumes
+        .lock()
+        .await
+        .iter()
+        .filter(|(volume_id, _)| !assigned_ids.contains(volume_id.as_str()))
+        .map(|(volume_id, device)| (volume_id.clone(), device.clone()))
+        .collect();
+
+    for (volume_id, device) in stale {
+        if let Err(e) = rbd::unmap_device(&device).await {
+            warn!(volume_id = %volume_id, device = %device, error = %e, "Failed to unmap RBD device");
+            continue;
+        }
+        mounted_volumes.lock().await.remove(&volume_id);
+        info!(volume_id = %volume_id, "Volume released");
+    }
+}
+
 async fn process_volumes(
     client: &client::ApiClient,
     agent_id: uuid::Uuid,
@@ -517,6 +542,8 @@ async fn process_volumes(
             return;
         }
     };
+
+    release_unassigned_volumes(mounted_volumes, &volumes).await;
 
     for volume in volumes {
         let already_mounted = mounted_volumes.lock().await.contains_key(&volume.id);
