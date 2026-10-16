@@ -9,6 +9,7 @@ pub mod certificate_revocations;
 pub mod failover_events;
 pub mod garage_nodes;
 pub mod identity_providers;
+pub mod ingress_routes;
 pub mod idp_group_mappings;
 pub mod invalid_jwt;
 pub mod key;

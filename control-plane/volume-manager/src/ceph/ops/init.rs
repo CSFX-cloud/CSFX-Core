@@ -111,7 +111,6 @@ pub async fn create_postgres_volumes(ceph: &CephManager, node_count: u32) -> Res
             pool: "csfx-postgres".to_string(),
             size_mb: 10240, // 10 GB
             features: vec!["layering".to_string(), "exclusive-lock".to_string()],
-            encrypted: false,
         };
 
         // Erstelle Volume falls nicht vorhanden

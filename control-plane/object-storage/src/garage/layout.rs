@@ -1,11 +1,12 @@
 use anyhow::Result;
 use entity::entities::{agents, garage_nodes};
 use sea_orm::{DatabaseConnection, EntityTrait};
+use shared::leader::LeaderLease;
 use tokio::time::{sleep, Duration};
 
 use crate::{
     db::garage_nodes as garage_nodes_db,
-    garage::{client::LayoutRole, leader::LayoutLeader, GarageClient},
+    garage::{client::LayoutRole, GarageClient},
     log_error, log_info, log_warn,
 };
 
@@ -137,7 +138,7 @@ async fn reconcile_once(db: &DatabaseConnection, garage: &GarageClient) -> Resul
 pub async fn run_reconcile_loop(
     db: DatabaseConnection,
     garage: GarageClient,
-    leader: LayoutLeader,
+    leader: LeaderLease,
 ) {
     loop {
         sleep(Duration::from_secs(RECONCILE_INTERVAL_SECONDS)).await;
@@ -161,7 +162,7 @@ const SELF_REGISTER_MAX_ATTEMPTS: u32 = 60;
 fn available_capacity_bytes(data_dir: &str) -> Option<i64> {
     match nix::sys::statvfs::statvfs(data_dir) {
         Ok(stats) => {
-            let bytes = stats.blocks_available() * stats.fragment_size();
+            let bytes = u64::from(stats.blocks_available()) * u64::from(stats.fragment_size());
             Some(bytes as i64)
         }
         Err(e) => {

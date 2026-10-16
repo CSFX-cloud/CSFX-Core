@@ -887,7 +887,7 @@ pub async fn internal_bootstrap_token(
         reqwest::Method::POST,
         "/admin/bootstrap-tokens",
         Some(
-            json!({"description": "auto-issued for node bootstrap", "ttl_hours": 1, "max_uses": 1}),
+            json!({"description": "auto-issued for node bootstrap", "ttl_hours": 1, "max_uses": 1, "role": "master"}),
         ),
         None,
     )

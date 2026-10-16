@@ -6,8 +6,11 @@ use utoipa_swagger_ui::SwaggerUi;
 mod admins;
 mod auth;
 mod auth_service;
+mod cluster_bundle;
 mod console_pin;
 mod db;
+mod etcd_members;
+mod ingress_sync;
 mod init;
 mod metrics;
 mod oidc;
@@ -15,7 +18,6 @@ mod prune;
 mod rbac_service;
 mod recovery;
 mod routes;
-mod self_monitor;
 mod service_client;
 mod setup;
 mod system_collector;
@@ -178,8 +180,8 @@ async fn main() {
     tracing::info!("starting log prune job");
     prune::spawn_log_prune_job(state.clone());
 
-    tracing::info!("starting self-monitoring service");
-    self_monitor::start_self_monitoring(std::sync::Arc::new(db_conn)).await;
+    tracing::info!("starting ingress synchronization");
+    ingress_sync::spawn(state.db_conn.clone());
 
     let app = routes::create_router()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))

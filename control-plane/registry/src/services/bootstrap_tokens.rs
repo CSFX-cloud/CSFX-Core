@@ -5,6 +5,13 @@ use uuid::Uuid;
 
 const TOKEN_PREFIX: &str = "csfx-bootstrap.";
 
+pub const ROLE_MASTER: &str = "master";
+pub const ROLE_WORKER: &str = "worker";
+
+pub fn is_valid_role(role: &str) -> bool {
+    role == ROLE_MASTER || role == ROLE_WORKER
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapToken {
     pub id: Uuid,
@@ -16,6 +23,24 @@ pub struct BootstrapToken {
     pub max_uses: i32,
     pub use_count: i32,
     pub revoked: bool,
+    pub role: String,
+}
+
+impl From<entity::bootstrap_tokens::Model> for BootstrapToken {
+    fn from(model: entity::bootstrap_tokens::Model) -> Self {
+        Self {
+            id: model.id,
+            token: model.token,
+            description: model.description,
+            created_by: model.created_by,
+            created_at: model.created_at.and_utc(),
+            expires_at: model.expires_at.and_utc(),
+            max_uses: model.max_uses,
+            use_count: model.use_count,
+            revoked: model.revoked,
+            role: model.role,
+        }
+    }
 }
 
 pub struct BootstrapTokenManager {
@@ -37,6 +62,7 @@ impl BootstrapTokenManager {
         created_by: String,
         ttl_hours: i64,
         max_uses: i32,
+        role: String,
     ) -> Result<BootstrapToken, String> {
         let token = format!("{}{}", TOKEN_PREFIX, Uuid::new_v4().simple());
         let expires_at = Utc::now() + chrono::Duration::hours(ttl_hours);
@@ -48,6 +74,7 @@ impl BootstrapTokenManager {
             created_by.clone(),
             expires_at,
             max_uses,
+            role.clone(),
         )
         .await
         .map_err(|e| format!("Failed to create bootstrap token: {}", e))?;
@@ -55,25 +82,15 @@ impl BootstrapTokenManager {
         crate::log_info!(
             "bootstrap_token_manager",
             &format!(
-                "Created bootstrap token max_uses={} ttl_hours={} id={}",
-                max_uses, ttl_hours, model.id
+                "Created bootstrap token max_uses={} ttl_hours={} role={} id={}",
+                max_uses, ttl_hours, role, model.id
             )
         );
 
-        Ok(BootstrapToken {
-            id: model.id,
-            token: model.token,
-            description: model.description,
-            created_by: model.created_by,
-            created_at: model.created_at.and_utc(),
-            expires_at: model.expires_at.and_utc(),
-            max_uses: model.max_uses,
-            use_count: model.use_count,
-            revoked: model.revoked,
-        })
+        Ok(model.into())
     }
 
-    pub async fn validate_and_use(&self, token_str: &str) -> Result<(), String> {
+    pub async fn validate_and_use(&self, token_str: &str) -> Result<String, String> {
         let model = crate::db::bootstrap_tokens::get_by_token(&self.db, token_str)
             .await
             .map_err(|e| format!("Database error: {}", e))?
@@ -120,7 +137,7 @@ impl BootstrapTokenManager {
             )
         );
 
-        Ok(())
+        Ok(model.role)
     }
 
     pub async fn revoke(&self, id: Uuid) -> Result<(), String> {
@@ -138,20 +155,7 @@ impl BootstrapTokenManager {
 
     pub async fn list(&self) -> Vec<BootstrapToken> {
         match crate::db::bootstrap_tokens::get_all_active(&self.db).await {
-            Ok(models) => models
-                .into_iter()
-                .map(|m| BootstrapToken {
-                    id: m.id,
-                    token: m.token,
-                    description: m.description,
-                    created_by: m.created_by,
-                    created_at: m.created_at.and_utc(),
-                    expires_at: m.expires_at.and_utc(),
-                    max_uses: m.max_uses,
-                    use_count: m.use_count,
-                    revoked: m.revoked,
-                })
-                .collect(),
+            Ok(models) => models.into_iter().map(BootstrapToken::from).collect(),
             Err(e) => {
                 crate::log_error!(
                     "bootstrap_token_manager",

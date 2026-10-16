@@ -64,6 +64,7 @@ pub struct AgentResponse {
     pub registered_at: String,
     pub cordoned: bool,
     pub maintenance_until: Option<String>,
+    pub role: String,
 }
 
 impl From<agents::Model> for AgentResponse {
@@ -82,6 +83,7 @@ impl From<agents::Model> for AgentResponse {
             registered_at: model.registered_at.to_string(),
             cordoned: model.cordoned,
             maintenance_until: model.maintenance_until.map(|dt| dt.and_utc().to_rfc3339()),
+            role: model.role,
         }
     }
 }
@@ -378,28 +380,44 @@ pub async fn drain_agent(
     }
 }
 
-pub async fn uncordon_agent(
-    CanManageSystem(_claims): CanManageSystem,
-    State(state): State<AppState>,
-    Path(agent_id): Path<Uuid>,
-) -> Result<impl IntoResponse, StatusCode> {
+async fn set_cordoned(
+    state: &AppState,
+    agent_id: Uuid,
+    cordoned: bool,
+) -> Result<StatusCode, StatusCode> {
     let agent = agents::Entity::find_by_id(agent_id)
         .one(&state.db_conn)
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "failed to fetch agent for uncordon");
+            tracing::error!(error = %e, cordoned = cordoned, "failed to fetch agent for cordon change");
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let mut active: agents::ActiveModel = agent.into();
-    active.cordoned = ActiveValue::Set(false);
+    active.cordoned = ActiveValue::Set(cordoned);
     active.update(&state.db_conn).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to uncordon agent");
+        tracing::error!(error = %e, cordoned = cordoned, "failed to change agent cordon state");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn cordon_agent(
+    CanManageSystem(_claims): CanManageSystem,
+    State(state): State<AppState>,
+    Path(agent_id): Path<Uuid>,
+) -> Result<impl IntoResponse, StatusCode> {
+    set_cordoned(&state, agent_id, true).await
+}
+
+pub async fn uncordon_agent(
+    CanManageSystem(_claims): CanManageSystem,
+    State(state): State<AppState>,
+    Path(agent_id): Path<Uuid>,
+) -> Result<impl IntoResponse, StatusCode> {
+    set_cordoned(&state, agent_id, false).await
 }
 
 pub fn agents_routes() -> Router<AppState> {
@@ -408,6 +426,7 @@ pub fn agents_routes() -> Router<AppState> {
         .route("/agents/{id}", get(get_agent))
         .route("/agents/{id}/metrics", get(get_agent_metrics))
         .route("/agents/{id}/metrics/latest", get(get_agent_metrics_latest))
+        .route("/agents/{id}/cordon", post(cordon_agent))
         .route("/agents/{id}/drain", post(drain_agent))
         .route("/agents/{id}/uncordon", post(uncordon_agent))
 }

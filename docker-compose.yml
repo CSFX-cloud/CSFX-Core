@@ -70,6 +70,7 @@ services:
     container_name: csfx-api-gateway-dev
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
+      ETCD_ENDPOINTS: http://etcd:2379
       RUST_LOG: ${RUST_LOG:-debug}
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       RSA_KEY_SIZE: "2048"
@@ -92,6 +93,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      etcd:
+        condition: service_started
       migrate:
         condition: service_completed_successfully
     volumes:
@@ -128,6 +131,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./control-plane/registry:/app/control-plane/registry
+      - ./control-plane/shared:/app/control-plane/shared
       - cargo_target_registry:/app/target
     command: cargo watch -x "run -p registry"
     healthcheck:
@@ -252,6 +256,7 @@ services:
     container_name: csfx-failover-controller-dev
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
+      ETCD_ENDPOINTS: http://etcd:2379
       FAILOVER_CONTROLLER_PORT: "8004"
       LISTEN_ADDR: "0.0.0.0"
       SCHEDULER_SERVICE_URL: http://scheduler:8002
@@ -262,6 +267,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      etcd:
+        condition: service_started
       scheduler:
         condition: service_started
       volume-manager:
@@ -292,6 +299,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./control-plane/sdn-controller:/app/control-plane/sdn-controller
+      - ./control-plane/shared:/app/control-plane/shared
       - cargo_target_sdn_controller:/app/target
     command: cargo watch -x "run -p sdn-controller"
     healthcheck:
@@ -368,6 +376,29 @@ services:
       - cargo_target_agent:/app/target
       - agent_state_3:/var/lib/csfx-agent
     command: cargo run -p csfx-agent
+
+  traefik:
+    image: traefik:v3.5
+    container_name: csfx-traefik-dev
+    profiles:
+      - ingress
+    command:
+      - --providers.etcd=true
+      - --providers.etcd.endpoints=etcd:2379
+      - --providers.etcd.rootKey=traefik
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --api.insecure=true
+    ports:
+      - "18088:80"
+      - "18443:443"
+      - "18080:8080"
+    depends_on:
+      etcd:
+        condition: service_started
+    networks:
+      - csfx-network
+    restart: unless-stopped
 
   app:
     build:

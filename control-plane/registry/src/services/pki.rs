@@ -6,7 +6,6 @@ use rcgen::{
     KeyPair, KeyUsagePurpose, SigningKey, PKCS_ECDSA_P256_SHA256,
 };
 use sea_orm::DatabaseConnection;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -29,7 +28,10 @@ const CA_KEY_PATH: &str = "/var/lib/csfx-cp/ca.key";
 struct CaState {
     ca_cert_pem: String,
     ca_key_pem: String,
-    serial_counter: AtomicI64,
+}
+
+fn random_serial() -> i64 {
+    (Uuid::new_v4().as_u128() >> 65) as i64
 }
 
 pub struct PkiService {
@@ -58,7 +60,6 @@ impl PkiService {
             return Ok(CaState {
                 ca_cert_pem: cert_pem,
                 ca_key_pem: key_pem,
-                serial_counter: AtomicI64::new(1),
             });
         }
 
@@ -71,7 +72,6 @@ impl PkiService {
             return Ok(CaState {
                 ca_cert_pem: cert_pem,
                 ca_key_pem: key_pem,
-                serial_counter: AtomicI64::new(1),
             });
         }
 
@@ -124,7 +124,6 @@ impl PkiService {
         Ok(CaState {
             ca_cert_pem,
             ca_key_pem,
-            serial_counter: AtomicI64::new(1),
         })
     }
 
@@ -145,7 +144,7 @@ impl PkiService {
         agent_id: Uuid,
         csr_pem: &str,
     ) -> Result<IssuedCertificate> {
-        let serial = self.ca.serial_counter.fetch_add(1, Ordering::SeqCst);
+        let serial = random_serial();
         let expires_at = Utc::now() + chrono::Duration::hours(self.cert_ttl_hours);
 
         let csr_params = CertificateSigningRequestParams::from_pem(csr_pem)
@@ -233,6 +232,16 @@ impl PkiService {
         );
 
         Ok(())
+    }
+
+    pub async fn revoke_active_certificate(&self, agent_id: Uuid, reason: String) -> Result<()> {
+        let active = crate::db::certificates::get_active_certificate(&self.db, agent_id)
+            .await
+            .map_err(|e| anyhow!("DB error: {}", e))?;
+        if active.is_none() {
+            return Ok(());
+        }
+        self.revoke_agent_certificate(agent_id, reason).await
     }
 
     pub async fn build_crl(&self) -> Result<Vec<i64>> {

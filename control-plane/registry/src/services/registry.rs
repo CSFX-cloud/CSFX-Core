@@ -28,6 +28,7 @@ pub struct RegisterAgentParams {
     pub agent_version: String,
     pub tags: Option<HashMap<String, String>>,
     pub allow_reregister: bool,
+    pub role: String,
 }
 
 pub struct AgentRegistry {
@@ -204,6 +205,7 @@ impl AgentRegistry {
             None,
             None,
             Some(wg_tunnel_ip.clone()),
+            params.role.clone(),
         )
         .await
         .map_err(|e| format!("Failed to create agent in database: {}", e))?;

@@ -6,7 +6,6 @@ pub struct CephVolume {
     pub pool: String,
     pub size_mb: u64,
     pub features: Vec<String>,
-    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,15 +54,6 @@ pub struct PgSummary {
     pub active_clean: u32,
     pub degraded: u32,
     pub misplaced: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RbdImage {
-    pub name: String,
-    pub size: u64,
-    pub pool: String,
-    pub format: u32,
-    pub features: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

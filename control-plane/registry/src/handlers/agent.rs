@@ -17,23 +17,23 @@ pub async fn register_agent(
     State(state): State<AppState>,
     Json(request): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let (agent_id, allow_reregister) =
+    let (agent_id, allow_reregister, role) =
         if crate::services::bootstrap_tokens::BootstrapTokenManager::is_bootstrap_token(
             &request.registration_token,
         ) {
-            if let Err(e) = state
+            let role = state
                 .bootstrap_token_manager
                 .validate_and_use(&request.registration_token)
                 .await
-            {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(ErrorResponse {
-                        error: format!("Invalid bootstrap token: {}", e),
-                    }),
-                ));
-            }
-            (uuid::Uuid::new_v4(), true)
+                .map_err(|e| {
+                    (
+                        StatusCode::UNAUTHORIZED,
+                        Json(ErrorResponse {
+                            error: format!("Invalid bootstrap token: {}", e),
+                        }),
+                    )
+                })?;
+            (uuid::Uuid::new_v4(), true, role)
         } else {
             let token_data = match state
                 .token_manager
@@ -75,7 +75,11 @@ pub async fn register_agent(
                 ));
             }
 
-            (token_data.agent_id, false)
+            (
+                token_data.agent_id,
+                false,
+                crate::services::bootstrap_tokens::ROLE_WORKER.to_string(),
+            )
         };
 
     let csr_pem = request.csr_pem.clone();
@@ -93,6 +97,7 @@ pub async fn register_agent(
                 agent_version: request.agent_version,
                 tags: request.tags,
                 allow_reregister,
+                role,
             },
             &state.mgmt_ipam,
         )

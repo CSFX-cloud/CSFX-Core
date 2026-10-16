@@ -1,3 +1,4 @@
+use shared::leader::LeaderLease;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
@@ -10,6 +11,8 @@ mod metrics;
 mod models;
 mod server;
 mod services;
+
+const LAYOUT_LOCK_KEY: &str = "/csfx/object-storage/layout-lock";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -50,9 +53,8 @@ async fn main() -> anyhow::Result<()> {
     log_info!("main", "etcd connection established");
 
     let node_id = Uuid::new_v4().to_string();
-    let leader = garage::leader::LayoutLeader::new(etcd, node_id);
+    let leader = LeaderLease::new(etcd, LAYOUT_LOCK_KEY, node_id).spawn();
 
-    tokio::spawn(leader.clone().run_campaign_loop());
     tokio::spawn(garage::layout::run_reconcile_loop(
         db.clone(),
         garage.clone(),

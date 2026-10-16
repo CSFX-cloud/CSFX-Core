@@ -8,6 +8,8 @@ mod models;
 mod server;
 mod services;
 
+const LEADER_KEY: &str = "/csfx/leaders/failover-controller";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
@@ -47,8 +49,10 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
+    let leader = shared::leader::LeaderLease::connect(LEADER_KEY).await?;
+
     log_info!("main", "Starting health monitor loop");
-    tokio::spawn(services::monitor::run(db));
+    tokio::spawn(services::monitor::run(db, leader));
 
     tokio::select! {
         result = axum::serve(listener, app) => {

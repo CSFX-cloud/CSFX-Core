@@ -13,7 +13,7 @@ fn read_ca_from_disk() -> Option<(String, String)> {
         .zip(std::fs::read_to_string(CA_KEY_PATH).ok())
 }
 
-async fn load_ca_pem() -> Option<(String, String)> {
+pub async fn load_ca_pem() -> Option<(String, String)> {
     if let (Ok(cert), Ok(key)) = (
         std::env::var("CSFX_CA_CERT_PEM"),
         std::env::var("CSFX_CA_KEY_PEM"),

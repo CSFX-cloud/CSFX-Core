@@ -1,3 +1,4 @@
+use shared::leader::LeaderLease;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -9,6 +10,32 @@ mod metrics;
 mod models;
 mod server;
 mod services;
+
+const LEADER_KEY: &str = "/csfx/leaders/scheduler";
+
+fn spawn_pending_retry(scheduler: Arc<services::scheduler::SchedulerService>, leader: LeaderLease) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            if !leader.is_leader() {
+                continue;
+            }
+            match scheduler.retry_pending().await {
+                Ok(0) => {}
+                Ok(count) => {
+                    log_info!(
+                        "main",
+                        &format!("Retried pending workloads placed={}", count)
+                    );
+                }
+                Err(e) => {
+                    log_error!("main", &format!("Pending retry failed err={}", e));
+                }
+            }
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -58,25 +85,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = server::create_router(state.clone());
 
-    let retry_scheduler = state.scheduler.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-        loop {
-            interval.tick().await;
-            match retry_scheduler.retry_pending().await {
-                Ok(0) => {}
-                Ok(count) => {
-                    log_info!(
-                        "main",
-                        &format!("Retried pending workloads placed={}", count)
-                    );
-                }
-                Err(e) => {
-                    log_error!("main", &format!("Pending retry failed err={}", e));
-                }
-            }
-        }
-    });
+    let leader = LeaderLease::connect(LEADER_KEY).await?;
+    spawn_pending_retry(state.scheduler.clone(), leader);
 
     let port = std::env::var("SCHEDULER_PORT")
         .ok()

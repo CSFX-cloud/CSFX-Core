@@ -10,6 +10,7 @@ pub async fn create(
     created_by: String,
     expires_at: chrono::DateTime<chrono::Utc>,
     max_uses: i32,
+    role: String,
 ) -> Result<bootstrap_tokens::Model> {
     let model = bootstrap_tokens::ActiveModel {
         id: Set(Uuid::new_v4()),
@@ -22,6 +23,7 @@ pub async fn create(
         use_count: Set(0),
         revoked: Set(false),
         revoked_at: Set(None),
+        role: Set(role),
     };
     Ok(model.insert(db).await?)
 }

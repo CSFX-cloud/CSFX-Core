@@ -16,6 +16,7 @@ export interface Node {
     registered_at: string;
     cordoned: boolean;
     maintenance_until: string | null;
+    role: 'master' | 'worker';
 }
 
 export interface NodeMetrics {
@@ -206,4 +207,45 @@ export async function uncordonNode(token: string, id: string): Promise<void> {
         const err = await res.json().catch(() => ({ error: res.status }));
         throw new Error(err.error ?? `Failed to uncordon node: ${res.status}`);
     }
+}
+
+export async function cordonNode(token: string, id: string): Promise<void> {
+    const res = await authedFetch(`${API_BASE}/agents/${id}/cordon`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.status }));
+        throw new Error(err.error ?? `Failed to cordon node: ${res.status}`);
+    }
+}
+
+export async function removeNode(token: string, id: string): Promise<void> {
+    const res = await authedFetch(`${API_BASE}/cluster/nodes/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.status }));
+        throw new Error(err.error ?? `Failed to remove node: ${res.status}`);
+    }
+}
+
+export interface JoinToken {
+    join_string: string;
+    role: 'master' | 'worker';
+    expires_at: string;
+}
+
+export async function createJoinToken(token: string, role: JoinToken['role'], ttlHours: number): Promise<JoinToken> {
+    const res = await authedFetch(`${API_BASE}/cluster/join-tokens`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, ttl_hours: ttlHours }),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.status }));
+        throw new Error(err.error ?? `Failed to create join token: ${res.status}`);
+    }
+    return res.json();
 }

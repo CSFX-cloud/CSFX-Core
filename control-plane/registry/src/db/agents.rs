@@ -61,6 +61,7 @@ pub async fn create(
     capabilities: Option<serde_json::Value>,
     public_key_pem: Option<String>,
     wg_tunnel_ip: Option<String>,
+    role: String,
 ) -> Result<agents::Model> {
     let model = agents::ActiveModel {
         id: Set(id),
@@ -85,6 +86,7 @@ pub async fn create(
         kvm_capable: Set(false),
         cordoned: Set(false),
         maintenance_until: Set(None),
+        role: Set(role),
     };
 
     Ok(model.insert(db).await?)

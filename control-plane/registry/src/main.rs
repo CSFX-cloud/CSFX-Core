@@ -9,6 +9,8 @@ mod models;
 mod server;
 mod services;
 
+const LEADER_KEY: &str = "/csfx/leaders/registry-health";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
@@ -92,12 +94,16 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
+    let leader = shared::leader::LeaderLease::connect(LEADER_KEY).await?;
     let health_check_handle = {
         let registry = agent_registry.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
             loop {
                 interval.tick().await;
+                if !leader.is_leader() {
+                    continue;
+                }
                 registry.check_agent_health(30, 60).await;
             }
         })

@@ -1,7 +1,10 @@
 use anyhow::Result;
 use chrono::Utc;
-use entity::entities::agents;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use entity::entities::{agents, volumes, workloads};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+    Set,
+};
 use uuid::Uuid;
 
 pub async fn set_agent_status(db: &DatabaseConnection, agent_id: Uuid, status: &str) -> Result<()> {
@@ -60,11 +63,7 @@ pub async fn get_stale_agents(
     let hard_cutoff = now - chrono::Duration::seconds(hard_threshold_secs);
 
     let all = agents::Entity::find()
-        .filter(
-            agents::Column::Status
-                .eq("Online")
-                .or(agents::Column::Status.eq("Degraded")),
-        )
+        .filter(agents::Column::Status.is_in(["Online", "Degraded", "Offline"]))
         .all(db)
         .await?;
 
@@ -81,7 +80,7 @@ pub async fn get_stale_agents(
             None => continue,
         };
 
-        if last_hb < hard_cutoff && agent.status == "Degraded" {
+        if last_hb < hard_cutoff && agent.status != "Online" {
             offline.push(agent);
         } else if last_hb < soft_cutoff && agent.status == "Online" {
             degraded.push(agent);
@@ -89,4 +88,27 @@ pub async fn get_stale_agents(
     }
 
     Ok((degraded, offline))
+}
+
+pub async fn count_online(db: &DatabaseConnection) -> Result<u64> {
+    Ok(agents::Entity::find()
+        .filter(agents::Column::Status.eq("Online"))
+        .count(db)
+        .await?)
+}
+
+pub async fn has_active_assignments(db: &DatabaseConnection, agent_id: Uuid) -> Result<bool> {
+    let workload_count = workloads::Entity::find()
+        .filter(workloads::Column::AssignedAgentId.eq(agent_id))
+        .filter(workloads::Column::Status.is_in(["scheduled", "running"]))
+        .count(db)
+        .await?;
+    if workload_count > 0 {
+        return Ok(true);
+    }
+    let volume_count = volumes::Entity::find()
+        .filter(volumes::Column::AttachedToAgent.eq(agent_id))
+        .count(db)
+        .await?;
+    Ok(volume_count > 0)
 }

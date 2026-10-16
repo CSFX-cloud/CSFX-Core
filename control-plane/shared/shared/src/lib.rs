@@ -1,5 +1,6 @@
 pub mod db;
 pub mod db_log_layer;
+pub mod leader;
 pub mod logger;
 pub mod ssh_access;
 

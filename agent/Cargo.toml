@@ -29,6 +29,7 @@ tar = "0.4"
 flate2 = "1"
 x25519-dalek = { workspace = true }
 base64 = { workspace = true }
+sha2 = { workspace = true }
 axum = { workspace = true, features = ["ws"] }
 x509-parser = { workspace = true }
 async-trait = { workspace = true }

@@ -2,7 +2,10 @@ mod agent_stream;
 mod client;
 mod config;
 mod disks;
+mod fence;
 mod firecracker;
+mod join;
+mod master_join;
 mod nftables;
 mod pki;
 mod qemu;
@@ -63,8 +66,17 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    let gateway_url = std::env::var("CSFX_GATEWAY_URL")
-        .context("CSFX_GATEWAY_URL environment variable is required")?;
+    let join_ticket = std::env::var("CSFX_JOIN")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|value| join::JoinTicket::parse(&value))
+        .transpose()
+        .context("Invalid CSFX_JOIN")?;
+    let gateway_url = match &join_ticket {
+        Some(ticket) => ticket.gateway_url.clone(),
+        None => std::env::var("CSFX_GATEWAY_URL")
+            .context("CSFX_GATEWAY_URL environment variable is required")?,
+    };
 
     if let Some(username) = std::env::args()
         .nth(1)
@@ -76,6 +88,10 @@ async fn main() -> Result<()> {
             .agent_id;
         ssh_keys::run_authorized_keys_command(&gateway_url, agent_id, &username).await;
         return Ok(());
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("--join-master") {
+        return master_join::run(&gateway_url).await;
     }
 
     info!(version = env!("CARGO_PKG_VERSION"), "csfx-agent starting");
@@ -100,11 +116,13 @@ async fn main() -> Result<()> {
     let wg_identity =
         wg_identity::load_or_generate().context("Failed to initialize WireGuard identity")?;
 
+    let ca_pem = resolve_trust_anchor(&gateway_url, join_ticket.as_ref()).await?;
     let api_client = client::ApiClient::new(
         gateway_url.clone(),
         wg_identity.public_key_b64.clone(),
         wg_endpoint,
         wg_tunnel_ip,
+        ca_pem.as_deref(),
     )
     .context("Failed to initialize API client")?;
 
@@ -122,6 +140,7 @@ async fn main() -> Result<()> {
             &gateway_url,
             heartbeat_interval_secs,
             &agent_pki,
+            join_ticket.as_ref(),
         )
         .await?
     };
@@ -229,25 +248,50 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn resolve_trust_anchor(
+    gateway_url: &str,
+    join_ticket: Option<&join::JoinTicket>,
+) -> Result<Option<String>> {
+    if let Ok(ca_pem) = pki::AgentPki::load_ca_pem() {
+        return Ok(Some(ca_pem));
+    }
+    let Some(ticket) = join_ticket else {
+        return Ok(None);
+    };
+    let ca_pem = client::fetch_cluster_ca(gateway_url).await?;
+    ticket.verify_ca(&ca_pem)?;
+    info!("Cluster CA fingerprint verified, pinning gateway certificate to cluster CA");
+    Ok(Some(ca_pem))
+}
+
+async fn resolve_registration_token(
+    client: &client::ApiClient,
+    join_ticket: Option<&join::JoinTicket>,
+) -> Result<String> {
+    if let Some(ticket) = join_ticket {
+        return Ok(ticket.token.clone());
+    }
+    if let Some(token) = std::env::var("CSFX_REGISTRATION_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+    {
+        return Ok(token);
+    }
+    info!("CSFX_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
+    client
+        .fetch_bootstrap_token()
+        .await
+        .context("Failed to fetch bootstrap token from gateway")
+}
+
 async fn perform_registration(
     client: &client::ApiClient,
     gateway_url: &str,
     heartbeat_interval_secs: u64,
     agent_pki: &pki::AgentPki,
+    join_ticket: Option<&join::JoinTicket>,
 ) -> Result<(uuid::Uuid, String)> {
-    let token = match std::env::var("CSFX_REGISTRATION_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty())
-    {
-        Some(t) => t,
-        None => {
-            info!("CSFX_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
-            client
-                .fetch_bootstrap_token()
-                .await
-                .context("Failed to fetch bootstrap token from gateway")?
-        }
-    };
+    let token = resolve_registration_token(client, join_ticket).await?;
 
     let info = system::collect_info();
 
@@ -316,6 +360,7 @@ async fn reconcile_tick(
     service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
     rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
     failure_count: &mut u32,
+    fence_guard: &mut fence::FenceGuard,
     current_flake_rev: &mut String,
 ) {
     process_volumes(client, agent_id, api_key, mounted_volumes).await;
@@ -356,6 +401,7 @@ async fn reconcile_tick(
         .await
     {
         Ok(resp) => {
+            fence_guard.record_success();
             if *failure_count > 0 {
                 info!(agent_id = %agent_id, "Heartbeat recovered after {} failures", failure_count);
                 *failure_count = 0;
@@ -400,6 +446,22 @@ async fn reconcile_tick(
                 error = %e,
                 "Heartbeat failed"
             );
+            if fence_guard.record_failure(std::time::Instant::now()) {
+                warn!(agent_id = %agent_id, "Control plane unreachable, self-fencing all workloads");
+                reap_stale_containers(
+                    firecracker.as_ref(),
+                    qemu.as_ref(),
+                    vm_workload_ids,
+                    running_containers,
+                    workload_phases,
+                    restart_counts,
+                    service_dns_registry,
+                    rg_dns_registry,
+                    &[],
+                )
+                .await;
+                release_unassigned_volumes(mounted_volumes, &[]).await;
+            }
         }
     }
 }
@@ -424,6 +486,7 @@ async fn run_heartbeat_loop(
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
+    let mut fence_guard = fence::FenceGuard::from_env();
     let mut current_flake_rev = String::new();
     let starts = StartTracker::default();
     let completed = Arc::clone(&starts.completed);
@@ -431,7 +494,7 @@ async fn run_heartbeat_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
             }
             signal = assignment_signal.recv() => {
                 if signal.is_none() {
@@ -441,11 +504,11 @@ async fn run_heartbeat_loop(
                 while assignment_signal.try_recv().is_ok() {}
                 info!(agent_id = %agent_id, "assignment push received, reconciling immediately");
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
             }
             _ = completed.notified() => {
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal received");
@@ -462,6 +525,30 @@ async fn run_heartbeat_loop(
     }
 }
 
+async fn release_unassigned_volumes(
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+    assigned: &[client::AssignedVolume],
+) {
+    let assigned_ids: HashSet<&str> = assigned.iter().map(|v| v.id.as_str()).collect();
+
+    let stale: Vec<(String, String)> = mounted_volumes
+        .lock()
+        .await
+        .iter()
+        .filter(|(volume_id, _)| !assigned_ids.contains(volume_id.as_str()))
+        .map(|(volume_id, device)| (volume_id.clone(), device.clone()))
+        .collect();
+
+    for (volume_id, device) in stale {
+        if let Err(e) = rbd::unmap_device(&device).await {
+            warn!(volume_id = %volume_id, device = %device, error = %e, "Failed to unmap RBD device");
+            continue;
+        }
+        mounted_volumes.lock().await.remove(&volume_id);
+        info!(volume_id = %volume_id, "Volume released");
+    }
+}
+
 async fn process_volumes(
     client: &client::ApiClient,
     agent_id: uuid::Uuid,
@@ -475,6 +562,8 @@ async fn process_volumes(
             return;
         }
     };
+
+    release_unassigned_volumes(mounted_volumes, &volumes).await;
 
     for volume in volumes {
         let already_mounted = mounted_volumes.lock().await.contains_key(&volume.id);

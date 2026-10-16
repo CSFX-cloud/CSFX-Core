@@ -2,7 +2,7 @@
     import { page } from '$app/stores';
     import { goto } from '$app/navigation';
     import { auth } from '$lib/auth/store.svelte';
-    import { getNode, getNodeMetricsLatest, openNodeMetricsSocket, rebootNode, powerOffNode, drainNode, uncordonNode, getNodeDisks, type LiveNodeMetrics, type Node, type NodeMetricsLatest, type DiskInfo } from '$lib/api/nodes';
+    import { getNode, getNodeMetricsLatest, openNodeMetricsSocket, rebootNode, powerOffNode, drainNode, cordonNode, uncordonNode, removeNode, getNodeDisks, type LiveNodeMetrics, type Node, type NodeMetricsLatest, type DiskInfo } from '$lib/api/nodes';
     import { listEvents, resolveEvent, setMaintenance, clearMaintenance, type AlertEvent } from '$lib/api/events';
     import { listWorkloads, type Workload } from '$lib/api/resource-groups';
     import { Button } from '$lib/components/ui/button/index.js';
@@ -10,6 +10,8 @@
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
     import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
     import PowerIcon from '@lucide/svelte/icons/power';
+    import BanIcon from '@lucide/svelte/icons/ban';
+    import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import GlobeIcon from '@lucide/svelte/icons/globe';
     import TagIcon from '@lucide/svelte/icons/tag';
     import WrenchIcon from '@lucide/svelte/icons/wrench';
@@ -482,6 +484,35 @@
         }
     }
 
+    async function handleCordon() {
+        if (!auth.token || !node) return;
+        powerActionBusy = true;
+        powerActionError = null;
+        try {
+            await cordonNode(auth.token, node.id);
+            node.cordoned = true;
+        } catch (e) {
+            powerActionError = e instanceof Error ? e.message : 'Failed to cordon node';
+        } finally {
+            powerActionBusy = false;
+        }
+    }
+
+    async function handleRemove() {
+        if (!auth.token || !node) return;
+        if (!confirm(`Remove ${node.hostname} from the cluster? Its certificate is revoked and it must join again to return.`)) return;
+        powerActionBusy = true;
+        powerActionError = null;
+        try {
+            await removeNode(auth.token, node.id);
+            await goto('/nodes');
+        } catch (e) {
+            powerActionError = e instanceof Error ? e.message : 'Failed to remove node';
+        } finally {
+            powerActionBusy = false;
+        }
+    }
+
     async function handleUncordon() {
         if (!auth.token || !node) return;
         powerActionBusy = true;
@@ -645,6 +676,7 @@
             <div class="flex items-center gap-2 min-w-0">
                 <span class="text-base font-semibold leading-tight truncate">{node.hostname}</span>
                 <span class="inline-block w-2 h-2 rounded-full shrink-0 {statusDotClass(node.status)}" title={node.status.toLowerCase()}></span>
+                <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-muted text-muted-foreground border shrink-0">{node.role}</span>
                 {#if node.cordoned}
                     <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-yellow-500/15 text-yellow-600 border border-yellow-500/20 shrink-0">cordoned</span>
                 {/if}
@@ -689,7 +721,13 @@
                 <Button variant="ghost" size="icon-sm" onclick={handleUncordon} disabled={powerActionBusy} aria-label="Uncordon" title="Uncordon">
                     <ArrowRightIcon class="size-4" />
                 </Button>
+                <Button variant="ghost" size="icon-sm" onclick={handleRemove} disabled={powerActionBusy} class="text-red-500 hover:text-red-500" aria-label="Remove from cluster" title="Remove from cluster">
+                    <Trash2Icon class="size-4" />
+                </Button>
             {:else}
+                <Button variant="ghost" size="icon-sm" onclick={handleCordon} disabled={powerActionBusy} aria-label="Cordon" title="Cordon">
+                    <BanIcon class="size-4" />
+                </Button>
                 <Button variant="ghost" size="icon-sm" onclick={handleDrain} disabled={powerActionBusy} aria-label="Drain" title="Drain">
                     <ArrowRightIcon class="size-4" />
                 </Button>
