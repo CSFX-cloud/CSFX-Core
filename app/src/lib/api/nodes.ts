@@ -237,11 +237,11 @@ export interface JoinToken {
     expires_at: string;
 }
 
-export async function createJoinToken(token: string, role: JoinToken['role'], ttlHours: number): Promise<JoinToken> {
+export async function createJoinToken(token: string, ttlHours: number): Promise<JoinToken> {
     const res = await authedFetch(`${API_BASE}/cluster/join-tokens`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role, ttl_hours: ttlHours }),
+        body: JSON.stringify({ ttl_hours: ttlHours }),
     });
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.status }));

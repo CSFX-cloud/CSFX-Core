@@ -15,13 +15,13 @@ use crate::{auth::rbac::CanManageSystem, setup::ca_fingerprint, AppState};
 
 const DEFAULT_TTL_HOURS: i64 = 1;
 const MAX_TTL_HOURS: i64 = 24 * 7;
+const JOIN_ROLE: &str = "worker";
 const ACTIVE_WORKLOAD_STATUSES: [&str; 3] = ["pending", "scheduled", "running"];
 
 type ApiError = (StatusCode, Json<Value>);
 
 #[derive(Debug, Deserialize)]
 pub struct CreateJoinTokenRequest {
-    pub role: Option<String>,
     pub ttl_hours: Option<i64>,
 }
 
@@ -91,7 +91,7 @@ pub async fn create_join_token(
         "description": "cluster join token",
         "ttl_hours": ttl_hours,
         "max_uses": 1,
-        "role": request.role,
+        "role": JOIN_ROLE,
     });
     let token = forward_to_registry(
         &state,
