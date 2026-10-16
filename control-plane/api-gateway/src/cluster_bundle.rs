@@ -1,7 +1,8 @@
 use serde::Serialize;
 use std::path::Path;
 
-const CREDENTIAL_GARAGE_RPC_SECRET: &str = "garage-rpc-secret";
+const CREDENTIAL_GARAGE_ENV: &str = "garage-env";
+const GARAGE_RPC_SECRET_KEY: &str = "GARAGE_RPC_SECRET";
 const CREDENTIAL_PATRONI_SUPERUSER: &str = "patroni-superuser-password";
 const CREDENTIAL_PATRONI_REPLICATION: &str = "patroni-replication-password";
 
@@ -20,6 +21,8 @@ pub enum BundleError {
     },
     #[error("cluster CA is not available")]
     MissingCa,
+    #[error("garage rpc secret is missing from the garage environment file")]
+    MissingGarageSecret,
 }
 
 #[derive(Debug, Serialize)]
@@ -47,7 +50,11 @@ impl ClusterSecrets {
             db_password: database_password(&database_url)
                 .ok_or(BundleError::MissingDatabasePassword)?
                 .to_string(),
-            garage_rpc_secret: credential(credentials, CREDENTIAL_GARAGE_RPC_SECRET)?,
+            garage_rpc_secret: env_file_value(
+                &credential(credentials, CREDENTIAL_GARAGE_ENV)?,
+                GARAGE_RPC_SECRET_KEY,
+            )
+            .ok_or(BundleError::MissingGarageSecret)?,
             patroni_superuser_password: credential(credentials, CREDENTIAL_PATRONI_SUPERUSER)?,
             patroni_replication_password: credential(credentials, CREDENTIAL_PATRONI_REPLICATION)?,
         })
@@ -62,6 +69,13 @@ fn credential(directory: &Path, name: &'static str) -> Result<String, BundleErro
     std::fs::read_to_string(directory.join(name))
         .map(|value| value.trim().to_string())
         .map_err(|source| BundleError::Credential { name, source })
+}
+
+pub fn env_file_value(contents: &str, key: &str) -> Option<String> {
+    contents.lines().find_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        (name.trim() == key && !value.trim().is_empty()).then(|| value.trim().to_string())
+    })
 }
 
 pub fn database_password(database_url: &str) -> Option<&str> {
@@ -88,6 +102,20 @@ mod tests {
         assert_eq!(
             database_password("postgres://csfx:a:b@c@127.0.0.1:5432/csfx"),
             Some("a:b@c")
+        );
+    }
+
+    #[test]
+    fn env_file_value_finds_the_key() {
+        let contents = "GARAGE_ADMIN_TOKEN=admin\nGARAGE_RPC_SECRET=abc123\n";
+        assert_eq!(
+            env_file_value(contents, "GARAGE_RPC_SECRET"),
+            Some("abc123".to_string())
+        );
+        assert_eq!(env_file_value(contents, "MISSING"), None);
+        assert_eq!(
+            env_file_value("GARAGE_RPC_SECRET=\n", "GARAGE_RPC_SECRET"),
+            None
         );
     }
 
