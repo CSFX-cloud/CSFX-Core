@@ -10,6 +10,7 @@ mod cluster_bundle;
 mod console_pin;
 mod db;
 mod etcd_members;
+mod ingress_sync;
 mod init;
 mod metrics;
 mod oidc;
@@ -178,6 +179,9 @@ async fn main() {
 
     tracing::info!("starting log prune job");
     prune::spawn_log_prune_job(state.clone());
+
+    tracing::info!("starting ingress synchronization");
+    ingress_sync::spawn(state.db_conn.clone());
 
     let app = routes::create_router()
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
