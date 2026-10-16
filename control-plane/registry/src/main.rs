@@ -106,7 +106,9 @@ async fn main() -> anyhow::Result<()> {
                 if !leader.is_leader() {
                     continue;
                 }
-                registry.check_agent_health(DEGRADED_AFTER_SECS, OFFLINE_AFTER_SECS).await;
+                registry
+                    .check_agent_health(DEGRADED_AFTER_SECS, OFFLINE_AFTER_SECS)
+                    .await;
             }
         })
     };
