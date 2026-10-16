@@ -22,6 +22,7 @@ pub mod agent_proxy;
 pub mod agent_stream;
 pub mod agents;
 pub mod buckets;
+pub mod cluster;
 pub mod events;
 pub mod identity_providers;
 pub mod logs;
@@ -133,6 +134,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(agent_proxy::agent_proxy_routes())
         .merge(agents::agents_routes())
         .merge(buckets::buckets_routes())
+        .merge(cluster::cluster_routes())
         .merge(identity_providers::identity_provider_routes())
         .merge(roles::roles_routes())
         .merge(networks::networks_routes())
