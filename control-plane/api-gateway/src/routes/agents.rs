@@ -64,6 +64,7 @@ pub struct AgentResponse {
     pub registered_at: String,
     pub cordoned: bool,
     pub maintenance_until: Option<String>,
+    pub role: String,
 }
 
 impl From<agents::Model> for AgentResponse {
@@ -82,6 +83,7 @@ impl From<agents::Model> for AgentResponse {
             registered_at: model.registered_at.to_string(),
             cordoned: model.cordoned,
             maintenance_until: model.maintenance_until.map(|dt| dt.and_utc().to_rfc3339()),
+            role: model.role,
         }
     }
 }
