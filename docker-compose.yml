@@ -377,6 +377,29 @@ services:
       - agent_state_3:/var/lib/csfx-agent
     command: cargo run -p csfx-agent
 
+  traefik:
+    image: traefik:v3.5
+    container_name: csfx-traefik-dev
+    profiles:
+      - ingress
+    command:
+      - --providers.etcd=true
+      - --providers.etcd.endpoints=etcd:2379
+      - --providers.etcd.rootKey=traefik
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --api.insecure=true
+    ports:
+      - "18088:80"
+      - "18443:443"
+      - "18080:8080"
+    depends_on:
+      etcd:
+        condition: service_started
+    networks:
+      - csfx-network
+    restart: unless-stopped
+
   app:
     build:
       context: ./app
