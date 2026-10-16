@@ -2,9 +2,11 @@
     import { Button } from "$lib/components/ui/button/index.js";
     import { Checkbox } from "$lib/components/ui/checkbox/index.js";
     import { Input } from "$lib/components/ui/input/index.js";
+    import * as InputOTP from "$lib/components/ui/input-otp/index.js";
+    import { REGEXP_ONLY_DIGITS_AND_CHARS } from "bits-ui";
     import { Label } from "$lib/components/ui/label/index.js";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
-    import { Download, ShieldCheck } from "@lucide/svelte";
+    import { Check, Download, ShieldCheck } from "@lucide/svelte";
     import { goto } from "$app/navigation";
     import { onMount } from "svelte";
     import { toast } from "svelte-sonner";
@@ -21,6 +23,7 @@
 
     const MIN_PASSWORD_LENGTH = 12;
     const MIN_PIN_LENGTH = 8;
+    const SETUP_CODE_LENGTH = 8;
     const STEPS: { id: Step; label: string }[] = [
         { id: "verify", label: "Verify" },
         { id: "account", label: "Administrator" },
@@ -41,7 +44,8 @@
     let recoveryKey = $state("");
     let keyStored = $state(false);
 
-    const codeValid = $derived(setupCode.replace(/[^a-z0-9]/gi, "").length >= 8);
+    const stepIndex = $derived(STEPS.findIndex((entry) => entry.id === step));
+    const codeValid = $derived(setupCode.length === SETUP_CODE_LENGTH);
     const accountValid = $derived(
         organizationName.trim().length > 0 &&
             /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(adminEmail.trim()) &&
@@ -141,10 +145,27 @@
     <Button class="w-full" disabled={!keyStored} onclick={() => goto("/")}>Open dashboard</Button>
 {:else}
     <h1 class="text-2xl font-light mb-2">Set up CSFX</h1>
-    <ol class="flex items-center gap-2 text-xs text-muted-foreground mb-8">
+    <p class="text-sm text-muted-foreground mb-8">Initialize your cluster in three steps</p>
+    <ol class="flex items-start mb-10">
         {#each STEPS as entry, index (entry.id)}
-            <li class={entry.id === step ? "font-bold text-foreground" : ""}>
-                {index + 1}. {entry.label}
+            <li class="flex flex-1 flex-col items-center gap-2 relative">
+                {#if index > 0}
+                    <span
+                        class="absolute top-4 right-1/2 h-px w-full -translate-y-1/2 transition-colors {index <= stepIndex ? 'bg-primary' : 'bg-border'}"
+                    ></span>
+                {/if}
+                <span
+                    class="relative z-10 flex size-8 items-center justify-center rounded-full border text-xs font-medium transition-colors {index < stepIndex
+                        ? 'border-primary bg-primary text-primary-foreground'
+                        : index === stepIndex
+                          ? 'border-primary bg-card text-foreground ring-4 ring-primary/20'
+                          : 'border-border bg-card text-muted-foreground'}"
+                >
+                    {#if index < stepIndex}<Check class="size-4" />{:else}{index + 1}{/if}
+                </span>
+                <span class="text-xs {index === stepIndex ? 'font-bold text-foreground' : 'text-muted-foreground'}">
+                    {entry.label}
+                </span>
             </li>
         {/each}
     </ol>
@@ -170,8 +191,28 @@
                 <Download class="size-4" /> Download CA certificate
             </Button>
             <div class="flex flex-col gap-1">
-                <Label for="setup-code" class="text-xs font-bold">Setup code from the node console</Label>
-                <Input id="setup-code" placeholder="ABCD-EFGH" autocomplete="off" bind:value={setupCode} />
+                <Label class="text-xs font-bold mb-1">Setup code from the node console</Label>
+                <InputOTP.Root
+                    maxlength={SETUP_CODE_LENGTH}
+                    pattern={REGEXP_ONLY_DIGITS_AND_CHARS}
+                    class="w-full"
+                    bind:value={setupCode}
+                    pasteTransformer={(text) => text.replace(/[^a-z0-9]/gi, "")}
+                >
+                    {#snippet children({ cells })}
+                        <InputOTP.Group class="flex-1">
+                            {#each cells.slice(0, 4) as cell (cell)}
+                                <InputOTP.Slot {cell} class="flex-1 w-full uppercase" />
+                            {/each}
+                        </InputOTP.Group>
+                        <InputOTP.Separator />
+                        <InputOTP.Group class="flex-1">
+                            {#each cells.slice(4, 8) as cell (cell)}
+                                <InputOTP.Slot {cell} class="flex-1 w-full uppercase" />
+                            {/each}
+                        </InputOTP.Group>
+                    {/snippet}
+                </InputOTP.Root>
             </div>
             <Button type="submit" class="w-full" disabled={!codeValid}>Continue</Button>
         {:else if step === "account"}
