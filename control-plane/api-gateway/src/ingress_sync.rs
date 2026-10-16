@@ -47,7 +47,7 @@ pub fn desired_entries(
     routes: &[RouteTarget],
     cert_resolver: Option<&str>,
 ) -> BTreeMap<String, String> {
-    let mut entries = BTreeMap::new();
+    let mut entries: BTreeMap<String, String> = redirect_middleware_entries().into_iter().collect();
     for route in routes {
         let name = format!("csfx-{}", route.id);
         entries.extend(service_entries(&name, &route.backend));
@@ -57,9 +57,6 @@ pub fn desired_entries(
         } else {
             entries.extend(plain_router_entries(&name, &route.hostname));
         }
-    }
-    if routes.iter().any(|route| route.tls) {
-        entries.extend(redirect_middleware_entries());
     }
     entries
 }
@@ -328,8 +325,18 @@ mod tests {
             "Host(`app.example.com`)"
         );
         assert_eq!(entries[&format!("{router}/entryPoints/0")], "web");
-        assert!(!entries.keys().any(|key| key.contains("middlewares")));
+        assert!(!entries.keys().any(|key| key.contains("-redirect/")));
         assert!(!entries.keys().any(|key| key.ends_with("/tls")));
+    }
+
+    #[test]
+    fn the_subtree_is_never_empty() {
+        let entries = desired_entries(&[], None);
+        assert_eq!(
+            entries["traefik/http/middlewares/csfx-redirect-https/redirectScheme/scheme"],
+            "https"
+        );
+        assert_eq!(diff_entries(&entries, &entries), EntryDiff::default());
     }
 
     #[test]
