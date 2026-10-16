@@ -5350,6 +5350,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "entity",
+ "etcd-client",
  "sea-orm",
  "serde",
  "serde_json",
