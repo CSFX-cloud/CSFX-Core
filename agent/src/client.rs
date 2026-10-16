@@ -477,6 +477,23 @@ impl ApiClient {
         Ok(())
     }
 
+    pub async fn fetch_ca_pem(&self) -> Result<String> {
+        let url = format!("{}/api/setup/ca.crt", self.gateway_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to fetch cluster CA")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Cluster CA fetch failed status={}", resp.status());
+        }
+
+        resp.text().await.context("Failed to read cluster CA")
+    }
+
     pub async fn fetch_bootstrap_token(&self) -> Result<String> {
         let url = format!("{}/api/registry/internal/bootstrap-token", self.gateway_url);
 

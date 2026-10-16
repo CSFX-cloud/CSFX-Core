@@ -3,6 +3,7 @@ mod client;
 mod config;
 mod disks;
 mod firecracker;
+mod join;
 mod nftables;
 mod pki;
 mod qemu;
@@ -63,8 +64,17 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
-    let gateway_url = std::env::var("CSFX_GATEWAY_URL")
-        .context("CSFX_GATEWAY_URL environment variable is required")?;
+    let join_ticket = std::env::var("CSFX_JOIN")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|value| join::JoinTicket::parse(&value))
+        .transpose()
+        .context("Invalid CSFX_JOIN")?;
+    let gateway_url = match &join_ticket {
+        Some(ticket) => ticket.gateway_url.clone(),
+        None => std::env::var("CSFX_GATEWAY_URL")
+            .context("CSFX_GATEWAY_URL environment variable is required")?,
+    };
 
     if let Some(username) = std::env::args()
         .nth(1)
@@ -122,6 +132,7 @@ async fn main() -> Result<()> {
             &gateway_url,
             heartbeat_interval_secs,
             &agent_pki,
+            join_ticket.as_ref(),
         )
         .await?
     };
@@ -229,25 +240,37 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+async fn resolve_registration_token(
+    client: &client::ApiClient,
+    join_ticket: Option<&join::JoinTicket>,
+) -> Result<String> {
+    if let Some(ticket) = join_ticket {
+        let ca_pem = client.fetch_ca_pem().await?;
+        ticket.verify_ca(&ca_pem)?;
+        info!("Cluster CA fingerprint verified");
+        return Ok(ticket.token.clone());
+    }
+    if let Some(token) = std::env::var("CSFX_REGISTRATION_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+    {
+        return Ok(token);
+    }
+    info!("CSFX_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
+    client
+        .fetch_bootstrap_token()
+        .await
+        .context("Failed to fetch bootstrap token from gateway")
+}
+
 async fn perform_registration(
     client: &client::ApiClient,
     gateway_url: &str,
     heartbeat_interval_secs: u64,
     agent_pki: &pki::AgentPki,
+    join_ticket: Option<&join::JoinTicket>,
 ) -> Result<(uuid::Uuid, String)> {
-    let token = match std::env::var("CSFX_REGISTRATION_TOKEN")
-        .ok()
-        .filter(|t| !t.is_empty())
-    {
-        Some(t) => t,
-        None => {
-            info!("CSFX_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
-            client
-                .fetch_bootstrap_token()
-                .await
-                .context("Failed to fetch bootstrap token from gateway")?
-        }
-    };
+    let token = resolve_registration_token(client, join_ticket).await?;
 
     let info = system::collect_info();
 
