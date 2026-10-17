@@ -22,6 +22,7 @@ const ETCD_JOIN_ENV_PATH: &str = "/etc/csfx/etcd-join.env";
 const PATRONI_SUPERUSER_PATH: &str = "/etc/csfx/patroni-superuser-password";
 const PATRONI_REPLICATION_PATH: &str = "/etc/csfx/patroni-replication-password";
 const PATRONI_GROUP: &str = "patroni";
+const LOCAL_STATE_DIRS: [&str; 3] = ["/var/lib/etcd", "/var/lib/patroni", "/var/lib/csfx-cp"];
 const CONTROL_PLANE_TARGET: &str = "csfx-cp.target";
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const REGISTRATION_ATTEMPTS: u32 = 120;
@@ -64,6 +65,7 @@ async fn wait_for_registration() -> Result<()> {
 async fn join(gateway_url: &str) -> Result<()> {
     let (client, api_key) = authenticated_client(gateway_url).await?;
     let bundle = client.request_master_bundle(&api_key).await?;
+    reset_local_control_plane()?;
     apply_bundle(&bundle).await?;
     write_file(PROMOTE_MARKER, "", 0o600)?;
     std::fs::remove_file(PENDING_MARKER).context("Failed to remove join marker")?;
@@ -81,6 +83,32 @@ async fn promote(gateway_url: &str) -> Result<()> {
         sleep(POLL_INTERVAL).await;
     }
     bail!("etcd learner did not catch up in time")
+}
+
+fn reset_local_control_plane() -> Result<()> {
+    for dir in LOCAL_STATE_DIRS {
+        clear_directory(dir)?;
+    }
+    info!("discarded local control plane state of the previous standalone install");
+    Ok(())
+}
+
+fn clear_directory(path: &str) -> Result<()> {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err).with_context(|| format!("Failed to read {path}")),
+    };
+    for entry in entries {
+        let entry_path = entry.with_context(|| format!("Failed to list {path}"))?.path();
+        let removed = if entry_path.is_dir() {
+            std::fs::remove_dir_all(&entry_path)
+        } else {
+            std::fs::remove_file(&entry_path)
+        };
+        removed.with_context(|| format!("Failed to remove {}", entry_path.display()))?;
+    }
+    Ok(())
 }
 
 async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
