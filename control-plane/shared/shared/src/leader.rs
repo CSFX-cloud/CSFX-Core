@@ -32,8 +32,8 @@ impl LeaderLease {
     }
 
     pub async fn connect(key: &str) -> Result<Self> {
-        let endpoints = std::env::var("ETCD_ENDPOINTS")
-            .unwrap_or_else(|_| DEFAULT_ETCD_ENDPOINTS.to_string());
+        let endpoints =
+            std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| DEFAULT_ETCD_ENDPOINTS.to_string());
         let etcd = Client::connect(endpoints.split(',').collect::<Vec<_>>(), None)
             .await
             .context("failed to connect to etcd")?;
@@ -88,7 +88,13 @@ impl LeaderLease {
                 0,
             )])
             .and_then(vec![put]);
-        if self.etcd.txn(txn).await.context("etcd txn failed")?.succeeded() {
+        if self
+            .etcd
+            .txn(txn)
+            .await
+            .context("etcd txn failed")?
+            .succeeded()
+        {
             return Ok(Some(lease_id));
         }
         self.etcd

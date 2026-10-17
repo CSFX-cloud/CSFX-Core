@@ -135,11 +135,7 @@ async fn reconcile_once(db: &DatabaseConnection, garage: &GarageClient) -> Resul
     Ok(())
 }
 
-pub async fn run_reconcile_loop(
-    db: DatabaseConnection,
-    garage: GarageClient,
-    leader: LeaderLease,
-) {
+pub async fn run_reconcile_loop(db: DatabaseConnection, garage: GarageClient, leader: LeaderLease) {
     loop {
         sleep(Duration::from_secs(RECONCILE_INTERVAL_SECONDS)).await;
 
@@ -162,7 +158,7 @@ const SELF_REGISTER_MAX_ATTEMPTS: u32 = 60;
 fn available_capacity_bytes(data_dir: &str) -> Option<i64> {
     match nix::sys::statvfs::statvfs(data_dir) {
         Ok(stats) => {
-            let bytes = u64::from(stats.blocks_available()) * u64::from(stats.fragment_size());
+            let bytes = stats.blocks_available() * stats.fragment_size();
             Some(bytes as i64)
         }
         Err(e) => {

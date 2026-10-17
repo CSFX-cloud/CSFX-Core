@@ -344,6 +344,18 @@ export async function completeSetup(input: SetupInput): Promise<SetupResult> {
     return res.json();
 }
 
+export async function requestClusterJoin(setupCode: string, joinString: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/setup/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setup_code: setupCode, join_string: joinString }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'join failed' }));
+        throw new SetupError(res.status, body.error ?? 'join failed');
+    }
+}
+
 export interface SshAccess {
     enabled: boolean;
     expires_at: string | null;

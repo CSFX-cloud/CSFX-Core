@@ -34,6 +34,14 @@ impl JoinTicket {
         }
     }
 
+    pub fn is_foreign_to(&self, ca_pem: Option<&str>, saved_gateway: Option<&str>) -> bool {
+        match (ca_pem, saved_gateway) {
+            (Some(pem), _) => self.verify_ca(pem).is_err(),
+            (None, Some(gateway)) => gateway != self.gateway_url,
+            (None, None) => false,
+        }
+    }
+
     pub fn verify_ca(&self, ca_pem: &str) -> Result<()> {
         let actual = ca_fingerprint(ca_pem)?;
         if actual != self.ca_fingerprint {
@@ -105,6 +113,17 @@ mod tests {
     fn rejects_malformed_ticket() {
         assert!(JoinTicket::parse("10.0.0.5:8000#token#aa").is_err());
         assert!(JoinTicket::parse("csfx-join.10.0.0.5:8000#token").is_err());
+    }
+
+    #[test]
+    fn detects_registration_of_another_cluster() {
+        let other_pem = "-----BEGIN CERTIFICATE-----\nBAUG\n-----END CERTIFICATE-----\n";
+        let ticket = JoinTicket::parse(&format!("csfx-join.h:1#t#{PEM_SHA256}")).unwrap();
+        assert!(!ticket.is_foreign_to(Some(PEM), Some("https://localhost:8000")));
+        assert!(ticket.is_foreign_to(Some(other_pem), None));
+        assert!(ticket.is_foreign_to(None, Some("https://localhost:8000")));
+        assert!(!ticket.is_foreign_to(None, Some("https://h:1")));
+        assert!(!ticket.is_foreign_to(None, None));
     }
 
     #[test]

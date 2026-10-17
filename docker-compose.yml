@@ -31,6 +31,7 @@ services:
       retries: 5
     networks:
       - csfx-network
+    restart: unless-stopped
 
   etcd:
     image: gcr.io/etcd-development/etcd:v3.5.21
@@ -39,10 +40,14 @@ services:
       - etcd
       - --advertise-client-urls=http://etcd:2379
       - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd-data
     ports:
       - "2379:2379"
+    volumes:
+      - etcd_data:/etcd-data
     networks:
       - csfx-network
+    restart: unless-stopped
 
   migrate:
     <<: *rust-service
@@ -420,6 +425,7 @@ services:
 
 volumes:
   postgres_data:
+  etcd_data:
   cargo_cache:
   cargo_git:
   cargo_target_migrate:

@@ -25,6 +25,18 @@ pub fn is_registered() -> bool {
     Path::new(CREDENTIALS_FILE).exists() && Path::new(CONFIG_FILE).exists()
 }
 
+pub fn clear_registration() -> Result<()> {
+    for file in [CREDENTIALS_FILE, CONFIG_FILE] {
+        match std::fs::remove_file(file) {
+            Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                return Err(err).with_context(|| format!("Failed to remove {file}"));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 pub fn load_config() -> Result<DaemonConfig> {
     let data = std::fs::read_to_string(CONFIG_FILE).context("Failed to read daemon config")?;
     serde_json::from_str(&data).context("Failed to parse daemon config")

@@ -13,13 +13,14 @@
     import {
         completeSetup,
         getSetupStatus,
+        requestClusterJoin,
         SETUP_CA_URL,
         SetupError,
         type SetupStatus,
     } from "$lib/auth/api";
     import { auth } from "$lib/auth/store.svelte";
 
-    type Step = "verify" | "account" | "console" | "done";
+    type Step = "verify" | "account" | "console" | "join" | "joining" | "done";
 
     const MIN_PASSWORD_LENGTH = 12;
     const MIN_PIN_LENGTH = 8;
@@ -35,6 +36,7 @@
     let loadFailed = $state(false);
     let submitting = $state(false);
     let setupCode = $state("");
+    let joinString = $state("");
     let organizationName = $state("");
     let adminEmail = $state("");
     let password = $state("");
@@ -52,6 +54,7 @@
             password.length >= MIN_PASSWORD_LENGTH &&
             password === passwordRepeat,
     );
+    const joinValid = $derived(/^csfx-join\.\S+#csfx-bootstrap\.[a-f0-9]+#[a-f0-9]+(#(worker|master))?$/.test(joinString.trim()));
     const pinValid = $derived(
         consolePin.length >= MIN_PIN_LENGTH && consolePin === consolePinRepeat,
     );
@@ -83,6 +86,18 @@
             recoveryKey = result.recovery_key;
             password = passwordRepeat = consolePin = consolePinRepeat = "";
             step = "done";
+        } catch (err) {
+            handleFailure(err);
+        } finally {
+            submitting = false;
+        }
+    }
+
+    async function submitJoin() {
+        submitting = true;
+        try {
+            await requestClusterJoin(setupCode.trim(), joinString.trim());
+            step = "joining";
         } catch (err) {
             handleFailure(err);
         } finally {
@@ -123,6 +138,12 @@
     </p>
 {:else if !status}
     <Spinner />
+{:else if step === "joining"}
+    <h1 class="text-2xl font-light mb-2">Joining the cluster</h1>
+    <p class="text-sm text-muted-foreground flex items-center gap-2">
+        <Spinner /> This node reboots and continues as a cluster member. Manage it from the web UI of
+        the cluster you joined.
+    </p>
 {:else if step === "done"}
     <h1 class="text-2xl font-light mb-2">Your cluster is ready</h1>
     <p class="text-sm text-muted-foreground mb-6">
@@ -177,6 +198,7 @@
             if (step === "verify" && codeValid) step = "account";
             else if (step === "account" && accountValid) step = "console";
             else if (step === "console" && pinValid && !submitting) submit();
+            else if (step === "join" && joinValid && !submitting) submitJoin();
         }}
     >
         {#if step === "verify"}
@@ -215,6 +237,24 @@
                 </InputOTP.Root>
             </div>
             <Button type="submit" class="w-full" disabled={!codeValid}>Continue</Button>
+            <Button type="button" variant="ghost" size="sm" disabled={!codeValid} onclick={() => (step = "join")}>
+                Join an existing cluster instead
+            </Button>
+        {:else if step === "join"}
+            <p class="text-sm text-muted-foreground">
+                Paste the join string from Add Node in the web UI of the cluster this node should
+                join. The node reboots after you confirm.
+            </p>
+            <div class="flex flex-col gap-1">
+                <Label for="join-string" class="text-xs font-bold">Join string</Label>
+                <Input id="join-string" placeholder="csfx-join.host:8000#csfx-bootstrap.&hellip;" autocomplete="off" bind:value={joinString} />
+            </div>
+            <div class="flex gap-2">
+                <Button type="button" variant="outline" onclick={() => (step = "verify")}>Back</Button>
+                <Button type="submit" class="flex-1" disabled={!joinValid || submitting}>
+                    {#if submitting}<Spinner />{:else}Join cluster{/if}
+                </Button>
+            </div>
         {:else if step === "account"}
             <div class="flex flex-col gap-1">
                 <Label for="organization" class="text-xs font-bold">Organization name</Label>
