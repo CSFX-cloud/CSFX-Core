@@ -100,7 +100,9 @@ fn clear_directory(path: &str) -> Result<()> {
         Err(err) => return Err(err).with_context(|| format!("Failed to read {path}")),
     };
     for entry in entries {
-        let entry_path = entry.with_context(|| format!("Failed to list {path}"))?.path();
+        let entry_path = entry
+            .with_context(|| format!("Failed to list {path}"))?
+            .path();
         let removed = if entry_path.is_dir() {
             std::fs::remove_dir_all(&entry_path)
         } else {
