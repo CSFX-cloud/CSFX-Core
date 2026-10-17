@@ -37,6 +37,10 @@ pub struct JoinBundle {
     etcd_initial_cluster: String,
 }
 
+pub fn member_name(agent_id: Uuid) -> String {
+    format!("csfx-{}", &agent_id.simple().to_string()[..8])
+}
+
 async fn etcd_client() -> Result<Client, ApiError> {
     let endpoints =
         std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| DEFAULT_ETCD_ENDPOINT.into());
@@ -109,7 +113,8 @@ pub async fn join_master(
         ));
     }
 
-    let plan = etcd_members::add_learner(&mut etcd, &node.hostname, &url)
+    let name = member_name(node.id);
+    let plan = etcd_members::add_learner(&mut etcd, &name, &url)
         .await
         .map_err(internal)?;
 
@@ -120,7 +125,7 @@ pub async fn join_master(
         ca_key_pem,
         secrets,
         etcd_member_id: plan.member_id,
-        etcd_name: node.hostname,
+        etcd_name: name,
         etcd_initial_cluster: plan.initial_cluster,
     }))
 }
@@ -196,14 +201,16 @@ pub async fn plan_removal(node: &agents::Model) -> Result<Option<u64>, ApiError>
     Ok(Some(member.id))
 }
 
-pub async fn finish_removal(member_id: u64, hostname: &str) -> Result<(), ApiError> {
+pub async fn finish_removal(member_id: u64, node: &agents::Model) -> Result<(), ApiError> {
     let mut etcd = etcd_client().await?;
     etcd_members::remove(&mut etcd, member_id)
         .await
         .map_err(internal)?;
-    etcd.delete(format!("{PATRONI_MEMBER_KEY_PREFIX}{hostname}"), None)
-        .await
-        .map_err(internal)?;
+    for name in [node.hostname.clone(), member_name(node.id)] {
+        etcd.delete(format!("{PATRONI_MEMBER_KEY_PREFIX}{name}"), None)
+            .await
+            .map_err(internal)?;
+    }
     Ok(())
 }
 
@@ -212,4 +219,17 @@ pub fn masters_routes() -> Router<AppState> {
         .route("/cluster/masters", get(list_masters))
         .route("/cluster/masters/join", post(join_master))
         .route("/cluster/masters/promote", post(promote_master))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn member_name_is_stable_and_distinct_per_agent() {
+        let first = Uuid::parse_str("0a1b2c3d-1111-4222-8333-444455556666").unwrap();
+        let second = Uuid::parse_str("9f8e7d6c-1111-4222-8333-444455556666").unwrap();
+        assert_eq!(member_name(first), "csfx-0a1b2c3d");
+        assert_ne!(member_name(first), member_name(second));
+    }
 }
