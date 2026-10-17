@@ -69,6 +69,18 @@ impl AgentPki {
         Ok(())
     }
 
+    pub fn clear_certificate() -> Result<()> {
+        for file in [CERT_FILE, CA_FILE] {
+            match std::fs::remove_file(file) {
+                Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(err).with_context(|| format!("Failed to remove {file}"));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     pub fn load_cert_pem() -> Result<String> {
         std::fs::read_to_string(CERT_FILE).context("Failed to read agent certificate")
     }

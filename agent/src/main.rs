@@ -72,6 +72,9 @@ async fn main() -> Result<()> {
         .map(|value| join::JoinTicket::parse(&value))
         .transpose()
         .context("Invalid CSFX_JOIN")?;
+    if let Some(ticket) = &join_ticket {
+        discard_foreign_registration(ticket)?;
+    }
     let gateway_url = match &join_ticket {
         Some(ticket) => ticket.gateway_url.clone(),
         None => std::env::var("CSFX_GATEWAY_URL")
@@ -246,6 +249,20 @@ async fn main() -> Result<()> {
     .await;
 
     Ok(())
+}
+
+fn discard_foreign_registration(ticket: &join::JoinTicket) -> Result<()> {
+    let ca_pem = pki::AgentPki::load_ca_pem().ok();
+    let saved_gateway = config::load_config().ok().map(|saved| saved.gateway_url);
+    if !ticket.is_foreign_to(ca_pem.as_deref(), saved_gateway.as_deref()) {
+        return Ok(());
+    }
+    warn!(
+        gateway_url = %ticket.gateway_url,
+        "Local registration belongs to another cluster, discarding it"
+    );
+    config::clear_registration()?;
+    pki::AgentPki::clear_certificate()
 }
 
 async fn resolve_trust_anchor(
