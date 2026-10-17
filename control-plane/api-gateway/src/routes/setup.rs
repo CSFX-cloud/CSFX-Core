@@ -14,8 +14,8 @@ use crate::{
     console_pin,
     routes::users::{session_parts, AuthResponse},
     setup::{
-        ca_fingerprint, ca_pem, code_matches, complete_setup, is_completed, read_setup_code,
-        SetupError, SetupInput,
+        ca_fingerprint, ca_pem, code_matches, complete_setup, is_completed, queue_join_request,
+        read_setup_code, SetupError, SetupInput,
     },
     AppState,
 };
@@ -38,6 +38,12 @@ pub struct SetupRequest {
     pub encrypted_console_pin: String,
 }
 
+#[derive(Deserialize)]
+pub struct JoinRequest {
+    pub setup_code: String,
+    pub join_string: String,
+}
+
 #[derive(Serialize)]
 pub struct SetupResponse {
     #[serde(flatten)]
@@ -50,6 +56,7 @@ pub fn routes() -> Router<AppState> {
         .route("/setup/status", get(get_status))
         .route("/setup/ca.crt", get(get_ca_certificate))
         .route("/setup", post(submit_setup))
+        .route("/setup/join", post(submit_join))
 }
 
 fn error_response(status: StatusCode, message: &str) -> ApiError {
@@ -157,6 +164,19 @@ pub async fn submit_setup(
         recovery_key,
     });
     Ok((StatusCode::CREATED, [(header::SET_COOKIE, cookie)], body).into_response())
+}
+
+pub async fn submit_join(
+    State(state): State<AppState>,
+    Json(request): Json<JoinRequest>,
+) -> Result<StatusCode, ApiError> {
+    if is_completed(&state.db_conn).await.map_err(internal_error)? {
+        return Err(map_setup_error(SetupError::AlreadyCompleted));
+    }
+    verify_setup_code(&request.setup_code).map_err(map_setup_error)?;
+    queue_join_request(&request.join_string).map_err(map_setup_error)?;
+    tracing::info!(target: "csfx::audit", event = "setup.join_requested");
+    Ok(StatusCode::ACCEPTED)
 }
 
 fn provision_console_pin(pin: &str) -> Result<String, ApiError> {

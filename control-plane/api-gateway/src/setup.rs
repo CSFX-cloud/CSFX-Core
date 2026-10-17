@@ -21,6 +21,7 @@ pub const SETUP_KEY: &str = "setup.completed";
 const LEGACY_ADMIN_NAME: &str = "admin@local.com";
 const LEGACY_ADMIN_PASSWORD: &str = "admin";
 const CA_CERT_PATH: &str = "/var/lib/csfx-cp/ca.crt";
+const JOIN_REQUEST_PATH: &str = "/var/lib/csfx-cp/join-request";
 const MIN_PASSWORD_LENGTH: usize = 12;
 const MAX_ORGANIZATION_NAME_LENGTH: usize = 100;
 const MAX_EMAIL_LENGTH: usize = 254;
@@ -43,6 +44,8 @@ pub enum SetupError {
     Database(#[from] DbErr),
     #[error("crypto error: {0}")]
     Crypto(#[from] CryptoError),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub struct SetupInput {
@@ -68,6 +71,38 @@ pub fn read_setup_code() -> Option<String> {
     let code = std::fs::read_to_string(path).ok()?;
     let code = code.trim();
     (!code.is_empty()).then(|| code.to_string())
+}
+
+pub fn is_valid_join_string(join_string: &str) -> bool {
+    let parts: Vec<&str> = join_string.split('#').collect();
+    let (endpoint, token, fingerprint) = match parts.as_slice() {
+        [endpoint, token, fingerprint] => (endpoint, token, fingerprint),
+        [endpoint, token, fingerprint, "worker" | "master"] => (endpoint, token, fingerprint),
+        _ => return false,
+    };
+    let is_hex = |value: &str| {
+        !value.is_empty() && value.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f'))
+    };
+    let is_endpoint = |value: &str| {
+        !value.is_empty()
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-'))
+    };
+    endpoint.strip_prefix("csfx-join.").is_some_and(is_endpoint)
+        && token.strip_prefix("csfx-bootstrap.").is_some_and(is_hex)
+        && is_hex(fingerprint)
+}
+
+pub fn queue_join_request(join_string: &str) -> Result<(), SetupError> {
+    if !is_valid_join_string(join_string) {
+        return Err(SetupError::InvalidInput("join_string"));
+    }
+    let path = std::env::var("CSFX_JOIN_REQUEST_FILE").unwrap_or_else(|_| JOIN_REQUEST_PATH.into());
+    let pending = format!("{path}.tmp");
+    std::fs::write(&pending, join_string)?;
+    std::fs::rename(&pending, &path)?;
+    Ok(())
 }
 
 fn normalize_code(code: &str) -> String {
@@ -306,6 +341,15 @@ mod tests {
     fn code_comparison_ignores_case_and_separators() {
         assert!(code_matches("ABCD-EFGH", "abcd efgh"));
         assert!(!code_matches("ABCD-EFGH", "ABCD-EFGJ"));
+    }
+
+    #[test]
+    fn join_string_validation_matches_console_format() {
+        assert!(is_valid_join_string("csfx-join.10.0.0.5:8000#csfx-bootstrap.ab12#cd34"));
+        assert!(is_valid_join_string("csfx-join.node-1:8000#csfx-bootstrap.ab12#cd34#master"));
+        assert!(!is_valid_join_string("csfx-join.10.0.0.5:8000#csfx-bootstrap.ab12#cd34#other"));
+        assert!(!is_valid_join_string("csfx-join.host#token#cd34"));
+        assert!(!is_valid_join_string("csfx-join.host;rm#csfx-bootstrap.ab#cd"));
     }
 
     #[test]
