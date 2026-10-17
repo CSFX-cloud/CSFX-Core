@@ -98,6 +98,8 @@ pub struct RegisterRequest {
     pub agent_version: String,
     pub tags: Option<HashMap<String, String>>,
     pub csr_pem: Option<String>,
+    #[serde(default)]
+    pub machine_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -29,6 +29,7 @@ pub struct RegisterAgentParams {
     pub tags: Option<HashMap<String, String>>,
     pub allow_reregister: bool,
     pub role: String,
+    pub machine_id: Option<String>,
 }
 
 pub struct AgentRegistry {
@@ -122,8 +123,8 @@ impl AgentRegistry {
             .as_ref()
             .and_then(|t| serde_json::to_value(t).ok());
 
-        if params.allow_reregister {
-            if let Some(existing) = crate::db::agents::get_by_hostname(&self.db, &params.hostname)
+        if let (true, Some(machine_id)) = (params.allow_reregister, params.machine_id.as_deref()) {
+            if let Some(existing) = crate::db::agents::get_by_machine_id(&self.db, machine_id)
                 .await
                 .map_err(|e| format!("Failed to query existing agent: {}", e))?
             {
@@ -190,10 +191,12 @@ impl AgentRegistry {
             .await
             .map_err(|e| format!("Failed to allocate management tunnel IP: {}", e))?;
 
+        let name = self.unique_name(&params.name, params.agent_id).await?;
+
         let db_agent = crate::db::agents::create(
             &self.db,
             params.agent_id,
-            params.name.clone(),
+            name,
             params.hostname.clone(),
             None,
             params.agent_version.clone(),
@@ -206,6 +209,7 @@ impl AgentRegistry {
             None,
             Some(wg_tunnel_ip.clone()),
             params.role.clone(),
+            params.machine_id.clone(),
         )
         .await
         .map_err(|e| format!("Failed to create agent in database: {}", e))?;
@@ -237,6 +241,16 @@ impl AgentRegistry {
         };
 
         Ok((agent, false))
+    }
+
+    async fn unique_name(&self, name: &str, agent_id: Uuid) -> Result<String, String> {
+        let taken = crate::db::agents::name_taken(&self.db, name)
+            .await
+            .map_err(|e| format!("Failed to query agent names: {}", e))?;
+        if !taken {
+            return Ok(name.to_string());
+        }
+        Ok(format!("{}-{}", name, &agent_id.simple().to_string()[..6]))
     }
 
     pub async fn update_heartbeat(

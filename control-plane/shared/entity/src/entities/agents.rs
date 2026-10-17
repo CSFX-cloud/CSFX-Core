@@ -28,6 +28,7 @@ pub struct Model {
     pub cordoned: bool,
     pub maintenance_until: Option<DateTime>,
     pub role: String,
+    pub machine_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
