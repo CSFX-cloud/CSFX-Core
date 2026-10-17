@@ -345,11 +345,19 @@ mod tests {
 
     #[test]
     fn join_string_validation_matches_console_format() {
-        assert!(is_valid_join_string("csfx-join.10.0.0.5:8000#csfx-bootstrap.ab12#cd34"));
-        assert!(is_valid_join_string("csfx-join.node-1:8000#csfx-bootstrap.ab12#cd34#master"));
-        assert!(!is_valid_join_string("csfx-join.10.0.0.5:8000#csfx-bootstrap.ab12#cd34#other"));
+        assert!(is_valid_join_string(
+            "csfx-join.10.0.0.5:8000#csfx-bootstrap.ab12#cd34"
+        ));
+        assert!(is_valid_join_string(
+            "csfx-join.node-1:8000#csfx-bootstrap.ab12#cd34#master"
+        ));
+        assert!(!is_valid_join_string(
+            "csfx-join.10.0.0.5:8000#csfx-bootstrap.ab12#cd34#other"
+        ));
         assert!(!is_valid_join_string("csfx-join.host#token#cd34"));
-        assert!(!is_valid_join_string("csfx-join.host;rm#csfx-bootstrap.ab#cd"));
+        assert!(!is_valid_join_string(
+            "csfx-join.host;rm#csfx-bootstrap.ab#cd"
+        ));
     }
 
     #[test]
