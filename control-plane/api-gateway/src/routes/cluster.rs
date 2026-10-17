@@ -188,7 +188,7 @@ pub async fn remove_node(
     .await?;
 
     if let Some(member_id) = etcd_member {
-        masters::finish_removal(member_id, &agent.hostname).await?;
+        masters::finish_removal(member_id, &agent).await?;
     }
 
     tracing::warn!(user_id = %claims.user_id, agent_id = %agent_id, "node removed");

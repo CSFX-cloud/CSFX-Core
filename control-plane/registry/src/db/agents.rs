@@ -3,14 +3,22 @@ use entity::agents;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use uuid::Uuid;
 
-pub async fn get_by_hostname(
+pub async fn get_by_machine_id(
     db: &DatabaseConnection,
-    hostname: &str,
+    machine_id: &str,
 ) -> Result<Option<agents::Model>> {
     Ok(agents::Entity::find()
-        .filter(agents::Column::Hostname.eq(hostname))
+        .filter(agents::Column::MachineId.eq(machine_id))
         .one(db)
         .await?)
+}
+
+pub async fn name_taken(db: &DatabaseConnection, name: &str) -> Result<bool> {
+    Ok(agents::Entity::find()
+        .filter(agents::Column::Name.eq(name))
+        .one(db)
+        .await?
+        .is_some())
 }
 
 pub async fn update_registration(
@@ -62,6 +70,7 @@ pub async fn create(
     public_key_pem: Option<String>,
     wg_tunnel_ip: Option<String>,
     role: String,
+    machine_id: Option<String>,
 ) -> Result<agents::Model> {
     let model = agents::ActiveModel {
         id: Set(id),
@@ -87,6 +96,7 @@ pub async fn create(
         cordoned: Set(false),
         maintenance_until: Set(None),
         role: Set(role),
+        machine_id: Set(machine_id),
     };
 
     Ok(model.insert(db).await?)

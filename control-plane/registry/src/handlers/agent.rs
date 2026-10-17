@@ -98,6 +98,7 @@ pub async fn register_agent(
                 tags: request.tags,
                 allow_reregister,
                 role,
+                machine_id: request.machine_id,
             },
             &state.mgmt_ipam,
         )

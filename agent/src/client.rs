@@ -25,6 +25,7 @@ struct RegisterRequest<'a> {
     os_version: &'a str,
     architecture: &'a str,
     agent_version: &'a str,
+    machine_id: Option<&'a str>,
     csr_pem: &'a str,
 }
 
@@ -260,6 +261,7 @@ impl ApiClient {
         os_type: &str,
         os_version: &str,
         architecture: &str,
+        machine_id: Option<&str>,
         csr_pem: &str,
     ) -> Result<RegisterResponse> {
         let url = format!("{}/api/registry/agents/register", self.gateway_url);
@@ -272,6 +274,7 @@ impl ApiClient {
             os_version,
             architecture,
             agent_version: env!("CARGO_PKG_VERSION"),
+            machine_id,
             csr_pem,
         };
 

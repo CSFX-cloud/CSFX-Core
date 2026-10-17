@@ -327,6 +327,7 @@ async fn perform_registration(
             &info.os_type,
             &info.os_version,
             &info.architecture,
+            info.machine_id.as_deref(),
             agent_pki.csr_pem(),
         )
         .await

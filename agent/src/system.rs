@@ -6,6 +6,7 @@ pub struct SystemInfo {
     pub os_type: String,
     pub os_version: String,
     pub architecture: String,
+    pub machine_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -196,7 +197,14 @@ pub fn collect_info() -> SystemInfo {
         os_type,
         os_version,
         architecture: std::env::consts::ARCH.to_string(),
+        machine_id: read_machine_id(),
     }
+}
+
+fn read_machine_id() -> Option<String> {
+    let raw = std::fs::read_to_string("/etc/machine-id").ok()?;
+    let id = raw.trim();
+    (!id.is_empty()).then(|| id.to_string())
 }
 
 pub fn collect_metrics() -> SystemMetrics {
