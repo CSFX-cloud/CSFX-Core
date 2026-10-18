@@ -4,6 +4,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 mod admins;
+mod audit;
 mod auth;
 mod auth_service;
 mod cluster_bundle;

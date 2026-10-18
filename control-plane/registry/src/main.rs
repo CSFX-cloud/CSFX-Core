@@ -57,8 +57,11 @@ async fn main() -> anyhow::Result<()> {
     let gateway_url =
         std::env::var("API_GATEWAY_URL").unwrap_or_else(|_| "http://localhost:8000".to_string());
 
+    let gateway_ca = reqwest::Certificate::from_pem(pki_service.ca_cert_pem().as_bytes())
+        .expect("Failed to parse CA certificate");
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .add_root_certificate(gateway_ca)
         .build()
         .expect("Failed to build HTTP client");
 

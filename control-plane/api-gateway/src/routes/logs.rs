@@ -26,6 +26,10 @@ pub struct LogsQuery {
     pub agent_id: Option<Uuid>,
     pub workload_id: Option<Uuid>,
     pub organization_id: Option<Uuid>,
+    pub kind: Option<String>,
+    pub actor_user_id: Option<Uuid>,
+    pub action: Option<String>,
+    pub target_id: Option<String>,
     pub from: Option<chrono::DateTime<chrono::Utc>>,
     pub to: Option<chrono::DateTime<chrono::Utc>>,
     pub q: Option<String>,
@@ -59,11 +63,23 @@ fn apply_filters(mut query: sea_orm::Select<Logs>, params: &LogsQuery) -> sea_or
     if let Some(organization_id) = params.organization_id {
         query = query.filter(logs::Column::OrganizationId.eq(organization_id));
     }
+    if let Some(kind) = &params.kind {
+        query = query.filter(logs::Column::Kind.eq(kind));
+    }
+    if let Some(actor_user_id) = params.actor_user_id {
+        query = query.filter(logs::Column::ActorUserId.eq(actor_user_id));
+    }
+    if let Some(action) = &params.action {
+        query = query.filter(logs::Column::Action.eq(action));
+    }
+    if let Some(target_id) = &params.target_id {
+        query = query.filter(logs::Column::TargetId.eq(target_id));
+    }
     if let Some(from) = params.from {
-        query = query.filter(logs::Column::CreatedAt.gte(from));
+        query = query.filter(logs::Column::LastSeenAt.gte(from));
     }
     if let Some(to) = params.to {
-        query = query.filter(logs::Column::CreatedAt.lte(to));
+        query = query.filter(logs::Column::LastSeenAt.lte(to));
     }
     if let Some(q) = &params.q {
         query = query.filter(logs::Column::Message.contains(q));
@@ -94,7 +110,7 @@ pub async fn list_logs(
         })?;
 
     let entries = base_query
-        .order_by(logs::Column::CreatedAt, Order::Desc)
+        .order_by(logs::Column::LastSeenAt, Order::Desc)
         .offset(offset)
         .limit(limit)
         .all(&state.db_conn)

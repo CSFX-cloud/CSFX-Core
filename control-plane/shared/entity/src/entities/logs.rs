@@ -14,6 +14,14 @@ pub struct Model {
     pub workload_id: Option<Uuid>,
     pub organization_id: Option<Uuid>,
     pub created_at: DateTimeWithTimeZone,
+    pub kind: String,
+    pub actor_user_id: Option<Uuid>,
+    pub action: Option<String>,
+    pub target_type: Option<String>,
+    pub target_id: Option<String>,
+    pub fields: Json,
+    pub occurrences: i32,
+    pub last_seen_at: DateTimeWithTimeZone,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

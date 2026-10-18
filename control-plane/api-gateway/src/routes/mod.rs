@@ -154,6 +154,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(logs::logs_routes())
         .merge(settings::settings_routes())
         .merge(s3_proxy::s3_proxy_routes())
+        .layer(axum::middleware::from_fn(crate::audit::audit_user_actions))
         .layer(GovernorLayer::new(governor_config));
 
     let login_rate_limited_router = Router::new()

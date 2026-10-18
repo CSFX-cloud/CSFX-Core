@@ -129,6 +129,7 @@ pub async fn login_user(
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let auth_service = AuthService::new(state.db_conn.clone());
+    let username = payload.username.clone();
 
     match auth_service
         .login_user(
@@ -139,9 +140,19 @@ pub async fn login_user(
         .await
     {
         Ok((token, two_factor_enabled, force_password_change)) => {
+            if let Ok(data) = crate::auth::jwt::verify_jwt(&token) {
+                shared::audit!(data.claims.user_id, "auth.login", "user", data.claims.user_id);
+            }
             session_response(token, two_factor_enabled, force_password_change)
         }
         Err(err) => {
+            tracing::warn!(
+                target: "csfx::audit",
+                action = "auth.login_failed",
+                target_type = "user",
+                target_id = %username,
+                "auth.login_failed"
+            );
             tracing::error!("Login failed: {}", err);
             match err {
                 crate::auth_service::AuthError::UserNotFound
