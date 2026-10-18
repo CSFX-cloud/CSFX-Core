@@ -35,7 +35,11 @@ fn message_text(value: serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(text) => Some(text),
         serde_json::Value::Array(bytes) => {
-            let raw: Vec<u8> = bytes.iter().filter_map(|b| b.as_u64()).map(|b| b as u8).collect();
+            let raw: Vec<u8> = bytes
+                .iter()
+                .filter_map(|b| b.as_u64())
+                .map(|b| b as u8)
+                .collect();
             Some(String::from_utf8_lossy(&raw).into_owned())
         }
         _ => None,
@@ -47,7 +51,12 @@ fn parse_line(line: &str) -> Option<JournalEntry> {
     let priority: u8 = raw.priority.as_deref()?.parse().ok()?;
     let message = message_text(raw.message?)?;
     Some(JournalEntry {
-        level: if priority <= ERROR_PRIORITY_MAX { "ERROR" } else { "WARN" }.to_string(),
+        level: if priority <= ERROR_PRIORITY_MAX {
+            "ERROR"
+        } else {
+            "WARN"
+        }
+        .to_string(),
         unit: raw.unit.or(raw.identifier).unwrap_or_default(),
         message,
         timestamp_micros: raw.timestamp_micros.and_then(|t| t.parse().ok()),
@@ -63,11 +72,19 @@ fn spawn_journalctl() -> Result<(tokio::process::Child, ChildStdout)> {
         .kill_on_drop(true)
         .spawn()
         .context("Failed to spawn journalctl")?;
-    let stdout = child.stdout.take().context("journalctl stdout unavailable")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("journalctl stdout unavailable")?;
     Ok((child, stdout))
 }
 
-async fn ship(client: &ApiClient, api_key: &str, batch: &mut Vec<JournalEntry>, failing: &mut bool) {
+async fn ship(
+    client: &ApiClient,
+    api_key: &str,
+    batch: &mut Vec<JournalEntry>,
+    failing: &mut bool,
+) {
     if batch.is_empty() {
         return;
     }

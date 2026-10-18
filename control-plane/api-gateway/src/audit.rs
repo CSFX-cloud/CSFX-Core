@@ -32,7 +32,10 @@ fn default_verb(method: &Method) -> &'static str {
 }
 
 fn parse_target<'a>(path: &'a str, method: &Method) -> Option<AuditTarget<'a>> {
-    let mut segments = path.strip_prefix(API_PREFIX)?.split('/').filter(|s| !s.is_empty());
+    let mut segments = path
+        .strip_prefix(API_PREFIX)?
+        .split('/')
+        .filter(|s| !s.is_empty());
     let resource = segments.next()?;
     let mut id = None;
     let mut verb = default_verb(method);

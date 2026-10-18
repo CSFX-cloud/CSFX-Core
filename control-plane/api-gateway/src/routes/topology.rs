@@ -66,9 +66,7 @@ fn edge(kind: &'static str, source: String, target: String) -> TopologyEdge {
     }
 }
 
-async fn latest_metrics(
-    state: &AppState,
-) -> Result<HashMap<Uuid, agent_metrics::Model>, ApiError> {
+async fn latest_metrics(state: &AppState) -> Result<HashMap<Uuid, agent_metrics::Model>, ApiError> {
     let since = (Utc::now() - Duration::minutes(METRICS_WINDOW_MINUTES)).naive_utc();
     let rows = agent_metrics::Entity::find()
         .filter(agent_metrics::Column::Timestamp.gte(since))

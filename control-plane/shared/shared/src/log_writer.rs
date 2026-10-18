@@ -15,7 +15,8 @@ const FLUSH_BATCH_SIZE: usize = 100;
 const DEDUP_WINDOW_MINUTES: i32 = 10;
 const KIND_SYSTEM: &str = "system";
 
-const BUMP_EXISTING_SQL: &str = "UPDATE logs SET occurrences = occurrences + $1, last_seen_at = now() \
+const BUMP_EXISTING_SQL: &str =
+    "UPDATE logs SET occurrences = occurrences + $1, last_seen_at = now() \
      WHERE id = (SELECT id FROM logs WHERE kind = 'system' AND service = $2 AND level = $3 \
      AND message = $4 AND agent_id IS NOT DISTINCT FROM $5 \
      AND last_seen_at > now() - make_interval(mins => $6) \
@@ -79,7 +80,11 @@ fn group_duplicates(buffer: &mut Vec<LogRecord>) -> (Vec<(LogRecord, i32)>, Vec<
     (grouped.into_values().collect(), unique)
 }
 
-async fn bump_existing(db: &DbConn, record: &LogRecord, count: i32) -> Result<bool, sea_orm::DbErr> {
+async fn bump_existing(
+    db: &DbConn,
+    record: &LogRecord,
+    count: i32,
+) -> Result<bool, sea_orm::DbErr> {
     let statement = Statement::from_sql_and_values(
         DbBackend::Postgres,
         BUMP_EXISTING_SQL,

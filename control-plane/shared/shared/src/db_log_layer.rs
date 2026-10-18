@@ -187,11 +187,7 @@ fn is_noisy_message_event(visitor: &EventVisitor) -> bool {
         .any(|needle| visitor.message.contains(needle))
 }
 
-fn build_record(
-    service: &'static str,
-    event: &Event<'_>,
-    mut visitor: EventVisitor,
-) -> LogRecord {
+fn build_record(service: &'static str, event: &Event<'_>, mut visitor: EventVisitor) -> LogRecord {
     let target = event.metadata().target();
     let is_audit = target == AUDIT_TARGET;
     let classification = visitor
@@ -245,9 +241,7 @@ impl<S: Subscriber> Layer<S> for DbLogLayer {
             return;
         }
 
-        let _ = self
-            .sender
-            .send(build_record(self.service, event, visitor));
+        let _ = self.sender.send(build_record(self.service, event, visitor));
     }
 }
 

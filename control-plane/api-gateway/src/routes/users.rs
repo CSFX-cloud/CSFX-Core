@@ -141,7 +141,12 @@ pub async fn login_user(
     {
         Ok((token, two_factor_enabled, force_password_change)) => {
             if let Ok(data) = crate::auth::jwt::verify_jwt(&token) {
-                shared::audit!(data.claims.user_id, "auth.login", "user", data.claims.user_id);
+                shared::audit!(
+                    data.claims.user_id,
+                    "auth.login",
+                    "user",
+                    data.claims.user_id
+                );
             }
             session_response(token, two_factor_enabled, force_password_change)
         }

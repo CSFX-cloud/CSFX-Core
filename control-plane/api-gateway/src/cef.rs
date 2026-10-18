@@ -33,10 +33,7 @@ fn signature_id(entry: &logs::Model) -> String {
 }
 
 fn extension_key(raw: &str) -> String {
-    let cleaned: String = raw
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect();
+    let cleaned: String = raw.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     format!("csfx{cleaned}")
 }
 
@@ -49,7 +46,10 @@ fn field_text(value: &serde_json::Value) -> String {
 
 fn extension_pairs(entry: &logs::Model) -> Vec<(String, String)> {
     let mut pairs = vec![
-        ("rt".to_string(), entry.last_seen_at.timestamp_millis().to_string()),
+        (
+            "rt".to_string(),
+            entry.last_seen_at.timestamp_millis().to_string(),
+        ),
         ("externalId".to_string(), entry.id.to_string()),
         ("cat".to_string(), entry.classification.clone()),
         ("cs1Label".to_string(), "service".to_string()),
@@ -62,11 +62,20 @@ fn extension_pairs(entry: &logs::Model) -> Vec<(String, String)> {
         ("suser", entry.actor_user_id.map(|id| id.to_string())),
         ("cs2Label", entry.agent_id.map(|_| "agentId".to_string())),
         ("cs2", entry.agent_id.map(|id| id.to_string())),
-        ("cs3Label", entry.workload_id.map(|_| "workloadId".to_string())),
+        (
+            "cs3Label",
+            entry.workload_id.map(|_| "workloadId".to_string()),
+        ),
         ("cs3", entry.workload_id.map(|id| id.to_string())),
-        ("cs4Label", entry.target_type.as_ref().map(|_| "targetType".to_string())),
+        (
+            "cs4Label",
+            entry.target_type.as_ref().map(|_| "targetType".to_string()),
+        ),
         ("cs4", entry.target_type.clone()),
-        ("cs5Label", entry.target_id.as_ref().map(|_| "targetId".to_string())),
+        (
+            "cs5Label",
+            entry.target_id.as_ref().map(|_| "targetId".to_string()),
+        ),
         ("cs5", entry.target_id.clone()),
     ];
     pairs.extend(

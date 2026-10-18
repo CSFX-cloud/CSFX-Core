@@ -204,7 +204,12 @@ async fn count_by(
 
     Ok(rows
         .into_iter()
-        .filter_map(|(value, count)| Some(FacetCount { value: value?, count }))
+        .filter_map(|(value, count)| {
+            Some(FacetCount {
+                value: value?,
+                count,
+            })
+        })
         .collect())
 }
 
@@ -214,21 +219,51 @@ pub async fn logs_facets(
     Query(params): Query<LogsQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let facets = LogsFacets {
-        kinds: count_by(&state, &LogsQuery { kind: None, ..params.clone() }, logs::Column::Kind).await?,
+        kinds: count_by(
+            &state,
+            &LogsQuery {
+                kind: None,
+                ..params.clone()
+            },
+            logs::Column::Kind,
+        )
+        .await?,
         classifications: count_by(
             &state,
-            &LogsQuery { classification: None, ..params.clone() },
+            &LogsQuery {
+                classification: None,
+                ..params.clone()
+            },
             logs::Column::Classification,
         )
         .await?,
-        services: count_by(&state, &LogsQuery { service: None, ..params.clone() }, logs::Column::Service).await?,
+        services: count_by(
+            &state,
+            &LogsQuery {
+                service: None,
+                ..params.clone()
+            },
+            logs::Column::Service,
+        )
+        .await?,
         target_types: count_by(
             &state,
-            &LogsQuery { target_type: None, ..params.clone() },
+            &LogsQuery {
+                target_type: None,
+                ..params.clone()
+            },
             logs::Column::TargetType,
         )
         .await?,
-        actions: count_by(&state, &LogsQuery { action: None, ..params.clone() }, logs::Column::Action).await?,
+        actions: count_by(
+            &state,
+            &LogsQuery {
+                action: None,
+                ..params.clone()
+            },
+            logs::Column::Action,
+        )
+        .await?,
     };
 
     Ok((StatusCode::OK, Json(json!(facets))))
