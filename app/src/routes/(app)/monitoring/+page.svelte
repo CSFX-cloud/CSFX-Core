@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount, onDestroy, untrack } from "svelte";
-    import { SvelteFlow, Background, Controls, MiniMap, type Node, type Edge } from "@xyflow/svelte";
+    import { SvelteFlow, Background, Controls, type Node, type Edge } from "@xyflow/svelte";
     import "@xyflow/svelte/dist/style.css";
     import { mode } from "mode-watcher";
     import { auth } from "$lib/auth/store.svelte";
@@ -15,7 +15,7 @@
     import CompactNode from "$lib/components/monitoring/compact-node.svelte";
     import * as Sheet from "$lib/components/ui/sheet/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
-    import SearchHeader from "$lib/components/search-header.svelte";
+    import SearchTrigger from "$lib/components/search-trigger.svelte";
     import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
     const REFRESH_INTERVAL_MS = 7000;
@@ -184,18 +184,19 @@
     </aside>
 
     <div class="flex min-w-0 flex-1 flex-col">
-        <SearchHeader />
-        <div class="flex items-center gap-2 px-4 pb-3">
-        <Button variant="outline" size="sm" class="ms-auto gap-1.5" onclick={resetLayout}>Reset layout</Button>
-        <Button variant="outline" size="sm" class="gap-1.5" onclick={refreshNow} disabled={refreshing}>
-            <RefreshCwIcon class="size-3.5 {refreshing ? 'animate-spin' : ''}" />
-            Refresh
-        </Button>
-
+    <main class="relative min-h-0 flex-1">
+        <div class="absolute left-1/2 top-4 z-10 w-full max-w-sm -translate-x-1/2">
+            <SearchTrigger />
         </div>
-    <main class="relative min-h-0 flex-1 border-t border-border">
+        <div class="absolute right-4 top-4 z-10 flex items-center gap-2">
+            <Button variant="outline" size="sm" onclick={resetLayout}>Reset layout</Button>
+            <Button variant="outline" size="sm" class="gap-1.5" onclick={refreshNow} disabled={refreshing}>
+                <RefreshCwIcon class="size-3.5 {refreshing ? 'animate-spin' : ''}" />
+                Refresh
+            </Button>
+        </div>
         {#if error}
-            <p class="absolute left-4 top-4 z-10 text-sm text-destructive">{error}</p>
+            <p class="absolute left-4 top-16 z-10 text-sm text-destructive">{error}</p>
         {/if}
         {#if nodes.length > 0}
         <SvelteFlow
@@ -213,7 +214,6 @@
         >
             <Background />
             <Controls showLock={false} />
-            <MiniMap pannable zoomable position="bottom-right" />
         </SvelteFlow>
         {/if}
     </main>
@@ -243,3 +243,9 @@
         {/if}
     </Sheet.Content>
 </Sheet.Root>
+
+<style>
+    :global(.svelte-flow__handle) {
+        opacity: 0;
+    }
+</style>
