@@ -38,12 +38,26 @@ export interface LogsFilter {
     kind?: 'user' | 'system';
     actor_user_id?: string;
     action?: string;
+    target_type?: string;
     target_id?: string;
     from?: string;
     to?: string;
     q?: string;
     limit?: number;
     offset?: number;
+}
+
+export interface FacetCount {
+    value: string;
+    count: number;
+}
+
+export interface LogsFacets {
+    kinds: FacetCount[];
+    classifications: FacetCount[];
+    services: FacetCount[];
+    target_types: FacetCount[];
+    actions: FacetCount[];
 }
 
 export interface LogsRetention {
@@ -66,6 +80,14 @@ export async function listLogs(token: string, filter: LogsFilter): Promise<LogsR
         headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`Failed to list logs: ${res.status}`);
+    return res.json();
+}
+
+export async function getLogsFacets(token: string, filter: LogsFilter): Promise<LogsFacets> {
+    const res = await authedFetch(`${API_BASE}/logs/facets${buildQuery(filter)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to load log facets: ${res.status}`);
     return res.json();
 }
 

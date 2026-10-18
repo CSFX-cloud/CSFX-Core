@@ -18,7 +18,7 @@ use crate::{auth::rbac::CanViewLogs, AppState};
 const DEFAULT_LIMIT: u64 = 100;
 const MAX_LIMIT: u64 = 500;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct LogsQuery {
     pub service: Option<String>,
     pub level: Option<String>,
@@ -29,6 +29,7 @@ pub struct LogsQuery {
     pub kind: Option<String>,
     pub actor_user_id: Option<Uuid>,
     pub action: Option<String>,
+    pub target_type: Option<String>,
     pub target_id: Option<String>,
     pub from: Option<chrono::DateTime<chrono::Utc>>,
     pub to: Option<chrono::DateTime<chrono::Utc>>,
@@ -44,15 +45,26 @@ pub struct LogsResponse {
     pub has_more: bool,
 }
 
+fn csv_values(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn apply_filters(mut query: sea_orm::Select<Logs>, params: &LogsQuery) -> sea_orm::Select<Logs> {
     if let Some(service) = &params.service {
-        query = query.filter(logs::Column::Service.eq(service));
+        query = query.filter(logs::Column::Service.is_in(csv_values(service)));
     }
     if let Some(level) = &params.level {
-        query = query.filter(logs::Column::Level.eq(level));
+        query = query.filter(logs::Column::Level.is_in(csv_values(level)));
     }
     if let Some(classification) = &params.classification {
-        query = query.filter(logs::Column::Classification.eq(classification));
+        query = query.filter(logs::Column::Classification.is_in(csv_values(classification)));
+    }
+    if let Some(target_type) = &params.target_type {
+        query = query.filter(logs::Column::TargetType.is_in(csv_values(target_type)));
     }
     if let Some(agent_id) = params.agent_id {
         query = query.filter(logs::Column::AgentId.eq(agent_id));
@@ -70,7 +82,7 @@ fn apply_filters(mut query: sea_orm::Select<Logs>, params: &LogsQuery) -> sea_or
         query = query.filter(logs::Column::ActorUserId.eq(actor_user_id));
     }
     if let Some(action) = &params.action {
-        query = query.filter(logs::Column::Action.eq(action));
+        query = query.filter(logs::Column::Action.is_in(csv_values(action)));
     }
     if let Some(target_id) = &params.target_id {
         query = query.filter(logs::Column::TargetId.eq(target_id));
@@ -135,6 +147,79 @@ pub async fn list_logs(
     ))
 }
 
+#[derive(Debug, Serialize)]
+pub struct FacetCount {
+    pub value: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LogsFacets {
+    pub kinds: Vec<FacetCount>,
+    pub classifications: Vec<FacetCount>,
+    pub services: Vec<FacetCount>,
+    pub target_types: Vec<FacetCount>,
+    pub actions: Vec<FacetCount>,
+}
+
+fn facet_error(error: sea_orm::DbErr) -> (StatusCode, Json<serde_json::Value>) {
+    tracing::error!(error = %error, "failed to compute log facets");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "database error" })),
+    )
+}
+
+async fn count_by(
+    state: &AppState,
+    params: &LogsQuery,
+    column: logs::Column,
+) -> Result<Vec<FacetCount>, (StatusCode, Json<serde_json::Value>)> {
+    let rows: Vec<(Option<String>, i64)> = apply_filters(Logs::find(), params)
+        .select_only()
+        .column(column)
+        .column_as(logs::Column::Id.count(), "count")
+        .group_by(column)
+        .order_by_desc(logs::Column::Id.count())
+        .into_tuple()
+        .all(&state.db_conn)
+        .await
+        .map_err(facet_error)?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|(value, count)| Some(FacetCount { value: value?, count }))
+        .collect())
+}
+
+pub async fn logs_facets(
+    CanViewLogs(_claims): CanViewLogs,
+    State(state): State<AppState>,
+    Query(params): Query<LogsQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let facets = LogsFacets {
+        kinds: count_by(&state, &LogsQuery { kind: None, ..params.clone() }, logs::Column::Kind).await?,
+        classifications: count_by(
+            &state,
+            &LogsQuery { classification: None, ..params.clone() },
+            logs::Column::Classification,
+        )
+        .await?,
+        services: count_by(&state, &LogsQuery { service: None, ..params.clone() }, logs::Column::Service).await?,
+        target_types: count_by(
+            &state,
+            &LogsQuery { target_type: None, ..params.clone() },
+            logs::Column::TargetType,
+        )
+        .await?,
+        actions: count_by(&state, &LogsQuery { action: None, ..params.clone() }, logs::Column::Action).await?,
+    };
+
+    Ok((StatusCode::OK, Json(json!(facets))))
+}
+
 pub fn logs_routes() -> Router<AppState> {
-    Router::new().route("/logs", get(list_logs))
+    Router::new()
+        .route("/logs", get(list_logs))
+        .route("/logs/facets", get(logs_facets))
 }
