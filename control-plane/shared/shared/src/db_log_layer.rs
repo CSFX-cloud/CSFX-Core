@@ -1,15 +1,10 @@
-use entity::logs;
-use sea_orm::{ActiveValue::Set, DbConn, EntityTrait};
+use serde_json::{Map, Value};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::time::{interval, Duration};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 use uuid::Uuid;
-
-const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
-const FLUSH_BATCH_SIZE: usize = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogClassification {
@@ -33,6 +28,19 @@ impl LogClassification {
         }
     }
 
+    fn from_name(name: &str) -> Option<Self> {
+        [
+            Self::Security,
+            Self::Performance,
+            Self::Audit,
+            Self::System,
+            Self::Network,
+            Self::Storage,
+        ]
+        .into_iter()
+        .find(|classification| classification.as_str() == name)
+    }
+
     fn from_target(target: &str) -> Self {
         if target.contains("auth") || target.contains("rbac") || target.contains("jwt") {
             Self::Security
@@ -45,56 +53,90 @@ impl LogClassification {
             Self::Network
         } else if target.contains("volume") || target.contains("storage") {
             Self::Storage
-        } else if target.contains("registry") {
-            Self::Audit
         } else {
             Self::System
         }
     }
 }
 
+pub const AUDIT_TARGET: &str = "csfx::audit";
+const KIND_USER: &str = "user";
+const KIND_SYSTEM: &str = "system";
+const TRACKED_ID_KEYS: [&str; 3] = ["agent_id", "workload_id", "organization_id"];
+
 pub struct LogRecord {
     pub service: &'static str,
     pub level: &'static str,
     pub classification: &'static str,
+    pub kind: &'static str,
     pub message: String,
     pub agent_id: Option<Uuid>,
     pub workload_id: Option<Uuid>,
     pub organization_id: Option<Uuid>,
+    pub actor_user_id: Option<Uuid>,
+    pub action: Option<String>,
+    pub target_type: Option<String>,
+    pub target_id: Option<String>,
+    pub fields: Map<String, Value>,
 }
 
 #[derive(Default)]
 struct EventVisitor {
     message: String,
-    agent_id: Option<Uuid>,
-    workload_id: Option<Uuid>,
-    organization_id: Option<Uuid>,
+    fields: Map<String, Value>,
 }
 
 impl Visit for EventVisitor {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        self.record_field(field.name(), format!("{value:?}"));
+        self.record_value(field.name(), Value::String(format!("{value:?}")));
     }
 
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.record_field(field.name(), value.to_string());
+        self.record_value(field.name(), Value::String(value.to_string()));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.record_value(field.name(), Value::from(value));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.record_value(field.name(), Value::from(value));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.record_value(field.name(), Value::Bool(value));
     }
 }
 
 impl EventVisitor {
-    fn record_field(&mut self, name: &str, value: String) {
-        match name {
-            "message" => self.message = trim_quotes(value),
-            "agent_id" => self.agent_id = Uuid::parse_str(&trim_quotes(value)).ok(),
-            "workload_id" => self.workload_id = Uuid::parse_str(&trim_quotes(value)).ok(),
-            "organization_id" => self.organization_id = Uuid::parse_str(&trim_quotes(value)).ok(),
-            _ => {}
+    fn record_value(&mut self, name: &str, value: Value) {
+        if name != "message" {
+            self.fields.insert(name.to_string(), value);
+            return;
         }
+        if let Value::String(message) = value {
+            self.message = message;
+        }
+    }
+
+    fn take_string(&mut self, name: &str) -> Option<String> {
+        match self.fields.remove(name)? {
+            Value::String(text) => Some(text),
+            other => Some(other.to_string()),
+        }
+    }
+
+    fn take_uuid(&mut self, name: &str) -> Option<Uuid> {
+        self.take_string(name)
+            .and_then(|text| Uuid::parse_str(&text).ok())
     }
 }
 
-fn trim_quotes(value: String) -> String {
-    value.trim_matches('"').to_string()
+fn uuid_from_message(message: &str, key: &str) -> Option<Uuid> {
+    let needle = format!("{key}=");
+    let start = message.find(&needle)? + needle.len();
+    let token = message[start..].split_whitespace().next()?;
+    Uuid::parse_str(token.trim_matches(|c: char| !c.is_ascii_hexdigit() && c != '-')).ok()
 }
 
 fn level_as_str(level: &Level) -> &'static str {
@@ -145,6 +187,40 @@ fn is_noisy_message_event(visitor: &EventVisitor) -> bool {
         .any(|needle| visitor.message.contains(needle))
 }
 
+fn build_record(service: &'static str, event: &Event<'_>, mut visitor: EventVisitor) -> LogRecord {
+    let target = event.metadata().target();
+    let is_audit = target == AUDIT_TARGET;
+    let classification = visitor
+        .take_string("classification")
+        .and_then(|name| LogClassification::from_name(&name))
+        .unwrap_or(if is_audit {
+            LogClassification::Audit
+        } else {
+            LogClassification::from_target(target)
+        });
+    let [agent_id, workload_id, organization_id] = TRACKED_ID_KEYS.map(|key| {
+        visitor
+            .take_uuid(key)
+            .or_else(|| uuid_from_message(&visitor.message, key))
+    });
+
+    LogRecord {
+        service,
+        level: level_as_str(event.metadata().level()),
+        classification: classification.as_str(),
+        kind: if is_audit { KIND_USER } else { KIND_SYSTEM },
+        agent_id,
+        workload_id,
+        organization_id,
+        actor_user_id: visitor.take_uuid("actor_user_id"),
+        action: visitor.take_string("action"),
+        target_type: visitor.take_string("target_type"),
+        target_id: visitor.take_string("target_id"),
+        message: visitor.message,
+        fields: visitor.fields,
+    }
+}
+
 impl<S: Subscriber> Layer<S> for DbLogLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         if *event.metadata().level() == Level::TRACE {
@@ -165,70 +241,22 @@ impl<S: Subscriber> Layer<S> for DbLogLayer {
             return;
         }
 
-        let record = LogRecord {
-            service: self.service,
-            level: level_as_str(event.metadata().level()),
-            classification: LogClassification::from_target(event.metadata().target()).as_str(),
-            message: visitor.message,
-            agent_id: visitor.agent_id,
-            workload_id: visitor.workload_id,
-            organization_id: visitor.organization_id,
-        };
-
-        let _ = self.sender.send(record);
+        let _ = self.sender.send(build_record(self.service, event, visitor));
     }
 }
 
-pub fn spawn_log_writer(mut receiver: UnboundedReceiver<LogRecord>, db: DbConn) {
-    tokio::spawn(async move {
-        let mut buffer = Vec::with_capacity(FLUSH_BATCH_SIZE);
-        let mut ticker = interval(FLUSH_INTERVAL);
-
-        loop {
-            tokio::select! {
-                record = receiver.recv() => {
-                    match record {
-                        Some(record) => {
-                            buffer.push(record);
-                            if buffer.len() >= FLUSH_BATCH_SIZE {
-                                flush(&db, &mut buffer).await;
-                            }
-                        }
-                        None => {
-                            flush(&db, &mut buffer).await;
-                            break;
-                        }
-                    }
-                }
-                _ = ticker.tick() => {
-                    flush(&db, &mut buffer).await;
-                }
-            }
-        }
-    });
-}
-
-async fn flush(db: &DbConn, buffer: &mut Vec<LogRecord>) {
-    if buffer.is_empty() {
-        return;
-    }
-
-    let models: Vec<logs::ActiveModel> = buffer
-        .drain(..)
-        .map(|record| logs::ActiveModel {
-            id: Set(Uuid::new_v4()),
-            service: Set(record.service.to_string()),
-            level: Set(record.level.to_string()),
-            classification: Set(record.classification.to_string()),
-            message: Set(record.message),
-            agent_id: Set(record.agent_id),
-            workload_id: Set(record.workload_id),
-            organization_id: Set(record.organization_id),
-            created_at: Set(chrono::Utc::now().into()),
-        })
-        .collect();
-
-    if let Err(error) = logs::Entity::insert_many(models).exec(db).await {
-        tracing::warn!(target: "shared::db_log_layer", error = %error, "failed to flush logs to database");
-    }
+#[macro_export]
+macro_rules! audit {
+    ($actor:expr, $action:expr, $target_type:expr, $target_id:expr $(, $key:ident = $value:expr)* $(,)?) => {
+        tracing::info!(
+            target: "csfx::audit",
+            actor_user_id = %$actor,
+            action = $action,
+            target_type = $target_type,
+            target_id = %$target_id,
+            $($key = %$value,)*
+            "{}",
+            $action
+        )
+    };
 }

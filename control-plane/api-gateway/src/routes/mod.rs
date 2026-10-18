@@ -18,6 +18,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::{info_span, Span};
 
+pub mod agent_logs;
 pub mod agent_proxy;
 pub mod agent_stream;
 pub mod agents;
@@ -41,6 +42,7 @@ pub mod ssh_access;
 pub mod ssh_keys;
 pub mod sso;
 pub mod system;
+pub mod topology;
 pub mod update;
 pub mod users;
 pub mod volumes;
@@ -129,6 +131,7 @@ pub fn create_router() -> Router<AppState> {
 
     let agent_unmetered_router = Router::new()
         .merge(agents::agents_unmetered_routes())
+        .merge(agent_logs::agent_logs_routes())
         .merge(resource_groups::resource_groups_agent_routes())
         .merge(agent_stream::agent_stream_routes());
 
@@ -152,8 +155,10 @@ pub fn create_router() -> Router<AppState> {
         .merge(resource_groups::resource_groups_routes())
         .merge(ingress::ingress_routes_router())
         .merge(logs::logs_routes())
+        .merge(topology::topology_routes())
         .merge(settings::settings_routes())
         .merge(s3_proxy::s3_proxy_routes())
+        .layer(axum::middleware::from_fn(crate::audit::audit_user_actions))
         .layer(GovernorLayer::new(governor_config));
 
     let login_rate_limited_router = Router::new()

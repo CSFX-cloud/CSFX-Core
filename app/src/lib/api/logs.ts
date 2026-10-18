@@ -12,6 +12,15 @@ export interface LogEntry {
     workload_id: string | null;
     organization_id: string | null;
     created_at: string;
+    kind: 'user' | 'system';
+    actor_user_id: string | null;
+    action: string | null;
+    target_type: string | null;
+    target_id: string | null;
+    fields: Record<string, unknown>;
+    occurrences: number;
+    last_seen_at: string;
+    cef: string;
 }
 
 export interface LogsResponse {
@@ -27,11 +36,29 @@ export interface LogsFilter {
     agent_id?: string;
     workload_id?: string;
     organization_id?: string;
+    kind?: 'user' | 'system';
+    actor_user_id?: string;
+    action?: string;
+    target_type?: string;
+    target_id?: string;
     from?: string;
     to?: string;
     q?: string;
     limit?: number;
     offset?: number;
+}
+
+export interface FacetCount {
+    value: string;
+    count: number;
+}
+
+export interface LogsFacets {
+    kinds: FacetCount[];
+    classifications: FacetCount[];
+    services: FacetCount[];
+    target_types: FacetCount[];
+    actions: FacetCount[];
 }
 
 export interface LogsRetention {
@@ -55,6 +82,27 @@ export async function listLogs(token: string, filter: LogsFilter): Promise<LogsR
     });
     if (!res.ok) throw new Error(`Failed to list logs: ${res.status}`);
     return res.json();
+}
+
+export async function getLogsFacets(token: string, filter: LogsFilter): Promise<LogsFacets> {
+    const res = await authedFetch(`${API_BASE}/logs/facets${buildQuery(filter)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to load log facets: ${res.status}`);
+    return res.json();
+}
+
+export async function exportLogsCef(token: string, filter: LogsFilter): Promise<void> {
+    const res = await authedFetch(`${API_BASE}/logs/export${buildQuery(filter)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to export logs: ${res.status}`);
+    const url = URL.createObjectURL(await res.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'csfx-logs.cef';
+    link.click();
+    URL.revokeObjectURL(url);
 }
 
 export async function getLogsRetention(token: string): Promise<LogsRetention> {

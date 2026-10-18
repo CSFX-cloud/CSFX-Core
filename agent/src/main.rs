@@ -5,6 +5,7 @@ mod disks;
 mod fence;
 mod firecracker;
 mod join;
+mod journal;
 mod master_join;
 mod nftables;
 mod pki;
@@ -227,6 +228,8 @@ async fn main() -> Result<()> {
     } else {
         info!("CSFX_AGENT_PORT not set, agent inbound server disabled");
     }
+
+    journal::spawn(api_client.clone(), api_key.clone());
 
     let assignment_signal = agent_stream::spawn(gateway_url.clone(), api_key.clone(), agent_id);
 

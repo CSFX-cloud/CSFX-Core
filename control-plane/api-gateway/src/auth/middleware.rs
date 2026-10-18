@@ -4,11 +4,33 @@ use crate::{
 };
 use axum::{
     extract::FromRequestParts,
-    http::{request::Parts, StatusCode},
+    http::{request::Parts, HeaderMap, StatusCode},
 };
 use chrono::Utc;
 use entity::InvalidJwt;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+pub fn request_token(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("Authorization")
+        .and_then(|header| header.to_str().ok())
+        .and_then(|header| header.strip_prefix("Bearer "))
+        .or_else(|| {
+            headers
+                .get("cookie")
+                .and_then(|cookie_header| cookie_header.to_str().ok())
+                .and_then(|cookies| {
+                    cookies.split(';').find_map(|cookie| {
+                        let mut parts = cookie.trim().splitn(2, '=');
+                        if parts.next()? == "token" {
+                            parts.next()
+                        } else {
+                            None
+                        }
+                    })
+                })
+        })
+}
 
 // Custom extractor for authenticated requests
 pub struct AuthenticatedUser(pub Claims);
@@ -20,27 +42,7 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let token = parts
-            .headers
-            .get("Authorization")
-            .and_then(|header| header.to_str().ok())
-            .and_then(|header| header.strip_prefix("Bearer "))
-            .or_else(|| {
-                parts
-                    .headers
-                    .get("cookie")
-                    .and_then(|cookie_header| cookie_header.to_str().ok())
-                    .and_then(|cookies| {
-                        cookies.split(';').find_map(|cookie| {
-                            let mut parts = cookie.trim().splitn(2, '=');
-                            if parts.next()? == "token" {
-                                parts.next()
-                            } else {
-                                None
-                            }
-                        })
-                    })
-            });
+        let token = request_token(&parts.headers);
 
         if let Some(token) = token {
             let is_blacklisted = InvalidJwt::find()
