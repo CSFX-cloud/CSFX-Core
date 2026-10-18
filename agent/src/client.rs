@@ -424,6 +424,31 @@ impl ApiClient {
             .context("Failed to parse resource group peers response")
     }
 
+    pub async fn fetch_mesh_peers(&self, api_key: &str) -> Result<Vec<ResourceGroupPeer>> {
+        let url = format!("{}/api/agents/mesh-peers", self.gateway_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("Failed to fetch mesh peers")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!(
+                "Failed to fetch mesh peers status={} {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            );
+        }
+
+        resp.json::<Vec<ResourceGroupPeer>>()
+            .await
+            .context("Failed to parse mesh peers response")
+    }
+
     pub async fn fetch_resource_group_vpn_peers(
         &self,
         api_key: &str,
