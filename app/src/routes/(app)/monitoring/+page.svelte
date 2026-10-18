@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, onDestroy } from "svelte";
+    import { onMount, onDestroy, untrack } from "svelte";
     import { SvelteFlow, Background, Controls, MiniMap, type Node, type Edge } from "@xyflow/svelte";
     import "@xyflow/svelte/dist/style.css";
     import { mode } from "mode-watcher";
@@ -36,6 +36,8 @@
     let showWorkloads = $state(true);
     let showVolumes = $state(false);
     let highlightedGroup = $state("");
+
+    let structureKey = $state("");
 
     let selectedNode = $state<Node | null>(null);
     let detailOpen = $state(false);
@@ -81,9 +83,27 @@
         return node.type === "workload" && node.data.resource_group_id !== highlightedGroup;
     }
 
+    function structureOf(result: { nodes: Node[]; edges: Edge[] }): string {
+        return [...result.nodes.map((node) => node.id), ...result.edges.map((edge) => edge.id)].join("|");
+    }
+
+    function refreshData(fresh: Node[]) {
+        const byId = new Map(fresh.map((node) => [node.id, node]));
+        nodes = nodes.map((node) => {
+            const next = byId.get(node.id);
+            return next ? { ...node, data: next.data, class: dimmed(next) ? "opacity-30" : "" } : node;
+        });
+    }
+
     function applyLayout() {
         if (!topology) return;
         const result = layoutTopology(topology, visibility, manualPositions);
+        const key = structureOf(result);
+        if (key === structureKey) {
+            refreshData(result.nodes);
+            return;
+        }
+        structureKey = key;
         nodes = result.nodes.map((node) => ({ ...node, class: dimmed(node) ? "opacity-30" : "" }));
         edges = result.edges;
     }
@@ -100,6 +120,7 @@
 
     function resetLayout() {
         manualPositions.clear();
+        structureKey = "";
         applyLayout();
     }
 
@@ -120,7 +141,7 @@
         topology;
         visibility;
         highlightedGroup;
-        applyLayout();
+        untrack(applyLayout);
     });
 </script>
 
@@ -174,6 +195,7 @@
         {#if error}
             <p class="absolute left-4 top-4 z-10 text-sm text-destructive">{error}</p>
         {/if}
+        {#key structureKey}
         <SvelteFlow
             bind:nodes
             bind:edges
@@ -190,6 +212,7 @@
             <Controls showLock={false} />
             <MiniMap pannable zoomable />
         </SvelteFlow>
+        {/key}
     </main>
 </div>
 

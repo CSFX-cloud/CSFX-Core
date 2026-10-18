@@ -1,4 +1,5 @@
 <script lang="ts">
+    import Icon from "@iconify/svelte";
     import { Handle, Position, type NodeProps } from "@xyflow/svelte";
     import { statusVariant } from "$lib/utils/status";
 
@@ -20,14 +21,15 @@
 
 <Handle type="target" position={Position.Top} />
 <div
-    class="rounded-md border bg-card px-3 py-1.5 text-card-foreground shadow-sm {type === 'cluster' ? 'w-48 text-center font-semibold' : 'w-44'} {selected ? 'ring-2 ring-primary' : ''}"
+    class="rounded-md border bg-card px-3 py-1.5 text-card-foreground shadow-sm {type === 'cluster' ? 'w-48 font-semibold' : 'w-44'} {selected ? 'ring-2 ring-primary' : ''}"
     style={data.groupColor ? `border-left: 4px solid ${data.groupColor}` : ""}
 >
     <div class="flex items-center gap-2">
-        {#if type !== "cluster"}
-            <span class="size-2 shrink-0 rounded-full {dotClass}"></span>
-        {/if}
+        <Icon icon={String(data.icon)} width={20} height={20} class="shrink-0" />
         <span class="truncate text-sm">{data.label}</span>
+        {#if type !== "cluster"}
+            <span class="ms-auto size-2 shrink-0 rounded-full {dotClass}"></span>
+        {/if}
     </div>
     {#if subtitle}
         <div class="truncate text-[11px] text-muted-foreground">{subtitle}</div>

@@ -1,5 +1,6 @@
 import dagre from '@dagrejs/dagre';
 import type { Edge, Node } from '@xyflow/svelte';
+import { resolveNodeOsIcon, resolveWorkloadIcon } from '$lib/utils/image-icon';
 import type { Topology, TopologyEdgeKind, TopologyNode, TopologyNodeKind } from '$lib/api/topology';
 
 export interface TopologyVisibility {
@@ -29,13 +30,26 @@ function isVisible(node: TopologyNode, visibility: TopologyVisibility): boolean 
     return true;
 }
 
+const STATIC_ICONS: Partial<Record<TopologyNodeKind, string>> = {
+    cluster: 'mdi:server-network',
+    volume: 'mdi:harddisk',
+};
+
+function nodeIcon(node: TopologyNode): string {
+    if (node.kind === 'agent') return resolveNodeOsIcon(String(node.data.os_type ?? ''));
+    if (node.kind === 'workload') {
+        return resolveWorkloadIcon(String(node.data.image ?? ''), String(node.data.runtime_class ?? ''));
+    }
+    return STATIC_ICONS[node.kind] ?? 'mdi:circle-outline';
+}
+
 function toFlowNode(node: TopologyNode, groupColors: Map<string, string>): Node {
     const groupId = node.data.resource_group_id as string | null | undefined;
     return {
         id: node.id,
         type: node.kind,
         position: { x: 0, y: 0 },
-        data: { label: node.label, ...node.data, groupColor: groupId ? groupColors.get(groupId) : undefined },
+        data: { label: node.label, icon: nodeIcon(node), ...node.data, groupColor: groupId ? groupColors.get(groupId) : undefined },
     };
 }
 

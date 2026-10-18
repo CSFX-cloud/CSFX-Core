@@ -3,7 +3,7 @@ import { authedFetch } from './http';
 const API_BASE = '/api';
 
 export type TopologyNodeKind = 'cluster' | 'agent' | 'workload' | 'volume' | 'resource_group';
-export type TopologyEdgeKind = 'member' | 'runs' | 'unscheduled' | 'mounts' | 'attached';
+export type TopologyEdgeKind = 'member' | 'runs' | 'unscheduled' | 'mounts' | 'attached' | 'unattached';
 
 export interface TopologyNode {
     id: string;

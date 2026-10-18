@@ -89,6 +89,7 @@ fn agent_node(agent: agents::Model, metrics: Option<&agent_metrics::Model>) -> T
             "hostname": agent.hostname,
             "ip_address": agent.ip_address,
             "role": agent.role,
+            "os_type": agent.os_type,
             "status": agent.status,
             "cordoned": agent.cordoned,
             "agent_version": agent.agent_version,
@@ -138,12 +139,12 @@ fn volume_node(volume: &volumes::Model) -> TopologyNode {
     }
 }
 
-fn volume_edge(volume: &volumes::Model) -> Option<TopologyEdge> {
+fn volume_edge(volume: &volumes::Model) -> TopologyEdge {
     let target = format!("volume:{}", volume.id);
     match (volume.attached_to_workload, volume.attached_to_agent) {
-        (Some(workload_id), _) => Some(edge("mounts", format!("workload:{workload_id}"), target)),
-        (None, Some(agent_id)) => Some(edge("attached", format!("agent:{agent_id}"), target)),
-        (None, None) => None,
+        (Some(workload_id), _) => edge("mounts", format!("workload:{workload_id}"), target),
+        (None, Some(agent_id)) => edge("attached", format!("agent:{agent_id}"), target),
+        (None, None) => edge("unattached", CLUSTER_NODE_ID.to_string(), target),
     }
 }
 
@@ -214,7 +215,7 @@ pub async fn get_topology(
     }
     for volume in &volume_rows {
         nodes.push(volume_node(volume));
-        edges.extend(volume_edge(volume));
+        edges.push(volume_edge(volume));
     }
     nodes.extend(group_rows.into_iter().map(resource_group_node));
 

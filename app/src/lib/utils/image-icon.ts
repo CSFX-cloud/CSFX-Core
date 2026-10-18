@@ -6,6 +6,7 @@ const KNOWN_IMAGE_ICONS: Record<string, string> = {
     mysql: 'logos:mysql',
     mariadb: 'logos:mariadb',
     mongo: 'logos:mongodb',
+    node: 'logos:nodejs-icon',
     mongodb: 'logos:mongodb',
     rabbitmq: 'logos:rabbitmq-icon',
     memcached: 'logos:memcached',
@@ -24,4 +25,24 @@ export function resolveImageIcon(image: string): string {
     const bareName = segments[segments.length - 1].toLowerCase();
 
     return KNOWN_IMAGE_ICONS[bareName] ?? DOCKER_FALLBACK_ICON;
+}
+
+const VM_ICONS: Array<[string, string]> = [
+    ['ubuntu', 'logos:ubuntu'],
+    ['windows', 'logos:microsoft-windows-icon'],
+    ['debian', 'logos:debian'],
+    ['fedora', 'logos:fedora'],
+    ['alpine', 'logos:alpinelinux-icon'],
+];
+
+const VM_FALLBACK_ICON = 'mdi:monitor';
+
+export function resolveWorkloadIcon(image: string, runtimeClass: string): string {
+    if (runtimeClass !== 'vm') return resolveImageIcon(image);
+    const lowered = image.toLowerCase();
+    return VM_ICONS.find(([needle]) => lowered.includes(needle))?.[1] ?? VM_FALLBACK_ICON;
+}
+
+export function resolveNodeOsIcon(osType: string): string {
+    return osType.toLowerCase().includes('nix') ? 'logos:nixos' : 'logos:linux-tux';
 }
