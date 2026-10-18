@@ -12,6 +12,14 @@ export interface LogEntry {
     workload_id: string | null;
     organization_id: string | null;
     created_at: string;
+    kind: 'user' | 'system';
+    actor_user_id: string | null;
+    action: string | null;
+    target_type: string | null;
+    target_id: string | null;
+    fields: Record<string, unknown>;
+    occurrences: number;
+    last_seen_at: string;
 }
 
 export interface LogsResponse {
@@ -27,6 +35,10 @@ export interface LogsFilter {
     agent_id?: string;
     workload_id?: string;
     organization_id?: string;
+    kind?: 'user' | 'system';
+    actor_user_id?: string;
+    action?: string;
+    target_id?: string;
     from?: string;
     to?: string;
     q?: string;
