@@ -3,6 +3,7 @@
     import { page } from "$app/state";
     import { auth } from "$lib/auth/store.svelte";
     import {
+        exportLogsCef,
         getLogsFacets,
         listLogs,
         type LogEntry,
@@ -11,7 +12,7 @@
     } from "$lib/api/logs";
     import { listNodes, type Node } from "$lib/api/nodes";
     import { listUsers, type OrganizationUser } from "$lib/api/users";
-    import { csv, levelTextClass, rangeStart, type RangeKey } from "$lib/utils/logs";
+    import { csv, describeAction, levelTextClass, rangeStart, type RangeKey } from "$lib/utils/logs";
     import SearchHeader from "$lib/components/search-header.svelte";
     import LogsFilterPanel from "$lib/components/logs/logs-filter-panel.svelte";
     import LogDetailPanel from "$lib/components/logs/log-detail-panel.svelte";
@@ -114,6 +115,15 @@
         range = "1D";
     }
 
+    async function exportCef() {
+        if (!auth.token) return;
+        try {
+            await exportLogsCef(auth.token, baseFilter());
+        } catch (e) {
+            error = e instanceof Error ? e.message : "Failed to export logs";
+        }
+    }
+
     function nodeLabel(id: string | null): string {
         if (!id) return "-";
         return nodeNames.get(id) ?? id.slice(0, 8);
@@ -195,6 +205,7 @@
             {refreshing}
             onrefresh={refreshNow}
             onclear={clearFilters}
+            onexport={exportCef}
         />
     </aside>
 
@@ -221,6 +232,7 @@
                         <tr class="text-left text-xs text-muted-foreground">
                             <th class="whitespace-nowrap px-3 py-2 font-medium">Time</th>
                             <th class="px-3 py-2 font-medium">User</th>
+                            <th class="px-3 py-2 font-medium">Event</th>
                             <th class="px-3 py-2 font-medium">Action</th>
                             <th class="px-3 py-2 font-medium">Resource</th>
                             <th class="px-3 py-2 font-medium">Target</th>
@@ -253,6 +265,7 @@
                                 {:else}
                                     <td class="whitespace-nowrap px-3 py-1.5 text-muted-foreground">{formatDateTime(entry.created_at)}</td>
                                     <td class="whitespace-nowrap px-3 py-1.5">{actorLabel(entry.actor_user_id)}</td>
+                                    <td class="whitespace-nowrap px-3 py-1.5">{describeAction(entry)}</td>
                                     <td class="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{entry.action ?? entry.message}</td>
                                     <td class="whitespace-nowrap px-3 py-1.5">{entry.target_type ?? "-"}</td>
                                     <td class="max-w-0 truncate px-3 py-1.5 font-mono text-xs">{targetLabel(entry)}</td>

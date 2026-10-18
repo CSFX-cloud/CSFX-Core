@@ -50,10 +50,26 @@ export function levelTextClass(level: string): string {
     }
 }
 
-export function rawLogLine(entry: LogEntry): string {
-    const fields = Object.entries(entry.fields ?? {})
-        .map(([key, value]) => `${key}=${String(value)}`)
-        .join(' ');
-    const head = `[${entry.level}] ${entry.service} ${entry.message}`;
-    return fields ? `${head} ${fields}` : head;
+const PAST_TENSE: Record<string, string> = {
+    create: 'created',
+    delete: 'deleted',
+    update: 'updated',
+    stop: 'stopped',
+    start: 'started',
+    restart: 'restarted',
+    redeploy: 'redeployed',
+    login: 'signed in',
+    login_failed: 'failed to sign in',
+    ticket: 'requested a console ticket for',
+};
+
+function singular(resource: string): string {
+    return resource.replace(/-/g, ' ').replace(/s$/, '');
+}
+
+export function describeAction(entry: LogEntry): string {
+    if (!entry.action) return entry.message;
+    const [resource, verb] = entry.action.split('.');
+    const verbText = PAST_TENSE[verb] ?? verb;
+    return entry.action.startsWith('auth.') ? verbText : `${verbText} ${singular(resource)}`;
 }

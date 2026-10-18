@@ -20,6 +20,7 @@ export interface LogEntry {
     fields: Record<string, unknown>;
     occurrences: number;
     last_seen_at: string;
+    cef: string;
 }
 
 export interface LogsResponse {
@@ -89,6 +90,19 @@ export async function getLogsFacets(token: string, filter: LogsFilter): Promise<
     });
     if (!res.ok) throw new Error(`Failed to load log facets: ${res.status}`);
     return res.json();
+}
+
+export async function exportLogsCef(token: string, filter: LogsFilter): Promise<void> {
+    const res = await authedFetch(`${API_BASE}/logs/export${buildQuery(filter)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to export logs: ${res.status}`);
+    const url = URL.createObjectURL(await res.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'csfx-logs.cef';
+    link.click();
+    URL.revokeObjectURL(url);
 }
 
 export async function getLogsRetention(token: string): Promise<LogsRetention> {

@@ -27,6 +27,7 @@
         refreshing,
         onrefresh,
         onclear,
+        onexport,
     }: {
         kind: LogKind;
         range: RangeKey;
@@ -44,6 +45,7 @@
         refreshing: boolean;
         onrefresh: () => void;
         onclear: () => void;
+        onexport: () => void;
     } = $props();
 
     const kindCounts = $derived(new Map((facets?.kinds ?? []).map((facet) => [facet.value, facet.count])));
@@ -141,5 +143,8 @@
 
     <button type="button" class="self-start text-sm text-primary hover:underline" onclick={onclear}>
         Clear filters
+    </button>
+    <button type="button" class="self-start text-sm text-primary hover:underline" onclick={onexport}>
+        Export as CEF
     </button>
 </div>

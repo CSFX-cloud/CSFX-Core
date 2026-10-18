@@ -1,6 +1,6 @@
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Json},
     routing::get,
     Router,
@@ -13,10 +13,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::{auth::rbac::CanViewLogs, AppState};
+use crate::{auth::rbac::CanViewLogs, cef::format_cef, AppState};
 
 const DEFAULT_LIMIT: u64 = 100;
 const MAX_LIMIT: u64 = 500;
+const EXPORT_LIMIT: u64 = 10_000;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct LogsQuery {
@@ -39,8 +40,22 @@ pub struct LogsQuery {
 }
 
 #[derive(Debug, Serialize)]
+pub struct LogEntryResponse {
+    #[serde(flatten)]
+    pub entry: logs::Model,
+    pub cef: String,
+}
+
+impl From<logs::Model> for LogEntryResponse {
+    fn from(entry: logs::Model) -> Self {
+        let cef = format_cef(&entry);
+        Self { entry, cef }
+    }
+}
+
+#[derive(Debug, Serialize)]
 pub struct LogsResponse {
-    pub entries: Vec<logs::Model>,
+    pub entries: Vec<LogEntryResponse>,
     pub total: u64,
     pub has_more: bool,
 }
@@ -136,6 +151,7 @@ pub async fn list_logs(
         })?;
 
     let has_more = offset + (entries.len() as u64) < total;
+    let entries: Vec<LogEntryResponse> = entries.into_iter().map(Into::into).collect();
 
     Ok((
         StatusCode::OK,
@@ -218,8 +234,40 @@ pub async fn logs_facets(
     Ok((StatusCode::OK, Json(json!(facets))))
 }
 
+pub async fn export_logs(
+    CanViewLogs(_claims): CanViewLogs,
+    State(state): State<AppState>,
+    Query(params): Query<LogsQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let entries = apply_filters(Logs::find(), &params)
+        .order_by(logs::Column::LastSeenAt, Order::Desc)
+        .limit(EXPORT_LIMIT)
+        .all(&state.db_conn)
+        .await
+        .map_err(facet_error)?;
+
+    let body = entries
+        .iter()
+        .map(format_cef)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok((
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"csfx-logs.cef\"",
+            ),
+        ],
+        body,
+    ))
+}
+
 pub fn logs_routes() -> Router<AppState> {
     Router::new()
         .route("/logs", get(list_logs))
+        .route("/logs/export", get(export_logs))
         .route("/logs/facets", get(logs_facets))
 }

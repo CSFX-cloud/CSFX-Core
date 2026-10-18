@@ -2,7 +2,7 @@
     import XIcon from "@lucide/svelte/icons/x";
     import CopyIcon from "@lucide/svelte/icons/copy";
     import type { LogEntry } from "$lib/api/logs";
-    import { levelTextClass, rawLogLine } from "$lib/utils/logs";
+    import { describeAction, levelTextClass } from "$lib/utils/logs";
     import SeverityBars from "./severity-bars.svelte";
 
     let {
@@ -32,10 +32,12 @@
         ].filter((row): row is [string, string] => row[1] !== null && row[1] !== undefined),
     );
     const fieldRows = $derived(Object.entries(entry.fields ?? {}));
-    const raw = $derived(rawLogLine(entry));
+    const description = $derived(
+        entry.kind === "user" ? `${actorLabel(entry.actor_user_id)} ${describeAction(entry)}` : entry.message,
+    );
 
     function copyRaw() {
-        navigator.clipboard.writeText(raw);
+        navigator.clipboard.writeText(entry.cef);
     }
 </script>
 
@@ -71,16 +73,16 @@
 
     <section class="rounded-lg bg-muted/40 p-4 text-sm">
         <h3 class="mb-2 font-semibold">Description</h3>
-        <p class="whitespace-pre-wrap break-words text-muted-foreground">{entry.message}</p>
+        <p class="whitespace-pre-wrap break-words text-muted-foreground">{description}</p>
     </section>
 
     <section class="rounded-lg bg-muted/40 p-4 text-sm">
         <div class="mb-2 flex items-center justify-between">
-            <h3 class="font-semibold">Raw log</h3>
+            <h3 class="font-semibold">CEF log</h3>
             <button type="button" class="text-muted-foreground hover:text-foreground" aria-label="Copy" onclick={copyRaw}>
                 <CopyIcon class="size-4" />
             </button>
         </div>
-        <pre class="whitespace-pre-wrap break-all rounded-md bg-background p-3 font-mono text-xs">{raw}</pre>
+        <pre class="whitespace-pre-wrap break-all rounded-md bg-background p-3 font-mono text-xs">{entry.cef}</pre>
     </section>
 </div>
