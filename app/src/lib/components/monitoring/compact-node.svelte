@@ -20,6 +20,7 @@
 </script>
 
 <Handle type="target" position={Position.Top} />
+<Handle type="target" position={Position.Left} id="left" />
 <div
     class="rounded-md border bg-card px-3 py-1.5 text-card-foreground shadow-sm {type === 'cluster' ? 'w-48 font-semibold' : 'w-44'} {selected ? 'ring-2 ring-primary' : ''}"
     style={data.groupColor ? `border-left: 4px solid ${data.groupColor}` : ""}
@@ -36,3 +37,4 @@
     {/if}
 </div>
 <Handle type="source" position={Position.Bottom} />
+<Handle type="source" position={Position.Right} id="right" />

@@ -21,6 +21,7 @@
     const REFRESH_INTERVAL_MS = 7000;
     const NODE_TYPES = {
         cluster: CompactNode,
+        unassigned: CompactNode,
         agent: AgentNode,
         workload: CompactNode,
         volume: CompactNode,
@@ -37,7 +38,7 @@
     let showVolumes = $state(false);
     let highlightedGroup = $state("");
 
-    let structureKey = $state("");
+    let structureKey = "";
 
     let selectedNode = $state<Node | null>(null);
     let detailOpen = $state(false);
@@ -195,7 +196,7 @@
         {#if error}
             <p class="absolute left-4 top-4 z-10 text-sm text-destructive">{error}</p>
         {/if}
-        {#key structureKey}
+        {#if nodes.length > 0}
         <SvelteFlow
             bind:nodes
             bind:edges
@@ -212,7 +213,7 @@
             <Controls showLock={false} />
             <MiniMap pannable zoomable />
         </SvelteFlow>
-        {/key}
+        {/if}
     </main>
 </div>
 
