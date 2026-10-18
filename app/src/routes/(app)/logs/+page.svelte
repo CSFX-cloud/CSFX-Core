@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
+    import { page } from "$app/state";
     import { auth } from "$lib/auth/store.svelte";
     import { listLogs, type LogEntry, type LogsFilter } from "$lib/api/logs";
     import { listNodes, type Node } from "$lib/api/nodes";
@@ -27,7 +28,9 @@
     const REFRESH_INTERVAL_MS = 7000;
     const PAGE_LIMIT = 100;
 
-    let kind = $state<LogKind>("user");
+    const initialNode = page.url.searchParams.get("node") ?? "";
+
+    let kind = $state<LogKind>(initialNode ? "system" : "user");
     let entries = $state<LogEntry[]>([]);
     let total = $state(0);
     let hasMore = $state(false);
@@ -46,7 +49,7 @@
     let searchText = $state("");
     let fromTime = $state("");
     let toTime = $state("");
-    let agentId = $state("");
+    let agentId = $state(initialNode);
     let actorId = $state("");
     let action = $state("");
 

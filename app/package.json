@@ -50,11 +50,13 @@
 	},
 	"dependencies": {
 		"@blobatar/svelte": "^2.7.0",
+		"@dagrejs/dagre": "^3.1.1",
 		"@iconify/svelte": "^5.2.1",
 		"@jis3r/icons": "^2.7.0",
 		"@novnc/novnc": "^1.7.0",
 		"@xterm/addon-fit": "^0.11.0",
 		"@xterm/xterm": "^6.0.0",
+		"@xyflow/svelte": "^1.7.0",
 		"blobatar": "^2.7.0",
 		"geist": "^1.7.0"
 	}

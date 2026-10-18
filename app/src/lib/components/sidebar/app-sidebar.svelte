@@ -27,7 +27,7 @@
         navBottom: [
             {
                 title: "Monitoring",
-                url: "#",
+                url: "/monitoring",
                 icon: IconActivity,
             },
             {
