@@ -398,7 +398,7 @@ async fn reconcile_tick(
     )
     .await;
     sync_wireguard_peers(client, api_key, agent_id, &resource_group_ids).await;
-    sync_vpn_peers(client, api_key, &resource_group_ids).await;
+    sync_mgmt_peers(client, api_key, agent_id, &resource_group_ids).await;
     firecracker.check_dns_liveness().await;
     qemu.check_dhcp_liveness().await;
     cleanup_stale_resource_groups(client, api_key, firecracker, qemu).await;
@@ -1084,8 +1084,64 @@ async fn sync_wireguard_peers(
     }
 }
 
-async fn sync_vpn_peers(client: &client::ApiClient, api_key: &str, resource_group_ids: &[String]) {
-    let mut wg_peers: Vec<wireguard::Peer> = Vec::new();
+async fn sync_mgmt_peers(
+    client: &client::ApiClient,
+    api_key: &str,
+    agent_id: uuid::Uuid,
+    resource_group_ids: &[String],
+) {
+    let Some(mut wg_peers) = fetch_mesh_wg_peers(client, api_key, agent_id).await else {
+        return;
+    };
+    wg_peers.extend(fetch_vpn_wg_peers(client, api_key, resource_group_ids).await);
+
+    if let Err(e) = wireguard::reconcile_peers(wireguard::MGMT_INTERFACE_NAME, &wg_peers).await {
+        warn!(error = %e, "Failed to sync management WireGuard peers");
+        return;
+    }
+
+    for peer in &wg_peers {
+        if let Err(e) =
+            wireguard::set_route(wireguard::MGMT_INTERFACE_NAME, &peer.allowed_ips).await
+        {
+            warn!(allowed_ips = %peer.allowed_ips, error = %e, "Failed to set management route");
+        }
+    }
+}
+
+async fn fetch_mesh_wg_peers(
+    client: &client::ApiClient,
+    api_key: &str,
+    agent_id: uuid::Uuid,
+) -> Option<Vec<wireguard::Peer>> {
+    let peers = match client.fetch_mesh_peers(api_key).await {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(error = %e, "Failed to fetch mesh peers");
+            return None;
+        }
+    };
+
+    let agent_id_str = agent_id.to_string();
+    Some(
+        peers
+            .into_iter()
+            .filter(|p| p.agent_id != agent_id_str)
+            .map(|p| wireguard::Peer {
+                public_key: p.wg_public_key,
+                endpoint: Some(p.wg_endpoint),
+                allowed_ips: format!("{}/32", p.wg_tunnel_ip),
+            })
+            .collect(),
+    )
+}
+
+async fn fetch_vpn_wg_peers(
+    client: &client::ApiClient,
+    api_key: &str,
+    resource_group_ids: &[String],
+) -> Vec<wireguard::Peer> {
+    let mut wg_peers = Vec::new();
 
     for resource_group_id in resource_group_ids {
         match client
@@ -1105,9 +1161,7 @@ async fn sync_vpn_peers(client: &client::ApiClient, api_key: &str, resource_grou
         }
     }
 
-    if let Err(e) = wireguard::reconcile_peers(wireguard::MGMT_INTERFACE_NAME, &wg_peers).await {
-        warn!(error = %e, "Failed to sync VPN client peers");
-    }
+    wg_peers
 }
 
 async fn cleanup_stale_resource_groups(

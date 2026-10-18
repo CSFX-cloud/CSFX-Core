@@ -854,6 +854,39 @@ pub async fn list_resource_group_peers(
     Ok((StatusCode::OK, Json(json!(peers))))
 }
 
+pub async fn list_mesh_peers(
+    _agent: crate::auth::agent::AgentApiKey,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let agent_rows = Agents::find()
+        .filter(agents::Column::WgPublicKey.is_not_null())
+        .filter(agents::Column::WgEndpoint.is_not_null())
+        .filter(agents::Column::WgTunnelIp.is_not_null())
+        .all(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to fetch mesh peers");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?;
+
+    let peers: Vec<ResourceGroupPeer> = agent_rows
+        .into_iter()
+        .filter_map(|a| {
+            Some(ResourceGroupPeer {
+                agent_id: a.id,
+                wg_public_key: a.wg_public_key?,
+                wg_endpoint: a.wg_endpoint?,
+                wg_tunnel_ip: a.wg_tunnel_ip?,
+            })
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(json!(peers))))
+}
+
 #[derive(Debug, Serialize)]
 pub struct VpnPeerInfo {
     pub client_public_key: String,
@@ -1193,6 +1226,7 @@ pub fn resource_groups_agent_routes() -> Router<AppState> {
             "/resource-groups/agent/active-ids",
             get(list_active_resource_group_ids),
         )
+        .route("/agents/mesh-peers", get(list_mesh_peers))
         .route(
             "/resource-groups/{id}/peers",
             get(list_resource_group_peers),
