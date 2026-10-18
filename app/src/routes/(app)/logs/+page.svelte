@@ -5,10 +5,10 @@
     import { listLogs, type LogEntry, type LogsFilter } from "$lib/api/logs";
     import { listNodes, type Node } from "$lib/api/nodes";
     import { listUsers, type OrganizationUser } from "$lib/api/users";
-    import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import * as Sheet from "$lib/components/ui/sheet/index.js";
     import { Input } from "$lib/components/ui/input/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
+    import SearchHeader from "$lib/components/search-header.svelte";
     import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
     type LogKind = "user" | "system";
@@ -213,38 +213,10 @@
     });
 </script>
 
-<header class="flex h-16 shrink-0 items-center gap-2 px-4 border-b">
-    <Sidebar.Trigger class="-ms-1" />
-    <span class="text-sm text-muted-foreground">/</span>
-    <span class="text-sm font-medium">Logs</span>
-    <div class="ms-4 flex rounded-md border p-0.5 text-sm">
-        <button
-            class="px-3 py-1 rounded {kind === 'user' ? 'bg-muted font-medium' : 'text-muted-foreground'}"
-            onclick={() => switchKind("user")}
-        >
-            Activity
-        </button>
-        <button
-            class="px-3 py-1 rounded {kind === 'system' ? 'bg-muted font-medium' : 'text-muted-foreground'}"
-            onclick={() => switchKind("system")}
-        >
-            System
-        </button>
-    </div>
-    <Button
-        variant="outline"
-        size="sm"
-        class="ms-auto gap-1.5"
-        onclick={refreshNow}
-        disabled={refreshing}
-    >
-        <RefreshCwIcon class="size-3.5 {refreshing ? 'animate-spin' : ''}" />
-        Refresh
-    </Button>
-</header>
 
-<div class="flex h-[calc(100vh-4rem)]">
-    <aside class="w-72 shrink-0 border-r flex flex-col overflow-y-auto">
+
+<div class="flex h-svh min-h-0">
+    <aside class="hidden shrink-0 flex-col overflow-y-auto border-r border-border pt-4 md:flex" style="width: 16rem;">
         <div class="p-4 flex flex-col gap-3">
             <h2 class="text-xs font-semibold uppercase text-muted-foreground">Filters</h2>
 
@@ -323,7 +295,36 @@
         </div>
     </aside>
 
-    <main class="flex-1 overflow-hidden flex flex-col">
+    <div class="flex min-w-0 flex-1 flex-col">
+        <SearchHeader />
+        <div class="flex items-center gap-2 px-4 pb-3">
+        <div class="flex rounded-md border p-0.5 text-sm">
+            <button
+                class="px-3 py-1 rounded {kind === 'user' ? 'bg-muted font-medium' : 'text-muted-foreground'}"
+                onclick={() => switchKind("user")}
+            >
+                Activity
+            </button>
+            <button
+                class="px-3 py-1 rounded {kind === 'system' ? 'bg-muted font-medium' : 'text-muted-foreground'}"
+                onclick={() => switchKind("system")}
+            >
+                System
+            </button>
+        </div>
+        <Button
+            variant="outline"
+            size="sm"
+            class="ms-auto gap-1.5"
+            onclick={refreshNow}
+            disabled={refreshing}
+        >
+            <RefreshCwIcon class="size-3.5 {refreshing ? 'animate-spin' : ''}" />
+            Refresh
+        </Button>
+
+        </div>
+    <main class="flex min-h-0 flex-1 flex-col overflow-hidden border-t border-border">
         {#if error}
             <p class="p-4 text-sm text-destructive">{error}</p>
         {/if}
@@ -417,6 +418,7 @@
             </div>
         </div>
     </main>
+    </div>
 </div>
 
 <Sheet.Root bind:open={detailOpen}>

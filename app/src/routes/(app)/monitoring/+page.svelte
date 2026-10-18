@@ -13,9 +13,9 @@
     } from "$lib/utils/topology-layout";
     import AgentNode from "$lib/components/monitoring/agent-node.svelte";
     import CompactNode from "$lib/components/monitoring/compact-node.svelte";
-    import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import * as Sheet from "$lib/components/ui/sheet/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
+    import SearchHeader from "$lib/components/search-header.svelte";
     import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
 
     const REFRESH_INTERVAL_MS = 7000;
@@ -146,19 +146,10 @@
     });
 </script>
 
-<header class="flex h-16 shrink-0 items-center gap-2 px-4 border-b">
-    <Sidebar.Trigger class="-ms-1" />
-    <span class="text-sm text-muted-foreground">/</span>
-    <span class="text-sm font-medium">Monitoring</span>
-    <Button variant="outline" size="sm" class="ms-auto gap-1.5" onclick={resetLayout}>Reset layout</Button>
-    <Button variant="outline" size="sm" class="gap-1.5" onclick={refreshNow} disabled={refreshing}>
-        <RefreshCwIcon class="size-3.5 {refreshing ? 'animate-spin' : ''}" />
-        Refresh
-    </Button>
-</header>
 
-<div class="flex h-[calc(100vh-4rem)]">
-    <aside class="w-64 shrink-0 border-r flex flex-col gap-4 overflow-y-auto p-4">
+
+<div class="flex h-svh min-h-0">
+    <aside class="hidden shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-4 pt-8 md:flex" style="width: 16rem;">
         <h2 class="text-xs font-semibold uppercase text-muted-foreground">Layers</h2>
         <label class="flex items-center justify-between text-sm">
             Workloads
@@ -192,7 +183,17 @@
         {/if}
     </aside>
 
-    <main class="relative flex-1">
+    <div class="flex min-w-0 flex-1 flex-col">
+        <SearchHeader />
+        <div class="flex items-center gap-2 px-4 pb-3">
+        <Button variant="outline" size="sm" class="ms-auto gap-1.5" onclick={resetLayout}>Reset layout</Button>
+        <Button variant="outline" size="sm" class="gap-1.5" onclick={refreshNow} disabled={refreshing}>
+            <RefreshCwIcon class="size-3.5 {refreshing ? 'animate-spin' : ''}" />
+            Refresh
+        </Button>
+
+        </div>
+    <main class="relative min-h-0 flex-1 border-t border-border">
         {#if error}
             <p class="absolute left-4 top-4 z-10 text-sm text-destructive">{error}</p>
         {/if}
@@ -206,15 +207,17 @@
             nodesConnectable={false}
             deleteKey={null}
             minZoom={0.2}
+            proOptions={{ hideAttribution: true }}
             onnodedragstop={onNodeDragStop}
             onnodeclick={onNodeClick}
         >
             <Background />
             <Controls showLock={false} />
-            <MiniMap pannable zoomable />
+            <MiniMap pannable zoomable position="bottom-right" />
         </SvelteFlow>
         {/if}
     </main>
+    </div>
 </div>
 
 <Sheet.Root bind:open={detailOpen}>
