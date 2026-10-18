@@ -42,6 +42,7 @@ pub mod ssh_access;
 pub mod ssh_keys;
 pub mod sso;
 pub mod system;
+pub mod topology;
 pub mod update;
 pub mod users;
 pub mod volumes;
@@ -154,6 +155,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(resource_groups::resource_groups_routes())
         .merge(ingress::ingress_routes_router())
         .merge(logs::logs_routes())
+        .merge(topology::topology_routes())
         .merge(settings::settings_routes())
         .merge(s3_proxy::s3_proxy_routes())
         .layer(axum::middleware::from_fn(crate::audit::audit_user_actions))
