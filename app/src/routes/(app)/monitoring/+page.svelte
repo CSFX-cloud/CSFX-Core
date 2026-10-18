@@ -17,6 +17,7 @@
     import { Button } from "$lib/components/ui/button/index.js";
     import SearchTrigger from "$lib/components/search-trigger.svelte";
     import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+    import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 
     const REFRESH_INTERVAL_MS = 7000;
     const NODE_TYPES = {
@@ -188,12 +189,20 @@
         <div class="absolute left-1/2 top-4 z-10 w-full max-w-sm -translate-x-1/2">
             <SearchTrigger />
         </div>
-        <div class="absolute right-4 top-4 z-10 flex items-center gap-2">
-            <Button variant="outline" size="sm" onclick={resetLayout}>Reset layout</Button>
-            <Button variant="outline" size="sm" class="gap-1.5" onclick={refreshNow} disabled={refreshing}>
-                <RefreshCwIcon class="size-3.5 {refreshing ? 'animate-spin' : ''}" />
-                Refresh
-            </Button>
+        <div class="absolute right-4 top-4 z-10 flex items-center gap-3 text-muted-foreground">
+            <button type="button" class="hover:text-foreground" title="Reset layout" aria-label="Reset layout" onclick={resetLayout}>
+                <RotateCcwIcon class="size-4" />
+            </button>
+            <button
+                type="button"
+                class="hover:text-foreground disabled:opacity-50"
+                title="Refresh"
+                aria-label="Refresh"
+                onclick={refreshNow}
+                disabled={refreshing}
+            >
+                <RefreshCwIcon class="size-4 {refreshing ? 'animate-spin' : ''}" />
+            </button>
         </div>
         {#if error}
             <p class="absolute left-4 top-16 z-10 text-sm text-destructive">{error}</p>
