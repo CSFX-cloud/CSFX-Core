@@ -18,6 +18,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::{info_span, Span};
 
+pub mod agent_logs;
 pub mod agent_proxy;
 pub mod agent_stream;
 pub mod agents;
@@ -129,6 +130,7 @@ pub fn create_router() -> Router<AppState> {
 
     let agent_unmetered_router = Router::new()
         .merge(agents::agents_unmetered_routes())
+        .merge(agent_logs::agent_logs_routes())
         .merge(resource_groups::resource_groups_agent_routes())
         .merge(agent_stream::agent_stream_routes());
 

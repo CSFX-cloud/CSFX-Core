@@ -170,6 +170,19 @@ pub async fn fetch_cluster_ca(gateway_url: &str) -> Result<String> {
     resp.text().await.context("Failed to read cluster CA")
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct JournalEntry {
+    pub level: String,
+    pub unit: String,
+    pub message: String,
+    pub timestamp_micros: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
+struct JournalBatch {
+    entries: Vec<JournalEntry>,
+}
+
 pub struct ApiClient {
     client: Client,
     gateway_url: String,
@@ -558,6 +571,25 @@ impl ApiClient {
                 status,
                 resp.text().await.unwrap_or_default()
             );
+        }
+
+        Ok(())
+    }
+
+    pub async fn push_logs(&self, api_key: &str, entries: Vec<JournalEntry>) -> Result<()> {
+        let url = format!("{}/api/agents/self/logs", self.gateway_url);
+
+        let resp = self
+            .client
+            .post(&url)
+            .header("X-API-Key", api_key)
+            .json(&JournalBatch { entries })
+            .send()
+            .await
+            .context("Failed to push logs")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Failed to push logs status={}", resp.status());
         }
 
         Ok(())
