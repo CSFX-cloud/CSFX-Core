@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LIMA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CORE_DIR="$(cd "$LIMA_DIR/../.." && pwd)"
+INFRA_DIR="${CSFX_INFRA_DIR:-$(cd "$CORE_DIR/../CSFX-Infra" && pwd)}"
+STATE_DIR="${CSFX_LIMA_STATE:-$HOME/.csfx-lima}"
+TARGET_TRIPLE="aarch64-unknown-linux-musl"
+BUILD_DIR="$CORE_DIR/target/lima"
+UI_DIR="$CORE_DIR/app"
+UI_BUILD_DIR="$UI_DIR/build"
+BIN_DIR="$BUILD_DIR/$TARGET_TRIPLE/debug"
+API_PORT=8000
+ADMIN_EMAIL="admin@csfx.dev"
+ADMIN_PASSWORD="csfx-dev-password-1"
+CONSOLE_PIN="12345678"
+
+export CSFX_API="https://localhost:$API_PORT"
+export CSFX_ADMIN_EMAIL="$ADMIN_EMAIL"
+export CSFX_ADMIN_PASSWORD="$ADMIN_PASSWORD"
+export CSFX_CONSOLE_PIN="$CONSOLE_PIN"
+
+declare -A UNIT_FOR_BIN=(
+  [csfx-migrate]=csfx-migrate
+  [api-gateway]=csfx-api-gateway
+  [registry]=csfx-registry
+  [scheduler]=csfx-scheduler
+  [volume-manager]=csfx-volume-manager
+  [failover-controller]=csfx-failover-controller
+  [sdn-controller]=csfx-sdn-controller
+  [object-storage]=csfx-object-storage
+  [csfx-agent]=csfx-agent
+)
+
+log() {
+  printf '[%s] %s\n' "$1" "$2" >&2
+}
+
+die() {
+  log ERROR "$1"
+  exit 1
+}
+
+mode() {
+  cat "$STATE_DIR/mode" 2>/dev/null || echo single
+}
+
+nodes() {
+  case "$(mode)" in
+    ha) echo "cp1 cp2 cp3" ;;
+    *) echo "cp1 w1" ;;
+  esac
+}
+
+instance() {
+  echo "csfx-$1"
+}
+
+require_tools() {
+  local tool
+  for tool in limactl nix rustup cargo-zigbuild zig watchexec jq curl openssl; do
+    command -v "$tool" > /dev/null || die "missing tool=$tool"
+  done
+}
+
+nixpkgs_rev() {
+  jq -r '.nodes.nixpkgs.locked.rev' "$INFRA_DIR/flake.lock"
+}
+
+flake_overrides() {
+  printf -- '--override-input csfx-infra path:/csfx-infra --override-input nixpkgs github:NixOS/nixpkgs/%s' "$(nixpkgs_rev)"
+}
+
+on_node() {
+  local node="$1"
+  shift
+  limactl shell --workdir / "$(instance "$node")" -- "$@"
+}
+
+on_all_nodes() {
+  local node pids=() status=0
+  for node in $(nodes); do
+    "$@" "$node" &
+    pids+=($!)
+  done
+  for pid in "${pids[@]}"; do
+    wait "$pid" || status=1
+  done
+  return $status
+}
+
+node_state() {
+  limactl list --format '{{.Status}}' "$(instance "$1")" 2>/dev/null || true
+}
+
+node_ip() {
+  on_node "$1" ip -4 -o addr show dev lima0 | awk '{split($4, address, "/"); print address[1]; exit}'
+}
+
+create_node() {
+  local node="$1" name
+  name="$(instance "$node")"
+  [ -n "$(node_state "$node")" ] && return 0
+  log INFO "creating node=$node"
+  limactl disk create "$name-data" --size 20GiB > /dev/null 2>&1 || true
+  local forwards='.portForwards = .portForwards'
+  [ "$node" = cp1 ] && forwards=".portForwards = [{\"guestPort\": $API_PORT, \"hostPort\": $API_PORT, \"hostIP\": \"127.0.0.1\"}] + .portForwards"
+  limactl create --name "$name" --tty=false \
+    --set "$forwards | .additionalDisks = [{\"name\": \"$name-data\", \"format\": false}] | .mounts = [
+      {\"location\": \"$BUILD_DIR\", \"mountPoint\": \"/opt/csfx-dev\"},
+      {\"location\": \"$UI_BUILD_DIR\", \"mountPoint\": \"/csfx-ui\"},
+      {\"location\": \"$LIMA_DIR\", \"mountPoint\": \"/csfx-dev\"},
+      {\"location\": \"$INFRA_DIR\", \"mountPoint\": \"/csfx-infra\"}]" \
+    "$LIMA_DIR/csfx.yaml"
+}
+
+ensure_ui_mount() {
+  local node="$1" name
+  name="$(instance "$node")"
+  grep -q /csfx-ui "$HOME/.lima/$name/lima.yaml" && return 0
+  log INFO "adding ui mount node=$node"
+  [ "$(node_state "$node")" = Running ] && limactl stop "$name" > /dev/null
+  limactl edit --tty=false --set ".mounts += [{\"location\": \"$UI_BUILD_DIR\", \"mountPoint\": \"/csfx-ui\"}]" "$name" > /dev/null
+  return 0
+}
+
+start_node() {
+  local node="$1"
+  [ "$(node_state "$node")" = Running ] && return 0
+  log INFO "starting node=$node"
+  limactl start --tty=false "$(instance "$node")" > /dev/null
+}
+
+rebuild_node() {
+  log INFO "rebuilding node=$1 action=$2"
+  on_node "$1" sudo nixos-rebuild "$2" --flake "path:/csfx-dev#$1" $(flake_overrides)
+}
+
+rustup_path() {
+  dirname "$(rustup which rustc)"
+}
+
+build() {
+  mkdir -p "$BIN_DIR"
+  (cd "$CORE_DIR" && PATH="$(rustup_path):$PATH" CARGO_TARGET_DIR="$BUILD_DIR" CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo zigbuild --quiet --target "$TARGET_TRIPLE" --workspace --bins --exclude csfx-updater)
+}
+
+build_ui() {
+  (cd "$UI_DIR" && npm run build --silent)
+}
+
+binary_stamps() {
+  local bin
+  for bin in "${!UNIT_FOR_BIN[@]}"; do
+    printf '%s %s\n' "$bin" "$(stat -f %m "$BIN_DIR/$bin" 2> /dev/null || echo 0)"
+  done | sort
+}
+
+changed_units() {
+  local before="$1" after="$2"
+  comm -13 <(echo "$before") <(echo "$after") | awk '{print $1}' | while read -r bin; do
+    echo "${UNIT_FOR_BIN[$bin]}.service"
+  done
+}
+
+restart_units() {
+  local node="$1"
+  shift
+  on_node "$node" sudo systemctl try-restart "$@"
+}
+
+reload() {
+  local before after units
+  before="$(binary_stamps)"
+  build
+  after="$(binary_stamps)"
+  units="$(changed_units "$before" "$after")"
+  [ -n "$units" ] || { log INFO "reload nothing_changed=true"; return 0; }
+  log INFO "reload units=$(echo "$units" | tr '\n' ',')"
+  on_all_nodes restart_units_for "$units"
+}
+
+restart_units_for() {
+  local units="$1" node="$2"
+  restart_units "$node" $units
+}
+
+wait_gateway() {
+  local attempt
+  for attempt in $(seq 1 120); do
+    curl -skf -m 3 "https://localhost:$API_PORT/api/public-key" > /dev/null && return 0
+    sleep 5
+  done
+  die "gateway not ready port=$API_PORT"
+}
+
+setup_code() {
+  on_node "$1" sudo cat /run/csfx/setup-code
+}
+
+wait_running() {
+  local node="$1" attempt
+  for attempt in $(seq 1 60); do
+    case "$(node_state "$node")" in
+      Running) return 0 ;;
+      Stopped) limactl start --tty=false "$(instance "$node")" > /dev/null ;;
+    esac
+    sleep 5
+  done
+  die "node not running node=$node"
+}
+
+join_node() {
+  local node="$1" role="$2" ip join_string
+  ip="$(node_ip cp1)"
+  join_string="$(CSFX_HOST="$ip:$API_PORT" "$LIMA_DIR/seed.sh" join-string "$role")"
+  log INFO "joining node=$node role=$role"
+  curl -skf -X POST "https://$(node_ip "$node"):$API_PORT/api/setup/join" \
+    -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg code "$(setup_code "$node")" --arg join "$join_string" '{setup_code: $code, join_string: $join}')" > /dev/null
+  sleep 10
+  wait_running "$node"
+}
+
+bootstrap() {
+  local node
+  for node in $(nodes); do rebuild_node "$node" boot; done
+  stop_all
+  start_all
+  wait_gateway
+  CSFX_SETUP_CODE="$(setup_code cp1)" "$LIMA_DIR/seed.sh" setup
+  for node in $(nodes); do
+    case "$node" in
+      cp1) ;;
+      w1) join_node "$node" worker ;;
+      *) join_node "$node" master ;;
+    esac
+  done
+  seed
+  snapshot seeded
+}
+
+seed() {
+  "$LIMA_DIR/seed.sh" data
+}
+
+snapshot_path() {
+  echo "$STATE_DIR/snapshots/$(mode)/$1"
+}
+
+stop_all() {
+  local node
+  for node in $(nodes); do
+    [ "$(node_state "$node")" = Running ] && limactl stop "$(instance "$node")" > /dev/null
+  done
+  return 0
+}
+
+start_all() {
+  local node
+  for node in $(nodes); do start_node "$node"; done
+}
+
+snapshot() {
+  local target node
+  target="$(snapshot_path "$1")"
+  stop_all
+  rm -rf "$target"
+  mkdir -p "$target"
+  for node in $(nodes); do
+    cp -c "$HOME/.lima/$(instance "$node")/diffdisk" "$target/$node.diffdisk"
+    cp -c "$HOME/.lima/_disks/$(instance "$node")-data/datadisk" "$target/$node.datadisk"
+  done
+  start_all
+  log INFO "snapshot saved name=$1"
+}
+
+restore() {
+  local source node
+  source="$(snapshot_path "$1")"
+  [ -d "$source" ] || die "snapshot missing name=$1"
+  stop_all
+  for node in $(nodes); do
+    cp -c "$source/$node.diffdisk" "$HOME/.lima/$(instance "$node")/diffdisk"
+    cp -c "$source/$node.datadisk" "$HOME/.lima/_disks/$(instance "$node")-data/datadisk"
+  done
+  start_all
+  log INFO "snapshot restored name=$1"
+}
+
+up() {
+  local node
+  mkdir -p "$STATE_DIR"
+  [ "${1:-}" = ha ] && echo ha > "$STATE_DIR/mode" || echo single > "$STATE_DIR/mode"
+  require_tools
+  mkdir -p "$UI_BUILD_DIR"
+  build
+  build_ui
+  for node in $(nodes); do create_node "$node"; ensure_ui_mount "$node"; done
+  start_all
+  [ -d "$(snapshot_path seeded)" ] || bootstrap
+  log INFO "ready api=https://localhost:$API_PORT admin=$ADMIN_EMAIL"
+}
+
+destroy() {
+  local node
+  for node in $(nodes); do
+    limactl delete --force "$(instance "$node")" 2> /dev/null || true
+    limactl disk delete --force "$(instance "$node")-data" 2> /dev/null || true
+  done
+  rm -rf "$STATE_DIR/snapshots/$(mode)"
+}
+
+status() {
+  on_all_nodes status_node
+}
+
+status_node() {
+  on_node "$1" csfx-status
+}
+
+watch() {
+  watchexec --watch "$UI_DIR/src" --watch "$UI_DIR/static" --exts svelte,ts,js,css,html,json --postpone -- "$0" ui &
+  trap 'kill $!' EXIT
+  watchexec --watch "$CORE_DIR/agent" --watch "$CORE_DIR/control-plane" --exts rs,toml --postpone -- "$0" reload
+}
+
+usage() {
+  die "usage: csfx-lima up [ha] | down | destroy | build | ui | reload | watch | switch [node] | logs <node> [unit] | shell <node> | status | setup-code <node> | ip <node> | snapshot <name> | restore <name> | reset | reseed"
+}
+
+main() {
+  local command="${1:-}"
+  [ $# -gt 0 ] && shift
+  case "$command" in
+    up) up "$@" ;;
+    down) stop_all ;;
+    destroy) destroy ;;
+    build) build ;;
+    reload) reload ;;
+    watch) watch ;;
+    ui) build_ui ;;
+    switch) if [ $# -gt 0 ]; then rebuild_node "$1" switch; else for node in $(nodes); do rebuild_node "$node" switch; done; fi ;;
+    logs) on_node "${1:?node}" sudo journalctl -f ${2:+-u "$2"} ;;
+    shell) limactl shell "$(instance "${1:?node}")" ;;
+    status) status ;;
+    setup-code) setup_code "${1:?node}" ;;
+    ip) node_ip "${1:?node}" ;;
+    snapshot) snapshot "${1:?name}" ;;
+    restore) restore "${1:?name}" ;;
+    reset) restore seeded ;;
+    reseed) seed ;;
+    *) usage ;;
+  esac
+}
+
+main "$@"
