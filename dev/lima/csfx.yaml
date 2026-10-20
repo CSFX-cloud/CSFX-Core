@@ -1,0 +1,23 @@
+vmType: vz
+arch: aarch64
+images:
+  - location: "https://github.com/nixos-lima/nixos-lima/releases/download/v0.2.2/nixos-lima-v0.2.2-aarch64.qcow2"
+    arch: aarch64
+    digest: "sha256:dc40482a45929e4cf86ad57425e1c6ac1b376fd81111cc93ba3c9b34e7f900b6"
+cpus: 2
+memory: 3GiB
+disk: 30GiB
+mountType: virtiofs
+mountInotify: false
+networks:
+  - vzNAT: true
+portForwards:
+  - proto: udp
+    guestPort: 68
+    guestIP: 0.0.0.0
+    ignore: true
+  - guestPortRange: [1, 65535]
+    ignore: true
+containerd:
+  system: false
+  user: false
