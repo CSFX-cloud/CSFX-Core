@@ -27,6 +27,7 @@ in
     csfx-agent = {
       enable = true;
       gatewayUrl = "https://localhost:8000";
+      enableFirecracker = true;
     };
     csfx-cp = {
       enable = true;

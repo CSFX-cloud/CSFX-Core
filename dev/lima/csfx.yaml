@@ -1,4 +1,5 @@
 vmType: vz
+nestedVirtualization: true
 arch: aarch64
 images:
   - location: "https://github.com/nixos-lima/nixos-lima/releases/download/v0.2.2/nixos-lima-v0.2.2-aarch64.qcow2"
@@ -14,6 +15,9 @@ networks:
 portForwards:
   - proto: udp
     guestPort: 68
+    guestIP: 0.0.0.0
+    ignore: true
+  - guestPortRange: [1, 65535]
     guestIP: 0.0.0.0
     ignore: true
   - guestPortRange: [1, 65535]
