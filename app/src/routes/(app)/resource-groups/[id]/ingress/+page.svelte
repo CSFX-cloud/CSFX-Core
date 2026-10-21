@@ -3,7 +3,9 @@
     import Trash2Icon from "@lucide/svelte/icons/trash-2";
     import { auth } from "$lib/auth/store.svelte";
     import { Button } from "$lib/components/ui/button/index.js";
-    import { createIngress, deleteIngress, listIngress, type IngressRoute } from "$lib/api/ingress";
+    import { createIngress, deleteIngress, listGateways, listIngress, type Gateway, type IngressRoute } from "$lib/api/ingress";
+    import GatewaysPanel from "$lib/components/resource-group/gateways-panel.svelte";
+    import DnsRecordsPanel from "$lib/components/resource-group/dns-records-panel.svelte";
     import RgTopbar from "$lib/components/resource-group/rg-topbar.svelte";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
 
@@ -11,6 +13,7 @@
     const base = `/resource-groups/${rg.rgId}`;
 
     let routes = $state<IngressRoute[]>([]);
+    let gateways = $state<Gateway[]>([]);
     let loading = $state(true);
     let busy = $state(false);
     let error = $state<string | null>(null);
@@ -18,12 +21,13 @@
 
     let hostname = $state("");
     let workloadId = $state("");
+    let gatewayId = $state("");
     let containerPort = $state<number | null>(null);
     let tls = $state(true);
 
     const candidates = $derived(rg.workloads.filter((workload) => (workload.ports ?? []).length > 0));
     const ports = $derived(candidates.find((workload) => workload.id === workloadId)?.ports ?? []);
-    const canSubmit = $derived(hostname.trim() !== "" && workloadId !== "" && containerPort !== null && !busy);
+    const canSubmit = $derived(hostname.trim() !== "" && gatewayId !== "" && workloadId !== "" && containerPort !== null && !busy);
 
     $effect(() => {
         void workloadId;
@@ -41,10 +45,15 @@
         return rg.workloads.find((workload) => workload.id === id)?.name ?? id;
     }
 
+    function gatewayName(id: string | null): string {
+        return gateways.find((gateway) => gateway.id === id)?.name ?? "none";
+    }
+
     async function refresh() {
         if (!auth.token) return;
         try {
-            routes = await listIngress(auth.token, rg.rgId);
+            [routes, gateways] = await Promise.all([listIngress(auth.token, rg.rgId), listGateways(auth.token, rg.rgId)]);
+            if (!gateways.some((gateway) => gateway.id === gatewayId)) gatewayId = gateways[0]?.id ?? "";
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load ingress routes";
@@ -59,6 +68,7 @@
         try {
             await createIngress(auth.token, rg.rgId, {
                 hostname: hostname.trim(),
+                gateway_id: gatewayId,
                 workload_id: workloadId,
                 container_port: containerPort,
                 tls,
@@ -90,7 +100,7 @@
     <div>
         <h1 class="text-xl font-semibold tracking-tight">Ingress</h1>
         <p class="text-sm text-muted-foreground mt-0.5">
-            Publish a workload under a hostname. Point the DNS record at the cluster address. Changes reach the proxy within about ten seconds.
+            Publish a workload under a hostname through a gateway. Hostnames inside the local zone resolve automatically, point other hostnames at the agent that runs the gateway. Changes reach the gateway within about ten seconds.
         </p>
     </div>
 
@@ -98,10 +108,27 @@
         <p class="text-xs text-destructive">{error}</p>
     {/if}
 
-    <div class="grid gap-3 rounded-lg border p-4 sm:grid-cols-5 sm:items-end">
+    <GatewaysPanel groupId={rg.rgId} {gateways} onchange={refresh} />
+
+    <div>
+        <h2 class="text-base font-semibold tracking-tight">Routes</h2>
+        {#if gateways.length === 0}
+            <p class="text-sm text-muted-foreground mt-0.5">Create a gateway first, routes are served through it.</p>
+        {/if}
+    </div>
+
+    <div class="grid gap-3 rounded-lg border p-4 sm:grid-cols-6 sm:items-end">
         <div class="flex flex-col gap-1 sm:col-span-2">
             <label class="text-xs text-muted-foreground" for="ingress-hostname">Hostname</label>
             <input id="ingress-hostname" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="app.example.com" bind:value={hostname} />
+        </div>
+        <div class="flex flex-col gap-1">
+            <label class="text-xs text-muted-foreground" for="ingress-gateway">Gateway</label>
+            <select id="ingress-gateway" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={gatewayId} disabled={gateways.length === 0}>
+                {#each gateways as gateway}
+                    <option value={gateway.id}>{gateway.name}</option>
+                {/each}
+            </select>
         </div>
         <div class="flex flex-col gap-1">
             <label class="text-xs text-muted-foreground" for="ingress-workload">Workload</label>
@@ -139,6 +166,7 @@
                 <thead class="bg-muted/30 text-xs text-muted-foreground">
                     <tr>
                         <th class="px-4 py-2 text-left font-medium">Hostname</th>
+                        <th class="px-4 py-2 text-left font-medium">Gateway</th>
                         <th class="px-4 py-2 text-left font-medium">Workload</th>
                         <th class="px-4 py-2 text-left font-medium">Port</th>
                         <th class="px-4 py-2 text-left font-medium">TLS</th>
@@ -149,6 +177,7 @@
                     {#each routes as route}
                         <tr class="border-t">
                             <td class="px-4 py-2 font-mono text-xs">{route.hostname}</td>
+                            <td class="px-4 py-2">{gatewayName(route.gateway_id)}</td>
                             <td class="px-4 py-2">{workloadName(route.workload_id)}</td>
                             <td class="px-4 py-2">{route.container_port}</td>
                             <td class="px-4 py-2">{route.tls ? "yes" : "no"}</td>
@@ -163,4 +192,6 @@
             </table>
         </div>
     {/if}
+
+    <DnsRecordsPanel groupId={rg.rgId} />
 </div>
