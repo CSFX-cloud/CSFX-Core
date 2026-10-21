@@ -1,6 +1,8 @@
 import adapter from "@sveltejs/adapter-static";
 
 /** @type {import('@sveltejs/kit').Config} */
+const outDir = process.env.UI_OUT_DIR ?? "build";
+
 const config = {
   compilerOptions: {
     runes: ({ filename }) =>
@@ -8,8 +10,8 @@ const config = {
   },
   kit: {
     adapter: adapter({
-      pages: "build",
-      assets: "build",
+      pages: outDir,
+      assets: outDir,
       fallback: "index.html",
       precompress: false,
       strict: false,
