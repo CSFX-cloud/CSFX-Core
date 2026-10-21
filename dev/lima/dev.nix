@@ -47,12 +47,14 @@ in
     csfx-garage.enable = true;
   };
 
-  systemd.services = lib.mapAttrs
-    (_: bin: { serviceConfig.ExecStart = lib.mkForce "${binDir}/${bin}"; })
-    devUnits
-  // {
-    csfx-api-gateway.environment.STATIC_DIR = lib.mkForce "/csfx-ui";
-    csfx-updater.enable = lib.mkForce false;
-    csfx-master-join.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --join-master";
-  };
+  systemd.services = lib.mkMerge [
+    (lib.mapAttrs
+      (_: bin: { serviceConfig.ExecStart = lib.mkForce "${binDir}/${bin}"; })
+      devUnits)
+    {
+      csfx-api-gateway.environment.STATIC_DIR = lib.mkForce "/csfx-ui";
+      csfx-updater.enable = lib.mkForce false;
+      csfx-master-join.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --join-master";
+    }
+  ];
 }
