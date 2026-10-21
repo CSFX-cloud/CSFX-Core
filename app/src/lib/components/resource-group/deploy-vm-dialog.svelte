@@ -3,6 +3,7 @@
     import {
         createWorkload,
         ensureIsoBucket,
+        findIsoBucket,
         uploadIso,
         listBucketObjects,
         presignObjectDownload,
@@ -51,10 +52,9 @@
         if (!auth.token) return;
         vmExistingIsosLoading = true;
         try {
-            const bucket = await ensureIsoBucket(auth.token, rgId);
-            vmIsoBucketId = bucket.id;
-            const result = await listBucketObjects(auth.token, bucket.id, "");
-            vmExistingIsos = result.objects;
+            const bucket = await findIsoBucket(auth.token, rgId);
+            vmIsoBucketId = bucket?.id ?? null;
+            vmExistingIsos = bucket ? (await listBucketObjects(auth.token, bucket.id, "")).objects : [];
             if (vmExistingIsos.length > 0) {
                 vmIsoMode = "existing";
                 vmSelectedIsoKey = vmExistingIsos[0].key;
