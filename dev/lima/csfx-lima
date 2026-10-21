@@ -146,7 +146,11 @@ build() {
 }
 
 build_ui() {
-  (cd "$UI_DIR" && npm run build --silent)
+  local staging="$UI_DIR/.build-staging"
+  (cd "$UI_DIR" && UI_OUT_DIR="$staging" npm run build --silent)
+  mkdir -p "$UI_BUILD_DIR"
+  rsync -a --delete "$staging/" "$UI_BUILD_DIR/"
+  rm -rf "$staging"
 }
 
 binary_stamps() {

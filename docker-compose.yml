@@ -86,6 +86,7 @@ services:
       SDN_CONTROLLER_URL: http://sdn-controller:8005
       OBJECT_STORAGE_URL: http://object-storage:8006
       FRONTEND_URL: http://localhost:5173
+      CSFX_LOCAL_ZONE: csfx.internal
       CSFX_INCLUDE_CONTAINERS: "true"
       CSFX_AGENT_DIRECT_HOSTNAME: "1"
       TLS_ENABLED: "false"
@@ -398,6 +399,24 @@ services:
       - "18088:80"
       - "18443:443"
       - "18080:8080"
+    depends_on:
+      etcd:
+        condition: service_started
+    networks:
+      - csfx-network
+    restart: unless-stopped
+
+  coredns:
+    image: coredns/coredns:1.12.1
+    container_name: csfx-coredns-dev
+    profiles:
+      - ingress
+    command: ["-conf", "/etc/coredns/Corefile"]
+    volumes:
+      - ./dev/coredns/Corefile:/etc/coredns/Corefile:ro
+    ports:
+      - "1053:53/udp"
+      - "1053:53/tcp"
     depends_on:
       etcd:
         condition: service_started

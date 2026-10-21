@@ -51,6 +51,12 @@ pub async fn allocate(resource_group_id: &str, cidr: &str, workload_id: &str) ->
     )
 }
 
+pub async fn is_claimed(resource_group_id: &str, ip: &str) -> bool {
+    tokio::fs::try_exists(registry_dir(resource_group_id).join(ip))
+        .await
+        .unwrap_or(false)
+}
+
 pub async fn release(resource_group_id: &str, workload_id: &str) {
     let rg_dir = registry_dir(resource_group_id);
     let Ok(mut entries) = tokio::fs::read_dir(&rg_dir).await else {

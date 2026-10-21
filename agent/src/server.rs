@@ -34,6 +34,8 @@ pub struct ServerState {
     pub qemu: Arc<crate::qemu::runtime::QemuRuntime>,
     pub running_containers: Arc<Mutex<HashMap<String, String>>>,
     pub agent_id: uuid::Uuid,
+    pub api_client: Arc<crate::client::ApiClient>,
+    pub api_key: String,
 }
 
 pub async fn run(state: ServerState, port: u16) -> Result<()> {
@@ -44,6 +46,10 @@ pub async fn run(state: ServerState, port: u16) -> Result<()> {
         .route("/metrics/stream", get(metrics_stream_handler))
         .route("/power", post(power_handler))
         .route("/disks", get(disks_handler))
+        .route(
+            "/ingress-config/{group_id}/{gateway_id}",
+            get(ingress_config_handler),
+        )
         .with_state(state);
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
@@ -461,6 +467,28 @@ async fn disks_handler(
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
 
     Ok(Json(crate::disks::collect_disks().await))
+}
+
+async fn ingress_config_handler(
+    State(state): State<ServerState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Path((group_id, gateway_id)): Path<(uuid::Uuid, uuid::Uuid)>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let group_id = group_id.to_string();
+    if !crate::rg_ipam::is_claimed(&group_id, &addr.ip().to_string()).await {
+        warn!(source = %addr, resource_group_id = %group_id, "rejected ingress config request from unknown guest");
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    state
+        .api_client
+        .fetch_gateway_config(&state.api_key, &group_id, &gateway_id.to_string())
+        .await
+        .map(Json)
+        .map_err(|e| {
+            warn!(error = %e, gateway_id = %gateway_id, "failed to serve ingress gateway config");
+            StatusCode::BAD_GATEWAY
+        })
 }
 
 async fn power_handler(

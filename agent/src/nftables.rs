@@ -6,6 +6,7 @@ const TABLE_NAME: &str = "csfx";
 const CHAIN_NAME: &str = "rg_isolation";
 const NAT_TABLE_NAME: &str = "csfx_nat";
 const NAT_CHAIN_NAME: &str = "node_port_dnat";
+const SNAT_CHAIN_NAME: &str = "node_port_snat";
 
 pub async fn ensure_table_and_chain() -> Result<()> {
     run_nft(&["add", "table", "inet", TABLE_NAME]).await?;
@@ -38,10 +39,20 @@ pub async fn ensure_table_and_chain() -> Result<()> {
     ])
     .await?;
 
+    run_nft(&[
+        "add",
+        "chain",
+        "ip",
+        NAT_TABLE_NAME,
+        SNAT_CHAIN_NAME,
+        "{ type nat hook postrouting priority 100 ; policy accept ; }",
+    ])
+    .await?;
+
     info!(
         table = NAT_TABLE_NAME,
-        chain = NAT_CHAIN_NAME,
-        "nftables node port dnat chain ready"
+        chains = "node_port_dnat,node_port_snat",
+        "nftables node port nat chains ready"
     );
 
     Ok(())
@@ -89,6 +100,10 @@ pub async fn add_node_port_dnat(
         "ip",
         NAT_TABLE_NAME,
         NAT_CHAIN_NAME,
+        "fib",
+        "daddr",
+        "type",
+        "local",
         protocol,
         "dport",
         &node_port.to_string(),
@@ -154,75 +169,92 @@ pub async fn dnat_bridge_port(bridge_name: &str, rg_gateway_ip: &str, port: u16)
     .await
 }
 
+pub async fn masquerade_bridge_traffic(bridge_name: &str) -> Result<()> {
+    let comment = format!("\"{}\"", snat_comment(bridge_name));
+    run_nft(&[
+        "add",
+        "rule",
+        "ip",
+        NAT_TABLE_NAME,
+        SNAT_CHAIN_NAME,
+        "iifname",
+        bridge_name,
+        "ct",
+        "status",
+        "dnat",
+        "masquerade",
+        "comment",
+        &comment,
+    ])
+    .await?;
+    run_nft(&[
+        "add",
+        "rule",
+        "ip",
+        NAT_TABLE_NAME,
+        SNAT_CHAIN_NAME,
+        "iifname",
+        bridge_name,
+        "oifname",
+        crate::wireguard::MGMT_INTERFACE_NAME,
+        "masquerade",
+        "comment",
+        &comment,
+    ])
+    .await
+}
+
+fn snat_comment(bridge_name: &str) -> String {
+    format!("{bridge_name}-snat")
+}
+
 pub async fn remove_node_port_rules(workload_id: &str) -> Result<()> {
-    let output = Command::new("nft")
-        .args(["-a", "list", "chain", "ip", NAT_TABLE_NAME, NAT_CHAIN_NAME])
-        .output()
-        .await
-        .context("failed to list nftables nat rules")?;
-
-    let listing = String::from_utf8_lossy(&output.stdout);
-    let mut handles = Vec::new();
-
-    for line in listing.lines() {
-        if !line.contains(&format!("\"{}\"", workload_id)) {
-            continue;
-        }
-        if let Some(handle) = line
-            .rsplit("handle ")
-            .next()
-            .and_then(|h| h.trim().parse::<u32>().ok())
-        {
-            handles.push(handle);
-        }
-    }
-
-    for handle in handles {
-        run_nft(&[
-            "delete",
-            "rule",
-            "ip",
-            NAT_TABLE_NAME,
-            NAT_CHAIN_NAME,
-            "handle",
-            &handle.to_string(),
-        ])
-        .await?;
-    }
-
-    Ok(())
+    delete_rules_containing(
+        "ip",
+        NAT_TABLE_NAME,
+        NAT_CHAIN_NAME,
+        &format!("\"{workload_id}\""),
+    )
+    .await
 }
 
 pub async fn remove_bridge_rules(bridge_name: &str) -> Result<()> {
+    delete_rules_containing("inet", TABLE_NAME, CHAIN_NAME, bridge_name).await?;
+    delete_rules_containing(
+        "ip",
+        NAT_TABLE_NAME,
+        SNAT_CHAIN_NAME,
+        &format!("\"{}\"", snat_comment(bridge_name)),
+    )
+    .await
+}
+
+async fn delete_rules_containing(
+    family: &str,
+    table: &str,
+    chain: &str,
+    needle: &str,
+) -> Result<()> {
     let output = Command::new("nft")
-        .args(["-a", "list", "chain", "inet", TABLE_NAME, CHAIN_NAME])
+        .args(["-a", "list", "chain", family, table, chain])
         .output()
         .await
         .context("failed to list nftables rules")?;
 
     let listing = String::from_utf8_lossy(&output.stdout);
-    let mut handles = Vec::new();
-
-    for line in listing.lines() {
-        if !line.contains(bridge_name) {
-            continue;
-        }
-        if let Some(handle) = line
-            .rsplit("handle ")
-            .next()
-            .and_then(|h| h.trim().parse::<u32>().ok())
-        {
-            handles.push(handle);
-        }
-    }
+    let handles: Vec<u32> = listing
+        .lines()
+        .filter(|line| line.contains(needle))
+        .filter_map(|line| line.rsplit("handle ").next()?.trim().parse().ok())
+        .collect();
 
     for handle in handles {
         run_nft(&[
             "delete",
             "rule",
-            "inet",
-            TABLE_NAME,
-            CHAIN_NAME,
+            family,
+            table,
+            chain,
             "handle",
             &handle.to_string(),
         ])

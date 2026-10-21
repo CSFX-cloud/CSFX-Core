@@ -1,6 +1,7 @@
 <script lang="ts">
     import Icon from "@iconify/svelte";
     import { goto } from "$app/navigation";
+    import CreateGatewayDialog from "$lib/components/resource-group/create-gateway-dialog.svelte";
     import CreateBucketDialog from "$lib/components/resource-group/create-bucket-dialog.svelte";
     import CreateVolumeDialog from "$lib/components/resource-group/create-volume-dialog.svelte";
     import DeployContainerDialog from "$lib/components/resource-group/deploy-container-dialog.svelte";
@@ -17,6 +18,7 @@
     let vmDialog = $state<DeployVmDialog | null>(null);
     let volumeDialog = $state<CreateVolumeDialog | null>(null);
     let bucketDialog = $state<CreateBucketDialog | null>(null);
+    let gatewayDialog = $state<CreateGatewayDialog | null>(null);
 
     const filteredTypes = $derived(
         RESOURCE_TYPES.filter((type) => `${type.label} ${type.description}`.toLowerCase().includes(searchText.toLowerCase())),
@@ -27,11 +29,17 @@
         goto(base);
     }
 
+    async function openGateway(gatewayId: string) {
+        await rg.load();
+        goto(`${base}/gateway/${gatewayId}`);
+    }
+
     function pick(key: ResourceTypeKey) {
         const openers: Record<ResourceTypeKey, () => void> = {
             "docker-container": () => deployDialog?.open(),
             "docker-compose": () => goto(`${base}/add/compose`),
             vm: () => vmDialog?.open(),
+            "api-gateway": () => gatewayDialog?.open(),
             volume: () => volumeDialog?.open(),
             bucket: () => bucketDialog?.open(),
         };
@@ -43,6 +51,7 @@
 <DeployVmDialog bind:this={vmDialog} rgId={rg.rgId} onDeployed={finish} />
 <CreateVolumeDialog bind:this={volumeDialog} rgId={rg.rgId} onCreated={finish} />
 <CreateBucketDialog bind:this={bucketDialog} rgId={rg.rgId} onCreated={finish} />
+<CreateGatewayDialog bind:this={gatewayDialog} rgId={rg.rgId} onCreated={openGateway} />
 
 <RgTopbar backHref={base} backLabel="Back to resource group" />
 

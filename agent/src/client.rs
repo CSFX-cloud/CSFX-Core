@@ -437,6 +437,39 @@ impl ApiClient {
             .context("Failed to parse resource group peers response")
     }
 
+    pub async fn fetch_gateway_config(
+        &self,
+        api_key: &str,
+        resource_group_id: &str,
+        gateway_id: &str,
+    ) -> Result<serde_json::Value> {
+        let url = format!(
+            "{}/api/resource-groups/{}/gateways/{}/config",
+            self.gateway_url, resource_group_id, gateway_id
+        );
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("Failed to fetch ingress gateway config")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!(
+                "Failed to fetch ingress gateway config status={} {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            );
+        }
+
+        resp.json::<serde_json::Value>()
+            .await
+            .context("Failed to parse ingress gateway config response")
+    }
+
     pub async fn fetch_mesh_peers(&self, api_key: &str) -> Result<Vec<ResourceGroupPeer>> {
         let url = format!("{}/api/agents/mesh-peers", self.gateway_url);
 

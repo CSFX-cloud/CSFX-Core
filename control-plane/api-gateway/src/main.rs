@@ -11,6 +11,7 @@ mod cef;
 mod cluster_bundle;
 mod console_pin;
 mod db;
+mod dns_sync;
 mod etcd_members;
 mod ingress_sync;
 mod init;
@@ -26,6 +27,7 @@ mod system_collector;
 mod telemetry;
 mod tls;
 mod utils;
+mod zone_cert;
 
 use routes::registry::{
     AgentStatistics, ErrorResponse as RegistryErrorResponse, HeartbeatRequest,

@@ -1,6 +1,5 @@
 <script lang="ts">
     import { goto } from "$app/navigation";
-    import GlobeIcon from "@lucide/svelte/icons/globe";
     import PlusIcon from "@lucide/svelte/icons/plus";
     import { Button } from "$lib/components/ui/button/index.js";
     import type { Workload } from "$lib/api/resource-groups";
@@ -15,6 +14,11 @@
     let bucketDetailDialog = $state<BucketDetailDialog | null>(null);
 
     function openWorkload(workload: Workload) {
+        const gateway = rg.gateways.find((candidate) => candidate.workload_id === workload.id);
+        if (gateway) {
+            goto(`${base}/gateway/${gateway.id}`);
+            return;
+        }
         const kind = workload.runtime_class === "vm" ? "vm" : "container";
         goto(`${base}/${kind}/${workload.id}`);
     }
@@ -24,10 +28,6 @@
 
 <RgTopbar backHref="/resource-groups" backLabel="Back to resource groups">
     {#snippet actions()}
-        <Button variant="outline" onclick={() => goto(`${base}/ingress`)}>
-            <GlobeIcon class="size-4" />
-            Ingress
-        </Button>
         <Button onclick={() => goto(`${base}/add`)}>
             <PlusIcon class="size-4" />
             Add Resource

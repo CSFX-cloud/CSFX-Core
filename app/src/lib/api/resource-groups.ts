@@ -672,9 +672,13 @@ export async function presignObjectUpload(
 
 const ISO_BUCKET_NAME = 'vm-isos';
 
-export async function ensureIsoBucket(token: string, rgId: string): Promise<Bucket> {
+export async function findIsoBucket(token: string, rgId: string): Promise<Bucket | null> {
     const buckets = await listResourceGroupBuckets(token, rgId);
-    const existing = buckets.find((b) => b.name === ISO_BUCKET_NAME);
+    return buckets.find((b) => b.name === ISO_BUCKET_NAME) ?? null;
+}
+
+export async function ensureIsoBucket(token: string, rgId: string): Promise<Bucket> {
+    const existing = await findIsoBucket(token, rgId);
     if (existing) return existing;
 
     return createBucket(token, {

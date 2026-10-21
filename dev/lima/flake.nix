@@ -21,6 +21,7 @@
         "csfx-garage"
         "csfx-setup"
         "csfx-cluster"
+        "csfx-ingress"
       ];
 
       mkNode = hostName: nixpkgs.lib.nixosSystem {

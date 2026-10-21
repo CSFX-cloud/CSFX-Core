@@ -28,6 +28,12 @@ in
       enable = true;
       gatewayUrl = "https://localhost:8000";
       enableFirecracker = true;
+      advertiseInterface = "enp0s2";
+      localDns.servers = [ "127.0.0.1" ];
+    };
+    csfx-ingress = {
+      enable = true;
+      dnsListenAddresses = [ "lo" "enp0s2" ];
     };
     csfx-cp = {
       enable = true;
@@ -42,12 +48,14 @@ in
     csfx-garage.enable = true;
   };
 
-  systemd.services = lib.mapAttrs
-    (_: bin: { serviceConfig.ExecStart = lib.mkForce "${binDir}/${bin}"; })
-    devUnits
-  // {
-    csfx-api-gateway.environment.STATIC_DIR = lib.mkForce "/csfx-ui";
-    csfx-updater.enable = lib.mkForce false;
-    csfx-master-join.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --join-master";
-  };
+  systemd.services = lib.mkMerge [
+    (lib.mapAttrs
+      (_: bin: { serviceConfig.ExecStart = lib.mkForce "${binDir}/${bin}"; })
+      devUnits)
+    {
+      csfx-api-gateway.environment.STATIC_DIR = lib.mkForce "/csfx-ui";
+      csfx-updater.enable = lib.mkForce false;
+      csfx-master-join.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --join-master";
+    }
+  ];
 }

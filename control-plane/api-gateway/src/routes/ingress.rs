@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use entity::entities::{ingress_routes, resource_groups, workloads};
+use entity::entities::{ingress_gateways, ingress_routes, resource_groups, workloads};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
 };
@@ -26,6 +26,7 @@ const MAX_LABEL_LENGTH: usize = 63;
 #[derive(Debug, Deserialize)]
 pub struct CreateIngressRequest {
     pub hostname: String,
+    pub gateway_id: Uuid,
     pub workload_id: Uuid,
     pub container_port: u16,
     #[serde(default = "default_tls")]
@@ -41,6 +42,7 @@ pub struct IngressResponse {
     pub id: Uuid,
     pub resource_group_id: Uuid,
     pub workload_id: Uuid,
+    pub gateway_id: Option<Uuid>,
     pub hostname: String,
     pub container_port: i32,
     pub tls: bool,
@@ -53,6 +55,7 @@ impl From<ingress_routes::Model> for IngressResponse {
             id: route.id,
             resource_group_id: route.resource_group_id,
             workload_id: route.workload_id,
+            gateway_id: route.gateway_id,
             hostname: route.hostname,
             container_port: route.container_port,
             tls: route.tls,
@@ -82,7 +85,7 @@ pub fn validate_hostname(raw: &str) -> Result<String, &'static str> {
     Ok(hostname)
 }
 
-fn is_valid_label(label: &str) -> bool {
+pub(super) fn is_valid_label(label: &str) -> bool {
     !label.is_empty()
         && label.len() <= MAX_LABEL_LENGTH
         && !label.starts_with('-')
@@ -100,7 +103,10 @@ pub fn port_is_declared(ports: Option<&Value>, container_port: u16) -> bool {
     })
 }
 
-async fn ensure_group(state: &AppState, group_id: Uuid) -> Result<(), ApiError> {
+pub(super) async fn ensure_group(
+    state: &AppState,
+    group_id: Uuid,
+) -> Result<resource_groups::Model, ApiError> {
     let org_id = state
         .default_org_id
         .ok_or_else(|| internal("default organization not initialized"))?;
@@ -109,7 +115,6 @@ async fn ensure_group(state: &AppState, group_id: Uuid) -> Result<(), ApiError> 
         .one(&state.db_conn)
         .await
         .map_err(internal)?
-        .map(|_| ())
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "resource group not found"))
 }
 
@@ -137,6 +142,7 @@ pub async fn create_ingress(
     ensure_group(&state, group_id).await?;
     let hostname = validate_hostname(&request.hostname)
         .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
+    ensure_gateway(&state, group_id, request.gateway_id).await?;
     ensure_workload_port(&state, group_id, &request).await?;
     ensure_hostname_free(&state, &hostname).await?;
 
@@ -144,6 +150,7 @@ pub async fn create_ingress(
         id: Set(Uuid::new_v4()),
         resource_group_id: Set(group_id),
         workload_id: Set(request.workload_id),
+        gateway_id: Set(Some(request.gateway_id)),
         hostname: Set(hostname),
         container_port: Set(i32::from(request.container_port)),
         tls: Set(request.tls),
@@ -160,6 +167,25 @@ pub async fn create_ingress(
         "ingress route created"
     );
     Ok((StatusCode::CREATED, Json(route.into())))
+}
+
+async fn ensure_gateway(
+    state: &AppState,
+    group_id: Uuid,
+    gateway_id: Uuid,
+) -> Result<(), ApiError> {
+    ingress_gateways::Entity::find_by_id(gateway_id)
+        .filter(ingress_gateways::Column::ResourceGroupId.eq(group_id))
+        .one(&state.db_conn)
+        .await
+        .map_err(internal)?
+        .map(|_| ())
+        .ok_or_else(|| {
+            error(
+                StatusCode::BAD_REQUEST,
+                "create an ingress gateway in the resource group first",
+            )
+        })
 }
 
 async fn ensure_workload_port(
