@@ -1,0 +1,8 @@
+csfx.internal:53 {
+    etcd csfx.internal {
+        path /skydns
+        endpoint http://etcd:2379
+    }
+    cache 10
+    errors
+}

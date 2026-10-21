@@ -28,6 +28,11 @@ in
       enable = true;
       gatewayUrl = "https://localhost:8000";
       enableFirecracker = true;
+      localDns.servers = [ "127.0.0.1" ];
+    };
+    csfx-ingress = {
+      enable = true;
+      dnsListenAddresses = [ "0.0.0.0" ];
     };
     csfx-cp = {
       enable = true;
