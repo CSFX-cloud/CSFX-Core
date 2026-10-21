@@ -27,6 +27,7 @@ mod system_collector;
 mod telemetry;
 mod tls;
 mod utils;
+mod zone_cert;
 
 use routes::registry::{
     AgentStatistics, ErrorResponse as RegistryErrorResponse, HeartbeatRequest,

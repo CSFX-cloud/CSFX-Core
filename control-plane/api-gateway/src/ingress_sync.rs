@@ -51,6 +51,17 @@ pub fn platform_entries() -> BTreeMap<String, String> {
     ])
 }
 
+pub fn zone_hostnames(routes: &[RouteTarget], zone: &str) -> Vec<String> {
+    let mut hostnames: Vec<String> = routes
+        .iter()
+        .filter(|route| route.tls && crate::dns_sync::in_zone(&route.hostname, zone))
+        .map(|route| route.hostname.clone())
+        .collect();
+    hostnames.sort();
+    hostnames.dedup();
+    hostnames
+}
+
 fn host_rule(hostname: &str) -> String {
     format!("Host(`{hostname}`)")
 }
@@ -372,6 +383,17 @@ mod tests {
         );
         let router = &config["http"]["routers"][router_name()];
         assert_eq!(router["tls"], json!({}));
+    }
+
+    #[test]
+    fn certificate_names_cover_only_tls_routes_inside_the_zone() {
+        let routes = [
+            target("web.csfx.internal", true),
+            target("web.csfx.internal", true),
+            target("plain.csfx.internal", false),
+            target("app.example.com", true),
+        ];
+        assert_eq!(zone_hostnames(&routes, ZONE), vec!["web.csfx.internal"]);
     }
 
     #[test]

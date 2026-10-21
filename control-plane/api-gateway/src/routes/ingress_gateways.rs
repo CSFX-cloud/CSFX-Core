@@ -22,7 +22,7 @@ use crate::{
         agent::AgentApiKey,
         rbac::{CanManageResourceGroups, CanViewResourceGroups},
     },
-    dns_sync, ingress_sync, AppState,
+    dns_sync, ingress_sync, zone_cert, AppState,
 };
 
 const GATEWAY_IMAGE: &str = "traefik:v3.5";
@@ -344,6 +344,9 @@ pub async fn delete_gateway(
         .exec(&state.db_conn)
         .await
         .map_err(internal)?;
+    zone_cert::remove(&state.db_conn, gateway_id)
+        .await
+        .map_err(internal)?;
 
     tracing::info!(user_id = %claims.user_id, gateway_id = %gateway_id, "ingress gateway deleted");
     Ok(StatusCode::NO_CONTENT)
@@ -372,12 +375,17 @@ pub async fn gateway_config(
     let targets = ingress_sync::load_targets(&state.db_conn, gateway.id)
         .await
         .map_err(internal)?;
+    let zone = dns_sync::zone_from_env();
     let resolver = acme_settings().map(|(resolver, _)| resolver);
-    Ok(Json(ingress_sync::provider_config(
-        &targets,
-        &dns_sync::zone_from_env(),
-        resolver.as_deref(),
-    )))
+    let mut config = ingress_sync::provider_config(&targets, &zone, resolver.as_deref());
+    let sans = ingress_sync::zone_hostnames(&targets, &zone);
+    let certificate = zone_cert::certificate_for(&state.db_conn, gateway.id, &sans)
+        .await
+        .map_err(internal)?;
+    if let Some(certificate) = certificate {
+        config["tls"] = zone_cert::tls_section(&certificate);
+    }
+    Ok(Json(config))
 }
 
 async fn ensure_hosted_by(
