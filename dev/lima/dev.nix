@@ -32,7 +32,7 @@ in
     };
     csfx-ingress = {
       enable = true;
-      dnsListenAddresses = [ "0.0.0.0" ];
+      dnsListenAddresses = [ "lo" "enp0s2" ];
     };
     csfx-cp = {
       enable = true;
