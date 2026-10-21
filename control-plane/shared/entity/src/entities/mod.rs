@@ -6,6 +6,7 @@ pub mod bootstrap_tokens;
 pub mod bucket_access_keys;
 pub mod buckets;
 pub mod certificate_revocations;
+pub mod dns_records;
 pub mod failover_events;
 pub mod garage_nodes;
 pub mod identity_providers;

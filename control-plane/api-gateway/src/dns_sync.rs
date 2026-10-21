@@ -1,4 +1,6 @@
-use entity::entities::{agents, ingress_gateways, ingress_routes, resource_groups, workloads};
+use entity::entities::{
+    agents, dns_records, ingress_gateways, ingress_routes, resource_groups, workloads,
+};
 use etcd_client::{Client, GetOptions};
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 use std::collections::{BTreeMap, HashMap};
@@ -25,6 +27,19 @@ pub fn zone_from_env() -> String {
         .unwrap_or_else(|| DEFAULT_ZONE.to_string())
 }
 
+pub fn servers_from_env() -> Vec<String> {
+    std::env::var("CSFX_LOCAL_DNS_ADDRESSES")
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|address| !address.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn in_zone(hostname: &str, zone: &str) -> bool {
     hostname
         .strip_suffix(zone)
@@ -45,34 +60,47 @@ pub fn record_key(hostname: &str) -> String {
     format!("{SKYDNS_ROOT}/{}/x1", reversed_labels(hostname))
 }
 
-fn record_value(address: &str) -> String {
-    serde_json::json!({ "host": address, "ttl": RECORD_TTL }).to_string()
+fn record_value(target: &str, ttl: u32) -> String {
+    serde_json::json!({ "host": target, "ttl": ttl }).to_string()
 }
 
 pub fn desired_records(
     zone: &str,
     gateways: &[GatewayAddress],
     routes: &[ingress_routes::Model],
+    manual: &[dns_records::Model],
 ) -> BTreeMap<String, String> {
     let by_id: HashMap<Uuid, &GatewayAddress> = gateways
         .iter()
         .map(|gateway| (gateway.id, gateway))
         .collect();
-    let mut records: BTreeMap<String, String> = gateways
+    let mut records: BTreeMap<String, String> = manual
         .iter()
-        .filter(|gateway| in_zone(&gateway.endpoint, zone))
-        .map(|gateway| {
-            (
-                record_key(&gateway.endpoint),
-                record_value(&gateway.address),
-            )
+        .filter(|record| in_zone(&record.name, zone))
+        .map(|record| {
+            let ttl = u32::try_from(record.ttl).unwrap_or(RECORD_TTL);
+            (record_key(&record.name), record_value(&record.value, ttl))
         })
         .collect();
+    records.extend(
+        gateways
+            .iter()
+            .filter(|gateway| in_zone(&gateway.endpoint, zone))
+            .map(|gateway| {
+                (
+                    record_key(&gateway.endpoint),
+                    record_value(&gateway.address, RECORD_TTL),
+                )
+            }),
+    );
     for route in routes.iter().filter(|route| in_zone(&route.hostname, zone)) {
         let Some(gateway) = route.gateway_id.and_then(|id| by_id.get(&id)) else {
             continue;
         };
-        records.insert(record_key(&route.hostname), record_value(&gateway.address));
+        records.insert(
+            record_key(&route.hostname),
+            record_value(&gateway.address, RECORD_TTL),
+        );
     }
     records
 }
@@ -197,7 +225,8 @@ pub async fn reconcile_once(
 ) -> anyhow::Result<EntryDiff> {
     let gateways = load_gateway_addresses(db, zone).await?;
     let routes = ingress_routes::Entity::find().all(db).await?;
-    let desired = desired_records(zone, &gateways, &routes);
+    let manual = dns_records::Entity::find().all(db).await?;
+    let desired = desired_records(zone, &gateways, &routes, &manual);
     let diff = diff_records(&existing_records(client, zone).await?, &desired);
     apply_diff(client, &diff).await?;
     Ok(diff)
@@ -254,7 +283,7 @@ mod tests {
             route("orphan.csfx.internal", None),
             route("lost.csfx.internal", Some(Uuid::from_u128(9))),
         ];
-        let records = desired_records("csfx.internal", &[gateway()], &routes);
+        let records = desired_records("csfx.internal", &[gateway()], &routes, &[]);
         let keys: Vec<&str> = records.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
@@ -267,6 +296,38 @@ mod tests {
             records["/skydns/internal/csfx/web/x1"],
             r#"{"host":"10.0.0.5","ttl":30}"#
         );
+    }
+
+    #[test]
+    fn manual_records_are_published_and_never_override_gateway_names() {
+        let manual = |name: &str, value: &str| dns_records::Model {
+            id: Uuid::nil(),
+            resource_group_id: Uuid::nil(),
+            name: name.to_string(),
+            record_type: "A".to_string(),
+            value: value.to_string(),
+            ttl: 60,
+            created_at: NaiveDateTime::default(),
+        };
+        let records = desired_records(
+            "csfx.internal",
+            &[gateway()],
+            &[],
+            &[
+                manual("db.csfx.internal", "10.0.0.9"),
+                manual("gw.prod.csfx.internal", "10.9.9.9"),
+                manual("elsewhere.example.com", "10.0.0.1"),
+            ],
+        );
+        assert_eq!(
+            records["/skydns/internal/csfx/db/x1"],
+            r#"{"host":"10.0.0.9","ttl":60}"#
+        );
+        assert_eq!(
+            records["/skydns/internal/csfx/prod/gw/x1"],
+            r#"{"host":"10.0.0.5","ttl":30}"#
+        );
+        assert_eq!(records.len(), 2);
     }
 
     #[test]

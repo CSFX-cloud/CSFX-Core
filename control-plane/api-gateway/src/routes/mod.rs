@@ -24,6 +24,7 @@ pub mod agent_stream;
 pub mod agents;
 pub mod buckets;
 pub mod cluster;
+pub mod dns_records;
 pub mod events;
 pub mod identity_providers;
 pub mod ingress;
@@ -156,6 +157,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(resource_groups::resource_groups_routes())
         .merge(ingress::ingress_routes_router())
         .merge(ingress_gateways::ingress_gateways_router())
+        .merge(dns_records::dns_records_router())
         .merge(logs::logs_routes())
         .merge(topology::topology_routes())
         .merge(settings::settings_routes())
