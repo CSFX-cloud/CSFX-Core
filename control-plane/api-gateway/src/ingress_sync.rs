@@ -246,6 +246,7 @@ async fn run(db: DatabaseConnection) {
     let cert_resolver = std::env::var("INGRESS_CERT_RESOLVER")
         .ok()
         .filter(|resolver| !resolver.is_empty());
+    let zone = crate::dns_sync::zone_from_env();
     let (leader, mut client) = connect_with_retry().await;
     let mut tick = interval(SYNC_INTERVAL);
 
@@ -265,6 +266,22 @@ async fn run(db: DatabaseConnection) {
             Ok(_) => {}
             Err(e) => tracing::error!(error = %e, "ingress synchronization failed"),
         }
+        sync_dns(&db, &mut client, &zone).await;
+    }
+}
+
+async fn sync_dns(db: &DatabaseConnection, client: &mut Client, zone: &str) {
+    match crate::dns_sync::reconcile_once(db, client, zone).await {
+        Ok(diff) if diff != EntryDiff::default() => {
+            tracing::info!(
+                puts = diff.puts.len(),
+                deletes = diff.deletes.len(),
+                zone = %zone,
+                "dns records synchronized"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::error!(error = %e, zone = %zone, "dns synchronization failed"),
     }
 }
 

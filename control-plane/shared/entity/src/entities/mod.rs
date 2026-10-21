@@ -10,6 +10,7 @@ pub mod failover_events;
 pub mod garage_nodes;
 pub mod identity_providers;
 pub mod idp_group_mappings;
+pub mod ingress_gateways;
 pub mod ingress_routes;
 pub mod invalid_jwt;
 pub mod key;

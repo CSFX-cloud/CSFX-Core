@@ -11,6 +11,7 @@ mod cef;
 mod cluster_bundle;
 mod console_pin;
 mod db;
+mod dns_sync;
 mod etcd_members;
 mod ingress_sync;
 mod init;

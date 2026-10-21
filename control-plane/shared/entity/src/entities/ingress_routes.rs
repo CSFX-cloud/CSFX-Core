@@ -8,6 +8,7 @@ pub struct Model {
     pub id: Uuid,
     pub resource_group_id: Uuid,
     pub workload_id: Uuid,
+    pub gateway_id: Option<Uuid>,
     pub hostname: String,
     pub container_port: i32,
     pub tls: bool,
