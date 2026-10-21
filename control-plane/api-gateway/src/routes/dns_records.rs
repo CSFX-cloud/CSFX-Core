@@ -48,6 +48,7 @@ pub struct RecordResponse {
 pub struct ZoneResponse {
     pub zone: String,
     pub servers: Vec<String>,
+    pub console_host: String,
 }
 
 impl From<dns_records::Model> for RecordResponse {
@@ -108,8 +109,10 @@ pub fn validate_record(
 }
 
 pub async fn get_zone(CanViewResourceGroups(_claims): CanViewResourceGroups) -> Json<ZoneResponse> {
+    let zone = dns_sync::zone_from_env();
     Json(ZoneResponse {
-        zone: dns_sync::zone_from_env(),
+        console_host: dns_sync::platform_hostname(&zone),
+        zone,
         servers: dns_sync::servers_from_env(),
     })
 }

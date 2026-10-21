@@ -19,6 +19,20 @@ pub struct GatewayAddress {
     pub address: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformRecord {
+    pub hostname: String,
+    pub addresses: Vec<String>,
+}
+
+pub fn platform_hostname(zone: &str) -> String {
+    std::env::var("CSFX_PLATFORM_HOSTNAME")
+        .ok()
+        .map(|name| name.trim().trim_matches('.').to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("console.{zone}"))
+}
+
 pub fn zone_from_env() -> String {
     std::env::var("CSFX_LOCAL_ZONE")
         .ok()
@@ -57,7 +71,11 @@ fn reversed_labels(name: &str) -> String {
 }
 
 pub fn record_key(hostname: &str) -> String {
-    format!("{SKYDNS_ROOT}/{}/x1", reversed_labels(hostname))
+    record_key_at(hostname, 1)
+}
+
+fn record_key_at(hostname: &str, position: usize) -> String {
+    format!("{SKYDNS_ROOT}/{}/x{position}", reversed_labels(hostname))
 }
 
 fn record_value(target: &str, ttl: u32) -> String {
@@ -69,6 +87,7 @@ pub fn desired_records(
     gateways: &[GatewayAddress],
     routes: &[ingress_routes::Model],
     manual: &[dns_records::Model],
+    platform: &PlatformRecord,
 ) -> BTreeMap<String, String> {
     let by_id: HashMap<Uuid, &GatewayAddress> = gateways
         .iter()
@@ -102,7 +121,26 @@ pub fn desired_records(
             record_value(&gateway.address, RECORD_TTL),
         );
     }
+    if in_zone(&platform.hostname, zone) {
+        records.extend(platform_records(platform));
+    }
     records
+}
+
+fn platform_records(platform: &PlatformRecord) -> Vec<(String, String)> {
+    let mut addresses: Vec<&String> = platform.addresses.iter().collect();
+    addresses.sort();
+    addresses.dedup();
+    addresses
+        .into_iter()
+        .enumerate()
+        .map(|(index, address)| {
+            (
+                record_key_at(&platform.hostname, index + 1),
+                record_value(address, RECORD_TTL),
+            )
+        })
+        .collect()
 }
 
 pub fn diff_records(
@@ -146,6 +184,27 @@ pub async fn load_gateway_addresses(
                 address: agent.ip_address.clone()?,
             })
         })
+        .collect())
+}
+
+pub async fn load_platform_addresses(db: &DatabaseConnection) -> Result<Vec<String>, DbErr> {
+    let configured = std::env::var("CSFX_PLATFORM_ADDRESSES").unwrap_or_default();
+    let addresses: Vec<String> = configured
+        .split(',')
+        .map(str::trim)
+        .filter(|address| !address.is_empty())
+        .map(str::to_string)
+        .collect();
+    if !addresses.is_empty() {
+        return Ok(addresses);
+    }
+    Ok(agents::Entity::find()
+        .filter(agents::Column::Role.eq(crate::routes::masters::ROLE_MASTER))
+        .filter(agents::Column::Status.eq("Online"))
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|agent| agent.ip_address)
         .collect())
 }
 
@@ -226,7 +285,11 @@ pub async fn reconcile_once(
     let gateways = load_gateway_addresses(db, zone).await?;
     let routes = ingress_routes::Entity::find().all(db).await?;
     let manual = dns_records::Entity::find().all(db).await?;
-    let desired = desired_records(zone, &gateways, &routes, &manual);
+    let platform = PlatformRecord {
+        hostname: platform_hostname(zone),
+        addresses: load_platform_addresses(db).await?,
+    };
+    let desired = desired_records(zone, &gateways, &routes, &manual, &platform);
     let diff = diff_records(&existing_records(client, zone).await?, &desired);
     apply_diff(client, &diff).await?;
     Ok(diff)
@@ -247,6 +310,13 @@ mod tests {
             container_port: 80,
             tls: true,
             created_at: NaiveDateTime::default(),
+        }
+    }
+
+    fn no_platform() -> PlatformRecord {
+        PlatformRecord {
+            hostname: "console.csfx.internal".to_string(),
+            addresses: Vec::new(),
         }
     }
 
@@ -283,7 +353,7 @@ mod tests {
             route("orphan.csfx.internal", None),
             route("lost.csfx.internal", Some(Uuid::from_u128(9))),
         ];
-        let records = desired_records("csfx.internal", &[gateway()], &routes, &[]);
+        let records = desired_records("csfx.internal", &[gateway()], &routes, &[], &no_platform());
         let keys: Vec<&str> = records.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
@@ -318,6 +388,7 @@ mod tests {
                 manual("gw.prod.csfx.internal", "10.9.9.9"),
                 manual("elsewhere.example.com", "10.0.0.1"),
             ],
+            &no_platform(),
         );
         assert_eq!(
             records["/skydns/internal/csfx/db/x1"],
@@ -328,6 +399,37 @@ mod tests {
             r#"{"host":"10.0.0.5","ttl":30}"#
         );
         assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn platform_hostname_gets_one_record_per_distinct_address() {
+        let platform = PlatformRecord {
+            hostname: "console.csfx.internal".to_string(),
+            addresses: vec![
+                "10.0.0.2".to_string(),
+                "10.0.0.1".to_string(),
+                "10.0.0.1".to_string(),
+            ],
+        };
+        let records = desired_records("csfx.internal", &[], &[], &[], &platform);
+        assert_eq!(
+            records["/skydns/internal/csfx/console/x1"],
+            r#"{"host":"10.0.0.1","ttl":30}"#
+        );
+        assert_eq!(
+            records["/skydns/internal/csfx/console/x2"],
+            r#"{"host":"10.0.0.2","ttl":30}"#
+        );
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn platform_outside_the_zone_is_not_published() {
+        let platform = PlatformRecord {
+            hostname: "console.example.com".to_string(),
+            addresses: vec!["10.0.0.1".to_string()],
+        };
+        assert!(desired_records("csfx.internal", &[], &[], &[], &platform).is_empty());
     }
 
     #[test]

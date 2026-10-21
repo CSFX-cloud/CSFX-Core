@@ -37,16 +37,22 @@ fn detect_primary_ip() -> Option<std::net::IpAddr> {
     Some(socket.local_addr().ok()?.ip())
 }
 
+fn append_san(san_hosts: &mut String, san: &str) {
+    if san_hosts.split(',').any(|existing| existing.trim() == san) {
+        return;
+    }
+    san_hosts.push(',');
+    san_hosts.push_str(san);
+}
+
 fn collect_sans() -> anyhow::Result<(String, Vec<SanType>)> {
     let mut san_hosts =
         std::env::var("TLS_SANS").unwrap_or_else(|_| "localhost,127.0.0.1".to_string());
     if let Some(primary_ip) = detect_primary_ip() {
-        let primary_ip = primary_ip.to_string();
-        if !san_hosts.split(',').any(|s| s.trim() == primary_ip) {
-            san_hosts.push(',');
-            san_hosts.push_str(&primary_ip);
-        }
+        append_san(&mut san_hosts, &primary_ip.to_string());
     }
+    let zone = crate::dns_sync::zone_from_env();
+    append_san(&mut san_hosts, &crate::dns_sync::platform_hostname(&zone));
 
     let mut sans = Vec::new();
     for san in san_hosts.split(',') {
@@ -119,5 +125,19 @@ pub async fn generate_tls_config() -> anyhow::Result<RustlsConfig> {
             );
             Ok(config)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::append_san;
+
+    #[test]
+    fn append_san_adds_a_name_once() {
+        let mut hosts = "localhost,127.0.0.1".to_string();
+        append_san(&mut hosts, "console.csfx.internal");
+        append_san(&mut hosts, "console.csfx.internal");
+        append_san(&mut hosts, "localhost");
+        assert_eq!(hosts, "localhost,127.0.0.1,console.csfx.internal");
     }
 }
