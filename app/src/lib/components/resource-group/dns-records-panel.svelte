@@ -69,7 +69,7 @@
         <p class="text-sm text-muted-foreground mt-0.5">
             {#if zone}
                 The platform serves the zone <span class="font-mono">{zone.zone}</span>{zone.servers.length > 0 ? ` from ${zone.servers.join(", ")}` : ""}.
-                Gateway endpoints and routes inside the zone resolve automatically.
+                Gateway endpoints and routes inside the zone resolve automatically, the control plane answers to <span class="font-mono">{zone.console_host}</span>.
             {:else}
                 The platform serves a local zone. Gateway endpoints and routes inside it resolve automatically.
             {/if}

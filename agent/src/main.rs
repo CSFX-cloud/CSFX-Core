@@ -2,6 +2,7 @@ mod agent_stream;
 mod client;
 mod config;
 mod disks;
+mod endpoint;
 mod fence;
 mod firecracker;
 mod join;
@@ -109,9 +110,7 @@ async fn main() -> Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(30);
 
-    let wg_endpoint = std::env::var("CSFX_WG_ENDPOINT")
-        .ok()
-        .or_else(detect_wg_endpoint);
+    let wg_endpoint = endpoint::resolve(MGMT_WG_PORT).await;
     let wg_tunnel_ip = if config::is_registered() {
         config::load_config().ok().and_then(|cfg| cfg.wg_tunnel_ip)
     } else {
@@ -1291,10 +1290,3 @@ async fn push_workload_stats(
 }
 
 const MGMT_WG_PORT: u16 = 51820;
-
-fn detect_wg_endpoint() -> Option<String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    let local_ip = socket.local_addr().ok()?.ip();
-    Some(format!("{}:{}", local_ip, MGMT_WG_PORT))
-}

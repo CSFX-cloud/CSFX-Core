@@ -28,6 +28,7 @@ in
       enable = true;
       gatewayUrl = "https://localhost:8000";
       enableFirecracker = true;
+      advertiseInterface = "enp0s2";
       localDns.servers = [ "127.0.0.1" ];
     };
     csfx-ingress = {

@@ -90,6 +90,7 @@ export interface CreateDnsRecordRequest {
 export interface DnsZone {
     zone: string;
     servers: string[];
+    console_host: string;
 }
 
 export async function listGateways(token: string, groupId: string): Promise<Gateway[]> {
