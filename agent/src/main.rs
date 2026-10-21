@@ -219,6 +219,8 @@ async fn main() -> Result<()> {
             qemu: qemu_runtime.clone(),
             running_containers: running_containers.clone(),
             agent_id,
+            api_client: api_client.clone(),
+            api_key: api_key.clone(),
         };
         tokio::spawn(async move {
             if let Err(e) = server::run(server_state, port).await {

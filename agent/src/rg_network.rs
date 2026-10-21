@@ -8,6 +8,7 @@ use crate::spec::{rg_bridge_iface_name, second_host_ip};
 
 const RG_REGISTRY_DIR: &str = "/var/lib/csfx-agent/rg-networks";
 const S3_SERVICE_NAME: &str = "s3";
+const PLATFORM_SERVICE_NAME: &str = "csfx";
 const S3_DNAT_PORT: u16 = 3900;
 
 pub async fn ensure_bridge(
@@ -44,6 +45,13 @@ pub async fn ensure_bridge(
                 info!(resource_group_id = %resource_group_id, error = %e, "Failed to register s3 dns record");
             }
 
+            if let Err(e) = rg_dns_registry
+                .upsert(resource_group_id, PLATFORM_SERVICE_NAME, &gateway)
+                .await
+            {
+                info!(resource_group_id = %resource_group_id, error = %e, "Failed to register platform dns record");
+            }
+
             if let Err(e) = crate::nftables::dnat_bridge_port(&iface, &gateway, S3_DNAT_PORT).await
             {
                 info!(resource_group_id = %resource_group_id, error = %e, "Failed to set up s3 dnat rule");
@@ -52,6 +60,10 @@ pub async fn ensure_bridge(
     }
 
     run_ip(&["link", "set", "dev", &iface, "up"]).await?;
+
+    crate::nftables::masquerade_bridge_traffic(&iface)
+        .await
+        .context("Failed to apply nftables masquerade for resource group bridge")?;
 
     let other_bridges = list_other_bridge_ifaces(resource_group_id).await?;
     crate::nftables::isolate_bridge(&iface, &other_bridges)
