@@ -59,6 +59,17 @@ fn pick_free_port(used: &HashSet<u16>, requested: &HashSet<u16>) -> Result<u16, 
         .ok_or_else(|| "no free node port available in configured range".to_string())
 }
 
+fn ensure_requested_free(ports: &[PortMapping], used: &HashSet<u16>) -> Result<(), String> {
+    match ports
+        .iter()
+        .filter_map(|mapping| mapping.node_port)
+        .find(|port| used.contains(port))
+    {
+        Some(port) => Err(format!("node port {port} is already in use on the agent")),
+        None => Ok(()),
+    }
+}
+
 pub async fn allocate_node_ports(
     db: &DatabaseConnection,
     agent_id: Uuid,
@@ -72,6 +83,7 @@ pub async fn allocate_node_ports(
     let mut used = used_node_ports_on_agent(db, agent_id, workload_id)
         .await
         .map_err(|e| format!("failed to query used node ports: {}", e))?;
+    ensure_requested_free(ports, &used)?;
     let mut requested: HashSet<u16> = ports.iter().filter_map(|p| p.node_port).collect();
 
     for mapping in ports.iter_mut() {
@@ -89,4 +101,31 @@ pub async fn allocate_node_ports(
 
 pub fn ports_to_json(ports: &[PortMapping]) -> Result<Value, String> {
     serde_json::to_value(ports).map_err(|e| format!("failed to serialize ports: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mapping(node_port: Option<u16>) -> PortMapping {
+        PortMapping {
+            container_port: 80,
+            protocol: None,
+            rg_port: None,
+            node_port,
+        }
+    }
+
+    #[test]
+    fn explicit_port_already_used_is_rejected() {
+        let used = HashSet::from([80]);
+        let error = ensure_requested_free(&[mapping(Some(80))], &used).unwrap_err();
+        assert!(error.contains("80"));
+    }
+
+    #[test]
+    fn free_and_unset_ports_are_accepted() {
+        let used = HashSet::from([80]);
+        assert!(ensure_requested_free(&[mapping(Some(443)), mapping(None)], &used).is_ok());
+    }
 }

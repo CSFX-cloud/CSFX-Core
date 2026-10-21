@@ -85,7 +85,7 @@ pub fn validate_hostname(raw: &str) -> Result<String, &'static str> {
     Ok(hostname)
 }
 
-fn is_valid_label(label: &str) -> bool {
+pub(super) fn is_valid_label(label: &str) -> bool {
     !label.is_empty()
         && label.len() <= MAX_LABEL_LENGTH
         && !label.starts_with('-')
@@ -103,7 +103,10 @@ pub fn port_is_declared(ports: Option<&Value>, container_port: u16) -> bool {
     })
 }
 
-async fn ensure_group(state: &AppState, group_id: Uuid) -> Result<(), ApiError> {
+pub(super) async fn ensure_group(
+    state: &AppState,
+    group_id: Uuid,
+) -> Result<resource_groups::Model, ApiError> {
     let org_id = state
         .default_org_id
         .ok_or_else(|| internal("default organization not initialized"))?;
@@ -112,7 +115,6 @@ async fn ensure_group(state: &AppState, group_id: Uuid) -> Result<(), ApiError> 
         .one(&state.db_conn)
         .await
         .map_err(internal)?
-        .map(|_| ())
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "resource group not found"))
 }
 

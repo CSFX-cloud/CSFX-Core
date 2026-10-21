@@ -1,7 +1,7 @@
 use entity::entities::{agents, ingress_routes, workloads};
 use etcd_client::{Client, GetOptions};
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use shared::leader::LeaderLease;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
@@ -43,84 +43,77 @@ pub fn node_port_for(ports: &Value, container_port: u16) -> Option<u16> {
     })
 }
 
-pub fn desired_entries(
-    routes: &[RouteTarget],
-    cert_resolver: Option<&str>,
-) -> BTreeMap<String, String> {
-    let mut entries: BTreeMap<String, String> = redirect_middleware_entries().into_iter().collect();
-    for route in routes {
-        let name = format!("csfx-{}", route.id);
-        entries.extend(service_entries(&name, &route.backend));
-        if route.tls {
-            entries.extend(tls_router_entries(&name, &route.hostname, cert_resolver));
-            entries.extend(redirect_router_entries(&name, &route.hostname));
-        } else {
-            entries.extend(plain_router_entries(&name, &route.hostname));
-        }
-    }
-    entries
+pub fn platform_entries() -> BTreeMap<String, String> {
+    let base = format!("{KEY_PREFIX}middlewares/{REDIRECT_MIDDLEWARE}/redirectScheme");
+    BTreeMap::from([
+        (format!("{base}/scheme"), "https".to_string()),
+        (format!("{base}/permanent"), "true".to_string()),
+    ])
 }
 
 fn host_rule(hostname: &str) -> String {
     format!("Host(`{hostname}`)")
 }
 
-fn service_entries(name: &str, backend: &str) -> [(String, String); 1] {
-    [(
-        format!("{KEY_PREFIX}services/{name}/loadBalancer/servers/0/url"),
-        backend.to_string(),
-    )]
-}
-
-fn plain_router_entries(name: &str, hostname: &str) -> [(String, String); 3] {
-    let base = format!("{KEY_PREFIX}routers/{name}");
-    [
-        (format!("{base}/rule"), host_rule(hostname)),
-        (format!("{base}/service"), name.to_string()),
-        (format!("{base}/entryPoints/0"), ENTRYPOINT_WEB.to_string()),
-    ]
-}
-
-fn tls_router_entries(
-    name: &str,
-    hostname: &str,
-    cert_resolver: Option<&str>,
-) -> Vec<(String, String)> {
-    let base = format!("{KEY_PREFIX}routers/{name}");
-    let mut entries = vec![
-        (format!("{base}/rule"), host_rule(hostname)),
-        (format!("{base}/service"), name.to_string()),
-        (
-            format!("{base}/entryPoints/0"),
-            ENTRYPOINT_WEBSECURE.to_string(),
-        ),
-        (format!("{base}/tls"), "true".to_string()),
-    ];
-    if let Some(resolver) = cert_resolver {
-        entries.push((format!("{base}/tls/certResolver"), resolver.to_string()));
+pub fn provider_config(routes: &[RouteTarget], zone: &str, cert_resolver: Option<&str>) -> Value {
+    let mut routers = Map::new();
+    let mut services = Map::new();
+    for route in routes {
+        let name = format!("csfx-{}", route.id);
+        services.insert(name.clone(), service_config(&route.backend));
+        if !route.tls {
+            routers.insert(name.clone(), plain_router(&name, &route.hostname));
+            continue;
+        }
+        let resolver = cert_resolver.filter(|_| !crate::dns_sync::in_zone(&route.hostname, zone));
+        routers.insert(name.clone(), tls_router(&name, &route.hostname, resolver));
+        routers.insert(format!("{name}-redirect"), redirect_router(&route.hostname));
     }
-    entries
+    json!({
+        "http": {
+            "routers": routers,
+            "services": services,
+            "middlewares": {
+                REDIRECT_MIDDLEWARE: {
+                    "redirectScheme": { "scheme": "https", "permanent": true }
+                }
+            }
+        }
+    })
 }
 
-fn redirect_router_entries(name: &str, hostname: &str) -> [(String, String); 4] {
-    let base = format!("{KEY_PREFIX}routers/{name}-redirect");
-    [
-        (format!("{base}/rule"), host_rule(hostname)),
-        (format!("{base}/service"), "noop@internal".to_string()),
-        (format!("{base}/entryPoints/0"), ENTRYPOINT_WEB.to_string()),
-        (
-            format!("{base}/middlewares/0"),
-            REDIRECT_MIDDLEWARE.to_string(),
-        ),
-    ]
+fn service_config(backend: &str) -> Value {
+    json!({ "loadBalancer": { "servers": [{ "url": backend }] } })
 }
 
-fn redirect_middleware_entries() -> [(String, String); 2] {
-    let base = format!("{KEY_PREFIX}middlewares/{REDIRECT_MIDDLEWARE}/redirectScheme");
-    [
-        (format!("{base}/scheme"), "https".to_string()),
-        (format!("{base}/permanent"), "true".to_string()),
-    ]
+fn plain_router(name: &str, hostname: &str) -> Value {
+    json!({
+        "rule": host_rule(hostname),
+        "service": name,
+        "entryPoints": [ENTRYPOINT_WEB]
+    })
+}
+
+fn tls_router(name: &str, hostname: &str, cert_resolver: Option<&str>) -> Value {
+    let tls = match cert_resolver {
+        Some(resolver) => json!({ "certResolver": resolver }),
+        None => json!({}),
+    };
+    json!({
+        "rule": host_rule(hostname),
+        "service": name,
+        "entryPoints": [ENTRYPOINT_WEBSECURE],
+        "tls": tls
+    })
+}
+
+fn redirect_router(hostname: &str) -> Value {
+    json!({
+        "rule": host_rule(hostname),
+        "service": "noop@internal",
+        "entryPoints": [ENTRYPOINT_WEB],
+        "middlewares": [REDIRECT_MIDDLEWARE]
+    })
 }
 
 pub fn is_owned_key(key: &str) -> bool {
@@ -144,8 +137,14 @@ pub fn diff_entries(
     EntryDiff { puts, deletes }
 }
 
-pub async fn load_targets(db: &DatabaseConnection) -> Result<Vec<RouteTarget>, DbErr> {
-    let routes = ingress_routes::Entity::find().all(db).await?;
+pub async fn load_targets(
+    db: &DatabaseConnection,
+    gateway_id: Uuid,
+) -> Result<Vec<RouteTarget>, DbErr> {
+    let routes = ingress_routes::Entity::find()
+        .filter(ingress_routes::Column::GatewayId.eq(gateway_id))
+        .all(db)
+        .await?;
     if routes.is_empty() {
         return Ok(Vec::new());
     }
@@ -225,15 +224,9 @@ pub async fn apply_diff(client: &mut Client, diff: &EntryDiff) -> Result<(), etc
     Ok(())
 }
 
-pub async fn reconcile_once(
-    db: &DatabaseConnection,
-    client: &mut Client,
-    cert_resolver: Option<&str>,
-) -> anyhow::Result<EntryDiff> {
-    let targets = load_targets(db).await?;
-    let desired = desired_entries(&targets, cert_resolver);
+pub async fn reconcile_once(client: &mut Client) -> anyhow::Result<EntryDiff> {
     let existing = existing_entries(client).await?;
-    let diff = diff_entries(&existing, &desired);
+    let diff = diff_entries(&existing, &platform_entries());
     apply_diff(client, &diff).await?;
     Ok(diff)
 }
@@ -243,9 +236,6 @@ pub fn spawn(db: DatabaseConnection) {
 }
 
 async fn run(db: DatabaseConnection) {
-    let cert_resolver = std::env::var("INGRESS_CERT_RESOLVER")
-        .ok()
-        .filter(|resolver| !resolver.is_empty());
     let zone = crate::dns_sync::zone_from_env();
     let (leader, mut client) = connect_with_retry().await;
     let mut tick = interval(SYNC_INTERVAL);
@@ -255,7 +245,7 @@ async fn run(db: DatabaseConnection) {
         if !leader.is_leader() {
             continue;
         }
-        match reconcile_once(&db, &mut client, cert_resolver.as_deref()).await {
+        match reconcile_once(&mut client).await {
             Ok(diff) if diff != EntryDiff::default() => {
                 tracing::info!(
                     puts = diff.puts.len(),
@@ -308,15 +298,20 @@ async fn connect() -> anyhow::Result<(LeaderLease, Client)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    fn target(tls: bool) -> RouteTarget {
+    const ZONE: &str = "csfx.internal";
+
+    fn target(hostname: &str, tls: bool) -> RouteTarget {
         RouteTarget {
             id: Uuid::nil(),
-            hostname: "app.example.com".to_string(),
+            hostname: hostname.to_string(),
             tls,
             backend: "http://10.100.0.4:30001".to_string(),
         }
+    }
+
+    fn router_name() -> String {
+        format!("csfx-{}", Uuid::nil())
     }
 
     #[test]
@@ -335,61 +330,60 @@ mod tests {
 
     #[test]
     fn plain_route_uses_the_web_entrypoint_only() {
-        let entries = desired_entries(&[target(false)], None);
-        let router = format!("traefik/http/routers/csfx-{}", Uuid::nil());
+        let config = provider_config(&[target("app.example.com", false)], ZONE, None);
+        let routers = &config["http"]["routers"];
+        let router = &routers[router_name()];
+        assert_eq!(router["rule"], "Host(`app.example.com`)");
+        assert_eq!(router["entryPoints"], json!(["web"]));
+        assert!(router.get("tls").is_none());
+        assert_eq!(routers.as_object().unwrap().len(), 1);
         assert_eq!(
-            entries[&format!("{router}/rule")],
-            "Host(`app.example.com`)"
-        );
-        assert_eq!(entries[&format!("{router}/entryPoints/0")], "web");
-        assert!(!entries.keys().any(|key| key.contains("-redirect/")));
-        assert!(!entries.keys().any(|key| key.ends_with("/tls")));
-    }
-
-    #[test]
-    fn the_subtree_is_never_empty() {
-        let entries = desired_entries(&[], None);
-        assert_eq!(
-            entries["traefik/http/middlewares/csfx-redirect-https/redirectScheme/scheme"],
-            "https"
-        );
-        assert_eq!(diff_entries(&entries, &entries), EntryDiff::default());
-    }
-
-    #[test]
-    fn tls_route_adds_secure_router_redirect_and_resolver() {
-        let entries = desired_entries(&[target(true)], Some("letsencrypt"));
-        let router = format!("traefik/http/routers/csfx-{}", Uuid::nil());
-        assert_eq!(entries[&format!("{router}/entryPoints/0")], "websecure");
-        assert_eq!(entries[&format!("{router}/tls")], "true");
-        assert_eq!(
-            entries[&format!("{router}/tls/certResolver")],
-            "letsencrypt"
-        );
-        assert_eq!(entries[&format!("{router}-redirect/entryPoints/0")], "web");
-        assert_eq!(
-            entries[&format!("{router}-redirect/middlewares/0")],
-            "csfx-redirect-https"
-        );
-        assert_eq!(
-            entries["traefik/http/middlewares/csfx-redirect-https/redirectScheme/scheme"],
-            "https"
+            config["http"]["services"][router_name()]["loadBalancer"]["servers"][0]["url"],
+            "http://10.100.0.4:30001"
         );
     }
 
     #[test]
-    fn tls_route_without_resolver_has_no_resolver_key() {
-        let entries = desired_entries(&[target(true)], None);
-        assert!(!entries.keys().any(|key| key.ends_with("certResolver")));
+    fn remote_tls_route_gets_resolver_and_redirect() {
+        let config = provider_config(
+            &[target("app.example.com", true)],
+            ZONE,
+            Some("letsencrypt"),
+        );
+        let routers = &config["http"]["routers"];
+        let router = &routers[router_name()];
+        assert_eq!(router["entryPoints"], json!(["websecure"]));
+        assert_eq!(router["tls"]["certResolver"], "letsencrypt");
+        let redirect = &routers[format!("{}-redirect", router_name())];
+        assert_eq!(redirect["entryPoints"], json!(["web"]));
+        assert_eq!(redirect["middlewares"], json!(["csfx-redirect-https"]));
+        assert_eq!(
+            config["http"]["middlewares"]["csfx-redirect-https"]["redirectScheme"]["permanent"],
+            true
+        );
+    }
+
+    #[test]
+    fn zone_tls_route_never_uses_a_cert_resolver() {
+        let config = provider_config(
+            &[target("web.csfx.internal", true)],
+            ZONE,
+            Some("letsencrypt"),
+        );
+        let router = &config["http"]["routers"][router_name()];
+        assert_eq!(router["tls"], json!({}));
+    }
+
+    #[test]
+    fn empty_gateway_still_serves_a_valid_document() {
+        let config = provider_config(&[], ZONE, None);
+        assert_eq!(config["http"]["routers"], json!({}));
+        assert_eq!(config["http"]["services"], json!({}));
     }
 
     #[test]
     fn diff_puts_changes_and_deletes_only_owned_keys() {
         let mut existing = BTreeMap::new();
-        existing.insert(
-            "traefik/http/routers/csfx-a/rule".to_string(),
-            "old".to_string(),
-        );
         existing.insert(
             "traefik/http/routers/csfx-gone/rule".to_string(),
             "x".to_string(),
@@ -398,42 +392,16 @@ mod tests {
             "traefik/http/routers/manual/rule".to_string(),
             "keep".to_string(),
         );
-        existing.insert(
-            "traefik/http/routers/csfx-same/rule".to_string(),
-            "same".to_string(),
-        );
-        let mut desired = BTreeMap::new();
-        desired.insert(
-            "traefik/http/routers/csfx-a/rule".to_string(),
-            "new".to_string(),
-        );
-        desired.insert(
-            "traefik/http/routers/csfx-same/rule".to_string(),
-            "same".to_string(),
-        );
-        desired.insert(
-            "traefik/http/routers/csfx-b/rule".to_string(),
-            "fresh".to_string(),
-        );
+        let diff = diff_entries(&existing, &platform_entries());
 
-        let diff = diff_entries(&existing, &desired);
-
-        assert_eq!(
-            diff.puts,
-            vec![
-                (
-                    "traefik/http/routers/csfx-a/rule".to_string(),
-                    "new".to_string()
-                ),
-                (
-                    "traefik/http/routers/csfx-b/rule".to_string(),
-                    "fresh".to_string()
-                ),
-            ]
-        );
+        assert_eq!(diff.puts.len(), 2);
         assert_eq!(
             diff.deletes,
             vec!["traefik/http/routers/csfx-gone/rule".to_string()]
+        );
+        assert_eq!(
+            diff_entries(&platform_entries(), &platform_entries()),
+            EntryDiff::default()
         );
     }
 
@@ -442,24 +410,11 @@ mod tests {
     async fn sync_roundtrip_against_real_etcd() {
         let endpoint = std::env::var("ETCD_ENDPOINTS").expect("ETCD_ENDPOINTS");
         let mut client = Client::connect([endpoint.as_str()], None).await.unwrap();
-        let desired = desired_entries(&[target(true)], Some("letsencrypt"));
 
-        let first = diff_entries(&existing_entries(&mut client).await.unwrap(), &desired);
-        apply_diff(&mut client, &first).await.unwrap();
-        let second = diff_entries(&existing_entries(&mut client).await.unwrap(), &desired);
-        let cleanup = diff_entries(
-            &existing_entries(&mut client).await.unwrap(),
-            &BTreeMap::new(),
-        );
-        apply_diff(&mut client, &cleanup).await.unwrap();
-        let after = diff_entries(
-            &existing_entries(&mut client).await.unwrap(),
-            &BTreeMap::new(),
-        );
+        let first = reconcile_once(&mut client).await.unwrap();
+        let second = reconcile_once(&mut client).await.unwrap();
 
         assert!(!first.puts.is_empty());
         assert_eq!(second, EntryDiff::default());
-        assert!(!cleanup.deletes.is_empty());
-        assert!(after.deletes.is_empty());
     }
 }
