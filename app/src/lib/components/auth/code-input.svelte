@@ -29,7 +29,10 @@
             {#if group > 0}<span class="su-code__dash" aria-hidden="true"></span>{/if}
             <div class="su-code__group">
                 {#each cells.slice(group * groupSize, (group + 1) * groupSize) as cell (cell)}
-                    <PinInput.Cell {cell} class="cx-input su-cell">{cell.char}</PinInput.Cell>
+                    <PinInput.Cell {cell} class="cx-input su-cell">
+                        {cell.char}
+                        {#if cell.hasFakeCaret}<span class="su-caret" aria-hidden="true"></span>{/if}
+                    </PinInput.Cell>
                 {/each}
             </div>
         {/each}

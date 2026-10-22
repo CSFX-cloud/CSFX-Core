@@ -1,5 +1,6 @@
 <script lang="ts">
     import CodeInput from "$lib/components/auth/code-input.svelte";
+    import PasswordInput from "$lib/components/auth/password-input.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
     import { ChevronRight, Download } from "@lucide/svelte";
     import { REGEXP_ONLY_DIGITS_AND_CHARS } from "bits-ui";
@@ -51,7 +52,8 @@
     const fingerprintLines = $derived(formatFingerprint(status?.ca_fingerprint ?? null));
     const codeValid = $derived(setupCode.length === SETUP_CODE_LENGTH);
     const passwordLongEnough = $derived(password.length >= MIN_PASSWORD_LENGTH);
-    const passwordMismatch = $derived(passwordRepeat.length > 0 && password !== passwordRepeat);
+    const passwordTooShort = $derived(password.length > 0 && !passwordLongEnough);
+    const passwordMismatch =$derived(passwordRepeat.length > 0 && password !== passwordRepeat);
     const accountValid = $derived(
         organizationName.trim().length > 0 &&
             /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(adminEmail.trim()) &&
@@ -59,7 +61,8 @@
             password === passwordRepeat,
     );
     const joinValid = $derived(/^csfx-join\.\S+#csfx-bootstrap\.[a-f0-9]+#[a-f0-9]+(#(worker|master))?$/.test(joinString.trim()));
-    const pinMismatch = $derived(consolePinRepeat.length > 0 && consolePin !== consolePinRepeat);
+    const pinTooShort = $derived(consolePin.length > 0 && consolePin.length < MIN_PIN_LENGTH);
+    const pinMismatch =$derived(consolePinRepeat.length > 0 && consolePin !== consolePinRepeat);
     const pinValid = $derived(
         consolePin.length >= MIN_PIN_LENGTH && consolePin === consolePinRepeat,
     );
@@ -203,10 +206,10 @@
             <button class="cx-btn cx-btn--primary cx-btn--block" type="submit" disabled={!codeValid}>
                 Continue <ChevronRight class="cx-i cx-chev" aria-hidden="true" />
             </button>
-            <button class="cx-btn cx-btn--ghost cx-btn--block" type="button" disabled={!codeValid} onclick={() => (step = "join")}>
-                Join an existing cluster instead
-            </button>
         </form>
+        <button class="cx-link su-join" type="button" disabled={!codeValid} onclick={() => (step = "join")}>
+            Join an existing cluster
+        </button>
     {:else if step === "join"}
         <form
             class="su-pane"
@@ -267,11 +270,16 @@
                 </div>
                 <div class="cx-field">
                     <label class="cx-label" for="password">Password</label>
-                    <input class="cx-input" id="password" type="password" autocomplete="new-password" placeholder="At least {MIN_PASSWORD_LENGTH} characters" bind:value={password} />
+                    <PasswordInput id="password" autocomplete="new-password" placeholder="At least {MIN_PASSWORD_LENGTH} characters" bind:value={password} />
+                    {#if passwordTooShort}
+                        <p class="cx-hint cx-hint--error">
+                            At least {MIN_PASSWORD_LENGTH} characters ({password.length} / {MIN_PASSWORD_LENGTH})
+                        </p>
+                    {/if}
                 </div>
                 <div class="cx-field">
                     <label class="cx-label" for="password-repeat">Repeat password</label>
-                    <input class="cx-input" id="password-repeat" type="password" autocomplete="new-password" aria-invalid={passwordMismatch} bind:value={passwordRepeat} />
+                    <PasswordInput id="password-repeat" autocomplete="new-password" invalid={passwordMismatch} bind:value={passwordRepeat} />
                     {#if passwordMismatch}<p class="cx-hint cx-hint--error">Passwords do not match</p>{/if}
                 </div>
             </div>
@@ -300,11 +308,16 @@
             <div style="display: grid; gap: 16px">
                 <div class="cx-field">
                     <label class="cx-label" for="pin">PIN</label>
-                    <input class="cx-input" id="pin" type="password" autocomplete="off" placeholder="At least {MIN_PIN_LENGTH} characters" bind:value={consolePin} />
+                    <PasswordInput id="pin" autocomplete="off" placeholder="At least {MIN_PIN_LENGTH} characters" bind:value={consolePin} />
+                    {#if pinTooShort}
+                        <p class="cx-hint cx-hint--error">
+                            At least {MIN_PIN_LENGTH} characters ({consolePin.length} / {MIN_PIN_LENGTH})
+                        </p>
+                    {/if}
                 </div>
                 <div class="cx-field">
                     <label class="cx-label" for="pin-repeat">Repeat PIN</label>
-                    <input class="cx-input" id="pin-repeat" type="password" autocomplete="off" aria-invalid={pinMismatch} bind:value={consolePinRepeat} />
+                    <PasswordInput id="pin-repeat" autocomplete="off" invalid={pinMismatch} bind:value={consolePinRepeat} />
                     {#if pinMismatch}<p class="cx-hint cx-hint--error">PINs do not match</p>{/if}
                 </div>
             </div>

@@ -12,7 +12,10 @@
     <main class="cx-auth">
         <section class="cx-card cx-auth__panel" aria-label="Account access">
             <div class="cx-auth__top">
-                <span class="cx-wordmark">csfx.cloud</span>
+                <span class="cx-wordmark">
+                    <img class="cx-wordmark__logo" src="/logo/logo-csfx.svg" alt="" />
+                    csfx.cloud
+                </span>
             </div>
             <div class="cx-auth__body">
                 <div class="cx-auth__form" style="gap: 32px">
