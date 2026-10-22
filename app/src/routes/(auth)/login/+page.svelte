@@ -1,8 +1,5 @@
 <script lang="ts">
-    import { Button } from "$lib/components/ui/button/index.js";
-    import { Input } from "$lib/components/ui/input/index.js";
-    import { Label } from "$lib/components/ui/label/index.js";
-    import { Lock, User, CircleCheck } from "@lucide/svelte";
+    import { ChevronRight, CircleCheck } from "@lucide/svelte";
     import { onMount } from "svelte";
     import Icon from "@iconify/svelte";
     import { presetFor } from "$lib/components/settings/identity-provider-presets";
@@ -18,6 +15,7 @@
     } from "$lib/auth/api";
     import { pendingLogin } from "$lib/auth/pending-login";
     import { auth } from "$lib/auth/store.svelte";
+    import PasswordInput from "$lib/components/auth/password-input.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
     import { toast } from "svelte-sonner";
 
@@ -89,88 +87,69 @@
     }
 </script>
 
-<img
-    src="/logo/logo-csfx.svg"
-    alt="CSFX Logo"
-    class="size-20 mb-6 rounded-md p-2 invert dark:invert-0"
-/>
-<h1 class="text-2xl font-light mb-10">Sign in</h1>
-
-{#if starting}
-    <div class="mb-6 flex items-center gap-2 rounded-md border bg-muted px-3 py-2 text-sm text-muted-foreground">
-        <Spinner /> Control plane is starting, this can take a few minutes.
-    </div>
-{/if}
-
 <form
-    onsubmit={(e) => {
-        e.preventDefault();
+    class="su-pane"
+    onsubmit={(event) => {
+        event.preventDefault();
         handleSubmit();
     }}
-    class="flex flex-col"
 >
-    <div class="flex flex-col gap-1 mb-4">
-        <Label for="username" class="text-xs font-bold mb-1">Username</Label>
-        <div class="relative">
-            <User
-                class="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground size-4"
-            />
-            <Input
+    <h1 class="cx-headline display-md">Sign in.</h1>
+
+    {#if starting}
+        <p class="su-status">
+            <Spinner /> Control plane is starting, this can take a few minutes.
+        </p>
+    {/if}
+
+    <div style="display: grid; gap: 16px">
+        <div class="cx-field">
+            <label class="cx-label" for="username">Username</label>
+            <input
+                class="cx-input"
                 id="username"
                 type="text"
                 placeholder="admin"
-                class="pl-9"
-                bind:value={username}
                 autocomplete="username"
+                bind:value={username}
             />
         </div>
-    </div>
-
-    <div class="flex flex-col gap-1 mb-6">
-        <Label for="password" class="text-xs font-bold mb-1">Password</Label>
-        <div class="relative">
-            <Lock
-                class="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground"
-            />
-            <Input
+        <div class="cx-field">
+            <label class="cx-label" for="password">Password</label>
+            <PasswordInput
                 id="password"
-                type="password"
-                placeholder="••••••••"
-                class="pl-9"
-                bind:value={password}
                 autocomplete="current-password"
+                placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"
+                bind:value={password}
             />
         </div>
     </div>
 
-    <Button
-        class="w-full"
+    <button
+        class="cx-btn cx-btn--primary cx-btn--block"
         type="submit"
         disabled={status !== "idle" || !username || !password}
+        aria-busy={status === "loading"}
     >
         {#if status === "loading"}
             <Spinner />
         {:else if status === "success"}
-            <CircleCheck class="size-4 animate-in zoom-in-50 duration-300" />
+            <CircleCheck class="cx-i" aria-hidden="true" />
         {:else}
-            Sign in
+            Sign in <ChevronRight class="cx-i cx-chev" aria-hidden="true" />
         {/if}
-    </Button>
-</form>
+    </button>
 
-{#if ssoProviders.length > 0}
-    <div class="flex items-center gap-3 my-6 text-xs text-muted-foreground">
-        <div class="h-px flex-1 bg-border"></div>
-        or
-        <div class="h-px flex-1 bg-border"></div>
-    </div>
-    <div class="flex flex-col gap-2">
-        {#each ssoProviders as provider (provider.slug)}
-            {@const preset = presetFor(provider.slug, provider.display_name)}
-            <Button variant="outline" class="w-full gap-2" href={ssoStartUrl(provider.slug)}>
-                <Icon icon={preset.icon} width={16} height={16} color={preset.iconColor} />
-                Continue with {provider.display_name}
-            </Button>
-        {/each}
-    </div>
-{/if}
+    {#if ssoProviders.length > 0}
+        <div class="cx-divider">or</div>
+        <div style="display: grid; gap: 8px">
+            {#each ssoProviders as provider (provider.slug)}
+                {@const preset = presetFor(provider.slug, provider.display_name)}
+                <a class="cx-btn cx-btn--secondary cx-btn--block" href={ssoStartUrl(provider.slug)}>
+                    <Icon icon={preset.icon} width={16} height={16} color={preset.iconColor} />
+                    Continue with {provider.display_name}
+                </a>
+            {/each}
+        </div>
+    {/if}
+</form>
