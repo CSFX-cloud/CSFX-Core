@@ -3,17 +3,11 @@
     import EmptyState from "$lib/components/dashboard/empty-state.svelte";
     import type { Node, NodeMetrics } from "$lib/api/nodes";
     import { nodeTone, usageTone } from "$lib/utils/dashboard";
-
-    const PERCENT = 100;
+    import { memoryPercent } from "$lib/utils/nodes";
 
     let { nodes, metrics, loading }: { nodes: Node[]; metrics: NodeMetrics[]; loading: boolean } = $props();
 
     const metricsById = $derived(new Map(metrics.map((entry) => [entry.agent_id, entry])));
-
-    function memoryPercent(entry: NodeMetrics | undefined): number | null {
-        if (!entry?.memory_total_bytes || entry.memory_used_bytes === null) return null;
-        return (entry.memory_used_bytes / entry.memory_total_bytes) * PERCENT;
-    }
 
     function label(status: string): string {
         return status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();

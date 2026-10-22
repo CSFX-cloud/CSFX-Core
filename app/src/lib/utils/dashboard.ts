@@ -17,6 +17,11 @@ export interface SeriesPaths {
     area: string;
 }
 
+export const USAGE_SERIES = [
+    { key: "cpu", label: "CPU", color: "#2dd4bf", fillOpacity: 0.25 },
+    { key: "memory", label: "Memory", color: "#3b82f6", fillOpacity: 0.35 },
+] as const;
+
 const CHART_WIDTH = 600;
 const CHART_HEIGHT = 200;
 const CHART_BASELINE = CHART_HEIGHT - 1;
@@ -46,12 +51,12 @@ export function nodeTone(status: string): Tone {
     return normalized === "offline" ? "danger" : "warning";
 }
 
-export function seriesPaths(samples: UsageHistoryPoint[], key: "cpu" | "memory" | "disk"): SeriesPaths {
+export function seriesPaths(samples: UsageHistoryPoint[], key: "cpu" | "memory" | "disk", yMax = MAX_PERCENT): SeriesPaths {
     if (samples.length < 2) return { line: "", area: "" };
     const step = CHART_WIDTH / (samples.length - 1);
     const points = samples.map((sample, index) => {
         const x = index * step;
-        const y = CHART_BASELINE - ((CHART_BASELINE - 1) * Math.min(sample[key], MAX_PERCENT)) / MAX_PERCENT;
+        const y = CHART_BASELINE - ((CHART_BASELINE - 1) * Math.min(sample[key], yMax)) / yMax;
         return `${x.toFixed(1)} ${y.toFixed(1)}`;
     });
     const line = `M${points.join("L")}`;
@@ -60,9 +65,9 @@ export function seriesPaths(samples: UsageHistoryPoint[], key: "cpu" | "memory" 
     return { line, area: `${line}L${lastX} ${CHART_BASELINE}L${firstX} ${CHART_BASELINE}Z` };
 }
 
-export function pointPosition(index: number, count: number, percent: number): { left: number; top: number } {
+export function pointPosition(index: number, count: number, percent: number, yMax = MAX_PERCENT): { left: number; top: number } {
     const left = count > 1 ? (index / (count - 1)) * 100 : 0;
-    const y = CHART_BASELINE - ((CHART_BASELINE - 1) * Math.min(percent, MAX_PERCENT)) / MAX_PERCENT;
+    const y = CHART_BASELINE - ((CHART_BASELINE - 1) * Math.min(percent, yMax)) / yMax;
     return { left, top: (y / CHART_HEIGHT) * 100 };
 }
 
@@ -71,6 +76,13 @@ export function formatBucket(bucket: string, range: "1h" | "24h" | "7d"): string
     const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     if (range !== "7d") return time;
     return `${date.toLocaleDateString([], { weekday: "short", day: "numeric" })} ${time}`;
+}
+
+const Y_AXIS_STEP = 20;
+
+export function chartCeiling(samples: UsageHistoryPoint[], keys: ("cpu" | "memory" | "disk")[]): number {
+    const peak = Math.max(0, ...samples.flatMap((sample) => keys.map((key) => sample[key])));
+    return Math.min(MAX_PERCENT, Math.max(Y_AXIS_STEP, Math.ceil(peak / Y_AXIS_STEP) * Y_AXIS_STEP));
 }
 
 export function alertTone(event: AlertEvent): Tone {

@@ -83,6 +83,51 @@ function healthHistory() {
     }));
 }
 
+const AGENT_ROUTE = /^\/api\/agents\/([^/]+)(\/metrics\/latest|\/disks)?$/;
+
+function latestMetrics(node) {
+    const metrics = nodeMetrics(node);
+    return {
+        id: `m-${node.id}`,
+        agent_id: node.id,
+        timestamp: new Date().toISOString(),
+        cpu_model: "Mock CPU",
+        cpu_cores: 8,
+        cpu_threads: 16,
+        cpu_usage_percent: metrics.cpu_usage_percent ?? 0,
+        memory_total_bytes: metrics.memory_total_bytes ?? 0,
+        memory_used_bytes: metrics.memory_used_bytes ?? 0,
+        memory_usage_percent: node.memory ?? 0,
+        disk_total_bytes: metrics.disk_total_bytes ?? 0,
+        disk_used_bytes: metrics.disk_used_bytes ?? 0,
+        disk_usage_percent: 9,
+        network_rx_bytes: 1.6 * GIB,
+        network_tx_bytes: 1.5 * GIB,
+        os_name: "NixOS",
+        os_version: "25.11",
+        kernel_version: "6.12.1",
+        hostname: node.name,
+        uptime_seconds: 240_000,
+    };
+}
+
+const DISKS = [
+    { device: "/dev/sda", model: "QEMU HARDDISK", media_type: "ssd", total_bytes: 120 * GIB, used_bytes: 6.9 * GIB, mount_point: "/", smart: null },
+    { device: "/dev/sr0", model: "QEMU DVD-ROM", media_type: "optical", total_bytes: 1.8 * GIB, used_bytes: 0, mount_point: null, smart: null },
+];
+
+function agentRoute(method, path) {
+    const match = method === "GET" ? AGENT_ROUTE.exec(path) : null;
+    const node = match && NODES.find((entry) => entry.id === match[1]);
+    if (!node) return null;
+    const handlers = {
+        undefined: (_body, response) => send(response, 200, agent(node)),
+        "/metrics/latest": (_body, response) => send(response, 200, latestMetrics(node)),
+        "/disks": (_body, response) => send(response, 200, DISKS),
+    };
+    return handlers[match[2]];
+}
+
 const USAGE_RANGES = { "1h": [60, 60_000], "24h": [96, 900_000], "7d": [168, 3_600_000] };
 
 function usageHistory(range) {
@@ -191,7 +236,8 @@ const routes = {
 };
 
 createServer(async (request, response) => {
-    const route = routes[`${request.method} ${request.url.split("?")[0]}`];
+    const path = request.url.split("?")[0];
+    const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path);
     if (!route) return send(response, 404, { error: "not found" });
     route(await readBody(request), response, new URL(request.url, "http://localhost").searchParams);
 }).listen(PORT, () => {

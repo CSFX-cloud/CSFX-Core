@@ -172,8 +172,9 @@ export interface UsageHistoryPoint {
 
 export type UsageRange = '1h' | '24h' | '7d';
 
-export async function getUsageHistory(token: string, range: UsageRange): Promise<UsageHistoryPoint[]> {
-    const res = await authedFetch(`${API_BASE}/system/stats/usage?range=${range}`, {
+export async function getUsageHistory(token: string, range: UsageRange, agentId?: string): Promise<UsageHistoryPoint[]> {
+    const agentQuery = agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
+    const res = await authedFetch(`${API_BASE}/system/stats/usage?range=${range}${agentQuery}`, {
         headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`usage history fetch failed: ${res.status}`);

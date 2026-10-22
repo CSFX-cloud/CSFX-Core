@@ -137,8 +137,6 @@
             {#snippet foot()}
                 {#if nodeTotal - nodesOnline > 0}
                     <span class="cx-badge cx-badge--danger">{nodeTotal - nodesOnline} offline</span>
-                {:else}
-                    <span class="cx-badge cx-badge--success">All online</span>
                 {/if}
             {/snippet}
         </StatCard>
