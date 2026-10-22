@@ -7,7 +7,8 @@ use axum::{
 };
 use entity::{entities::logs, Logs};
 use sea_orm::{
-    ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    sea_query::Expr, ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,6 +19,8 @@ use crate::{auth::rbac::CanViewLogs, cef::format_cef, AppState};
 const DEFAULT_LIMIT: u64 = 100;
 const MAX_LIMIT: u64 = 500;
 const EXPORT_LIMIT: u64 = 10_000;
+const TREND_BUCKETS: i64 = 60;
+const DEFAULT_TREND_WINDOW_HOURS: i64 = 24;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct LogsQuery {
@@ -269,6 +272,64 @@ pub async fn logs_facets(
     Ok((StatusCode::OK, Json(json!(facets))))
 }
 
+#[derive(Debug, Serialize)]
+pub struct TrendPoint {
+    pub start: chrono::DateTime<chrono::Utc>,
+    pub count: i64,
+}
+
+fn trend_points(
+    from: chrono::DateTime<chrono::Utc>,
+    bucket_seconds: i64,
+    rows: Vec<(i64, i64)>,
+) -> Vec<TrendPoint> {
+    let counts: std::collections::HashMap<i64, i64> = rows.into_iter().collect();
+    (0..TREND_BUCKETS)
+        .map(|index| TrendPoint {
+            start: from + chrono::Duration::seconds(index * bucket_seconds),
+            count: counts.get(&index).copied().unwrap_or(0),
+        })
+        .collect()
+}
+
+pub async fn logs_trend(
+    CanViewLogs(_claims): CanViewLogs,
+    State(state): State<AppState>,
+    Query(params): Query<LogsQuery>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let to = params.to.unwrap_or_else(chrono::Utc::now);
+    let from = params
+        .from
+        .unwrap_or(to - chrono::Duration::hours(DEFAULT_TREND_WINDOW_HOURS));
+    let span = (to - from).num_seconds().max(TREND_BUCKETS);
+    let bucket_seconds = (span + TREND_BUCKETS - 1) / TREND_BUCKETS;
+    let filtered = LogsQuery {
+        from: Some(from),
+        to: Some(to),
+        ..params
+    };
+    let bucket = Expr::cust(format!(
+        "FLOOR((EXTRACT(EPOCH FROM last_seen_at) - {}) / {})::bigint",
+        from.timestamp(),
+        bucket_seconds
+    ));
+
+    let rows: Vec<(i64, i64)> = apply_filters(Logs::find(), &filtered)
+        .select_only()
+        .expr_as(bucket.clone(), "bucket")
+        .column_as(logs::Column::Id.count(), "count")
+        .group_by(bucket)
+        .into_tuple()
+        .all(&state.db_conn)
+        .await
+        .map_err(facet_error)?;
+
+    Ok((
+        StatusCode::OK,
+        Json(json!(trend_points(from, bucket_seconds, rows))),
+    ))
+}
+
 pub async fn export_logs(
     CanViewLogs(_claims): CanViewLogs,
     State(state): State<AppState>,
@@ -305,4 +366,5 @@ pub fn logs_routes() -> Router<AppState> {
         .route("/logs", get(list_logs))
         .route("/logs/export", get(export_logs))
         .route("/logs/facets", get(logs_facets))
+        .route("/logs/trend", get(logs_trend))
 }
