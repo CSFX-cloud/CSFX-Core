@@ -207,6 +207,53 @@ function groupRoute(method, path) {
     return (_body, response) => send(response, 200, handlers[match[2]]);
 }
 
+const LOG_PATTERN = [
+    ["ERROR", "system", "agent", "n1", "/dev/ttyS0: not a tty"],
+    ["WARN", "system", "agent", "n1", "serial-getty@ttyS0.service: scheduled restart"],
+    ["INFO", "storage", "object-storage", null, "applied cluster layout v12"],
+];
+
+const LOGS = Array.from({ length: 21 }, (_, index) => {
+    const [level, classification, service, agentId, message] = LOG_PATTERN[index % 3];
+    const at = new Date(Date.now() - index * 10_000).toISOString();
+    return {
+        id: `l${index}`, service, level, classification, message, agent_id: agentId, workload_id: null, organization_id: null,
+        created_at: at, kind: "system", actor_user_id: null, action: null, target_type: null, target_id: null, fields: {},
+        occurrences: index % 4 === 0 ? 3 : 1, last_seen_at: at, cef: `CEF:0|csfx|${service}|1|${index}|${message}|5`,
+    };
+});
+
+const LOG_FACETS = {
+    kinds: [{ value: "system", count: 19756 }, { value: "user", count: 2 }],
+    classifications: [{ value: "system", count: 16887 }, { value: "storage", count: 2869 }],
+    services: [{ value: "agent", count: 16863 }, { value: "object-storage", count: 2869 }, { value: "api-gateway", count: 24 }],
+    target_types: [],
+    actions: [],
+};
+
+const ROLES = [
+    { id: "r1", name: "Admin", description: "Full access", is_system_role: true, permission_ids: ["p1", "p2"] },
+    { id: "r2", name: "Viewer", description: null, is_system_role: true, permission_ids: ["p1"] },
+];
+
+const USERS = [
+    { id: "u1", username: "admin", email: "admin@local.com", role_id: "r1", role_name: "Admin", force_password_change: false, two_factor_enabled: false, gravatar_email: null, auth_source: "local", joined_at: "2026-10-18T10:00:00" },
+];
+
+const PROVIDERS = [
+    { id: "i1", slug: "github", display_name: "GitHub", issuer_url: "https://token.actions.example.com", client_id: "abc", redirect_uri: "http://localhost/api/auth/oidc/github/callback", scopes: "openid profile email", username_claim: "preferred_username", email_claim: "email", groups_claim: "groups", default_role_id: "r2", auto_provision: true, enabled: true, user_count: 0 },
+];
+
+const BUCKET_ROUTE = /^\/api\/buckets\/([^/]+)(\/objects)?$/;
+
+function bucketRoute(method, path) {
+    const match = method === "GET" ? BUCKET_ROUTE.exec(path) : null;
+    const bucket = match && BUCKETS.find((entry) => entry.id === match[1]);
+    if (!bucket) return null;
+    const objects = { objects: [{ key: "dump-2026-10-22.sql.gz", size: 2_100_000_000, last_modified: "2026-10-22T09:00:00" }], folders: ["archive/"], next_continuation_token: null };
+    return (_body, response) => send(response, 200, match[2] ? objects : bucket);
+}
+
 const USAGE_RANGES = { "1h": [60, 60_000], "24h": [96, 900_000], "7d": [168, 3_600_000] };
 
 function usageHistory(range) {
@@ -304,6 +351,17 @@ const routes = {
     "GET /api/system/stats": (_body, response) => send(response, 200, clusterStats()),
     "GET /api/system/stats/history": (_body, response) => send(response, 200, healthHistory()),
     "GET /api/system/stats/usage": (_body, response, query) => send(response, 200, usageHistory(query.get("range"))),
+    "GET /api/logs": (_body, response) => send(response, 200, { entries: LOGS, total: 19756, has_more: true }),
+    "GET /api/logs/trend": (_body, response) =>
+        send(response, 200, Array.from({ length: 60 }, (_, index) => ({ start: new Date(Date.now() - (60 - index) * 60_000).toISOString(), count: 20 + Math.round(Math.abs(Math.sin(index / 4)) * 60) }))),
+    "GET /api/logs/facets": (_body, response) => send(response, 200, LOG_FACETS),
+    "GET /api/admin/settings/ssh": (_body, response) => send(response, 200, { enabled: false, expires_at: null, effective: false }),
+    "GET /api/admin/settings/logs-retention": (_body, response) => send(response, 200, { retention_days: 30 }),
+    "GET /api/organization/users": (_body, response) => send(response, 200, USERS),
+    "GET /api/organization/roles": (_body, response) => send(response, 200, ROLES.map(({ id, name, description }) => ({ id, name, description }))),
+    "GET /api/roles": (_body, response) => send(response, 200, ROLES),
+    "GET /api/permissions": (_body, response) => send(response, 200, [{ id: "p1", resource: "agents", action: "view", description: null }, { id: "p2", resource: "agents", action: "manage", description: null }]),
+    "GET /api/identity-providers": (_body, response) => send(response, 200, PROVIDERS),
     "GET /api/events": (_body, response) => send(response, 200, EVENTS),
     "GET /api/workloads": (_body, response) => send(response, 200, WORKLOADS),
     "GET /api/volumes": (_body, response) => send(response, 200, VOLUMES),
@@ -319,7 +377,7 @@ const routes = {
 
 createServer(async (request, response) => {
     const path = request.url.split("?")[0];
-    const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path) ?? groupRoute(request.method, path);
+    const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path) ?? groupRoute(request.method, path) ?? bucketRoute(request.method, path);
     if (!route) return send(response, 404, { error: "not found" });
     route(await readBody(request), response, new URL(request.url, "http://localhost").searchParams);
 }).listen(PORT, () => {

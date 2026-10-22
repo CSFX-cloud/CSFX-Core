@@ -24,30 +24,21 @@ export function toggleValue(values: string[], value: string): string[] {
     return values.includes(value) ? values.filter((entry) => entry !== value) : [...values, value];
 }
 
-export function levelBars(level: string): number {
-    switch (level) {
-        case 'ERROR': return 3;
-        case 'WARN': return 2;
-        default: return 1;
-    }
+export interface LevelMeta {
+    label: string;
+    tone: 'danger' | 'warning' | '';
+    dot: string;
 }
 
-export function levelBarClass(level: string): string {
-    switch (level) {
-        case 'ERROR': return 'bg-red-500';
-        case 'WARN': return 'bg-yellow-500';
-        case 'DEBUG': return 'bg-muted-foreground';
-        default: return 'bg-green-500';
-    }
-}
+const LEVEL_META: Record<string, LevelMeta> = {
+    ERROR: { label: 'Error', tone: 'danger', dot: 'var(--danger)' },
+    WARN: { label: 'Warning', tone: 'warning', dot: 'var(--warning)' },
+    INFO: { label: 'Info', tone: '', dot: 'var(--ink-soft)' },
+    DEBUG: { label: 'Debug', tone: '', dot: 'var(--marker)' },
+};
 
-export function levelTextClass(level: string): string {
-    switch (level) {
-        case 'ERROR': return 'text-red-500';
-        case 'WARN': return 'text-yellow-500';
-        case 'DEBUG': return 'text-muted-foreground';
-        default: return 'text-green-500';
-    }
+export function levelMeta(level: string): LevelMeta {
+    return LEVEL_META[level] ?? LEVEL_META.INFO;
 }
 
 const PAST_TENSE: Record<string, string> = {

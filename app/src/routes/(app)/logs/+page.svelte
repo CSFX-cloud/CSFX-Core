@@ -1,21 +1,25 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
+    import { Download, RefreshCw, Search } from "@lucide/svelte";
     import { page } from "$app/state";
     import { auth } from "$lib/auth/store.svelte";
     import {
         exportLogsCef,
         getLogsFacets,
+        getLogsTrend,
         listLogs,
         type LogEntry,
         type LogsFacets,
         type LogsFilter,
+        type LogsTrendPoint,
     } from "$lib/api/logs";
     import { listNodes, type Node } from "$lib/api/nodes";
     import { listUsers, type OrganizationUser } from "$lib/api/users";
-    import { csv, describeAction, levelTextClass, rangeStart, type RangeKey } from "$lib/utils/logs";
+    import { csv, rangeStart, type RangeKey } from "$lib/utils/logs";
     import LogsFilterPanel from "$lib/components/logs/logs-filter-panel.svelte";
     import LogDetailPanel from "$lib/components/logs/log-detail-panel.svelte";
-    import SeverityBars from "$lib/components/logs/severity-bars.svelte";
+    import LogsTable from "$lib/components/logs/logs-table.svelte";
+    import LogsTrend from "$lib/components/logs/logs-trend.svelte";
 
     type LogKind = "user" | "system";
 
@@ -37,6 +41,7 @@
 
     let entries = $state<LogEntry[]>([]);
     let facets = $state<LogsFacets | null>(null);
+    let trend = $state<LogsTrendPoint[]>([]);
     let total = $state(0);
     let hasMore = $state(false);
     let offset = $state(0);
@@ -72,10 +77,12 @@
         if (!auth.token) return;
         try {
             const filter = baseFilter();
-            const [list, facetResult] = await Promise.all([
+            const [list, facetResult, trendResult] = await Promise.all([
                 listLogs(auth.token, { ...filter, limit: PAGE_LIMIT, offset }),
                 getLogsFacets(auth.token, filter),
+                getLogsTrend(auth.token, filter),
             ]);
+            trend = trendResult;
             entries = list.entries;
             total = list.total;
             hasMore = list.has_more;
@@ -133,15 +140,6 @@
         return userNames.get(id) ?? id.slice(0, 8);
     }
 
-    function targetLabel(entry: LogEntry): string {
-        if (!entry.target_id || entry.target_id === "-") return "-";
-        return entry.target_id;
-    }
-
-    function formatDateTime(timestamp: string): string {
-        return new Date(timestamp).toLocaleString();
-    }
-
     onMount(() => {
         loadDirectories();
         refreshTimer = setInterval(load, REFRESH_INTERVAL_MS);
@@ -185,107 +183,65 @@
     });
 </script>
 
-<div class="flex h-svh min-h-0">
-    <aside class="hidden shrink-0 overflow-y-auto border-r border-border md:block" style="width: 16rem;">
-        <LogsFilterPanel
-            bind:kind
-            bind:range
-            bind:levels
-            bind:classifications
-            bind:services
-            bind:targetTypes
-            bind:actions
-            bind:agentId
-            bind:searchText
-            bind:fromTime
-            bind:toTime
-            {facets}
-            {nodes}
-            {refreshing}
-            onrefresh={refreshNow}
-            onclear={clearFilters}
-            onexport={exportCef}
-        />
-    </aside>
+<div class="lg-main {selectedEntry ? 'lg-main--detail' : ''}">
+    <LogsFilterPanel
+        bind:kind
+        bind:range
+        bind:levels
+        bind:classifications
+        bind:services
+        bind:targetTypes
+        bind:actions
+        bind:agentId
+        bind:fromTime
+        bind:toTime
+        {facets}
+        {nodes}
+        onclear={clearFilters}
+    />
 
-    <div class="flex min-w-0 flex-1 flex-col">
-        {#if error}
-            <p class="px-4 pb-2 text-sm text-destructive">{error}</p>
-        {/if}
-
-        <div class="min-h-0 flex-1 overflow-y-auto">
-            <table class="w-full border-collapse text-sm">
-                <thead class="sticky top-0 z-10 bg-background">
-                    {#if kind === "system"}
-                        <tr class="text-left text-xs text-muted-foreground">
-                            <th class="px-3 py-2 font-medium">Severity</th>
-                            <th class="px-3 py-2 font-medium">Category</th>
-                            <th class="px-3 py-2 font-medium">Service</th>
-                            <th class="px-3 py-2 font-medium">Node</th>
-                            <th class="px-3 py-2 font-medium">Description</th>
-                            <th class="whitespace-nowrap px-3 py-2 font-medium">Time</th>
-                        </tr>
-                    {:else}
-                        <tr class="text-left text-xs text-muted-foreground">
-                            <th class="whitespace-nowrap px-3 py-2 font-medium">Time</th>
-                            <th class="px-3 py-2 font-medium">User</th>
-                            <th class="px-3 py-2 font-medium">Event</th>
-                            <th class="px-3 py-2 font-medium">Action</th>
-                            <th class="px-3 py-2 font-medium">Resource</th>
-                            <th class="px-3 py-2 font-medium">Target</th>
-                        </tr>
-                    {/if}
-                </thead>
-                <tbody>
-                    {#if loading}
-                        <tr><td class="px-3 py-3 text-muted-foreground" colspan="6">Loading...</td></tr>
-                    {:else if entries.length === 0}
-                        <tr><td class="px-3 py-3 text-muted-foreground" colspan="6">No log entries.</td></tr>
-                    {:else}
-                        {#each entries as entry (entry.id)}
-                            <tr
-                                class="cursor-pointer hover:bg-muted/30 {selectedEntry?.id === entry.id ? 'bg-muted/50' : ''}"
-                                onclick={() => (selectedEntry = entry)}
-                            >
-                                {#if kind === "system"}
-                                    <td class="px-3 py-1.5"><SeverityBars level={entry.level} /></td>
-                                    <td class="whitespace-nowrap px-3 py-1.5">{entry.classification}</td>
-                                    <td class="whitespace-nowrap px-3 py-1.5">{entry.service}</td>
-                                    <td class="whitespace-nowrap px-3 py-1.5">{nodeLabel(entry.agent_id)}</td>
-                                    <td class="max-w-0 truncate px-3 py-1.5">
-                                        <span class={entry.level === "ERROR" ? levelTextClass(entry.level) : ""}>{entry.message}</span>
-                                        {#if entry.occurrences > 1}
-                                            <span class="ms-1 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">x{entry.occurrences}</span>
-                                        {/if}
-                                    </td>
-                                    <td class="whitespace-nowrap px-3 py-1.5 text-muted-foreground">{formatDateTime(entry.last_seen_at)}</td>
-                                {:else}
-                                    <td class="whitespace-nowrap px-3 py-1.5 text-muted-foreground">{formatDateTime(entry.created_at)}</td>
-                                    <td class="whitespace-nowrap px-3 py-1.5">{actorLabel(entry.actor_user_id)}</td>
-                                    <td class="whitespace-nowrap px-3 py-1.5">{describeAction(entry)}</td>
-                                    <td class="whitespace-nowrap px-3 py-1.5 font-mono text-xs">{entry.action ?? entry.message}</td>
-                                    <td class="whitespace-nowrap px-3 py-1.5">{entry.target_type ?? "-"}</td>
-                                    <td class="max-w-0 truncate px-3 py-1.5 font-mono text-xs">{targetLabel(entry)}</td>
-                                {/if}
-                            </tr>
-                        {/each}
-                    {/if}
-                </tbody>
-            </table>
-        </div>
-
-        <div class="flex items-center justify-between border-t border-border px-4 py-2 text-xs text-muted-foreground">
-            <span>{entries.length === 0 ? 0 : offset + 1}-{offset + entries.length} of {total} logs</span>
-            <div class="flex gap-2">
-                <button class="rounded border px-2 py-1 disabled:opacity-40" onclick={() => (offset = Math.max(0, offset - PAGE_LIMIT))} disabled={offset === 0}>Prev</button>
-                <button class="rounded border px-2 py-1 disabled:opacity-40" onclick={() => (offset += PAGE_LIMIT)} disabled={!hasMore}>Next</button>
+    <div class="lg-body">
+        <div class="lg-head">
+            <div>
+                <h1 class="db-title">Logs</h1>
+                <p class="db-sub">Every event from the cluster, stored on the cluster.</p>
+            </div>
+            <div class="db-actions">
+                <div class="cx-input-wrap db-search">
+                    <Search class="cx-i" aria-hidden="true" />
+                    <input class="cx-input cx-input--icon" type="search" placeholder="Search messages" aria-label="Search messages" bind:value={searchText} />
+                </div>
+                <button class="cx-icon-btn lg-calendar" type="button" aria-label="Refresh" disabled={refreshing} onclick={refreshNow}>
+                    <RefreshCw class="cx-i {refreshing ? 'db-spin' : ''}" aria-hidden="true" />
+                </button>
+                <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={exportCef}>
+                    <Download class="cx-i" aria-hidden="true" />
+                    Export as CEF
+                </button>
             </div>
         </div>
+
+        {#if error}<p class="cx-hint cx-hint--error" style="margin-bottom: 8px">{error}</p>{/if}
+
+        <LogsTrend points={trend} />
+
+        <LogsTable
+            {kind}
+            {entries}
+            selectedId={selectedEntry?.id ?? null}
+            {loading}
+            {offset}
+            {total}
+            pageLimit={PAGE_LIMIT}
+            {hasMore}
+            {nodeLabel}
+            {actorLabel}
+            onselect={(entry) => (selectedEntry = entry)}
+            onpage={(next) => (offset = next)}
+        />
     </div>
 
     {#if selectedEntry}
-        <aside class="hidden shrink-0 border-l border-border lg:block" style="width: 24rem;">
-            <LogDetailPanel entry={selectedEntry} {nodeLabel} {actorLabel} onclose={() => (selectedEntry = null)} />
-        </aside>
+        <LogDetailPanel entry={selectedEntry} {nodeLabel} {actorLabel} onclose={() => (selectedEntry = null)} />
     {/if}
 </div>

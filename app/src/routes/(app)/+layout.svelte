@@ -12,8 +12,9 @@
 
     let { children } = $props();
 
+    auth.init();
+
     onMount(async () => {
-        auth.init();
         if (!auth.token) {
             goto("/login");
             return;

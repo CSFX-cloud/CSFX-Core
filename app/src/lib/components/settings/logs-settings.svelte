@@ -1,8 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import * as Card from "$lib/components/ui/card/index.js";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import { Input } from "$lib/components/ui/input/index.js";
+    import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { getLogsRetention, updateLogsRetention } from "$lib/api/logs";
 
@@ -55,44 +53,34 @@
     onMount(load);
 </script>
 
-{#if error}
-    <div class="mb-4 px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-sm text-destructive">
-        {error}
-    </div>
-{/if}
+{#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 
-<div class="flex flex-col gap-6 max-w-2xl">
-    <Card.Root>
-        <Card.Header>
-            <Card.Title>Log retention</Card.Title>
-            <Card.Description>
-                Logs older than this many days are deleted automatically every hour.
-            </Card.Description>
-        </Card.Header>
-        <Card.Content>
-            {#if loading}
-                <div class="h-9 w-32 rounded bg-muted animate-pulse"></div>
-            {:else}
-                <div class="flex items-end gap-3">
-                    <div class="flex flex-col gap-1">
-                        <label class="text-xs text-muted-foreground" for="retention-input">Retention (days)</label>
-                        <Input
-                            id="retention-input"
-                            type="number"
-                            min={MIN_RETENTION_DAYS}
-                            max={MAX_RETENTION_DAYS}
-                            bind:value={inputValue}
-                            class="w-32"
-                        />
-                    </div>
-                    <Button onclick={save} disabled={saving || inputValue === String(retentionDays)} size="sm">
-                        {saving ? "Saving..." : "Save"}
-                    </Button>
-                    {#if saved && !saving}
-                        <span class="text-xs text-green-500">Saved</span>
-                    {/if}
+<SettingsPage title="Logs" description="How long events are kept on this cluster.">
+    <section class="cx-panel st-panel" aria-labelledby="st-retention">
+        <div>
+            <h3 id="st-retention">Log retention</h3>
+            <p>Logs older than this many days are deleted automatically every hour.</p>
+        </div>
+        {#if loading}
+            <div class="db-skeleton db-skeleton--row" style="width: 200px" aria-hidden="true"></div>
+        {:else}
+            <form
+                class="cx-field"
+                style="max-width: 280px"
+                onsubmit={(event) => {
+                    event.preventDefault();
+                    save();
+                }}
+            >
+                <label class="cx-label" for="retention-input">Retention (days)</label>
+                <div class="st-row">
+                    <input class="cx-input" id="retention-input" type="number" min={MIN_RETENTION_DAYS} max={MAX_RETENTION_DAYS} bind:value={inputValue} />
+                    <button class="cx-btn cx-btn--secondary cx-btn--sm" type="submit" style="height: 44px" disabled={saving || inputValue === String(retentionDays)} aria-busy={saving}>
+                        {saving ? "Saving" : "Save"}
+                    </button>
                 </div>
-            {/if}
-        </Card.Content>
-    </Card.Root>
-</div>
+                {#if saved && !saving}<p class="cx-hint" style="color: var(--success)">Saved</p>{/if}
+            </form>
+        {/if}
+    </section>
+</SettingsPage>

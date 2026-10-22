@@ -6,7 +6,6 @@
         type Bucket,
         type BucketAccessKey,
     } from "$lib/api/resource-groups";
-    import { Button } from "$lib/components/ui/button/index.js";
     import { createClipboard } from "$lib/utils/clipboard.svelte";
     import ModalDialog from "./modal-dialog.svelte";
 
@@ -71,49 +70,51 @@
         createdSecret = null;
     }}
 >
-    <div class="flex flex-col gap-2">
-        <p class="text-xs font-medium text-muted-foreground">Access Keys</p>
+    <div class="md__fields">
+        <p class="md-label" style="margin: 0">Access keys</p>
         {#if keys.length === 0}
-            <p class="text-xs text-muted-foreground">no access keys yet</p>
+            <p class="cx-hint">No access keys yet</p>
         {:else}
-            <div class="border rounded-lg divide-y">
-                {#each keys as key (key.id)}
-                    <div class="flex items-center justify-between px-3 py-2 text-xs">
-                        <div>
-                            <p class="font-medium">{key.name}</p>
-                            <p class="text-muted-foreground font-mono">{key.garage_key_id}</p>
-                        </div>
-                        <span class="text-muted-foreground">{key.permissions}</span>
-                    </div>
-                {/each}
+            <div class="db-scroll">
+                <table class="cx-table">
+                    <thead><tr><th>Name</th><th>Key ID</th><th>Permissions</th></tr></thead>
+                    <tbody>
+                        {#each keys as key (key.id)}
+                            <tr>
+                                <td>{key.name}</td>
+                                <td class="cx-num">{key.garage_key_id}</td>
+                                <td class="cx-soft">{key.permissions}</td>
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
             </div>
         {/if}
-    </div>
 
-    {#if createdSecret}
-        <div class="border rounded-lg p-3 bg-muted/30 flex flex-col gap-1.5">
-            <p class="text-xs font-medium">Secret access key created</p>
-            <p class="text-xs font-mono break-all">{createdSecret}</p>
-            <p class="text-xs text-destructive">this will not be shown again, copy it now</p>
-            <Button
-                size="sm"
-                variant="outline"
-                class="self-start"
-                onclick={() => clipboard.copy(createdSecret ?? "", "bucket-secret")}
-            >
-                {clipboard.copiedKey === "bucket-secret" ? "Copied" : "Copy"}
-            </Button>
-        </div>
-    {/if}
+        {#if createdSecret}
+            <div class="bk-secret">
+                <p style="margin: 0; font-weight: 500">Secret access key created</p>
+                <p class="cx-mono" style="margin: 0; font-size: 12px; word-break: break-all">{createdSecret}</p>
+                <p class="cx-hint cx-hint--error">This will not be shown again, copy it now.</p>
+                <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" style="justify-self: start" onclick={() => clipboard.copy(createdSecret ?? "", "bucket-secret")}>
+                    {clipboard.copiedKey === "bucket-secret" ? "Copied" : "Copy"}
+                </button>
+            </div>
+        {/if}
 
-    {#if error}
-        <p class="text-xs text-destructive">{error}</p>
-    {/if}
+        {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 
-    <div class="flex gap-2">
-        <input class="border rounded px-3 py-1.5 text-sm bg-background flex-1" placeholder="key name" bind:value={newKeyName} />
-        <Button size="sm" onclick={createKey} disabled={creating || !newKeyName}>
-            {creating ? "Creating..." : "Create Key"}
-        </Button>
+        <form
+            class="st-row"
+            onsubmit={(event) => {
+                event.preventDefault();
+                createKey();
+            }}
+        >
+            <input class="cx-input" placeholder="Key name" aria-label="Key name" autocomplete="off" bind:value={newKeyName} />
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" style="height: 44px" disabled={creating || !newKeyName} aria-busy={creating}>
+                {creating ? "Creating" : "Create key"}
+            </button>
+        </form>
     </div>
 </ModalDialog>

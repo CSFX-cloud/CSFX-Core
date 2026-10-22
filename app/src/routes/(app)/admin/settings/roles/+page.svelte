@@ -1,12 +1,11 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import PlusIcon from "@lucide/svelte/icons/plus";
+    import { Plus } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { deleteRole, listPermissions, listRoles, type Permission, type Role } from "$lib/api/roles";
-    import { Badge } from "$lib/components/ui/badge/index.js";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import * as Card from "$lib/components/ui/card/index.js";
+    import { pluralize } from "$lib/utils/format";
     import RoleDialog from "$lib/components/settings/role-dialog.svelte";
+    import SettingsPage from "$lib/components/settings/settings-page.svelte";
 
     let roles = $state<Role[]>([]);
     let permissions = $state<Permission[]>([]);
@@ -47,58 +46,43 @@
 
 <RoleDialog bind:this={dialog} {permissions} onSaved={load} />
 
-<div class="flex max-w-3xl flex-col gap-6">
-    <div class="flex items-start justify-between gap-4">
-        <div>
-            <h2 class="text-lg font-light text-foreground/70">Roles</h2>
-            <p class="text-xs text-muted-foreground">
-                Roles bundle permissions. Assign them to users or map them to identity provider groups.
-            </p>
-        </div>
-        <Button onclick={() => dialog?.open(null)}>
-            <PlusIcon class="size-4" />
+<SettingsPage title="Roles" description="Roles bundle permissions. Assign them to users or map them to identity provider groups.">
+    {#snippet actions()}
+        <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" onclick={() => dialog?.open(null)}>
+            <Plus class="cx-i" aria-hidden="true" />
             Create role
-        </Button>
-    </div>
+        </button>
+    {/snippet}
 
-    {#if error}
-        <p class="px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-sm text-destructive">{error}</p>
-    {/if}
+    {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 
     {#if loading}
-        <div class="h-24 rounded-lg bg-muted animate-pulse"></div>
+        <div class="db-skeleton db-skeleton--row" style="height: 96px" aria-hidden="true"></div>
     {:else}
-        {#each roles as role (role.id)}
-            <Card.Root>
-                <Card.Header>
-                    <div class="flex items-center justify-between gap-3">
-                        <div class="min-w-0">
-                            <Card.Title class="flex items-center gap-2">
-                                {role.name}
-                                {#if role.is_system_role}
-                                    <Badge variant="secondary">System</Badge>
-                                {/if}
-                            </Card.Title>
-                            <Card.Description>
-                                {role.description ?? "No description"} · {role.permission_ids.length} permissions
-                            </Card.Description>
+        <section class="cx-panel st-panel" aria-label="Roles">
+            <div>
+                {#each roles as role (role.id)}
+                    <div class="st-role">
+                        <div style="min-width: 0">
+                            <h3>{role.name}{#if role.is_system_role}<span class="cx-badge">System</span>{/if}</h3>
+                            <p>{role.description ?? "No description"} &middot; {pluralize(role.permission_ids.length, "permission")}</p>
                         </div>
-                        <div class="flex shrink-0 items-center gap-2">
-                            <Button size="sm" variant="outline" onclick={() => dialog?.open(role)}>
+                        <div class="db-actions" style="flex-shrink: 0">
+                            <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={() => dialog?.open(role)}>
                                 {role.is_system_role ? "View" : "Edit"}
-                            </Button>
+                            </button>
                             {#if !role.is_system_role}
                                 {#if pendingDeleteId === role.id}
-                                    <Button size="sm" variant="destructive" onclick={() => remove(role)}>Confirm</Button>
-                                    <Button size="sm" variant="ghost" onclick={() => (pendingDeleteId = null)}>Cancel</Button>
+                                    <button class="cx-btn cx-btn--primary cx-btn--sm nd-danger" type="button" onclick={() => remove(role)}>Confirm</button>
+                                    <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => (pendingDeleteId = null)}>Cancel</button>
                                 {:else}
-                                    <Button size="sm" variant="ghost" onclick={() => (pendingDeleteId = role.id)}>Delete</Button>
+                                    <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => (pendingDeleteId = role.id)}>Delete</button>
                                 {/if}
                             {/if}
                         </div>
                     </div>
-                </Card.Header>
-            </Card.Root>
-        {/each}
+                {/each}
+            </div>
+        </section>
     {/if}
-</div>
+</SettingsPage>

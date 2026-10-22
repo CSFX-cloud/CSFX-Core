@@ -1,21 +1,27 @@
 <script lang="ts">
+    import { untrack } from "svelte";
+    import { Download, File, Folder, FolderOpen, Trash2, Upload } from "@lucide/svelte";
     import { page } from "$app/stores";
     import { auth } from "$lib/auth/store.svelte";
-    import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
     import {
+        deleteBucketObject,
         getBucket,
         listBucketObjects,
-        deleteBucketObject,
-        presignObjectUpload,
         presignObjectDownload,
+        presignObjectUpload,
         uploadObjectToPresignedUrl,
         type Bucket,
         type ObjectEntry,
     } from "$lib/api/resource-groups";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import Icon from "@iconify/svelte";
+    import EmptyState from "$lib/components/dashboard/empty-state.svelte";
+    import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
+    import { fmtBytes, formatBytes } from "$lib/utils/format";
+    import { folderName, objectName, prefixCrumbs } from "$lib/utils/bucket-objects";
+    import { badgeClass, statusLabel } from "$lib/utils/tone";
 
-    const bucketId: string = $page.params.id;
+    const SKELETON_ROWS = 3;
+
+    const bucketId: string = $page.params.id ?? "";
 
     let bucket = $state<Bucket | null>(null);
     let objects = $state<ObjectEntry[]>([]);
@@ -26,49 +32,8 @@
     let uploading = $state(false);
     let fileInput = $state<HTMLInputElement | null>(null);
 
-    function fmtBytes(bytes: number): string {
-        if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)} GB`;
-        if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
-        if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-        return `${bytes} B`;
-    }
-
-    function folderName(prefix: string): string {
-        const trimmed = prefix.slice(0, -1);
-        const parts = trimmed.split("/");
-        return parts[parts.length - 1];
-    }
-
-    function objectName(key: string): string {
-        const parts = key.split("/");
-        return parts[parts.length - 1];
-    }
-
-    function breadcrumbParts(): { name: string; prefix: string }[] {
-        if (!currentPrefix) return [];
-        const segments = currentPrefix.slice(0, -1).split("/");
-        const parts: { name: string; prefix: string }[] = [];
-        let acc = "";
-        for (const segment of segments) {
-            acc += `${segment}/`;
-            parts.push({ name: segment, prefix: acc });
-        }
-        return parts;
-    }
-
-    async function load() {
-        if (!auth.token) return;
-        try {
-            await Promise.all([
-                getBucket(auth.token, bucketId).then((b) => (bucket = b)),
-                loadObjects(),
-            ]);
-        } catch (e) {
-            error = e instanceof Error ? e.message : "Failed to load bucket";
-        } finally {
-            loading = false;
-        }
-    }
+    const crumbs = $derived(prefixCrumbs(currentPrefix));
+    const empty = $derived(folders.length === 0 && objects.length === 0);
 
     async function loadObjects() {
         if (!auth.token) return;
@@ -77,22 +42,29 @@
         folders = result.folders;
     }
 
+    async function load() {
+        if (!auth.token) return;
+        try {
+            await Promise.all([getBucket(auth.token, bucketId).then((loaded) => (bucket = loaded)), loadObjects()]);
+        } catch (e) {
+            error = e instanceof Error ? e.message : "Failed to load bucket";
+        } finally {
+            loading = false;
+        }
+    }
+
     function openFolder(prefix: string) {
         currentPrefix = prefix;
-        loadObjects();
+        loadObjects().catch((e) => (error = e instanceof Error ? e.message : "Failed to load objects"));
     }
 
     async function handleUpload(event: Event) {
-        if (!auth.token) return;
-        const input = event.target as HTMLInputElement;
-        const file = input.files?.[0];
-        if (!file) return;
-
+        const file = (event.target as HTMLInputElement).files?.[0];
+        if (!auth.token || !file) return;
         uploading = true;
         error = null;
         try {
-            const key = `${currentPrefix}${file.name}`;
-            const presigned = await presignObjectUpload(auth.token, bucketId, key);
+            const presigned = await presignObjectUpload(auth.token, bucketId, `${currentPrefix}${file.name}`);
             await uploadObjectToPresignedUrl(presigned.url, file);
             await loadObjects();
         } catch (e) {
@@ -106,29 +78,24 @@
     async function handleDownload(key: string) {
         if (!auth.token) return;
         try {
-            const presigned = await presignObjectDownload(auth.token, bucketId, key);
-            window.open(presigned.url, "_blank");
+            window.open((await presignObjectDownload(auth.token, bucketId, key)).url, "_blank");
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to download file";
         }
     }
 
     async function handleDelete(key: string) {
-        if (!auth.token) return;
+        if (!auth.token || !confirm(`Delete ${objectName(key)}?`)) return;
         try {
             await deleteBucketObject(auth.token, bucketId, key);
-            objects = objects.filter((o) => o.key !== key);
+            objects = objects.filter((object) => object.key !== key);
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to delete object";
         }
     }
 
-    let loadStarted = false;
     $effect(() => {
-        if (auth.token && !loadStarted) {
-            loadStarted = true;
-            load();
-        }
+        if (auth.token) untrack(load);
     });
 
     $effect(() => {
@@ -137,122 +104,108 @@
     });
 </script>
 
-<div class="flex flex-col gap-6 p-6">
+<div class="db-content">
     {#if loading}
-        <p class="text-sm text-muted-foreground">Loading...</p>
-    {:else if error && !bucket}
-        <p class="text-sm text-destructive">{error}</p>
-    {:else if bucket}
-        <div class="flex items-center justify-between">
+        <div class="db-skeleton sv-skeleton" aria-hidden="true"></div>
+    {:else if !bucket}
+        <p class="cx-hint cx-hint--error">{error ?? "Bucket not found"}</p>
+    {:else}
+        <div class="db-head">
             <div>
-                <h1 class="text-xl font-semibold tracking-tight">{bucket.name}</h1>
-                <p class="text-sm text-muted-foreground mt-0.5 font-mono">{bucket.global_alias}</p>
+                <h1 class="db-title">{bucket.name}</h1>
+                <p class="db-sub cx-mono" style="font-size: 13px">{bucket.global_alias}</p>
             </div>
-            <div>
-                <input
-                    bind:this={fileInput}
-                    type="file"
-                    class="hidden"
-                    onchange={handleUpload}
-                />
-                <Button size="sm" onclick={() => fileInput?.click()} disabled={uploading}>
-                    <Icon icon="mdi:upload" width={14} height={14} />
-                    {uploading ? "Uploading..." : "Upload File"}
-                </Button>
-            </div>
-        </div>
-
-        <div class="flex items-center gap-1.5 text-sm">
-            <button
-                class="text-muted-foreground hover:text-foreground"
-                onclick={() => openFolder("")}
-            >
-                {bucket.name}
-            </button>
-            {#each breadcrumbParts() as part}
-                <span class="text-muted-foreground">/</span>
-                <button
-                    class="text-muted-foreground hover:text-foreground"
-                    onclick={() => openFolder(part.prefix)}
-                >
-                    {part.name}
+            <div class="db-actions">
+                <input bind:this={fileInput} type="file" class="db-sr-only" aria-label="Choose a file to upload" onchange={handleUpload} />
+                <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" disabled={uploading} aria-busy={uploading} onclick={() => fileInput?.click()}>
+                    <Upload class="cx-i" aria-hidden="true" />
+                    {uploading ? "Uploading" : "Upload file"}
                 </button>
-            {/each}
+            </div>
         </div>
 
-        {#if error}
-            <p class="text-xs text-destructive">{error}</p>
-        {/if}
-
-        <div class="border rounded-lg overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-muted/50">
-                    <tr>
-                        <th class="text-left px-4 py-3 font-medium text-muted-foreground">Name</th>
-                        <th class="text-left px-4 py-3 font-medium text-muted-foreground">Size</th>
-                        <th class="text-left px-4 py-3 font-medium text-muted-foreground">Last Modified</th>
-                        <th class="text-right px-4 py-3 font-medium text-muted-foreground">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {#if folders.length === 0 && objects.length === 0}
-                        <tr>
-                            <td colspan="4" class="px-4 py-8 text-center text-muted-foreground">
-                                This folder is empty
-                            </td>
-                        </tr>
+        <section class="db-stats" aria-label="Bucket details">
+            <div class="cx-stat">
+                <p class="cx-stat__label">Status</p>
+                <p class="db-stat-value"><span class={badgeClass(bucket.status)}>{statusLabel(bucket.status)}</span></p>
+            </div>
+            <div class="cx-stat">
+                <p class="cx-stat__label">Exposure</p>
+                <p class="db-stat-value">{bucket.exposure}</p>
+            </div>
+            <div class="cx-stat">
+                <p class="cx-stat__label">Quota</p>
+                <p class="db-stat-value">{bucket.quota_max_size ? fmtBytes(bucket.quota_max_size) : "Unlimited"}</p>
+            </div>
+            <div class="cx-stat">
+                <p class="cx-stat__label">Resource group</p>
+                <p class="db-stat-value" style="font-size: 16px">
+                    {#if bucket.resource_group_id}
+                        <a class="cx-link" href="/resource-groups/{bucket.resource_group_id}">{bucket.resource_group_id.slice(0, 8)}</a>
                     {:else}
-                        {#each folders as folder (folder)}
-                            <tr
-                                class="border-t hover:bg-muted/30 transition-colors cursor-pointer"
-                                onclick={() => openFolder(folder)}
-                            >
-                                <td class="px-4 py-3">
-                                    <div class="flex items-center gap-2.5">
-                                        <Icon icon="mdi:folder-outline" width={16} height={16} class="text-muted-foreground" />
-                                        <span class="font-medium">{folderName(folder)}</span>
-                                    </div>
-                                </td>
-                                <td class="px-4 py-3 text-muted-foreground">-</td>
-                                <td class="px-4 py-3 text-muted-foreground">-</td>
-                                <td class="px-4 py-3"></td>
-                            </tr>
-                        {/each}
-                        {#each objects as object (object.key)}
-                            <tr class="border-t hover:bg-muted/30 transition-colors">
-                                <td class="px-4 py-3">
-                                    <div class="flex items-center gap-2.5">
-                                        <Icon icon="mdi:file-outline" width={16} height={16} class="text-muted-foreground" />
-                                        <span>{objectName(object.key)}</span>
-                                    </div>
-                                </td>
-                                <td class="px-4 py-3 text-muted-foreground">{fmtBytes(object.size)}</td>
-                                <td class="px-4 py-3 text-muted-foreground text-xs">{object.last_modified}</td>
-                                <td class="px-4 py-3">
-                                    <div class="flex items-center justify-end gap-1">
-                                        <button
-                                            class="flex items-center justify-center w-7 h-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                                            onclick={() => handleDownload(object.key)}
-                                            aria-label="Download"
-                                            title="Download"
-                                        >
-                                            <Icon icon="mdi:download" width={16} height={16} />
-                                        </button>
-                                        <button
-                                            class="flex items-center justify-center w-7 h-7 rounded-full text-destructive hover:bg-destructive/10 transition-colors"
-                                            onclick={() => handleDelete(object.key)}
-                                            aria-label="Delete"
-                                            title="Delete"
-                                        >
-                                            <Icon icon="mdi:trash-can-outline" width={16} height={16} />
-                                        </button>
-                                    </div>
-                                </td>
-                            </tr>
-                        {/each}
+                        &mdash;
                     {/if}
-                </tbody>
-            </table>
-        </div>
+                </p>
+            </div>
+        </section>
+
+        {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
+
+        <section class="cx-panel" aria-label="Objects">
+            <nav class="bk-crumbs" aria-label="Folder path">
+                <button class="bk-crumb" type="button" onclick={() => openFolder("")}>{bucket.name}</button>
+                {#each crumbs as crumb (crumb.prefix)}
+                    <span class="bk-crumbs__separator">/</span>
+                    <button class="bk-crumb" type="button" onclick={() => openFolder(crumb.prefix)}>{crumb.name}</button>
+                {/each}
+            </nav>
+
+            {#if empty}
+                <EmptyState icon={FolderOpen} label="This folder is empty" />
+            {:else}
+                <div class="db-scroll">
+                    <table class="cx-table">
+                        <thead><tr><th>Name</th><th>Size</th><th>Last modified</th><th><span class="db-sr-only">Actions</span></th></tr></thead>
+                        <tbody>
+                            {#each folders as folder (folder)}
+                                <tr class="nl-row">
+                                    <td>
+                                        <div class="rs-name">
+                                            <span class="cx-tile-plain nl-tile" aria-hidden="true"><Folder class="cx-i" /></span>
+                                            <button class="rs-link" type="button" onclick={() => openFolder(folder)}>{folderName(folder)}</button>
+                                        </div>
+                                    </td>
+                                    <td class="cx-soft">&mdash;</td>
+                                    <td class="cx-soft">&mdash;</td>
+                                    <td></td>
+                                </tr>
+                            {/each}
+                            {#each objects as object (object.key)}
+                                <tr>
+                                    <td>
+                                        <div class="rs-name">
+                                            <span class="cx-tile-plain nl-tile" aria-hidden="true"><File class="cx-i" /></span>
+                                            <span>{objectName(object.key)}</span>
+                                        </div>
+                                    </td>
+                                    <td class="cx-num">{formatBytes(object.size)}</td>
+                                    <td class="cx-num">{object.last_modified}</td>
+                                    <td>
+                                        <div class="db-actions" style="justify-content: flex-end">
+                                            <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label="Download {objectName(object.key)}" title="Download" onclick={() => handleDownload(object.key)}>
+                                                <Download class="cx-i" aria-hidden="true" />
+                                            </button>
+                                            <button class="cx-icon-btn cx-icon-btn--sm nd-danger" type="button" aria-label="Delete {objectName(object.key)}" title="Delete" onclick={() => handleDelete(object.key)}>
+                                                <Trash2 class="cx-i" aria-hidden="true" />
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                </div>
+            {/if}
+        </section>
     {/if}
 </div>
