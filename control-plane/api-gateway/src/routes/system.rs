@@ -7,7 +7,8 @@ use axum::{
 };
 use entity::entities::{agent_metrics, agents};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, Statement,
+    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, QueryResult,
+    Statement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +74,14 @@ pub struct HealthHistoryPoint {
     pub online_count: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct UsageHistoryPoint {
+    pub bucket: String,
+    pub cpu: f64,
+    pub memory: f64,
+    pub disk: f64,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct HistoryRangeQuery {
     pub range: Option<String>,
@@ -85,6 +94,7 @@ pub fn routes() -> Router<AppState> {
         .route("/system/metrics", get(get_system_metrics))
         .route("/system/stats", get(get_cluster_stats))
         .route("/system/stats/history", get(get_health_history))
+        .route("/system/stats/usage", get(get_usage_history))
 }
 
 async fn health_check() -> Json<serde_json::Value> {
@@ -276,4 +286,58 @@ async fn get_health_history(
         .collect();
 
     Ok(Json(points))
+}
+
+fn usage_range(range: Option<&str>) -> (&'static str, i64) {
+    match range {
+        Some("7d") => ("7 days", 3600),
+        Some("24h") => ("24 hours", 900),
+        _ => ("1 hour", 60),
+    }
+}
+
+fn usage_history_sql(interval: &str, bucket_seconds: i64) -> String {
+    format!(
+        r#"
+        SELECT
+            to_timestamp(floor(extract(epoch from timestamp) / {bucket_seconds}) * {bucket_seconds}) AS bucket,
+            AVG(cpu_usage_percent) AS cpu,
+            AVG(memory_usage_percent) AS memory,
+            AVG(disk_usage_percent) AS disk
+        FROM agent_metrics
+        WHERE timestamp >= NOW() - INTERVAL '{interval}'
+        GROUP BY bucket
+        ORDER BY bucket ASC
+        "#
+    )
+}
+
+fn usage_point(row: QueryResult) -> UsageHistoryPoint {
+    let bucket: chrono::NaiveDateTime = row.try_get("", "bucket").unwrap_or_default();
+    let percent = |column: &str| row.try_get::<Option<f64>>("", column).ok().flatten().unwrap_or(0.0);
+    UsageHistoryPoint {
+        bucket: bucket.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        cpu: percent("cpu"),
+        memory: percent("memory"),
+        disk: percent("disk"),
+    }
+}
+
+async fn get_usage_history(
+    _auth: AuthenticatedUser,
+    Query(params): Query<HistoryRangeQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<UsageHistoryPoint>>, StatusCode> {
+    let (interval, bucket_seconds) = usage_range(params.range.as_deref());
+    let sql = usage_history_sql(interval, bucket_seconds);
+    let rows = state
+        .db_conn
+        .query_all(Statement::from_string(DatabaseBackend::Postgres, sql))
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to query usage history");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(rows.into_iter().map(usage_point).collect()))
 }
