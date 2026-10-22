@@ -51,7 +51,10 @@
 
 <aside class="cx-side db-side" aria-label="Main navigation">
     <div class="cx-side__brand db-brand">
-        <span>csfx.cloud</span>
+        <span class="db-brand__name">
+            <img class="db-brand__logo" src="/logo/logo-csfx.svg" alt="" />
+            csfx.cloud
+        </span>
         {#if version}<span class="db-version">v{version}</span>{/if}
     </div>
     <button class="cx-search db-search" type="button" onclick={() => commandPalette.show()}>
