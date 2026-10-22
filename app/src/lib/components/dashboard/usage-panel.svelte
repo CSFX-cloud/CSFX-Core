@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { UsageHistoryPoint, UsageRange } from "$lib/api/nodes";
     import type { UsageSample } from "$lib/utils/cluster-metrics";
-    import { seriesPaths, usageTone } from "$lib/utils/dashboard";
+    import { formatBucket, pointPosition, seriesPaths, usageTone } from "$lib/utils/dashboard";
 
     const SERIES = [
         { key: "cpu", label: "CPU", color: "#2dd4bf", fillOpacity: 0.25 },
@@ -25,7 +25,24 @@
 
     let { history, latest, range, onrange }: Props = $props();
 
+    const TOOLTIP_FLIP_FRACTION = 0.6;
+
+    let hoverIndex = $state<number | null>(null);
+
     const paths = $derived(SERIES.map((series) => ({ ...series, ...seriesPaths(history, series.key) })));
+    const hovered = $derived(hoverIndex !== null ? (history[hoverIndex] ?? null) : null);
+    const markers = $derived(
+        hovered && hoverIndex !== null
+            ? SERIES.map((series) => ({ ...series, value: hovered[series.key], ...pointPosition(hoverIndex!, history.length, hovered[series.key]) }))
+            : [],
+    );
+
+    function trackPointer(event: PointerEvent) {
+        if (history.length < 2) return;
+        const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        const fraction = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+        hoverIndex = Math.round(fraction * (history.length - 1));
+    }
 </script>
 
 <section class="cx-panel" aria-labelledby="db-usage-title">
@@ -49,6 +66,7 @@
     </div>
     <div class="db-chart">
         <div class="db-chart__y" aria-hidden="true"><span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0</span></div>
+        <div class="db-chart__plot" role="presentation" onpointermove={trackPointer} onpointerleave={() => (hoverIndex = null)}>
         <svg viewBox="0 0 600 200" preserveAspectRatio="none" role="img" aria-label="CPU and memory usage over the selected range">
             <defs>
                 {#each SERIES as series (series.key)}
@@ -66,6 +84,23 @@
                 {/if}
             {/each}
         </svg>
+        {#if hovered && markers.length}
+            {@const left = markers[0].left}
+            <div class="db-hover__line" style="left: {left}%"></div>
+            {#each markers as marker (marker.key)}
+                <span class="db-hover__dot" style="left: {marker.left}%; top: {marker.top}%; background: {marker.color}"></span>
+            {/each}
+            <div class="db-tooltip" style="left: {left}%; transform: translateX({left / 100 > TOOLTIP_FLIP_FRACTION ? 'calc(-100% - 12px)' : '12px'})">
+                <time datetime={hovered.bucket}>{formatBucket(hovered.bucket, range)}</time>
+                {#each markers as marker (marker.key)}
+                    <span class="db-tooltip__row">
+                        <span><i style="background: {marker.color}"></i>{marker.label}</span>
+                        <b>{marker.value.toFixed(1)}%</b>
+                    </span>
+                {/each}
+            </div>
+        {/if}
+        </div>
     </div>
     <div class="db-meters">
         {#each METERS as meter (meter.key)}

@@ -60,6 +60,19 @@ export function seriesPaths(samples: UsageHistoryPoint[], key: "cpu" | "memory" 
     return { line, area: `${line}L${lastX} ${CHART_BASELINE}L${firstX} ${CHART_BASELINE}Z` };
 }
 
+export function pointPosition(index: number, count: number, percent: number): { left: number; top: number } {
+    const left = count > 1 ? (index / (count - 1)) * 100 : 0;
+    const y = CHART_BASELINE - ((CHART_BASELINE - 1) * Math.min(percent, MAX_PERCENT)) / MAX_PERCENT;
+    return { left, top: (y / CHART_HEIGHT) * 100 };
+}
+
+export function formatBucket(bucket: string, range: "1h" | "24h" | "7d"): string {
+    const date = new Date(parseTimestamp(bucket));
+    const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (range !== "7d") return time;
+    return `${date.toLocaleDateString([], { weekday: "short", day: "numeric" })} ${time}`;
+}
+
 export function alertTone(event: AlertEvent): Tone {
     if (event.status === "resolved") return "success";
     return event.severity === "critical" ? "danger" : "warning";
