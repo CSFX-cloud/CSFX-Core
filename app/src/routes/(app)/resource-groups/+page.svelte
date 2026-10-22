@@ -8,7 +8,6 @@
         suggestCidr,
         type ResourceGroup,
     } from "$lib/api/resource-groups";
-    import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
     import Icon from "@iconify/svelte";
     import IconPicker from "$lib/components/icon-picker.svelte";
@@ -182,12 +181,6 @@
         </div>
     </div>
 </dialog>
-
-<header class="flex h-16 shrink-0 items-center gap-2 px-4 border-b">
-    <Sidebar.Trigger class="-ms-1" />
-    <span class="text-sm text-muted-foreground">/</span>
-    <span class="text-sm font-medium">Resource Groups</span>
-</header>
 
 <div class="flex flex-col gap-6 p-6 min-w-0 overflow-x-hidden">
     <div class="flex items-center justify-between">

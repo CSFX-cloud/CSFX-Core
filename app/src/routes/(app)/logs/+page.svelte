@@ -13,7 +13,6 @@
     import { listNodes, type Node } from "$lib/api/nodes";
     import { listUsers, type OrganizationUser } from "$lib/api/users";
     import { csv, describeAction, levelTextClass, rangeStart, type RangeKey } from "$lib/utils/logs";
-    import SearchHeader from "$lib/components/search-header.svelte";
     import LogsFilterPanel from "$lib/components/logs/logs-filter-panel.svelte";
     import LogDetailPanel from "$lib/components/logs/log-detail-panel.svelte";
     import SeverityBars from "$lib/components/logs/severity-bars.svelte";
@@ -210,8 +209,6 @@
     </aside>
 
     <div class="flex min-w-0 flex-1 flex-col">
-        <SearchHeader />
-
         {#if error}
             <p class="px-4 pb-2 text-sm text-destructive">{error}</p>
         {/if}

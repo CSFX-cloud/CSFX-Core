@@ -15,7 +15,6 @@
     import CompactNode from "$lib/components/monitoring/compact-node.svelte";
     import * as Sheet from "$lib/components/ui/sheet/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
-    import SearchTrigger from "$lib/components/search-trigger.svelte";
     import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
     import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 
@@ -186,9 +185,6 @@
 
     <div class="flex min-w-0 flex-1 flex-col">
     <main class="relative min-h-0 flex-1">
-        <div class="absolute left-1/2 top-4 z-10 w-full max-w-sm -translate-x-1/2">
-            <SearchTrigger />
-        </div>
         <div class="absolute right-4 top-4 z-10 flex items-center gap-3 text-muted-foreground">
             <button type="button" class="hover:text-foreground" title="Reset layout" aria-label="Reset layout" onclick={resetLayout}>
                 <RotateCcwIcon class="size-4" />

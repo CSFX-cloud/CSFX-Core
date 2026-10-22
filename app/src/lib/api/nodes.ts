@@ -163,6 +163,23 @@ export async function getHealthHistory(token: string, range: '1h' | '24h' | '7d'
     return res.json();
 }
 
+export interface UsageHistoryPoint {
+    bucket: string;
+    cpu: number;
+    memory: number;
+    disk: number;
+}
+
+export type UsageRange = '1h' | '24h' | '7d';
+
+export async function getUsageHistory(token: string, range: UsageRange): Promise<UsageHistoryPoint[]> {
+    const res = await authedFetch(`${API_BASE}/system/stats/usage?range=${range}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`usage history fetch failed: ${res.status}`);
+    return res.json();
+}
+
 export async function rebootNode(token: string, id: string): Promise<void> {
     const res = await authedFetch(`${API_BASE}/agents/${id}/power`, {
         method: 'POST',

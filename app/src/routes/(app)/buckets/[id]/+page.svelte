@@ -11,7 +11,6 @@
         type Bucket,
         type ObjectEntry,
     } from "$lib/api/resource-groups";
-    import * as Sidebar from "$lib/components/ui/sidebar/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
     import Icon from "@iconify/svelte";
 
@@ -133,8 +132,6 @@
 </script>
 
 <header class="flex h-16 shrink-0 items-center gap-2 px-4 border-b">
-    <Sidebar.Trigger class="-ms-1" />
-    <span class="text-sm text-muted-foreground">/</span>
     <a href="/buckets" class="text-sm text-muted-foreground hover:text-foreground">S3 Buckets</a>
     <span class="text-sm text-muted-foreground">/</span>
     <span class="text-sm font-medium">{bucket?.name ?? bucketId.slice(0, 8)}</span>
