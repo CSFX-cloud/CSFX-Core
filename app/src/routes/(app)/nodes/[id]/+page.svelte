@@ -39,7 +39,10 @@
     let metricsError = $state<string | null>(null);
     let metricsLoading = $state(false);
     let metricsLive = $state(false);
-    let activeTab = $state<'summary' | 'hardware' | 'storage' | 'workloads' | 'network' | 'alerts' | 'tasks'>('summary');
+    type NodeTab = 'summary' | 'hardware' | 'storage' | 'workloads' | 'network' | 'alerts' | 'tasks';
+    const NODE_TABS: NodeTab[] = ['summary', 'hardware', 'storage', 'workloads', 'network', 'alerts', 'tasks'];
+    const requestedTab = $page.url.searchParams.get('tab');
+    let activeTab = $state<NodeTab>(NODE_TABS.find((tab) => tab === requestedTab) ?? 'summary');
     let liveSocket: WebSocket | null = null;
     let powerActionBusy = $state(false);
     let powerActionError = $state<string | null>(null);
