@@ -84,6 +84,19 @@ export async function listLogs(token: string, filter: LogsFilter): Promise<LogsR
     return res.json();
 }
 
+export interface LogsTrendPoint {
+    start: string;
+    count: number;
+}
+
+export async function getLogsTrend(token: string, filter: LogsFilter): Promise<LogsTrendPoint[]> {
+    const res = await authedFetch(`${API_BASE}/logs/trend${buildQuery(filter)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`Failed to load log trend: ${res.status}`);
+    return res.json();
+}
+
 export async function getLogsFacets(token: string, filter: LogsFilter): Promise<LogsFacets> {
     const res = await authedFetch(`${API_BASE}/logs/facets${buildQuery(filter)}`, {
         headers: { Authorization: `Bearer ${token}` },

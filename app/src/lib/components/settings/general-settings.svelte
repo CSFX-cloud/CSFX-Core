@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import * as Card from "$lib/components/ui/card/index.js";
-    import { Button } from "$lib/components/ui/button/index.js";
+    import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import { auth } from "$lib/auth/store.svelte";
     import {
         getAvatarFallbackStyle,
@@ -93,91 +92,59 @@
     });
 </script>
 
-{#if error}
-    <div class="mb-4 px-3 py-2 rounded-md bg-destructive/10 border border-destructive/20 text-sm text-destructive">
-        {error}
-    </div>
-{/if}
+{#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 
-<div class="flex flex-col gap-6 max-w-2xl">
-    <Card.Root>
-        <Card.Header>
-            <Card.Title>Avatar fallback</Card.Title>
-            <Card.Description>
-                How users without a profile image are shown across the app.
-            </Card.Description>
-        </Card.Header>
-        <Card.Content>
-            {#if loading}
-                <div class="h-9 w-48 rounded bg-muted animate-pulse"></div>
-            {:else}
-                <div class="flex items-center justify-between gap-4">
-                    <div class="flex items-center gap-2">
-                        <Button
-                            variant={style === "initials" ? "default" : "outline"}
-                            size="sm"
-                            onclick={() => setStyle("initials")}
-                            disabled={saving}
-                        >
-                            Initials
-                        </Button>
-                        <Button
-                            variant={style === "blobatar" ? "default" : "outline"}
-                            size="sm"
-                            onclick={() => setStyle("blobatar")}
-                            disabled={saving}
-                        >
-                            Blobatar
-                        </Button>
-                    </div>
-                    <div class="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border {style === 'blobatar' ? '' : 'bg-muted'} text-xs font-medium">
-                        {#if style === "blobatar"}
-                            <Blobatar name={auth.user?.username ?? "user"} size={60} class="size-[150%]" />
-                        {:else}
-                            {initials(auth.user?.username ?? "??")}
-                        {/if}
-                    </div>
-                </div>
+<SettingsPage title="General" description="Cluster-wide preferences.">
+    <section class="cx-panel st-panel" aria-labelledby="st-avatar">
+        <div class="st-split">
+            <div>
+                <h3 id="st-avatar">Avatar fallback</h3>
+                <p>How users without a profile image are shown across the app.</p>
+            </div>
+            {#if !loading}
+                <span class="st-avatar" style="width: 44px; height: 44px; font-size: 13px" aria-hidden="true">
+                    {#if style === "blobatar"}
+                        <Blobatar name={auth.user?.username ?? "user"} size={60} class="size-[150%]" />
+                    {:else}
+                        {initials(auth.user?.username ?? "??")}
+                    {/if}
+                </span>
             {/if}
-        </Card.Content>
-    </Card.Root>
+        </div>
+        {#if loading}
+            <div class="db-skeleton db-skeleton--row" style="width: 200px" aria-hidden="true"></div>
+        {:else}
+            <div class="cx-tabs cx-tabs--contained cx-tabs--sm" role="tablist" aria-label="Avatar fallback" style="justify-self: start">
+                <button class="cx-tab" role="tab" type="button" aria-selected={style === "initials"} disabled={saving} onclick={() => setStyle("initials")}>Initials</button>
+                <button class="cx-tab" role="tab" type="button" aria-selected={style === "blobatar"} disabled={saving} onclick={() => setStyle("blobatar")}>Blobatar</button>
+            </div>
+        {/if}
+    </section>
 
     {#if ssh}
-        <Card.Root>
-            <Card.Header>
-                <Card.Title>SSH access</Card.Title>
-                <Card.Description>
-                    Closed by default. When open, administrators with a registered public key can
-                    sign in as user csfx on every node. Passwords are never accepted.
-                </Card.Description>
-            </Card.Header>
-            <Card.Content class="flex flex-col gap-4">
-                {#if ssh.effective}
-                    <div class="flex items-center justify-between gap-4">
-                        <p class="text-sm">{describeExpiry(ssh)}</p>
-                        <Button variant="outline" size="sm" disabled={sshSaving} onclick={() => updateSsh(false)}>
-                            Disable
-                        </Button>
-                    </div>
-                {:else}
-                    <div class="flex flex-wrap items-center gap-2">
-                        {#each SSH_DURATIONS as option (option.label)}
-                            <Button
-                                variant={sshHours === option.hours ? "default" : "outline"}
-                                size="sm"
-                                onclick={() => (sshHours = option.hours)}
-                            >
-                                {option.label}
-                            </Button>
-                        {/each}
-                    </div>
-                    <div>
-                        <Button size="sm" disabled={sshSaving} onclick={() => updateSsh(true)}>
-                            Enable SSH access
-                        </Button>
-                    </div>
-                {/if}
-            </Card.Content>
-        </Card.Root>
+        <section class="cx-panel st-panel" aria-labelledby="st-ssh">
+            <div>
+                <h3 id="st-ssh">SSH access</h3>
+                <p>
+                    Closed by default. When open, administrators with a registered public key can sign in as user csfx on every node.
+                    Passwords are never accepted.
+                </p>
+            </div>
+            {#if ssh.effective}
+                <div class="st-split">
+                    <p class="st-note" style="flex: 1">{describeExpiry(ssh)}</p>
+                    <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" disabled={sshSaving} onclick={() => updateSsh(false)}>Disable</button>
+                </div>
+            {:else}
+                <div class="cx-tabs cx-tabs--contained cx-tabs--sm" role="tablist" aria-label="Duration" style="justify-self: start; flex-wrap: wrap">
+                    {#each SSH_DURATIONS as option (option.label)}
+                        <button class="cx-tab" role="tab" type="button" aria-selected={sshHours === option.hours} onclick={() => (sshHours = option.hours)}>{option.label}</button>
+                    {/each}
+                </div>
+                <div>
+                    <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" disabled={sshSaving} aria-busy={sshSaving} onclick={() => updateSsh(true)}>Enable SSH access</button>
+                </div>
+            {/if}
+        </section>
     {/if}
-</div>
+</SettingsPage>

@@ -1,25 +1,28 @@
 <script lang="ts">
     import { onDestroy, onMount } from "svelte";
+    import { Layers, Package, RefreshCw, Square, Trash2 } from "@lucide/svelte";
     import { page } from "$app/stores";
     import { goto } from "$app/navigation";
-    import Icon from "@iconify/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { deleteStack, getStack, restartStack, stopStack, type Stack } from "$lib/api/resource-groups";
-    import { resolveImageIcon } from "$lib/utils/image-icon";
-    import { stackStatus } from "$lib/utils/resource-items";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import StatusBadge from "$lib/components/status-badge.svelte";
     import ComposeEditor from "$lib/components/resource-group/compose-editor.svelte";
     import StackLogsTab from "$lib/components/resource-group/stack-logs-tab.svelte";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
+    import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
+    import ServiceIcon from "$lib/components/shell/service-icon.svelte";
+    import WorkloadHero, { type MetaItem } from "$lib/components/workload/workload-hero.svelte";
+    import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
+    import { knownWorkloadIcon } from "$lib/utils/image-icon";
+    import { stackStatus } from "$lib/utils/resource-items";
+    import { badgeClass, statusLabel } from "$lib/utils/tone";
 
     type Tab = "logs" | "services" | "compose";
 
     const POLL_INTERVAL_MS = 5000;
-    const TABS: [Tab, string][] = [
-        ["logs", "Logs"],
-        ["services", "Services"],
-        ["compose", "Compose"],
+    const TABS: { id: Tab; label: string }[] = [
+        { id: "logs", label: "Logs" },
+        { id: "services", label: "Services" },
+        { id: "compose", label: "Compose" },
     ];
 
     const rg = useResourceGroupState();
@@ -31,7 +34,13 @@
     let actionError = $state<string | null>(null);
     let actionBusy = $state(false);
 
-    const children = $derived(rg.workloads.filter((w) => w.stack_id === stackId));
+    const children = $derived(rg.workloads.filter((workload) => workload.stack_id === stackId));
+    const running = $derived(children.filter((child) => child.status === "running").length);
+    const name = $derived(stack?.name ?? "Stack");
+    const meta = $derived<MetaItem[]>([
+        { icon: Package, text: `${children.length} services` },
+        { icon: Layers, text: rg.group?.name ?? "Resource group", href: base },
+    ]);
 
     async function runAction(action: (token: string, id: string) => Promise<unknown>, failure: string) {
         if (!auth.token) return false;
@@ -50,6 +59,7 @@
     }
 
     async function remove() {
+        if (!confirm(`Delete stack ${name}?`)) return;
         if (await runAction(deleteStack, "Failed to delete stack")) goto(base);
     }
 
@@ -63,88 +73,78 @@
         if (auth.token) stack = await getStack(auth.token, stackId);
     });
 
+    $effect(() => {
+        breadcrumb.set(rg.group ? `${rg.group.name} / ${name}` : null);
+        return () => breadcrumb.set(null);
+    });
+
     const pollInterval = setInterval(rg.load, POLL_INTERVAL_MS);
 
     onDestroy(() => clearInterval(pollInterval));
 </script>
 
-<header class="flex shrink-0 items-center gap-3 px-4 py-4">
-    <Button variant="ghost" size="icon-sm" onclick={() => goto(base)} aria-label="Back to resource group">
-        <Icon icon="mdi:arrow-left" width={16} height={16} />
-    </Button>
-    <Icon icon="logos:docker-icon" width={28} height={28} class="shrink-0" />
-    <div class="min-w-0">
-        <div class="flex items-center gap-2">
-            <span class="text-base font-semibold leading-tight truncate">{stack?.name ?? "Stack"}</span>
-            {#if children.length > 0}
-                <StatusBadge
-                    status={stackStatus(children)}
-                    label="{children.filter((c) => c.status === 'running').length}/{children.length} running"
-                />
-            {/if}
-        </div>
-        <p class="text-xs text-muted-foreground">{children.length} services</p>
-    </div>
-    <div class="ml-auto flex items-center gap-0.5 shrink-0">
-        <Button variant="ghost" size="icon-sm" onclick={() => runAction(restartStack, "Failed to restart stack")} disabled={actionBusy} aria-label="Restart stack" title="Restart stack">
-            <Icon icon="mdi:restart" width={16} height={16} />
-        </Button>
-        <Button variant="ghost" size="icon-sm" onclick={() => runAction(stopStack, "Failed to stop stack")} disabled={actionBusy} aria-label="Stop stack" title="Stop stack">
-            <Icon icon="mdi:stop-circle-outline" width={16} height={16} />
-        </Button>
-        <Button variant="ghost" size="icon-sm" onclick={remove} disabled={actionBusy} class="text-red-500 hover:text-red-500" aria-label="Delete stack" title="Delete stack">
-            <Icon icon="mdi:trash-can-outline" width={16} height={16} />
-        </Button>
-    </div>
-</header>
-
-{#if actionError}
-    <p class="text-xs text-destructive px-4 pt-2">{actionError}</p>
-{/if}
-
-<div class="flex-1 overflow-y-auto">
-    <div class="px-6 pt-4">
-        <div class="flex gap-0 border-b">
-            {#each TABS as [key, label] (key)}
-                <button
-                    class="px-3 py-2 text-xs font-medium border-b-2 transition-colors {tab === key ? 'border-foreground text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
-                    onclick={() => (tab = key)}
-                >
-                    {label}
-                </button>
-            {/each}
-        </div>
-    </div>
-
+<div class="db-content">
     {#if rg.loading}
-        <p class="px-6 py-8 text-sm text-muted-foreground">Loading...</p>
-    {:else if tab === "logs"}
-        <div class="px-6 py-4">
-            <div class="border rounded-lg overflow-hidden h-[36rem]">
-                {#key children.length}
-                    <StackLogsTab workloads={children} />
-                {/key}
-            </div>
-        </div>
-    {:else if tab === "services"}
-        <div class="px-6 py-4">
-            <div class="border rounded-lg divide-y">
-                {#each children as child (child.id)}
-                    <button
-                        class="flex w-full items-center gap-3 p-3 text-left hover:bg-muted/20 transition-colors"
-                        onclick={() => goto(`${base}/container/${child.id}`)}
-                    >
-                        <Icon icon={resolveImageIcon(child.image)} width={20} height={20} class="shrink-0" />
-                        <div class="min-w-0 flex-1">
-                            <p class="text-sm font-medium leading-tight">{child.service_name ?? child.name}</p>
-                            <p class="text-xs text-muted-foreground font-mono truncate">{child.image}</p>
-                        </div>
-                        <StatusBadge status={child.status} />
-                    </button>
-                {/each}
-            </div>
-        </div>
+        <div class="db-skeleton sv-skeleton" aria-hidden="true"></div>
     {:else}
-        <ComposeEditor rgId={rg.rgId} {stackId} onDone={done} />
+        <WorkloadHero
+            label="Compose stack {name}"
+            title={name}
+            status={children.length ? stackStatus(children) : "pending"}
+            statusText={children.length ? `${running}/${children.length} running` : undefined}
+            {meta}
+        >
+            {#snippet lead()}
+                <ServiceIcon name="docker-compose" size="xl" />
+            {/snippet}
+            {#snippet actions()}
+                <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" disabled={actionBusy} onclick={() => runAction(stopStack, "Failed to stop stack")}>
+                    <Square class="cx-i" aria-hidden="true" />Stop
+                </button>
+                <button class="cx-icon-btn" type="button" disabled={actionBusy} aria-label="Restart stack" title="Restart stack" onclick={() => runAction(restartStack, "Failed to restart stack")}>
+                    <RefreshCw class="cx-i" aria-hidden="true" />
+                </button>
+                <button class="cx-icon-btn nd-danger" type="button" disabled={actionBusy} aria-label="Delete stack" title="Delete stack" onclick={remove}>
+                    <Trash2 class="cx-i" aria-hidden="true" />
+                </button>
+            {/snippet}
+        </WorkloadHero>
+
+        {#if actionError}<p class="cx-hint cx-hint--error">{actionError}</p>{/if}
+
+        <WorkloadTabs tabs={TABS} active={tab} label="Stack sections" onselect={(id) => (tab = id)} />
+
+        {#if tab === "logs"}
+            {#key children.length}
+                <StackLogsTab workloads={children} />
+            {/key}
+        {:else if tab === "services"}
+            <section class="cx-panel" aria-labelledby="stk-services">
+                <div class="cx-panel__head">
+                    <div><h2 class="cx-panel__title" id="stk-services">Services</h2><p class="cx-panel__sub">Containers that make up {name}</p></div>
+                </div>
+                <div class="db-scroll">
+                    <table class="cx-table">
+                        <thead><tr><th>Service</th><th>Status</th><th>Image</th></tr></thead>
+                        <tbody>
+                            {#each children as child (child.id)}
+                                <tr class="nl-row">
+                                    <td>
+                                        <div class="rs-name">
+                                            <ServiceIcon name="docker-containers" brand={knownWorkloadIcon(child.image, child.runtime_class)} />
+                                            <a class="rs-link" href="{base}/container/{child.id}">{child.service_name ?? child.name}</a>
+                                        </div>
+                                    </td>
+                                    <td><span class={badgeClass(child.status)}>{statusLabel(child.status)}</span></td>
+                                    <td class="cx-num">{child.image}</td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        {:else}
+            <ComposeEditor rgId={rg.rgId} groupName={rg.group?.name ?? "the group"} {stackId} onDone={done} />
+        {/if}
     {/if}
 </div>

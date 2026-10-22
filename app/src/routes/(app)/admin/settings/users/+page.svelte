@@ -1,8 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import PlusIcon from "@lucide/svelte/icons/plus";
-    import UsersIcon from "@lucide/svelte/icons/users";
-    import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
+    import { Plus, RefreshCw, Users } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import {
         deleteUser,
@@ -12,10 +10,10 @@
         type OrganizationRole,
         type OrganizationUser,
     } from "$lib/api/users";
-    import { Badge } from "$lib/components/ui/badge/index.js";
-    import { Button } from "$lib/components/ui/button/index.js";
+    import EmptyState from "$lib/components/dashboard/empty-state.svelte";
     import CreateUserDialog from "$lib/components/settings/create-user-dialog.svelte";
     import UserAvatar from "$lib/components/settings/user-avatar.svelte";
+    import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import UserDrawer from "$lib/components/settings/user-drawer.svelte";
 
     let users = $state<OrganizationUser[]>([]);
@@ -84,83 +82,49 @@
     onDelete={removeSelected}
 />
 
-<div class="flex min-w-0 flex-1 flex-col gap-6">
-    <div class="flex items-center justify-between">
-        <div>
-            <h1 class="text-xl font-semibold tracking-tight">Users</h1>
-            <p class="text-sm text-muted-foreground mt-0.5">Manage everyone who can sign in</p>
-        </div>
-        <Button size="sm" onclick={() => createDialog?.open()}>
-            <PlusIcon class="size-3.5" />
+<SettingsPage title="Users" description="Manage everyone who can sign in.">
+    {#snippet actions()}
+        <button class="cx-icon-btn" type="button" style="width: 36px; height: 36px" aria-label="Refresh" disabled={refreshing} onclick={load}>
+            <RefreshCw class="cx-i {refreshing ? 'db-spin' : ''}" aria-hidden="true" />
+        </button>
+        <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" onclick={() => createDialog?.open()}>
+            <Plus class="cx-i" aria-hidden="true" />
             Create user
-        </Button>
-    </div>
+        </button>
+    {/snippet}
 
-    <div class="border rounded-lg overflow-hidden">
-        <div class="flex items-center justify-between px-4 py-3 border-b bg-muted/30">
-            <div class="flex items-center gap-2">
-                <UsersIcon class="size-4 text-muted-foreground" />
-                <span class="text-sm font-semibold">User Summary</span>
-            </div>
-            <Button variant="ghost" size="icon-sm" onclick={load} disabled={refreshing} aria-label="Refresh">
-                <RefreshCwIcon class="size-4 {refreshing ? 'animate-spin' : ''}" />
-            </Button>
+    {#if error}
+        <p class="cx-hint cx-hint--error">{error}</p>
+    {:else if loading}
+        <div class="db-skeleton-list" aria-hidden="true">
+            {#each { length: 3 } as _, index (index)}<span class="db-skeleton db-skeleton--row"></span>{/each}
         </div>
-        <table class="w-full text-sm">
-            <thead class="bg-muted/50">
-                <tr>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">ID</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">User</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Email</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Role</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Sign-in</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">2FA</th>
-                    <th class="text-left px-4 py-3 font-medium text-muted-foreground">Joined</th>
-                </tr>
-            </thead>
-            <tbody>
-                {#if loading}
-                    <tr>
-                        <td colspan="7" class="px-4 py-8 text-center text-muted-foreground">Loading...</td>
-                    </tr>
-                {:else if error}
-                    <tr>
-                        <td colspan="7" class="px-4 py-8 text-center text-destructive">{error}</td>
-                    </tr>
-                {:else if users.length === 0}
-                    <tr>
-                        <td colspan="7" class="px-4 py-8 text-center text-muted-foreground">No users</td>
-                    </tr>
-                {:else}
-                    {#each users as user (user.id)}
-                        <tr
-                            class="border-t hover:bg-muted/30 transition-colors cursor-pointer"
-                            onclick={() => (selectedId = user.id)}
-                        >
-                            <td class="px-4 py-3 font-mono text-xs text-muted-foreground">{user.id.slice(0, 8)}</td>
-                            <td class="px-4 py-3">
-                                <div class="flex items-center gap-3">
-                                    <UserAvatar name={user.username} gravatarEmail={user.gravatar_email} />
-                                    <span class="font-medium">{user.username}</span>
-                                </div>
-                            </td>
-                            <td class="px-4 py-3 text-muted-foreground">{user.email ?? user.gravatar_email ?? "-"}</td>
-                            <td class="px-4 py-3">{user.role_name}</td>
-                            <td class="px-4 py-3">
-                                <Badge variant={user.auth_source === "local" ? "secondary" : "pending"}>
-                                    {user.auth_source === "local" ? "Local" : "SSO"}
-                                </Badge>
-                            </td>
-                            <td class="px-4 py-3">
-                                <Badge variant={user.two_factor_enabled ? "success" : "outline"}>
-                                    {user.two_factor_enabled ? "On" : "Off"}
-                                </Badge>
-                            </td>
-                            <td class="px-4 py-3 text-muted-foreground">{user.joined_at.slice(0, 10)}</td>
-                        </tr>
-                    {/each}
-                {/if}
-            </tbody>
-        </table>
-    </div>
-</div>
+    {:else if users.length === 0}
+        <EmptyState icon={Users} label="No users" />
+    {:else}
+        <section class="cx-panel" aria-label="Users">
+            <div class="db-scroll">
+                <table class="cx-table">
+                    <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Sign-in</th><th>2FA</th><th>Joined</th></tr></thead>
+                    <tbody>
+                        {#each users as user (user.id)}
+                            <tr class="nl-row">
+                                <td>
+                                    <div class="rs-name">
+                                        <UserAvatar name={user.username} gravatarEmail={user.gravatar_email} />
+                                        <button class="rs-link" type="button" onclick={() => (selectedId = user.id)}>{user.username}</button>
+                                    </div>
+                                </td>
+                                <td class="cx-soft">{user.email ?? user.gravatar_email ?? "\u2014"}</td>
+                                <td class="cx-soft">{user.role_name}</td>
+                                <td><span class="cx-badge">{user.auth_source === "local" ? "Local" : "SSO"}</span></td>
+                                <td><span class="cx-badge {user.two_factor_enabled ? 'cx-badge--success' : ''}">{user.two_factor_enabled ? "On" : "Off"}</span></td>
+                                <td class="cx-num">{user.joined_at.slice(0, 10)}</td>
+                            </tr>
+                        {/each}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    {/if}
+</SettingsPage>

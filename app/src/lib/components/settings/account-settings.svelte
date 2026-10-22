@@ -1,11 +1,10 @@
 <script lang="ts">
-    import { Button } from "$lib/components/ui/button/index.js";
-    import { Input } from "$lib/components/ui/input/index.js";
-    import { Label } from "$lib/components/ui/label/index.js";
-    import { Switch } from "$lib/components/ui/switch/index.js";
-    import * as InputOTP from "$lib/components/ui/input-otp/index.js";
+    import { REGEXP_ONLY_DIGITS } from "bits-ui";
+    import CodeInput from "$lib/components/auth/code-input.svelte";
+    import PasswordInput from "$lib/components/auth/password-input.svelte";
+    import SettingsPage from "$lib/components/settings/settings-page.svelte";
+    import Switch from "$lib/components/shell/switch.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
-    import * as Avatar from "$lib/components/ui/avatar/index.js";
     import { auth } from "$lib/auth/store.svelte";
     import {
         changeEmail,
@@ -45,6 +44,8 @@
     let qrCode = $state("");
     let otpValue = $state("");
     let twoFactorBusy = $state(false);
+
+    const OTP_LENGTH = 6;
 
     const emailChanged = $derived(email.trim() !== "" && email !== (auth.user?.email ?? ""));
     const passwordValid = $derived(newPassword.length >= 8 && newPassword === confirmPassword);
@@ -114,7 +115,7 @@
     }
 
     async function confirmEnable() {
-        if (!auth.token || otpValue.length !== 6) return;
+        if (!auth.token || otpValue.length !== OTP_LENGTH) return;
         twoFactorBusy = true;
         try {
             await enable2FA(auth.token, otpValue);
@@ -131,7 +132,7 @@
     }
 
     async function confirmDisable() {
-        if (!auth.token || otpValue.length !== 6) return;
+        if (!auth.token || otpValue.length !== OTP_LENGTH) return;
         twoFactorBusy = true;
         try {
             await disable2FA(auth.token, otpValue);
@@ -154,140 +155,108 @@
     }
 </script>
 
-<div class="flex flex-col gap-8 max-w-xl">
-    <section class="flex flex-col gap-4">
-        <h3 class="text-sm font-semibold">Profile</h3>
-        <div class="flex items-center gap-4">
-            <Avatar.Root class="size-16 rounded-lg">
-                {#if avatarPreview}
-                    <Avatar.Image src={avatarPreview} alt="Gravatar avatar" />
-                {/if}
-                <Avatar.Fallback class="rounded-lg text-lg">
-                    {(auth.user?.username ?? "??").slice(0, 2).toUpperCase()}
-                </Avatar.Fallback>
-            </Avatar.Root>
-            <div class="flex-1 flex flex-col gap-1.5">
-                <Label for="settings-gravatar" class="text-xs text-muted-foreground">Gravatar email</Label>
-                <div class="flex gap-2">
-                    <Input
-                        id="settings-gravatar"
-                        type="email"
-                        bind:value={gravatarEmail}
-                        placeholder="you@example.com"
-                    />
-                    <Button onclick={saveGravatarEmail} disabled={!gravatarChanged || gravatarSaving} size="sm">
-                        {#if gravatarSaving}<Spinner />{:else}Save{/if}
-                    </Button>
+{#snippet otpPanel(note: string, confirmLabel: string, destructive: boolean, onconfirm: () => void)}
+    <div style="display: grid; gap: 16px">
+        <p class="st-note">{note}</p>
+        {#if twoFactorStep === "enrolling" && qrCode}
+            <img class="st-qr" src="data:image/png;base64,{qrCode}" alt="2FA QR code" />
+        {/if}
+        <CodeInput bind:value={otpValue} length={OTP_LENGTH} groupSize={3} pattern={REGEXP_ONLY_DIGITS} label="Authenticator code" />
+        <div class="db-actions">
+            <button class="cx-btn cx-btn--primary cx-btn--sm {destructive ? 'nd-danger' : ''}" type="button" disabled={otpValue.length !== OTP_LENGTH || twoFactorBusy} aria-busy={twoFactorBusy} onclick={onconfirm}>
+                {#if twoFactorBusy}<Spinner />{:else}{confirmLabel}{/if}
+            </button>
+            <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={cancelTwoFactorStep}>Cancel</button>
+        </div>
+    </div>
+{/snippet}
+
+<SettingsPage title="Account" description="Your profile and how you sign in.">
+    <section class="cx-panel st-panel" aria-labelledby="st-profile">
+        <div><h3 id="st-profile">Profile</h3><p>Shown to other administrators of this cluster.</p></div>
+        <div class="st-profile">
+            <span class="st-avatar" aria-hidden="true">
+                {#if avatarPreview}<img src={avatarPreview} alt="" />{:else}{(auth.user?.username ?? "??").slice(0, 2).toUpperCase()}{/if}
+            </span>
+            <div style="display: grid; gap: 16px; min-width: 0">
+                <div class="cx-field">
+                    <label class="cx-label" for="st-grav">Gravatar email</label>
+                    <div class="st-row">
+                        <input class="cx-input" id="st-grav" type="email" placeholder="you@example.com" aria-describedby="st-grav-hint" bind:value={gravatarEmail} />
+                        <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" style="height: 44px" disabled={!gravatarChanged || gravatarSaving} onclick={saveGravatarEmail}>
+                            {#if gravatarSaving}<Spinner />{:else}Save{/if}
+                        </button>
+                    </div>
+                    <p class="cx-hint" id="st-grav-hint">
+                        The avatar is loaded from <a class="cx-link" href="https://gravatar.com/profile" target="_blank" rel="noreferrer">gravatar.com</a>. Leave empty to keep initials.
+                    </p>
                 </div>
-                <p class="text-xs text-muted-foreground">
-                    Avatar is pulled from <a href="https://gravatar.com/profile" target="_blank" rel="noreferrer" class="underline">gravatar.com</a>
-                </p>
-            </div>
-        </div>
-        <div class="flex flex-col gap-1.5">
-            <Label for="settings-username" class="text-xs text-muted-foreground">Username</Label>
-            <Input id="settings-username" value={auth.user?.username ?? ""} disabled />
-        </div>
-        <div class="flex flex-col gap-1.5">
-            <Label for="settings-email" class="text-xs text-muted-foreground">Email</Label>
-            <div class="flex gap-2">
-                <Input id="settings-email" type="email" bind:value={email} placeholder="you@example.com" />
-                <Button onclick={saveEmail} disabled={!emailChanged || emailSaving} size="sm">
-                    {#if emailSaving}<Spinner />{:else}Save{/if}
-                </Button>
+                <div class="cx-field">
+                    <label class="cx-label" for="st-user">Username</label>
+                    <input class="cx-input st-ro" id="st-user" type="text" value={auth.user?.username ?? ""} readonly aria-describedby="st-user-hint" />
+                    <p class="cx-hint" id="st-user-hint">Set during setup. It can't be changed.</p>
+                </div>
+                <div class="cx-field">
+                    <label class="cx-label" for="st-mail">Email</label>
+                    <div class="st-row">
+                        <input class="cx-input" id="st-mail" type="email" autocomplete="email" placeholder="you@example.com" bind:value={email} />
+                        <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" style="height: 44px" disabled={!emailChanged || emailSaving} onclick={saveEmail}>
+                            {#if emailSaving}<Spinner />{:else}Save{/if}
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     </section>
 
-    <section class="flex flex-col gap-4 pt-6 border-t">
-        <h3 class="text-sm font-semibold">Password</h3>
-        <div class="flex flex-col gap-1.5">
-            <Label for="settings-old-password" class="text-xs text-muted-foreground">Current password</Label>
-            <Input id="settings-old-password" type="password" bind:value={oldPassword} autocomplete="current-password" />
-        </div>
-        <div class="flex flex-col gap-1.5">
-            <Label for="settings-new-password" class="text-xs text-muted-foreground">New password</Label>
-            <Input id="settings-new-password" type="password" bind:value={newPassword} autocomplete="new-password" />
-        </div>
-        <div class="flex flex-col gap-1.5">
-            <Label for="settings-confirm-password" class="text-xs text-muted-foreground">Confirm new password</Label>
-            <Input id="settings-confirm-password" type="password" bind:value={confirmPassword} autocomplete="new-password" />
-        </div>
-        <Button onclick={savePassword} disabled={!passwordValid || passwordSaving} size="sm" class="w-fit">
-            {#if passwordSaving}<Spinner />{:else}Update password{/if}
-        </Button>
-    </section>
-
-    <section class="flex flex-col gap-4 pt-6 border-t">
-        <div class="flex items-center justify-between">
+    <section class="cx-panel st-panel" aria-labelledby="st-pw">
+        <div><h3 id="st-pw">Password</h3><p>Use one you don't use anywhere else.</p></div>
+        <form
+            style="display: grid; gap: 16px"
+            onsubmit={(event) => {
+                event.preventDefault();
+                savePassword();
+            }}
+        >
+            <div class="cx-field">
+                <label class="cx-label" for="st-cur">Current password</label>
+                <PasswordInput id="st-cur" autocomplete="current-password" bind:value={oldPassword} />
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px">
+                <div class="cx-field">
+                    <label class="cx-label" for="st-new">New password</label>
+                    <PasswordInput id="st-new" autocomplete="new-password" bind:value={newPassword} />
+                </div>
+                <div class="cx-field">
+                    <label class="cx-label" for="st-conf">Confirm new password</label>
+                    <PasswordInput id="st-conf" autocomplete="new-password" bind:value={confirmPassword} />
+                </div>
+            </div>
             <div>
-                <h3 class="text-sm font-semibold">Two-factor authentication</h3>
-                <p class="text-xs text-muted-foreground mt-0.5">Require an authenticator code at login</p>
+                <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={!passwordValid || passwordSaving} aria-busy={passwordSaving}>
+                    {#if passwordSaving}<Spinner />{:else}Update password{/if}
+                </button>
+            </div>
+        </form>
+    </section>
+
+    <section class="cx-panel st-panel" aria-labelledby="st-2fa">
+        <div class="st-toggle">
+            <div>
+                <h3 id="st-2fa">Two-factor authentication</h3>
+                <p>Ask for a code from an authenticator app at every sign-in.</p>
             </div>
             <Switch
                 checked={auth.user?.two_factor_enabled ?? false}
+                label="Two-factor authentication"
                 disabled={twoFactorBusy || twoFactorStep !== "idle"}
-                onCheckedChange={toggleTwoFactor}
+                onchange={toggleTwoFactor}
             />
         </div>
-
         {#if twoFactorStep === "enrolling"}
-            <div class="flex flex-col gap-4 p-4 rounded-lg border bg-muted/30">
-                <p class="text-xs text-muted-foreground">Scan with your authenticator app, then enter the code</p>
-                {#if qrCode}
-                    <img
-                        src="data:image/png;base64,{qrCode}"
-                        alt="2FA QR code"
-                        class="size-40 rounded-md self-center bg-white p-2"
-                    />
-                {/if}
-                <InputOTP.Root maxlength={6} bind:value={otpValue}>
-                    {#snippet children({ cells })}
-                        <InputOTP.Group class="flex-1">
-                            {#each cells.slice(0, 3) as cell (cell)}
-                                <InputOTP.Slot {cell} class="flex-1 w-full" />
-                            {/each}
-                        </InputOTP.Group>
-                        <InputOTP.Separator />
-                        <InputOTP.Group class="flex-1">
-                            {#each cells.slice(3, 6) as cell (cell)}
-                                <InputOTP.Slot {cell} class="flex-1 w-full" />
-                            {/each}
-                        </InputOTP.Group>
-                    {/snippet}
-                </InputOTP.Root>
-                <div class="flex gap-2">
-                    <Button onclick={confirmEnable} disabled={otpValue.length !== 6 || twoFactorBusy} size="sm">
-                        {#if twoFactorBusy}<Spinner />{:else}Confirm{/if}
-                    </Button>
-                    <Button onclick={cancelTwoFactorStep} variant="outline" size="sm">Cancel</Button>
-                </div>
-            </div>
+            {@render otpPanel("Scan the QR code with your authenticator app, then enter the code.", "Confirm", false, confirmEnable)}
         {:else if twoFactorStep === "disabling"}
-            <div class="flex flex-col gap-4 p-4 rounded-lg border bg-muted/30">
-                <p class="text-xs text-muted-foreground">Enter your current code to disable 2FA</p>
-                <InputOTP.Root maxlength={6} bind:value={otpValue}>
-                    {#snippet children({ cells })}
-                        <InputOTP.Group class="flex-1">
-                            {#each cells.slice(0, 3) as cell (cell)}
-                                <InputOTP.Slot {cell} class="flex-1 w-full" />
-                            {/each}
-                        </InputOTP.Group>
-                        <InputOTP.Separator />
-                        <InputOTP.Group class="flex-1">
-                            {#each cells.slice(3, 6) as cell (cell)}
-                                <InputOTP.Slot {cell} class="flex-1 w-full" />
-                            {/each}
-                        </InputOTP.Group>
-                    {/snippet}
-                </InputOTP.Root>
-                <div class="flex gap-2">
-                    <Button onclick={confirmDisable} disabled={otpValue.length !== 6 || twoFactorBusy} variant="destructive" size="sm">
-                        {#if twoFactorBusy}<Spinner />{:else}Disable{/if}
-                    </Button>
-                    <Button onclick={cancelTwoFactorStep} variant="outline" size="sm">Cancel</Button>
-                </div>
-            </div>
+            {@render otpPanel("Enter your current code to disable two-factor authentication.", "Disable", true, confirmDisable)}
         {/if}
     </section>
-</div>
+</SettingsPage>

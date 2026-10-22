@@ -1,9 +1,9 @@
 <script lang="ts">
     import { auth } from "$lib/auth/store.svelte";
     import { createUser, type OrganizationRole } from "$lib/api/users";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import { Switch } from "$lib/components/ui/switch/index.js";
+    import PasswordInput from "$lib/components/auth/password-input.svelte";
     import ModalDialog from "$lib/components/resource-group/modal-dialog.svelte";
+    import Switch from "$lib/components/shell/switch.svelte";
 
     const MIN_PASSWORD_LENGTH = 8;
 
@@ -55,46 +55,43 @@
 </script>
 
 <ModalDialog bind:this={dialog} title="Create user" onclose={() => (error = null)}>
-    <div class="grid grid-cols-1 gap-3">
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="new-user-name">Username</label>
-            <input id="new-user-name" class="border rounded px-3 py-1.5 text-sm bg-background" autocomplete="off" bind:value={username} />
+    <form
+        class="md__fields"
+        onsubmit={(event) => {
+            event.preventDefault();
+            submit();
+        }}
+    >
+        <div class="cx-field">
+            <label class="cx-label" for="new-user-name">Username</label>
+            <input class="cx-input" id="new-user-name" autocomplete="off" bind:value={username} />
         </div>
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="new-user-email">Email (optional)</label>
-            <input id="new-user-email" type="email" class="border rounded px-3 py-1.5 text-sm bg-background" autocomplete="off" bind:value={email} />
+        <div class="cx-field">
+            <label class="cx-label" for="new-user-email">Email <span style="color: var(--ink-muted)">Optional</span></label>
+            <input class="cx-input" id="new-user-email" type="email" autocomplete="off" bind:value={email} />
         </div>
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="new-user-password">Initial password</label>
-            <input
-                id="new-user-password"
-                type="password"
-                class="border rounded px-3 py-1.5 text-sm bg-background"
-                autocomplete="new-password"
-                placeholder="At least {MIN_PASSWORD_LENGTH} characters"
-                bind:value={password}
-            />
+        <div class="cx-field">
+            <label class="cx-label" for="new-user-password">Initial password</label>
+            <PasswordInput id="new-user-password" autocomplete="new-password" placeholder="At least {MIN_PASSWORD_LENGTH} characters" bind:value={password} />
         </div>
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="new-user-role">Role</label>
-            <select id="new-user-role" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={roleId}>
+        <div class="cx-field">
+            <label class="cx-label" for="new-user-role">Role</label>
+            <select class="cx-input" id="new-user-role" bind:value={roleId}>
                 {#each roles as role (role.id)}
                     <option value={role.id}>{role.name}</option>
                 {/each}
             </select>
         </div>
-        <div class="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
-            <span class="text-sm">Require password change on first sign-in</span>
-            <Switch bind:checked={forcePasswordChange} />
+        <div class="st-note st-split">
+            <span>Require password change on first sign-in</span>
+            <Switch checked={forcePasswordChange} label="Require password change" onchange={(value) => (forcePasswordChange = value)} />
         </div>
-    </div>
-    {#if error}
-        <p class="text-xs text-destructive">{error}</p>
-    {/if}
-    <div class="flex gap-2 justify-end">
-        <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
-        <Button size="sm" onclick={submit} disabled={creating || !valid}>
-            {creating ? "Creating..." : "Create"}
-        </Button>
-    </div>
+        {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
+        <div class="md__foot">
+            <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => dialog?.close()}>Cancel</button>
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={creating || !valid} aria-busy={creating}>
+                {creating ? "Creating" : "Create"}
+            </button>
+        </div>
+    </form>
 </ModalDialog>

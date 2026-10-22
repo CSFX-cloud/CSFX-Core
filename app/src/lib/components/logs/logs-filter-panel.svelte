@@ -1,14 +1,27 @@
 <script lang="ts">
-    import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
-    import SearchIcon from "@lucide/svelte/icons/search";
-    import CalendarIcon from "@lucide/svelte/icons/calendar-days";
+    import { CalendarDays } from "@lucide/svelte";
     import type { LogsFacets } from "$lib/api/logs";
     import type { Node } from "$lib/api/nodes";
-    import { LEVELS, RANGES, toggleValue, type RangeKey } from "$lib/utils/logs";
+    import { LEVELS, levelMeta, RANGES, toggleValue, type RangeKey } from "$lib/utils/logs";
     import FacetList from "./facet-list.svelte";
-    import SeverityBars from "./severity-bars.svelte";
 
     type LogKind = "user" | "system";
+
+    type Props = {
+        kind: LogKind;
+        range: RangeKey;
+        levels: string[];
+        classifications: string[];
+        services: string[];
+        targetTypes: string[];
+        actions: string[];
+        agentId: string;
+        fromTime: string;
+        toTime: string;
+        facets: LogsFacets | null;
+        nodes: Node[];
+        onclear: () => void;
+    };
 
     let {
         kind = $bindable(),
@@ -19,117 +32,78 @@
         targetTypes = $bindable(),
         actions = $bindable(),
         agentId = $bindable(),
-        searchText = $bindable(),
         fromTime = $bindable(),
         toTime = $bindable(),
         facets,
         nodes,
-        refreshing,
-        onrefresh,
         onclear,
-        onexport,
-    }: {
-        kind: LogKind;
-        range: RangeKey;
-        levels: string[];
-        classifications: string[];
-        services: string[];
-        targetTypes: string[];
-        actions: string[];
-        agentId: string;
-        searchText: string;
-        fromTime: string;
-        toTime: string;
-        facets: LogsFacets | null;
-        nodes: Node[];
-        refreshing: boolean;
-        onrefresh: () => void;
-        onclear: () => void;
-        onexport: () => void;
-    } = $props();
+    }: Props = $props();
 
     const kindCounts = $derived(new Map((facets?.kinds ?? []).map((facet) => [facet.value, facet.count])));
+    const streams: { value: LogKind; label: string }[] = [
+        { value: "system", label: "General" },
+        { value: "user", label: "Audit" },
+    ];
 </script>
 
-<div class="flex flex-col gap-4 p-4">
-    <div class="flex items-center gap-2">
-        <div class="relative flex-1">
-            <SearchIcon class="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <input
-                class="h-9 w-full rounded-md border border-input bg-background pl-8 pr-2 text-sm"
-                placeholder="Search"
-                bind:value={searchText}
-            />
-        </div>
-        <button
-            type="button"
-            class="flex size-9 items-center justify-center rounded-md border border-input text-muted-foreground hover:text-foreground"
-            title="Refresh"
-            aria-label="Refresh"
-            onclick={onrefresh}
-        >
-            <RefreshCwIcon class="size-4 {refreshing ? 'animate-spin' : ''}" />
-        </button>
-    </div>
-
-    <div class="flex items-center rounded-md border border-input text-sm">
-        {#each RANGES as entry (entry.key)}
+<aside class="lg-side" aria-label="Filters">
+    <div>
+        <h2>Time range</h2>
+        <div style="display: flex; gap: 6px; align-items: center">
+            <div class="cx-tabs cx-tabs--contained cx-tabs--sm" role="tablist" aria-label="Time range" style="flex: 1">
+                {#each RANGES as entry (entry.key)}
+                    <button class="cx-tab" role="tab" type="button" aria-selected={range === entry.key} style="flex: 1; padding: 0 8px" onclick={() => (range = entry.key)}>
+                        {entry.label}
+                    </button>
+                {/each}
+            </div>
             <button
+                class="cx-icon-btn cx-icon-btn--sm lg-calendar"
                 type="button"
-                class="flex-1 py-1.5 {range === entry.key ? 'font-semibold text-primary' : 'text-muted-foreground'}"
-                onclick={() => (range = entry.key)}
+                aria-label="Custom range"
+                aria-pressed={range === "custom"}
+                onclick={() => (range = "custom")}
             >
-                {entry.label}
+                <CalendarDays class="cx-i" aria-hidden="true" />
             </button>
-        {/each}
-        <button
-            type="button"
-            class="px-3 py-1.5 {range === 'custom' ? 'text-primary' : 'text-muted-foreground'}"
-            title="Custom range"
-            aria-label="Custom range"
-            onclick={() => (range = "custom")}
-        >
-            <CalendarIcon class="size-4" />
-        </button>
-    </div>
-
-    {#if range === "custom"}
-        <div class="grid grid-cols-2 gap-2">
-            <input type="datetime-local" class="rounded border bg-background px-2 py-1.5 text-xs" bind:value={fromTime} />
-            <input type="datetime-local" class="rounded border bg-background px-2 py-1.5 text-xs" bind:value={toTime} />
         </div>
-    {/if}
-
-    <div class="grid grid-cols-4 gap-1.5">
-        {#each LEVELS as level (level)}
-            <button
-                type="button"
-                class="flex items-center justify-center rounded-md border py-2 {levels.includes(level) ? 'border-primary bg-muted' : 'border-input'}"
-                title={level}
-                onclick={() => (levels = toggleValue(levels, level))}
-            >
-                <SeverityBars {level} />
-            </button>
-        {/each}
+        {#if range === "custom"}
+            <div style="display: grid; gap: 8px; margin-top: 10px">
+                <input type="datetime-local" class="cx-input lg-input" aria-label="From" bind:value={fromTime} />
+                <input type="datetime-local" class="cx-input lg-input" aria-label="To" bind:value={toTime} />
+            </div>
+        {/if}
     </div>
 
-    <div class="flex items-center gap-4 text-sm">
-        <label class="flex items-center gap-2">
-            <input type="radio" class="accent-primary" checked={kind === "system"} onchange={() => (kind = "system")} />
-            General ({kindCounts.get("system") ?? 0})
-        </label>
-        <label class="flex items-center gap-2">
-            <input type="radio" class="accent-primary" checked={kind === "user"} onchange={() => (kind = "user")} />
-            Audit ({kindCounts.get("user") ?? 0})
-        </label>
+    <div>
+        <h2>Severity</h2>
+        <div class="lg-sev" role="group" aria-label="Severity">
+            {#each LEVELS as level (level)}
+                {@const meta = levelMeta(level)}
+                <button type="button" aria-pressed={levels.includes(level)} onclick={() => (levels = toggleValue(levels, level))}>
+                    <i style="background: {meta.dot}"></i>{meta.label}
+                </button>
+            {/each}
+        </div>
+    </div>
+
+    <div>
+        <h2>Stream</h2>
+        <div class="cx-tabs cx-tabs--contained cx-tabs--sm cx-tabs--block" role="tablist" aria-label="Stream">
+            {#each streams as stream (stream.value)}
+                <button class="cx-tab" role="tab" type="button" aria-selected={kind === stream.value} style="padding: 0 8px" onclick={() => (kind = stream.value)}>
+                    {stream.label} {(kindCounts.get(stream.value) ?? 0).toLocaleString()}
+                </button>
+            {/each}
+        </div>
     </div>
 
     {#if kind === "system"}
         <FacetList title="Category" facets={facets?.classifications ?? []} bind:selected={classifications} />
         <FacetList title="Service" facets={facets?.services ?? []} bind:selected={services} />
-        <div class="flex flex-col gap-1">
-            <label class="text-sm font-semibold" for="node-filter">Node</label>
-            <select id="node-filter" class="h-9 rounded-md border border-input bg-background px-2 text-sm" bind:value={agentId}>
+        <div>
+            <h2><label for="lg-node">Node</label></h2>
+            <select class="cx-input lg-select" id="lg-node" bind:value={agentId}>
                 <option value="">All nodes</option>
                 {#each nodes as node (node.id)}
                     <option value={node.id}>{node.name}</option>
@@ -141,10 +115,7 @@
         <FacetList title="Action" facets={facets?.actions ?? []} bind:selected={actions} />
     {/if}
 
-    <button type="button" class="self-start text-sm text-primary hover:underline" onclick={onclear}>
-        Clear filters
-    </button>
-    <button type="button" class="self-start text-sm text-primary hover:underline" onclick={onexport}>
-        Export as CEF
-    </button>
-</div>
+    <div class="lg-links">
+        <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" style="justify-content: flex-start; padding: 0" onclick={onclear}>Clear filters</button>
+    </div>
+</aside>

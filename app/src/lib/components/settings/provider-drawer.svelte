@@ -1,23 +1,13 @@
 <script lang="ts">
     import Icon from "@iconify/svelte";
-    import CopyIcon from "@lucide/svelte/icons/copy";
+    import { Copy } from "@lucide/svelte";
     import { toast } from "svelte-sonner";
-    import * as Sheet from "$lib/components/ui/sheet/index.js";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import { Switch } from "$lib/components/ui/switch/index.js";
-    import StatusBadge from "$lib/components/status-badge.svelte";
+    import SideDrawer from "$lib/components/shell/side-drawer.svelte";
+    import Switch from "$lib/components/shell/switch.svelte";
     import type { IdentityProvider } from "$lib/api/identity-providers";
     import { presetFor } from "./identity-provider-presets";
 
-    let {
-        provider,
-        roleName,
-        testing,
-        onClose,
-        onTest,
-        onEdit,
-        onDelete,
-    }: {
+    type Props = {
         provider: IdentityProvider | null;
         roleName: string;
         testing: boolean;
@@ -25,12 +15,27 @@
         onTest: () => void;
         onEdit: () => void;
         onDelete: (deleteUsers: boolean) => void;
-    } = $props();
+    };
+
+    let { provider, roleName, testing, onClose, onTest, onEdit, onDelete }: Props = $props();
 
     let confirmingDelete = $state(false);
     let deleteUsers = $state(false);
 
     const preset = $derived(provider ? presetFor(provider.slug, provider.display_name) : null);
+    const rows = $derived(
+        provider
+            ? [
+                  { label: "Issuer", value: provider.issuer_url, mono: true },
+                  { label: "Client ID", value: provider.client_id, mono: true },
+                  { label: "Scopes", value: provider.scopes, mono: true },
+                  { label: "Claims", value: `${provider.username_claim}, ${provider.email_claim}, ${provider.groups_claim}`, mono: true },
+                  { label: "Default role", value: roleName, mono: false },
+                  { label: "Create users on first sign-in", value: provider.auto_provision ? "Yes" : "No", mono: false },
+                  { label: "Users", value: String(provider.user_count), mono: false },
+              ]
+            : [],
+    );
 
     $effect(() => {
         if (provider) {
@@ -46,101 +51,56 @@
     }
 </script>
 
-<Sheet.Root open={provider !== null} onOpenChange={(open) => !open && onClose()}>
-    <Sheet.Content class="sm:max-w-md">
-        {#if provider && preset}
-            <Sheet.Header class="pt-6">
-                <div class="flex items-center gap-3">
-                    <Icon icon={preset.icon} width={28} height={28} color={preset.iconColor} />
-                    <div class="min-w-0">
-                        <Sheet.Title class="truncate">{provider.display_name}</Sheet.Title>
-                        <Sheet.Description class="truncate font-mono">{provider.slug}</Sheet.Description>
-                    </div>
-                </div>
-            </Sheet.Header>
-
-            <div class="flex flex-col gap-3 border-y border-dashed border-border px-4 py-5 text-xs">
-                <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">Status</span>
-                    <StatusBadge
-                        status={provider.enabled ? "active" : "disabled"}
-                        label={provider.enabled ? "Enabled" : "Disabled"}
-                    />
-                </div>
-                <div class="flex items-center justify-between gap-4">
-                    <span class="text-muted-foreground">Issuer</span>
-                    <span class="truncate font-mono" title={provider.issuer_url}>{provider.issuer_url}</span>
-                </div>
-                <div class="flex items-center justify-between gap-4">
-                    <span class="text-muted-foreground">Client ID</span>
-                    <span class="truncate font-mono">{provider.client_id}</span>
-                </div>
-                <div class="flex items-center justify-between gap-4">
-                    <span class="text-muted-foreground">Redirect URI</span>
-                    <button
-                        class="flex min-w-0 items-center gap-1.5 rounded px-1.5 py-0.5 font-mono hover:bg-muted transition-colors"
-                        onclick={copyRedirectUri}
-                        title="Copy redirect URI"
-                    >
-                        <span class="truncate">{provider.redirect_uri}</span>
-                        <CopyIcon class="size-3 shrink-0" />
+<SideDrawer open={provider !== null} title={provider?.display_name ?? ""} subtitle={provider?.slug} onclose={onClose}>
+    {#snippet header()}
+        {#if preset}<span class="svc-tile" style="background: var(--bg-200)"><Icon icon={preset.icon} width={20} height={20} color={preset.iconColor} /></span>{/if}
+    {/snippet}
+    {#if provider}
+        <dl class="nd-kv">
+            <div>
+                <dt>Status</dt>
+                <dd><span class="cx-badge {provider.enabled ? 'cx-badge--success' : ''}">{provider.enabled ? "Enabled" : "Disabled"}</span></dd>
+            </div>
+            {#each rows as row (row.label)}
+                <div><dt>{row.label}</dt><dd class:mono={row.mono} style="word-break: break-all">{row.value}</dd></div>
+            {/each}
+            <div>
+                <dt>Redirect URI</dt>
+                <dd>
+                    <button class="cx-btn cx-btn--ghost cx-btn--sm cx-mono" type="button" style="height: auto; padding: 4px 8px; font-size: 12px; white-space: normal; word-break: break-all" title="Copy redirect URI" onclick={copyRedirectUri}>
+                        {provider.redirect_uri}
+                        <Copy class="cx-i" aria-hidden="true" />
                     </button>
-                </div>
-                <div class="flex items-center justify-between gap-4">
-                    <span class="text-muted-foreground">Scopes</span>
-                    <span class="truncate font-mono">{provider.scopes}</span>
-                </div>
-                <div class="flex items-center justify-between gap-4">
-                    <span class="text-muted-foreground">Claims</span>
-                    <span class="truncate font-mono">
-                        {provider.username_claim}, {provider.email_claim}, {provider.groups_claim}
-                    </span>
-                </div>
-                <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">Default role</span>
-                    <span>{roleName}</span>
-                </div>
-                <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">Create users on first sign-in</span>
-                    <span>{provider.auto_provision ? "Yes" : "No"}</span>
-                </div>
-                <div class="flex items-center justify-between gap-2">
-                    <span class="text-muted-foreground">Users</span>
-                    <span>{provider.user_count}</span>
-                </div>
+                </dd>
             </div>
+        </dl>
 
-            <div class="flex gap-2 px-4">
-                <Button variant="outline" onclick={onTest} disabled={testing}>
-                    {testing ? "Testing..." : "Test connection"}
-                </Button>
-                <Button variant="outline" onclick={onEdit}>Edit</Button>
+        <div class="db-actions">
+            <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" disabled={testing} aria-busy={testing} onclick={onTest}>
+                {testing ? "Testing" : "Test connection"}
+            </button>
+            <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={onEdit}>Edit</button>
+        </div>
+
+        {#if confirmingDelete}
+            <div class="st-note st-split">
+                <span>
+                    {#if provider.user_count > 0}
+                        Also delete {provider.user_count} {provider.user_count === 1 ? "user" : "users"} and their SSH keys
+                    {:else}
+                        No users belong to this provider
+                    {/if}
+                </span>
+                <Switch checked={deleteUsers} label="Delete users too" disabled={provider.user_count === 0} onchange={(value) => (deleteUsers = value)} />
             </div>
-
-            <Sheet.Footer class="mt-auto">
-                {#if confirmingDelete}
-                    <div class="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
-                        <span class="text-sm">
-                            {#if provider.user_count > 0}
-                                Also delete {provider.user_count} {provider.user_count === 1 ? "user" : "users"} and their SSH keys
-                            {:else}
-                                No users belong to this provider
-                            {/if}
-                        </span>
-                        <Switch bind:checked={deleteUsers} disabled={provider.user_count === 0} />
-                    </div>
-                    <Button variant="destructive" onclick={() => onDelete(deleteUsers)}>Confirm delete</Button>
-                    <Button variant="ghost" onclick={() => (confirmingDelete = false)}>Cancel</Button>
-                {:else}
-                    <Button
-                        variant="outline"
-                        class="border-destructive/40 text-destructive hover:bg-destructive/10"
-                        onclick={() => (confirmingDelete = true)}
-                    >
-                        Delete provider
-                    </Button>
-                {/if}
-            </Sheet.Footer>
+            <div class="db-actions">
+                <button class="cx-btn cx-btn--primary cx-btn--sm nd-danger" type="button" onclick={() => onDelete(deleteUsers)}>Confirm delete</button>
+                <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => (confirmingDelete = false)}>Cancel</button>
+            </div>
+        {:else}
+            <div>
+                <button class="cx-btn cx-btn--secondary cx-btn--sm nd-danger" type="button" onclick={() => (confirmingDelete = true)}>Delete provider</button>
+            </div>
         {/if}
-    </Sheet.Content>
-</Sheet.Root>
+    {/if}
+</SideDrawer>

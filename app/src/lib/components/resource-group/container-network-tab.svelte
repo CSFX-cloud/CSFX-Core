@@ -1,74 +1,76 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import Icon from "@iconify/svelte";
+    import { Check, Copy } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { getNode } from "$lib/api/nodes";
     import type { Workload } from "$lib/api/resource-groups";
     import { createClipboard } from "$lib/utils/clipboard.svelte";
 
-    let { workload, rgId }: { workload: Workload; rgId: string } = $props();
+    let { workload, rgId, groupName, cidr }: { workload: Workload; rgId: string; groupName: string; cidr: string } = $props();
 
     const clipboard = createClipboard();
     let nodeIp = $state<string | null>(null);
 
-    const host = $derived(`${workload.service_name ?? workload.name}.svc.${rgId}.internal`);
+    const name = $derived(workload.service_name ?? workload.name);
+    const host = $derived(`${name}.svc.${rgId}.internal`);
+    const defaultPort = $derived(workload.ports?.[0]?.container_port ?? null);
 
     const rows = $derived(
         (workload.ports ?? []).map((port) => ({
             port: port.container_port,
             addresses: [
                 { key: `rg-${port.container_port}`, label: "RG-internal (DNS)", value: `${host}:${port.container_port}` },
-                ...(port.rg_port
-                    ? [{ key: `rgp-${port.container_port}`, label: "RG port (mesh gateway)", value: `rg-gateway:${port.rg_port}` }]
-                    : []),
-                ...(port.node_port
-                    ? [{ key: `ext-${port.container_port}`, label: "External", value: `${nodeIp ?? "node-ip"}:${port.node_port}` }]
-                    : []),
+                ...(port.rg_port ? [{ key: `rgp-${port.container_port}`, label: "RG port (mesh gateway)", value: `rg-gateway:${port.rg_port}` }] : []),
+                ...(port.node_port ? [{ key: `ext-${port.container_port}`, label: "External", value: `${nodeIp ?? "node-ip"}:${port.node_port}` }] : []),
             ],
         })),
     );
 
     onMount(async () => {
         if (!auth.token || !workload.assigned_agent_id) return;
-        try {
-            nodeIp = (await getNode(auth.token, workload.assigned_agent_id)).ip_address;
-        } catch {
-            nodeIp = null;
-        }
+        nodeIp = await getNode(auth.token, workload.assigned_agent_id)
+            .then((node) => node.ip_address)
+            .catch(() => null);
     });
 </script>
 
-<div class="h-full overflow-y-auto p-6 space-y-6">
-    {#if rows.length > 0}
-        <div>
-            <p class="text-xs font-medium text-muted-foreground mb-2">Ports</p>
-            <div class="border rounded-lg divide-y">
-                {#each rows as row (row.port)}
-                    <div class="p-3 space-y-2">
-                        {#each row.addresses as address (address.key)}
-                            <div class="flex items-center justify-between gap-3">
-                                <div class="min-w-0">
-                                    <p class="text-xs text-muted-foreground">{address.label}</p>
-                                    <p class="font-mono text-sm truncate">{address.value}</p>
-                                </div>
-                                <button
-                                    class="flex items-center justify-center w-8 h-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
-                                    onclick={() => clipboard.copy(address.value, address.key)}
-                                    aria-label="Copy"
-                                    title="Copy"
-                                >
-                                    <Icon icon={clipboard.copiedKey === address.key ? "mdi:check" : "mdi:content-copy"} width={16} height={16} />
-                                </button>
-                            </div>
-                        {/each}
-                    </div>
-                {/each}
+<div class="rd-two">
+    <section class="cx-panel" aria-labelledby="ct-ports">
+        <div class="cx-panel__head">
+            <div>
+                <h2 class="cx-panel__title" id="ct-ports">Published ports</h2>
+                <p class="cx-panel__sub">Reachable from outside the resource group</p>
             </div>
         </div>
-        <p class="text-xs text-muted-foreground">
-            Reachable over VPN via the RG-internal address, or externally via the node IP if a node port is set. Use "Connect VPN" to resolve RG-internal hostnames.
+        {#if rows.length === 0}
+            <p class="cx-hint" style="padding: 20px 0; text-align: center">No ports published.</p>
+        {:else}
+            <dl class="nd-kv">
+                {#each rows as row (row.port)}
+                    {#each row.addresses as address (address.key)}
+                        <div>
+                            <dt>{address.label}</dt>
+                            <dd class="mono" style="display: flex; align-items: center; gap: 8px; justify-content: flex-end">
+                                <span>{address.value}</span>
+                                <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label="Copy {address.value}" title="Copy" onclick={() => clipboard.copy(address.value, address.key)}>
+                                    {#if clipboard.copiedKey === address.key}<Check class="cx-i" aria-hidden="true" />{:else}<Copy class="cx-i" aria-hidden="true" />{/if}
+                                </button>
+                            </dd>
+                        </div>
+                    {/each}
+                {/each}
+            </dl>
+        {/if}
+    </section>
+    <section class="cx-panel" aria-labelledby="ct-internal">
+        <div class="cx-panel__head"><h2 class="cx-panel__title" id="ct-internal">Inside {groupName}</h2></div>
+        <dl class="nd-kv">
+            <div><dt>Internal DNS name</dt><dd class="mono">{name}</dd></div>
+            <div><dt>Default port</dt><dd class="mono">{defaultPort ?? "—"}</dd></div>
+            <div><dt>Network</dt><dd class="mono">{cidr}</dd></div>
+        </dl>
+        <p class="cx-hint" style="margin-top: 16px">
+            Other resources in {groupName} reach this container by its name on its default port. Use "Connect VPN" to resolve RG-internal hostnames.
         </p>
-    {:else}
-        <p class="text-sm text-muted-foreground">No ports configured for this container.</p>
-    {/if}
+    </section>
 </div>

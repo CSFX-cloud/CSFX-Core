@@ -1,8 +1,8 @@
 <script lang="ts">
     import { untrack } from "svelte";
+    import { RefreshCw } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { updateWorkload, type Workload } from "$lib/api/resource-groups";
-    import { Button } from "$lib/components/ui/button/index.js";
 
     let { workload, onRedeployed }: { workload: Workload; onRedeployed: () => Promise<void> } = $props();
 
@@ -59,39 +59,45 @@
     }
 </script>
 
-<div class="h-full overflow-y-auto p-6 space-y-5">
-    <div class="flex flex-col gap-1">
-        <label class="text-xs text-muted-foreground" for="s-image">Image</label>
-        <input id="s-image" class="border rounded px-3 py-1.5 text-sm bg-background font-mono" placeholder="nginx:latest" bind:value={image} />
-    </div>
-    <div class="flex flex-col gap-1">
-        <label class="text-xs text-muted-foreground" for="s-env">Environment variables</label>
-        <textarea id="s-env" class="border rounded px-3 py-2 text-sm bg-background font-mono h-40 resize-y" placeholder="KEY=value" bind:value={envText}></textarea>
-        <p class="text-xs text-muted-foreground">One KEY=VALUE per line.</p>
-    </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="s-restart-policy">Restart policy</label>
-            <select id="s-restart-policy" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={restartPolicy}>
-                <option value="always">Always</option>
-                <option value="on-failure">On failure</option>
-                <option value="never">Never</option>
-            </select>
+<section class="cx-panel st-panel" aria-labelledby="ct-set">
+    <div><h3 id="ct-set">Configuration</h3><p>Changes apply on the next redeploy.</p></div>
+    <form
+        class="rd-form"
+        onsubmit={(event) => {
+            event.preventDefault();
+            redeploy();
+        }}
+    >
+        <div class="cx-field">
+            <label class="cx-label" for="s-image">Image</label>
+            <input class="cx-input cx-mono" id="s-image" placeholder="nginx:latest" autocomplete="off" bind:value={image} />
         </div>
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="s-max-restarts">Max restarts</label>
-            <input id="s-max-restarts" type="number" min="0" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="Unlimited" bind:value={maxRestarts} />
+        <div class="cx-field">
+            <label class="cx-label" for="s-env">Environment variables</label>
+            <textarea class="rd-textarea" id="s-env" placeholder="KEY=value" aria-describedby="s-env-hint" bind:value={envText}></textarea>
+            <p class="cx-hint" id="s-env-hint">One KEY=value per line.</p>
         </div>
-    </div>
-    <p class="text-xs text-muted-foreground">
-        Redeploying applies the new configuration by recreating the container, pulling the image again if changed.
-    </p>
-    {#if error}
-        <p class="text-xs text-destructive">{error}</p>
-    {/if}
-    <div class="flex justify-end">
-        <Button size="sm" onclick={redeploy} disabled={saving}>
-            {saving ? "Redeploying..." : "Redeploy"}
-        </Button>
-    </div>
-</div>
+        <div class="rd-row2">
+            <div class="cx-field">
+                <label class="cx-label" for="s-restart-policy">Restart policy</label>
+                <select class="cx-input" id="s-restart-policy" bind:value={restartPolicy}>
+                    <option value="always">Always</option>
+                    <option value="on-failure">On failure</option>
+                    <option value="never">Never</option>
+                </select>
+            </div>
+            <div class="cx-field">
+                <label class="cx-label" for="s-max-restarts">Max restarts</label>
+                <input class="cx-input" id="s-max-restarts" type="number" min="0" placeholder="Unlimited" bind:value={maxRestarts} />
+            </div>
+        </div>
+        {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
+        <div class="rd-form-foot">
+            <p>Redeploying recreates the container with this configuration and pulls the image again if it changed.</p>
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={saving} aria-busy={saving}>
+                <RefreshCw class="cx-i" aria-hidden="true" />
+                {saving ? "Redeploying" : "Redeploy"}
+            </button>
+        </div>
+    </form>
+</section>

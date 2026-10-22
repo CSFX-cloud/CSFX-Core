@@ -147,7 +147,7 @@
     bind:this={dialog}
     title={editing ? "Edit identity provider" : preset ? `Set up ${preset.label}` : "Add identity provider"}
     subtitle={editing?.slug}
-    width="max-w-2xl"
+    size="xl"
     onclose={() => (error = null)}
 >
     {#if step === "pick"}

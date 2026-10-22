@@ -1,22 +1,18 @@
 <script lang="ts">
-    import XIcon from "@lucide/svelte/icons/x";
-    import CopyIcon from "@lucide/svelte/icons/copy";
+    import { Copy, X } from "@lucide/svelte";
     import type { LogEntry } from "$lib/api/logs";
-    import { describeAction, levelTextClass } from "$lib/utils/logs";
-    import SeverityBars from "./severity-bars.svelte";
+    import { describeAction, levelMeta } from "$lib/utils/logs";
 
-    let {
-        entry,
-        nodeLabel,
-        actorLabel,
-        onclose,
-    }: {
+    type Props = {
         entry: LogEntry;
         nodeLabel: (id: string | null) => string;
         actorLabel: (id: string | null) => string;
         onclose: () => void;
-    } = $props();
+    };
 
+    let { entry, nodeLabel, actorLabel, onclose }: Props = $props();
+
+    const meta = $derived(levelMeta(entry.level));
     const rows = $derived(
         [
             ["Service", entry.service],
@@ -32,57 +28,45 @@
         ].filter((row): row is [string, string] => row[1] !== null && row[1] !== undefined),
     );
     const fieldRows = $derived(Object.entries(entry.fields ?? {}));
-    const description = $derived(
-        entry.kind === "user" ? `${actorLabel(entry.actor_user_id)} ${describeAction(entry)}` : entry.message,
-    );
+    const description = $derived(entry.kind === "user" ? `${actorLabel(entry.actor_user_id)} ${describeAction(entry)}` : entry.message);
 
     function copyRaw() {
         navigator.clipboard.writeText(entry.cef);
     }
 </script>
 
-<div class="flex h-full flex-col gap-3 overflow-y-auto p-4">
-    <div class="flex items-center justify-between">
-        <span class="text-sm font-semibold">{new Date(entry.created_at).toLocaleString()}</span>
-        <button type="button" class="text-muted-foreground hover:text-foreground" aria-label="Close" onclick={onclose}>
-            <XIcon class="size-4" />
+<aside class="lg-detail" aria-label="Log entry">
+    <div class="lg-detail__head">
+        <span class="cx-num" style="color: var(--ink)">{new Date(entry.created_at).toLocaleString()}</span>
+        <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label="Close" onclick={onclose}>
+            <X class="cx-i" aria-hidden="true" />
         </button>
     </div>
 
-    <section class="rounded-lg bg-muted/40 p-4 text-sm">
-        <div class="flex items-center justify-between py-1.5">
-            <span class="text-muted-foreground">Severity</span>
-            <span class="flex items-center gap-2 {levelTextClass(entry.level)}">
-                {entry.level}
-                <SeverityBars level={entry.level} />
-            </span>
-        </div>
-        {#each rows as [label, value] (label)}
-            <div class="flex items-center justify-between gap-4 py-1.5">
-                <span class="text-muted-foreground">{label}</span>
-                <span class="break-all text-right">{value}</span>
-            </div>
-        {/each}
-        {#each fieldRows as [key, value] (key)}
-            <div class="flex items-center justify-between gap-4 py-1.5">
-                <span class="text-muted-foreground">{key}</span>
-                <span class="break-all text-right font-mono text-xs">{String(value)}</span>
-            </div>
-        {/each}
+    <section class="cx-panel lg-detail__panel">
+        <dl class="nd-kv">
+            <div><dt>Severity</dt><dd><span class="cx-badge {meta.tone ? `cx-badge--${meta.tone}` : ''}">{meta.label}</span></dd></div>
+            {#each rows as [label, value] (label)}
+                <div><dt>{label}</dt><dd style="word-break: break-all">{value}</dd></div>
+            {/each}
+            {#each fieldRows as [key, value] (key)}
+                <div><dt>{key}</dt><dd class="mono" style="word-break: break-all">{String(value)}</dd></div>
+            {/each}
+        </dl>
     </section>
 
-    <section class="rounded-lg bg-muted/40 p-4 text-sm">
-        <h3 class="mb-2 font-semibold">Description</h3>
-        <p class="whitespace-pre-wrap break-words text-muted-foreground">{description}</p>
+    <section class="cx-panel lg-detail__panel">
+        <h3 class="cx-panel__title" style="margin-bottom: 8px">Description</h3>
+        <p class="lg-detail__text">{description}</p>
     </section>
 
-    <section class="rounded-lg bg-muted/40 p-4 text-sm">
-        <div class="mb-2 flex items-center justify-between">
-            <h3 class="font-semibold">CEF log</h3>
-            <button type="button" class="text-muted-foreground hover:text-foreground" aria-label="Copy" onclick={copyRaw}>
-                <CopyIcon class="size-4" />
+    <section class="cx-panel lg-detail__panel">
+        <div class="cx-panel__head" style="margin-bottom: 8px; align-items: center">
+            <h3 class="cx-panel__title">CEF log</h3>
+            <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label="Copy CEF log" onclick={copyRaw}>
+                <Copy class="cx-i" aria-hidden="true" />
             </button>
         </div>
-        <pre class="whitespace-pre-wrap break-all rounded-md bg-background p-3 font-mono text-xs">{entry.cef}</pre>
+        <pre class="lg-detail__raw">{entry.cef}</pre>
     </section>
-</div>
+</aside>

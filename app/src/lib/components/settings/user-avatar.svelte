@@ -1,6 +1,8 @@
 <script lang="ts">
-    import * as Avatar from "$lib/components/ui/avatar/index.js";
     import { gravatarUrl } from "$lib/auth/api";
+
+    const AVATAR_SIZE = 30;
+    const INITIALS_LENGTH = 2;
 
     let { name, gravatarEmail }: { name: string; gravatarEmail: string | null } = $props();
 
@@ -11,13 +13,10 @@
             url = null;
             return;
         }
-        gravatarUrl(gravatarEmail, 64).then((resolved) => (url = resolved));
+        gravatarUrl(gravatarEmail, AVATAR_SIZE * 2).then((resolved) => (url = resolved));
     });
 </script>
 
-<Avatar.Root class="size-8 rounded-lg">
-    {#if url}
-        <Avatar.Image src={url} alt={name} />
-    {/if}
-    <Avatar.Fallback class="rounded-lg text-xs">{name.slice(0, 2).toUpperCase()}</Avatar.Fallback>
-</Avatar.Root>
+<span class="st-avatar" style="width: {AVATAR_SIZE}px; height: {AVATAR_SIZE}px; font-size: 11px" aria-hidden="true">
+    {#if url}<img src={url} alt="" />{:else}{name.slice(0, INITIALS_LENGTH).toUpperCase()}{/if}
+</span>

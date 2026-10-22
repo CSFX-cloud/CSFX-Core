@@ -1,67 +1,76 @@
 <script lang="ts">
-    import type { UsageSample } from "$lib/utils/cluster-metrics";
+    import type { UsageHistoryPoint, UsageRange } from "$lib/api/nodes";
+    import { formatBucket, pointPosition, seriesPaths, USAGE_SERIES } from "$lib/utils/dashboard";
 
-    const WIDTH = 200;
-    const HEIGHT = 80;
-    const MAX_PERCENT = 100;
+    const GRID_PATH = "M0 1H600M0 50.5H600M0 100H600M0 149.5H600M0 199H600";
+    const AXIS_FRACTIONS = [1, 0.75, 0.5, 0.25, 0];
+    const TOOLTIP_FLIP_FRACTION = 0.6;
 
-    const SERIES = [
-        { key: "cpu", label: "CPU", color: "#38bdf8" },
-        { key: "memory", label: "Memory", color: "#a855f7" },
-        { key: "disk", label: "Disk", color: "#f59e0b" },
-    ] as const;
+    type Props = { history: UsageHistoryPoint[]; range: UsageRange; yMax?: number; label: string };
 
-    let { samples, capacity }: { samples: UsageSample[]; capacity: number } = $props();
+    let { history, range, yMax = 100, label }: Props = $props();
 
-    const gradientPrefix = `usage-${Math.random().toString(36).slice(2, 9)}`;
-    const latest = $derived(samples.length ? samples[samples.length - 1] : null);
+    const uid = $props.id();
+    let hoverIndex = $state<number | null>(null);
 
-    function linePoints(key: (typeof SERIES)[number]["key"]): string[] {
-        const step = WIDTH / (capacity - 1);
-        const offset = capacity - samples.length;
-        return samples.map((sample, index) => {
-            const x = (offset + index) * step;
-            const y = HEIGHT - (Math.min(sample[key], MAX_PERCENT) / MAX_PERCENT) * HEIGHT;
-            return `${x.toFixed(1)},${y.toFixed(1)}`;
-        });
+    const axis = $derived(AXIS_FRACTIONS.map((fraction) => (fraction === 0 ? "0" : `${+(yMax * fraction).toFixed(1)}%`)));
+    const paths = $derived(USAGE_SERIES.map((series) => ({ ...series, ...seriesPaths(history, series.key, yMax) })));
+    const hovered = $derived(hoverIndex !== null ? (history[hoverIndex] ?? null) : null);
+    const markers = $derived.by(() => {
+        const index = hoverIndex;
+        if (index === null || hovered === null) return [];
+        return USAGE_SERIES.map((series) => ({
+            ...series,
+            value: hovered[series.key],
+            ...pointPosition(index, history.length, hovered[series.key], yMax),
+        }));
+    });
+
+    function trackPointer(event: PointerEvent) {
+        if (history.length < 2) return;
+        const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        const fraction = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
+        hoverIndex = Math.round(fraction * (history.length - 1));
     }
-
-    const paths = $derived(
-        SERIES.map((series) => {
-            const points = linePoints(series.key);
-            if (points.length < 2) return { ...series, line: "", area: "" };
-            const line = `M ${points.join(" L ")}`;
-            const firstX = points[0].split(",")[0];
-            const lastX = points[points.length - 1].split(",")[0];
-            return { ...series, line, area: `${line} L ${lastX},${HEIGHT} L ${firstX},${HEIGHT} Z` };
-        }),
-    );
 </script>
 
-<div class="flex flex-col gap-2">
-    <div class="flex items-center justify-between gap-2 text-xs">
-        {#each SERIES as series (series.key)}
-            <span class="flex items-center gap-1 tabular-nums" style="color: {series.color}">
-                <span class="size-1.5 rounded-full" style="background-color: {series.color}"></span>
-                {series.label}
-                {latest ? `${latest[series.key].toFixed(0)}%` : "-"}
-            </span>
-        {/each}
+<div class="db-chart">
+    <div class="db-chart__y" aria-hidden="true">
+        {#each axis as tick (tick)}<span>{tick}</span>{/each}
     </div>
-    <svg viewBox="0 0 {WIDTH} {HEIGHT}" width="100%" height={HEIGHT} preserveAspectRatio="none" class="block rounded-md bg-muted/30">
-        <defs>
-            {#each SERIES as series (series.key)}
-                <linearGradient id="{gradientPrefix}-{series.key}" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color={series.color} stop-opacity="0.3" />
-                    <stop offset="100%" stop-color={series.color} stop-opacity="0" />
-                </linearGradient>
+    <div class="db-chart__plot" role="presentation" onpointermove={trackPointer} onpointerleave={() => (hoverIndex = null)}>
+        <svg viewBox="0 0 600 200" preserveAspectRatio="none" role="img" aria-label={label}>
+            <defs>
+                {#each USAGE_SERIES as series (series.key)}
+                    <linearGradient id="{uid}-{series.key}" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" style="stop-color: {series.color}; stop-opacity: {series.fillOpacity}"></stop>
+                        <stop offset="1" style="stop-color: {series.color}; stop-opacity: 0"></stop>
+                    </linearGradient>
+                {/each}
+            </defs>
+            <path class="db-gridline" d={GRID_PATH}></path>
+            {#each paths as path (path.key)}
+                {#if path.line}
+                    <path d={path.area} fill="url(#{uid}-{path.key})"></path>
+                    <path class="db-line" d={path.line} style="stroke: {path.color}"></path>
+                {/if}
             {/each}
-        </defs>
-        {#each paths as path (path.key)}
-            {#if path.line}
-                <path d={path.area} fill="url(#{gradientPrefix}-{path.key})" stroke="none" />
-                <path d={path.line} fill="none" stroke={path.color} stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
-            {/if}
-        {/each}
-    </svg>
+        </svg>
+        {#if hovered && markers.length}
+            {@const left = markers[0].left}
+            <div class="db-hover__line" style="left: {left}%"></div>
+            {#each markers as marker (marker.key)}
+                <span class="db-hover__dot" style="left: {marker.left}%; top: {marker.top}%; background: {marker.color}"></span>
+            {/each}
+            <div class="db-tooltip" style="left: {left}%; transform: translateX({left / 100 > TOOLTIP_FLIP_FRACTION ? 'calc(-100% - 12px)' : '12px'})">
+                <time datetime={hovered.bucket}>{formatBucket(hovered.bucket, range)}</time>
+                {#each markers as marker (marker.key)}
+                    <span class="db-tooltip__row">
+                        <span><i style="background: {marker.color}"></i>{marker.label}</span>
+                        <b>{marker.value.toFixed(1)}%</b>
+                    </span>
+                {/each}
+            </div>
+        {/if}
+    </div>
 </div>

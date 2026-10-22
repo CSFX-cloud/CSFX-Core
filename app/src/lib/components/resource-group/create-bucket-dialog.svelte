@@ -1,7 +1,6 @@
 <script lang="ts">
     import { auth } from "$lib/auth/store.svelte";
     import { createBucket } from "$lib/api/resource-groups";
-    import { Button } from "$lib/components/ui/button/index.js";
     import ModalDialog from "./modal-dialog.svelte";
 
     let { rgId, onCreated }: { rgId: string; onCreated: () => Promise<void> } = $props();
@@ -17,11 +16,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !name) return;
+        if (!auth.token || !name.trim()) return;
         creating = true;
         error = null;
         try {
-            await createBucket(auth.token, { name, resource_group_id: rgId, exposure });
+            await createBucket(auth.token, { name: name.trim(), resource_group_id: rgId, exposure });
             dialog?.close();
             name = "";
             exposure = "internal";
@@ -34,27 +33,31 @@
     }
 </script>
 
-<ModalDialog bind:this={dialog} title="Create Bucket" onclose={() => (error = null)}>
-    <div class="grid grid-cols-1 gap-3">
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="b-name">Name</label>
-            <input id="b-name" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="assets" bind:value={name} />
+<ModalDialog bind:this={dialog} title="Create bucket" onclose={() => (error = null)}>
+    <form
+        class="md__fields"
+        onsubmit={(event) => {
+            event.preventDefault();
+            submit();
+        }}
+    >
+        <div class="cx-field">
+            <label class="cx-label" for="b-name">Name</label>
+            <input class="cx-input" id="b-name" placeholder="assets" autocomplete="off" bind:value={name} />
         </div>
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="b-exposure">Exposure</label>
-            <select id="b-exposure" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={exposure}>
+        <div class="cx-field">
+            <label class="cx-label" for="b-exposure">Exposure</label>
+            <select class="cx-input" id="b-exposure" bind:value={exposure}>
                 <option value="internal">Internal (resource group only)</option>
                 <option value="external">External (public endpoint)</option>
             </select>
         </div>
-    </div>
-    {#if error}
-        <p class="text-xs text-destructive">{error}</p>
-    {/if}
-    <div class="flex gap-2 justify-end">
-        <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
-        <Button size="sm" onclick={submit} disabled={creating || !name}>
-            {creating ? "Creating..." : "Create"}
-        </Button>
-    </div>
+        {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
+        <div class="md__foot">
+            <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => dialog?.close()}>Cancel</button>
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={creating || !name.trim()} aria-busy={creating}>
+                {creating ? "Creating" : "Create"}
+            </button>
+        </div>
+    </form>
 </ModalDialog>

@@ -1,7 +1,6 @@
 <script lang="ts">
     import { auth } from "$lib/auth/store.svelte";
     import { createGateway } from "$lib/api/ingress";
-    import { Button } from "$lib/components/ui/button/index.js";
     import ModalDialog from "./modal-dialog.svelte";
 
     let { rgId, onCreated }: { rgId: string; onCreated: (gatewayId: string) => Promise<void> } = $props();
@@ -36,31 +35,37 @@
     }
 </script>
 
-<ModalDialog bind:this={dialog} title="Create API Gateway" onclose={() => (error = null)}>
-    <p class="text-xs text-muted-foreground">
-        The gateway runs as a service in this resource group. Connect your services to it afterwards and publish them under a local or public domain.
-    </p>
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="gw-name">Name</label>
-            <input id="gw-name" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="edge" bind:value={name} />
+<ModalDialog bind:this={dialog} title="Create API gateway" size="md" onclose={() => (error = null)}>
+    <form
+        class="md__fields"
+        onsubmit={(event) => {
+            event.preventDefault();
+            submit();
+        }}
+    >
+        <p class="db-sub" style="margin: 0; font-size: 13px">
+            The gateway runs as a service in this resource group. Connect your services to it afterwards and publish them under a local or public domain.
+        </p>
+        <div class="cx-field">
+            <label class="cx-label" for="gw-name">Name</label>
+            <input class="cx-input" id="gw-name" placeholder="edge" autocomplete="off" bind:value={name} />
         </div>
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="gw-http">HTTP port</label>
-            <input id="gw-http" type="number" min="1" max="65535" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={httpPort} />
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+            <div class="cx-field">
+                <label class="cx-label" for="gw-http">HTTP port</label>
+                <input class="cx-input" id="gw-http" type="number" min="1" max="65535" bind:value={httpPort} />
+            </div>
+            <div class="cx-field">
+                <label class="cx-label" for="gw-https">HTTPS port</label>
+                <input class="cx-input" id="gw-https" type="number" min="1" max="65535" bind:value={httpsPort} />
+            </div>
         </div>
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="gw-https">HTTPS port</label>
-            <input id="gw-https" type="number" min="1" max="65535" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={httpsPort} />
+        {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
+        <div class="md__foot">
+            <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => dialog?.close()}>Cancel</button>
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={creating || !valid} aria-busy={creating}>
+                {creating ? "Creating" : "Create"}
+            </button>
         </div>
-    </div>
-    {#if error}
-        <p class="text-xs text-destructive">{error}</p>
-    {/if}
-    <div class="flex gap-2 justify-end">
-        <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
-        <Button size="sm" onclick={submit} disabled={creating || !valid}>
-            {creating ? "Creating..." : "Create"}
-        </Button>
-    </div>
+    </form>
 </ModalDialog>

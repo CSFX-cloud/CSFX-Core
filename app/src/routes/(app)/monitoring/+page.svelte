@@ -2,7 +2,6 @@
     import { onMount, onDestroy, untrack } from "svelte";
     import { SvelteFlow, Background, Controls, type Node, type Edge } from "@xyflow/svelte";
     import "@xyflow/svelte/dist/style.css";
-    import { mode } from "mode-watcher";
     import { auth } from "$lib/auth/store.svelte";
     import { getTopology, type Topology } from "$lib/api/topology";
     import {
@@ -15,7 +14,6 @@
     import CompactNode from "$lib/components/monitoring/compact-node.svelte";
     import * as Sheet from "$lib/components/ui/sheet/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
-    import SearchTrigger from "$lib/components/search-trigger.svelte";
     import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
     import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 
@@ -149,84 +147,74 @@
 
 
 
-<div class="flex h-svh min-h-0">
-    <aside class="hidden shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-4 pt-8 md:flex" style="width: 16rem;">
-        <h2 class="text-xs font-semibold uppercase text-muted-foreground">Layers</h2>
-        <label class="flex items-center justify-between text-sm">
-            Workloads
-            <input type="checkbox" bind:checked={showWorkloads} />
-        </label>
-        <label class="flex items-center justify-between text-sm {showWorkloads ? '' : 'opacity-50'}">
-            Volumes
-            <input type="checkbox" bind:checked={showVolumes} disabled={!showWorkloads} />
-        </label>
-
-        <h2 class="text-xs font-semibold uppercase text-muted-foreground">Resource groups</h2>
-        <div class="flex flex-col gap-1">
+<div class="tp-main">
+    <aside class="tp-side" aria-label="Map options">
+        <div>
+            <h2>Layers</h2>
+            <div class="tp-opts">
+                <label class="cx-check"><input type="checkbox" bind:checked={showWorkloads} /> Workloads</label>
+                <label class="cx-check" style={showWorkloads ? "" : "opacity: .5"}>
+                    <input type="checkbox" bind:checked={showVolumes} disabled={!showWorkloads} /> Volumes
+                </label>
+            </div>
+        </div>
+        <div>
+            <h2>Resource groups</h2>
             {#each groups as group (group.id)}
                 <button
-                    class="flex items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-muted {highlightedGroup === group.id ? 'bg-muted font-medium' : ''}"
+                    class="tp-group"
+                    type="button"
+                    aria-pressed={highlightedGroup === group.id}
                     onclick={() => (highlightedGroup = highlightedGroup === group.id ? "" : group.id)}
                 >
-                    <span class="size-2.5 rounded-sm" style="background-color: {group.color}"></span>
+                    <span class="tp-dot" style="background: {group.color}"></span>
                     <span class="truncate">{group.name}</span>
                 </button>
             {:else}
-                <p class="text-xs text-muted-foreground">No resource groups.</p>
+                <p class="cx-hint">No resource groups.</p>
             {/each}
         </div>
-
         {#if topology}
-            <div class="mt-auto text-xs text-muted-foreground">
-                {topology.nodes.filter((node) => node.kind === "agent").length} nodes,
+            <p class="tp-foot">
+                {topology.nodes.filter((node) => node.kind === "agent").length} nodes &middot;
                 {topology.nodes.filter((node) => node.kind === "workload").length} workloads
-            </div>
+            </p>
         {/if}
     </aside>
 
-    <div class="flex min-w-0 flex-1 flex-col">
-    <main class="relative min-h-0 flex-1">
-        <div class="absolute left-1/2 top-4 z-10 w-full max-w-sm -translate-x-1/2">
-            <SearchTrigger />
-        </div>
-        <div class="absolute right-4 top-4 z-10 flex items-center gap-3 text-muted-foreground">
-            <button type="button" class="hover:text-foreground" title="Reset layout" aria-label="Reset layout" onclick={resetLayout}>
-                <RotateCcwIcon class="size-4" />
+    <section class="tp-canvas" aria-label="Cluster map">
+        <div class="tp-tools">
+            <button class="cx-icon-btn cx-icon-btn--sm" type="button" title="Reset layout" aria-label="Reset layout" onclick={resetLayout}>
+                <RotateCcwIcon class="cx-i" />
             </button>
-            <button
-                type="button"
-                class="hover:text-foreground disabled:opacity-50"
-                title="Refresh"
-                aria-label="Refresh"
-                onclick={refreshNow}
-                disabled={refreshing}
-            >
-                <RefreshCwIcon class="size-4 {refreshing ? 'animate-spin' : ''}" />
+            <button class="cx-icon-btn cx-icon-btn--sm" type="button" title="Refresh" aria-label="Refresh" disabled={refreshing} onclick={refreshNow}>
+                <RefreshCwIcon class="cx-i {refreshing ? 'db-spin' : ''}" />
             </button>
         </div>
-        {#if error}
-            <p class="absolute left-4 top-16 z-10 text-sm text-destructive">{error}</p>
-        {/if}
+        {#if error}<p class="cx-hint cx-hint--error tp-error">{error}</p>{/if}
         {#if nodes.length > 0}
-        <SvelteFlow
-            bind:nodes
-            bind:edges
-            nodeTypes={NODE_TYPES}
-            colorMode={mode.current ?? "dark"}
-            fitView
-            nodesConnectable={false}
-            deleteKey={null}
-            minZoom={0.2}
-            proOptions={{ hideAttribution: true }}
-            onnodedragstop={onNodeDragStop}
-            onnodeclick={onNodeClick}
-        >
-            <Background />
-            <Controls showLock={false} />
-        </SvelteFlow>
+            <SvelteFlow
+                bind:nodes
+                bind:edges
+                nodeTypes={NODE_TYPES}
+                colorMode="dark"
+                fitView
+                nodesConnectable={false}
+                deleteKey={null}
+                minZoom={0.2}
+                proOptions={{ hideAttribution: true }}
+                onnodedragstop={onNodeDragStop}
+                onnodeclick={onNodeClick}
+            >
+                <Background gap={22} size={1.3} />
+                <Controls showLock={false} />
+            </SvelteFlow>
         {/if}
-    </main>
-    </div>
+        <div class="tp-legend" aria-hidden="true">
+            <span><i style="background: var(--success)"></i>Online</span>
+            <span><i style="background: var(--danger)"></i>Offline</span>
+        </div>
+    </section>
 </div>
 
 <Sheet.Root bind:open={detailOpen}>

@@ -1,31 +1,27 @@
 <script lang="ts">
-    import MonitorIcon from "@lucide/svelte/icons/monitor";
     import { auth } from "$lib/auth/store.svelte";
     import type { Workload } from "$lib/api/resource-groups";
+    import { serviceIcon } from "$lib/components/shell/service-icons";
     import VncConsole from "$lib/components/vnc-console.svelte";
 
     let { workload, onOpen }: { workload: Workload; onOpen: () => void } = $props();
 
     const live = $derived(workload.status === "running" && !!auth.token);
+    const glyph = serviceIcon("virtual-machines").svg;
 </script>
 
-<button
-    class="relative block w-72 shrink-0 overflow-hidden rounded-lg border bg-muted/40 aspect-video cursor-pointer hover:border-foreground/40 transition-colors"
-    onclick={onOpen}
-    aria-label="Open console"
-    title={live ? "Open console" : "Console preview is available while the vm is running"}
->
+<button class="vm-screen" type="button" aria-label="Open console" title={live ? "Open console" : "Console preview is available while the VM is running"} onclick={onOpen}>
     {#if live && auth.token}
         {#key workload.id}
-            <div class="absolute inset-0 pointer-events-none">
+            <div style="position: absolute; inset: 0; pointer-events: none">
                 <VncConsole token={auth.token} workloadId={workload.id} viewOnly />
             </div>
         {/key}
+        <span class="vm-screen__live"><i></i>LIVE</span>
     {:else}
-        <div class="absolute inset-0 flex flex-col items-center justify-center gap-2.5 animate-pulse">
-            <MonitorIcon class="size-8 text-muted-foreground" />
-            <div class="h-2 w-24 rounded-full bg-foreground/10"></div>
-            <div class="h-2 w-14 rounded-full bg-foreground/10"></div>
-        </div>
+        <span class="vm-screen__off">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html glyph}</svg>
+            Powered off
+        </span>
     {/if}
 </button>

@@ -229,9 +229,7 @@
                     </div>
                 {/if}
             {:else if tab === "logs"}
-                <div class="border rounded-lg overflow-hidden h-[36rem]">
-                    <ContainerLogsTab workloadId={gateway.workload_id} />
-                </div>
+                <ContainerLogsTab workloadId={gateway.workload_id} running />
             {:else}
                 <DnsRecordsPanel groupId={rg.rgId} />
             {/if}

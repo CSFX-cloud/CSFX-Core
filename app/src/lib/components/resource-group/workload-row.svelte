@@ -1,84 +1,59 @@
 <script lang="ts">
-    import Icon from "@iconify/svelte";
+    import { RefreshCw, Square, Trash2 } from "@lucide/svelte";
     import type { Workload } from "$lib/api/resource-groups";
-    import { resolveImageIcon } from "$lib/utils/image-icon";
-    import StatusBadge from "$lib/components/status-badge.svelte";
+    import ActionMenu from "$lib/components/resource-group/action-menu.svelte";
+    import type { MenuAction } from "$lib/components/resource-group/menu-action";
+    import { formatBytes } from "$lib/utils/format";
+    import ServiceIcon from "$lib/components/shell/service-icon.svelte";
+    import { knownWorkloadIcon } from "$lib/utils/image-icon";
+    import { badgeClass, statusLabel } from "$lib/utils/tone";
 
-    let {
-        w,
-        indented = false,
-        onOpen,
-        onRestart,
-        onStop,
-        onDelete,
-    }: {
+    const MILLICORES_PER_CORE = 1000;
+
+    type Props = {
         w: Workload;
+        href: string;
+        icon: string;
+        nodeName: string;
         indented?: boolean;
-        onOpen: () => void;
         onRestart: () => void;
         onStop: () => void;
         onDelete: () => void;
-    } = $props();
+    };
+
+    let { w, href, icon, nodeName, indented = false, onRestart, onStop, onDelete }: Props = $props();
+
+    const isVm = $derived(w.runtime_class === "vm");
+    const details = $derived(isVm ? `${w.cpu_millicores / MILLICORES_PER_CORE} vCPU · ${formatBytes(w.memory_bytes)}` : containerDetails(w));
+    const actions = $derived<MenuAction[]>([
+        { label: "Restart", icon: RefreshCw, onselect: onRestart },
+        { label: "Stop", icon: Square, onselect: onStop, disabled: w.desired_state === "stopped" },
+        { label: "Delete", icon: Trash2, onselect: onDelete, danger: true },
+    ]);
+
+    function containerDetails(workload: Workload): string {
+        const port = workload.ports?.[0]?.container_port;
+        return port ? `${workload.image} · port ${port}` : workload.image;
+    }
 </script>
 
-<tr
-    class="border-t hover:bg-muted/20 transition-colors cursor-pointer"
-    onclick={onOpen}
->
-    <td class="px-4 py-3">
-        <div class="flex items-center gap-2.5" class:ps-6={indented}>
-            <div class="flex w-5 shrink-0 items-center justify-center">
-                <Icon icon={w.runtime_class === "vm" ? "mdi:monitor" : resolveImageIcon(w.image)} width={20} height={20} />
-            </div>
-            <p class="font-medium leading-tight">{w.service_name ?? w.name}</p>
+<tr>
+    <td>
+        <div class="rs-name {indented ? 'rs-name--child' : ''}">
+            <ServiceIcon name={icon} brand={knownWorkloadIcon(w.image, w.runtime_class)} />
+            <a class="rs-link" {href}>{w.service_name ?? w.name}</a>
         </div>
     </td>
-    <td class="px-4 py-3">
-        <span class="text-xs px-2 py-0.5 rounded border font-medium">{w.runtime_class === "vm" ? "VM" : "Container"}</span>
+    <td>
+        <span class={badgeClass(w.status)}>{statusLabel(w.status)}</span>
+        {#if w.restart_count > 0}
+            <span class="rs-restarts" title="Restarted {w.restart_count} time{w.restart_count === 1 ? '' : 's'}{w.max_restarts !== null ? ` (max ${w.max_restarts})` : ''}">
+                &#8635; {w.restart_count}
+            </span>
+        {/if}
     </td>
-    <td class="px-4 py-3 text-xs text-muted-foreground font-mono">
-        {w.assigned_agent_id ? w.assigned_agent_id.slice(0, 8) : "-"}
-    </td>
-    <td class="px-4 py-3">
-        <div class="flex items-center gap-1.5">
-            <StatusBadge status={w.status} />
-            {#if w.restart_count > 0}
-                <span
-                    class="text-xs px-1.5 py-0.5 rounded-full font-medium bg-amber-500/10 text-amber-600"
-                    title="Restarted {w.restart_count} time{w.restart_count === 1 ? '' : 's'}{w.max_restarts !== null ? ` (max ${w.max_restarts})` : ''}"
-                >
-                    ↻ {w.restart_count}
-                </span>
-            {/if}
-        </div>
-    </td>
-    <td class="px-4 py-3">
-        <div class="flex items-center justify-end gap-1">
-            <button
-                class="flex items-center justify-center w-7 h-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                onclick={(e) => { e.stopPropagation(); onRestart(); }}
-                aria-label="Restart"
-                title="Restart"
-            >
-                <Icon icon="mdi:restart" width={16} height={16} />
-            </button>
-            <button
-                class="flex items-center justify-center w-7 h-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                onclick={(e) => { e.stopPropagation(); onStop(); }}
-                disabled={w.desired_state === "stopped"}
-                aria-label="Stop"
-                title="Stop"
-            >
-                <Icon icon="mdi:stop-circle-outline" width={16} height={16} />
-            </button>
-            <button
-                class="flex items-center justify-center w-7 h-7 rounded-full text-destructive hover:bg-destructive/10 transition-colors"
-                onclick={(e) => { e.stopPropagation(); onDelete(); }}
-                aria-label="Delete"
-                title="Delete"
-            >
-                <Icon icon="mdi:trash-can-outline" width={16} height={16} />
-            </button>
-        </div>
-    </td>
+    <td class="cx-soft">{details}</td>
+    <td class="cx-soft">{nodeName}</td>
+    <td class="cx-num">{w.created_at.slice(0, 10)}</td>
+    <td><ActionMenu label="Actions for {w.service_name ?? w.name}" {actions} /></td>
 </tr>
