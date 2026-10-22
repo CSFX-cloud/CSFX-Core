@@ -1,4 +1,4 @@
-import { Activity, Database, Layers, LayoutDashboard, ScrollText, Server, Settings } from "@lucide/svelte";
+import { Database, Layers, LayoutDashboard, ScrollText, Network, Server, Settings } from "@lucide/svelte";
 
 export interface NavItem {
     title: string;
@@ -10,7 +10,7 @@ export const PRIMARY_NAV: NavItem[] = [
     { title: "Overview", href: "/", icon: LayoutDashboard },
     { title: "Nodes", href: "/nodes", icon: Server },
     { title: "Resource groups", href: "/resource-groups", icon: Layers },
-    { title: "Monitoring", href: "/monitoring", icon: Activity },
+    { title: "Topology", href: "/monitoring", icon: Network },
     { title: "Logs", href: "/logs", icon: ScrollText },
 ];
 

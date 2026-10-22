@@ -1,5 +1,7 @@
 <script lang="ts">
+    import { Plus } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
+    import type { Gateway } from "$lib/api/ingress";
     import {
         deleteBucket,
         deleteStack,
@@ -13,42 +15,40 @@
         type Volume,
         type Workload,
     } from "$lib/api/resource-groups";
-    import {
-        buildResourceItems,
-        filterResources,
-        type ResourceTab,
-    } from "$lib/utils/resource-items";
+    import { buildResourceItems, filterResources, workloadHref, type ResourceTab } from "$lib/utils/resource-items";
     import BucketRow from "./bucket-row.svelte";
     import StackRow from "./stack-row.svelte";
     import VolumeRow from "./volume-row.svelte";
     import WorkloadRow from "./workload-row.svelte";
 
-    let {
-        workloads,
-        volumes,
-        buckets,
-        onOpenWorkload,
-        onOpenStack,
-        onOpenBucket,
-        onChanged,
-        onError,
-    }: {
+    const TABS: { value: ResourceTab; label: string }[] = [
+        { value: "all", label: "All" },
+        { value: "compute", label: "Compute" },
+        { value: "containers", label: "Containers" },
+        { value: "storage", label: "Storage" },
+    ];
+    const NODE_ID_LENGTH = 8;
+
+    type Props = {
+        groupName: string;
+        base: string;
         workloads: Workload[];
         volumes: Volume[];
         buckets: Bucket[];
-        onOpenWorkload: (workload: Workload) => void;
-        onOpenStack: (stackId: string) => void;
+        gateways: Gateway[];
+        nodeNames: Map<string, string>;
         onOpenBucket: (bucket: Bucket) => void;
         onChanged: () => Promise<void>;
         onError: (message: string) => void;
-    } = $props();
+    };
+
+    let { groupName, base, workloads, volumes, buckets, gateways, nodeNames, onOpenBucket, onChanged, onError }: Props = $props();
 
     let activeTab = $state<ResourceTab>("all");
-    let filterText = $state("");
     let expandedStacks = $state<Set<string>>(new Set());
 
     const allResources = $derived(buildResourceItems(workloads, volumes, buckets));
-    const filteredResources = $derived(filterResources(allResources, activeTab, filterText));
+    const visible = $derived(filterResources(allResources, activeTab));
 
     function token(): string {
         if (!auth.token) throw new Error("Not authenticated");
@@ -69,89 +69,96 @@
         if (!next.delete(stackId)) next.add(stackId);
         expandedStacks = next;
     }
+
+    function workloadIcon(workload: Workload): string {
+        if (gateways.some((gateway) => gateway.workload_id === workload.id)) return "load-balancer";
+        return workload.runtime_class === "vm" ? "virtual-machines" : "docker-containers";
+    }
+
+    function nodeName(agentId: string | null): string {
+        if (!agentId) return "—";
+        return nodeNames.get(agentId) ?? agentId.slice(0, NODE_ID_LENGTH);
+    }
 </script>
 
 {#snippet workloadRow(w: Workload, indented: boolean)}
     <WorkloadRow
         {w}
         {indented}
-        onOpen={() => onOpenWorkload(w)}
+        href={workloadHref(base, w, gateways)}
+        icon={workloadIcon(w)}
+        nodeName={nodeName(w.assigned_agent_id)}
         onRestart={() => run(() => restartWorkload(token(), w.id), "Failed to restart container")}
         onStop={() => run(() => stopWorkload(token(), w.id), "Failed to stop container")}
         onDelete={() => run(() => deleteWorkload(token(), w.id), "Failed to delete container")}
     />
 {/snippet}
 
-<div class="border rounded-lg overflow-hidden">
-    <div class="px-4 py-3 border-b flex items-center justify-between gap-4 flex-wrap">
-        <div class="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-muted">
-            {#each [["all", `All ${allResources.length}`], ["container", `Container ${workloads.filter((w) => w.runtime_class !== "vm").length}`], ["vm", `VM ${workloads.filter((w) => w.runtime_class === "vm").length}`], ["volume", `Volume ${volumes.length}`], ["bucket", `Bucket ${buckets.length}`]] as [tab, label]}
-                <button
-                    class="px-3 py-1 rounded-md text-sm font-medium transition-all duration-200 {activeTab === tab ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-                    onclick={() => (activeTab = tab as ResourceTab)}
-                >
-                    {label}
-                </button>
-            {/each}
+{#if allResources.length === 0}
+    <section class="cx-stage empty" aria-label="No resources">
+        <div class="cx-stage__canvas"></div>
+        <div class="empty__in">
+            <span class="glow" aria-hidden="true"><Plus class="cx-i" /></span>
+            <h2>Nothing runs in {groupName} yet.</h2>
+            <p>Add a VM, container, volume or bucket. It joins this group's private network automatically.</p>
+            <a class="cx-btn cx-btn--primary cx-btn--sm" href="{base}/add" style="margin-top: 8px">
+                <Plus class="cx-i" aria-hidden="true" />
+                Add resource
+            </a>
         </div>
-        <div class="flex items-center gap-2 border rounded px-3 py-1.5 text-sm min-w-[180px]">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground shrink-0"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input class="bg-transparent outline-none flex-1 text-sm" placeholder="Filter resources..." bind:value={filterText} />
+    </section>
+{:else}
+    <section class="cx-panel" aria-labelledby="rs-title">
+        <div class="cx-panel__head" style="align-items: center">
+            <div>
+                <h2 class="cx-panel__title" id="rs-title">Resources</h2>
+                <p class="cx-panel__sub">Everything running in {groupName}</p>
+            </div>
+            <div class="cx-tabs cx-tabs--contained cx-tabs--sm" role="tablist" aria-label="Filter by kind">
+                {#each TABS as tab (tab.value)}
+                    <button class="cx-tab" role="tab" type="button" aria-selected={activeTab === tab.value} onclick={() => (activeTab = tab.value)}>
+                        {tab.label} {filterResources(allResources, tab.value).length}
+                    </button>
+                {/each}
+            </div>
         </div>
-    </div>
-
-    <table class="w-full text-sm">
-        <thead>
-            <tr class="bg-muted/30 border-b">
-                <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Resource</th>
-                <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Kind</th>
-                <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Host / Size</th>
-                <th class="text-left px-4 py-2.5 font-medium text-muted-foreground text-xs">Status</th>
-                <th class="px-4 py-2.5"></th>
-            </tr>
-        </thead>
-        <tbody>
-                    {#if filteredResources.length === 0}
-                        <tr>
-                            <td colspan="5" class="px-4 py-10 text-center text-muted-foreground text-sm">
-                                {allResources.length === 0 ? "No resources yet. Deploy a container or create a volume." : "No resources match filter."}
-                            </td>
-                        </tr>
-                    {:else}
-                        {#each filteredResources as item (item.kind + (item.kind === "stack" ? item.data.stack_id : item.data.id))}
-                            {#if item.kind === "container" || item.kind === "vm"}
-                                {@render workloadRow(item.data, false)}
-                            {:else if item.kind === "stack"}
-                                {@const stack = item.data}
-                                {@const expanded = expandedStacks.has(stack.stack_id)}
-                                <StackRow
-                                    {stack}
-                                    {expanded}
-                                    onOpen={() => onOpenStack(stack.stack_id)}
-                                    onToggle={() => toggleStack(stack.stack_id)}
-                                    onRestart={() => run(() => restartStack(token(), stack.stack_id), "Failed to restart stack")}
-                                    onStop={() => run(() => stopStack(token(), stack.stack_id), "Failed to stop stack")}
-                                    onDelete={() => run(() => deleteStack(token(), stack.stack_id), "Failed to delete stack")}
-                                />
-                                {#if expanded}
-                                    {#each stack.children as child (child.id)}
-                                        {@render workloadRow(child, true)}
-                                    {/each}
-                                {/if}
-                            {:else if item.kind === "volume"}
-                                <VolumeRow
-                                    v={item.data}
-                                    onDelete={() => run(() => deleteVolume(token(), item.data.id), "Failed to delete volume")}
-                                />
-                            {:else if item.kind === "bucket"}
-                                <BucketRow
-                                    b={item.data}
-                                    onOpen={() => onOpenBucket(item.data)}
-                                    onDelete={() => run(() => deleteBucket(token(), item.data.id), "Failed to delete bucket")}
-                                />
+        <div class="db-scroll">
+            <table class="cx-table">
+                <thead><tr><th>Name</th><th>Status</th><th>Details</th><th>Node</th><th>Created</th><th><span class="db-sr-only">Actions</span></th></tr></thead>
+                <tbody>
+                    {#each visible as item (item.kind + (item.kind === "stack" ? item.data.stack_id : item.data.id))}
+                        {#if item.kind === "container" || item.kind === "vm"}
+                            {@render workloadRow(item.data, false)}
+                        {:else if item.kind === "stack"}
+                            {@const stack = item.data}
+                            {@const expanded = expandedStacks.has(stack.stack_id)}
+                            <StackRow
+                                {stack}
+                                {expanded}
+                                href="{base}/stack/{stack.stack_id}"
+                                nodeName={nodeName(stack.children[0]?.assigned_agent_id ?? null)}
+                                onToggle={() => toggleStack(stack.stack_id)}
+                                onRestart={() => run(() => restartStack(token(), stack.stack_id), "Failed to restart stack")}
+                                onStop={() => run(() => stopStack(token(), stack.stack_id), "Failed to stop stack")}
+                                onDelete={() => run(() => deleteStack(token(), stack.stack_id), "Failed to delete stack")}
+                            />
+                            {#if expanded}
+                                {#each stack.children as child (child.id)}
+                                    {@render workloadRow(child, true)}
+                                {/each}
                             {/if}
-                        {/each}
-                    {/if}
+                        {:else if item.kind === "volume"}
+                            <VolumeRow v={item.data} onDelete={() => run(() => deleteVolume(token(), item.data.id), "Failed to delete volume")} />
+                        {:else}
+                            <BucketRow
+                                b={item.data}
+                                onOpen={() => onOpenBucket(item.data)}
+                                onDelete={() => run(() => deleteBucket(token(), item.data.id), "Failed to delete bucket")}
+                            />
+                        {/if}
+                    {/each}
                 </tbody>
             </table>
         </div>
+    </section>
+{/if}

@@ -48,3 +48,7 @@ export function formatUptime(seconds: number | null | undefined): string {
 export function formatPercent(value: number | null | undefined): string {
     return value == null ? "-" : `${value.toFixed(1)}%`;
 }
+
+export function pluralize(count: number, noun: string): string {
+    return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}

@@ -20,22 +20,26 @@
     }
 </script>
 
-<dialog bind:this={dialog} class="nd-dialog">
+<dialog bind:this={dialog} class="md-dialog" style="max-width: 400px">
     <form
-        class="nd-dialog__body"
+        class="md__body"
         onsubmit={(event) => {
             event.preventDefault();
             if (valid) onsubmit(parsed);
         }}
     >
-        <h2>Start maintenance</h2>
-        <p>Hardware alerts for this node are suppressed until maintenance ends.</p>
+        <div class="md__head">
+            <div>
+                <h2>Start maintenance</h2>
+                <p>Hardware alerts for this node are suppressed until maintenance ends.</p>
+            </div>
+        </div>
         <div class="cx-field">
             <label class="cx-label" for="maintenance-minutes">Duration (minutes)</label>
             <input class="cx-input" id="maintenance-minutes" type="number" min="1" aria-invalid={!valid} bind:value={minutes} />
         </div>
         {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
-        <div class="nd-dialog__actions">
+        <div class="md__foot">
             <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={close}>Cancel</button>
             <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={!valid || busy} aria-busy={busy}>
                 {busy ? "Starting" : "Start maintenance"}

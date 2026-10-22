@@ -1,6 +1,7 @@
 <script lang="ts">
     import { page } from "$app/stores";
     import { auth } from "$lib/auth/store.svelte";
+    import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
     import {
         getBucket,
         listBucketObjects,
@@ -129,13 +130,12 @@
             load();
         }
     });
-</script>
 
-<header class="flex h-16 shrink-0 items-center gap-2 px-4 border-b">
-    <a href="/buckets" class="text-sm text-muted-foreground hover:text-foreground">S3 Buckets</a>
-    <span class="text-sm text-muted-foreground">/</span>
-    <span class="text-sm font-medium">{bucket?.name ?? bucketId.slice(0, 8)}</span>
-</header>
+    $effect(() => {
+        breadcrumb.set(bucket?.name ?? bucketId.slice(0, 8));
+        return () => breadcrumb.set(null);
+    });
+</script>
 
 <div class="flex flex-col gap-6 p-6">
     {#if loading}

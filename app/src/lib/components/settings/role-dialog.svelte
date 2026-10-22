@@ -68,7 +68,7 @@
     bind:this={dialog}
     title={editing ? (editing.is_system_role ? "Role permissions" : "Edit role") : "Create role"}
     subtitle={editing?.name}
-    width="max-w-2xl"
+    size="xl"
     onclose={() => (error = null)}
 >
     <div class="flex max-h-[65vh] flex-col gap-3 overflow-y-auto pr-1">

@@ -1,17 +1,19 @@
 <script lang="ts">
     import type { Snippet } from "svelte";
-    import Icon from "@iconify/svelte";
+    import { X } from "@lucide/svelte";
+
+    type Size = "sm" | "md" | "lg" | "xl";
 
     let {
         title,
         subtitle,
-        width = "max-w-sm",
+        size = "sm",
         onclose,
         children,
     }: {
         title: string;
         subtitle?: string;
-        width?: string;
+        size?: Size;
         onclose?: () => void;
         children: Snippet;
     } = $props();
@@ -27,26 +29,15 @@
     }
 </script>
 
-<dialog
-    bind:this={element}
-    class="fixed inset-0 z-50 m-auto w-full {width} rounded-xl border bg-background shadow-xl p-0 backdrop:bg-black/40"
-    {onclose}
->
-    <div class="flex flex-col gap-5 p-6">
-        <div class="flex items-center justify-between">
+<dialog bind:this={element} class="md-dialog {size === 'sm' ? '' : `md-dialog--${size}`}" {onclose}>
+    <div class="md__body">
+        <div class="md__head">
             <div>
-                <h2 class="text-base font-semibold">{title}</h2>
-                {#if subtitle}
-                    <p class="text-xs text-muted-foreground font-mono">{subtitle}</p>
-                {/if}
+                <h2>{title}</h2>
+                {#if subtitle}<p class="cx-mono">{subtitle}</p>{/if}
             </div>
-            <button
-                class="flex items-center justify-center w-8 h-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                onclick={close}
-                aria-label="Close"
-                title="Close"
-            >
-                <Icon icon="mdi:close" width={18} height={18} />
+            <button class="cx-icon-btn cx-icon-btn--sm" type="button" tabindex="-1" aria-label="Close" onclick={close}>
+                <X class="cx-i" aria-hidden="true" />
             </button>
         </div>
         {@render children()}

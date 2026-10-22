@@ -1,6 +1,7 @@
+import type { Gateway } from "$lib/api/ingress";
 import type { Bucket, Volume, Workload } from "$lib/api/resource-groups";
 
-export type ResourceTab = "all" | "container" | "vm" | "volume" | "bucket";
+export type ResourceTab = "all" | "compute" | "containers" | "storage";
 
 export interface WorkloadStack {
     stack_id: string;
@@ -51,23 +52,20 @@ export function buildResourceItems(workloads: Workload[], volumes: Volume[], buc
 }
 
 function matchesTab(item: ResourceItem, tab: ResourceTab): boolean {
-    if (tab === "all") return true;
-    if (tab === "container") return item.kind === "container" || item.kind === "stack";
-    return item.kind === tab;
-}
-
-function matchesText(item: ResourceItem, query: string): boolean {
-    const includes = (value: string) => value.toLowerCase().includes(query);
-    if (item.kind === "container" || item.kind === "vm") return includes(item.data.name) || includes(item.data.image);
-    if (item.kind === "stack") {
-        return includes(item.data.stack_name) || item.data.children.some((c) => includes(c.name) || includes(c.image));
+    switch (tab) {
+        case "all":
+            return true;
+        case "compute":
+            return item.kind === "vm";
+        case "containers":
+            return item.kind === "container" || item.kind === "stack";
+        case "storage":
+            return item.kind === "volume" || item.kind === "bucket";
     }
-    return includes(item.data.name);
 }
 
-export function filterResources(items: ResourceItem[], tab: ResourceTab, text: string): ResourceItem[] {
-    const query = text.toLowerCase();
-    return items.filter((item) => matchesTab(item, tab) && (!query || matchesText(item, query)));
+export function filterResources(items: ResourceItem[], tab: ResourceTab): ResourceItem[] {
+    return items.filter((item) => matchesTab(item, tab));
 }
 
 export function stackStatus(children: Workload[]): string {
@@ -75,4 +73,10 @@ export function stackStatus(children: Workload[]): string {
     if (children.some((c) => c.status === "failed" || c.status === "error")) return "failed";
     if (children.every((c) => c.status === "stopped")) return "stopped";
     return "pending";
+}
+
+export function workloadHref(base: string, workload: Workload, gateways: Gateway[]): string {
+    const gateway = gateways.find((candidate) => candidate.workload_id === workload.id);
+    if (gateway) return `${base}/gateway/${gateway.id}`;
+    return `${base}/${workload.runtime_class === "vm" ? "vm" : "container"}/${workload.id}`;
 }

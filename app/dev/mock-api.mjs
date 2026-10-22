@@ -128,6 +128,85 @@ function agentRoute(method, path) {
     return handlers[match[2]];
 }
 
+const GROUP_ID = "g1";
+const GROUP = {
+    id: GROUP_ID,
+    organization_id: "o1",
+    name: "test",
+    description: null,
+    internal_cidr: "10.101.0.0/24",
+    status: "active",
+    icon: "mdi:cube-outline",
+    color: "#818cf8",
+    pinned: false,
+    has_icon_image: false,
+    preview_url: null,
+    created_at: "2026-10-20T10:00:00",
+    updated_at: null,
+};
+
+const WORKLOADS = [
+    {
+        id: "w1", name: "vm-postgres-01", image: "ubuntu-24.04.iso", cpu_millicores: 2000, memory_bytes: 4 * GIB, disk_bytes: 0,
+        status: "running", assigned_agent_id: "n1", container_id: null, env_vars: null, ports: null, volume_mounts: null,
+        resource_group_id: GROUP_ID, stack_id: null, service_name: null, restart_policy: "always", max_restarts: null,
+        restart_count: 0, runtime_class: "vm", desired_state: "running", cpu_usage_percent: 3, memory_usage_bytes: GIB,
+        network_rx_bytes: 0, network_tx_bytes: 0, stats_updated_at: null, created_at: "2026-10-21T10:00:00", updated_at: null,
+    },
+    {
+        id: "w2", name: "web-frontend", image: "nginx:1.27", cpu_millicores: 500, memory_bytes: GIB, disk_bytes: 0,
+        status: "running", assigned_agent_id: "n1", container_id: "c1", env_vars: null, ports: [{ container_port: 80, protocol: "tcp", rg_port: null, node_port: null }],
+        volume_mounts: null, resource_group_id: GROUP_ID, stack_id: null, service_name: null, restart_policy: "always", max_restarts: null,
+        restart_count: 0, runtime_class: "firecracker", desired_state: "running", cpu_usage_percent: 1, memory_usage_bytes: 100_000_000,
+        network_rx_bytes: 0, network_tx_bytes: 0, stats_updated_at: null, created_at: "2026-10-21T10:05:00", updated_at: null,
+    },
+];
+
+const VOLUMES = [
+    { id: "v1", name: "pg-data", size_gb: 50, pool: "rbd", status: "attached", attached_to_workload: "w1", resource_group_id: GROUP_ID, created_at: "2026-10-21T10:00:00" },
+];
+
+const BUCKETS = [
+    { id: "b1", name: "backups", global_alias: "test-backups", exposure: "internal", quota_max_size: null, quota_max_objects: null, status: "active", resource_group_id: GROUP_ID, created_at: "2026-10-22T09:00:00", updated_at: null },
+];
+
+const TOPOLOGY = {
+    nodes: [
+        { id: "cluster", kind: "cluster", label: "Cluster", data: {} },
+        ...NODES.map((node) => ({
+            id: node.id,
+            kind: "agent",
+            label: node.name,
+            data: { id: node.id, status: node.status, role: node.role, ip_address: node.ip_address, hostname: node.name, os_type: "linux", cpu_percent: node.cpu, memory_percent: node.memory, disk_percent: 9, cordoned: false },
+        })),
+        { id: GROUP_ID, kind: "resource_group", label: "test", data: { id: GROUP_ID, color: "#818cf8" } },
+        { id: "w2", kind: "workload", label: "web-frontend", data: { id: "w2", status: "running", image: "nginx:1.27", runtime_class: "firecracker", resource_group_id: GROUP_ID } },
+    ],
+    edges: [
+        { id: "e-n1", source: "cluster", target: "n1", kind: "member" },
+        { id: "e-n2", source: "cluster", target: "n2", kind: "member" },
+        { id: "e-w2", source: "n1", target: "w2", kind: "runs" },
+    ],
+};
+
+const GROUP_ROUTE = /^\/api\/resource-groups\/([^/]+)(\/workloads|\/volumes|\/buckets|\/gateways)?$/;
+
+function groupRoute(method, path) {
+    if (method === "PATCH" && path === `/api/resource-groups/${GROUP_ID}`) {
+        return (body, response) => send(response, 200, Object.assign(GROUP, body));
+    }
+    const match = method === "GET" ? GROUP_ROUTE.exec(path) : null;
+    if (!match || match[1] === "suggest-cidr") return null;
+    const handlers = {
+        undefined: GROUP,
+        "/workloads": WORKLOADS,
+        "/volumes": VOLUMES,
+        "/buckets": BUCKETS,
+        "/gateways": [],
+    };
+    return (_body, response) => send(response, 200, handlers[match[2]]);
+}
+
 const USAGE_RANGES = { "1h": [60, 60_000], "24h": [96, 900_000], "7d": [168, 3_600_000] };
 
 function usageHistory(range) {
@@ -226,9 +305,12 @@ const routes = {
     "GET /api/system/stats/history": (_body, response) => send(response, 200, healthHistory()),
     "GET /api/system/stats/usage": (_body, response, query) => send(response, 200, usageHistory(query.get("range"))),
     "GET /api/events": (_body, response) => send(response, 200, EVENTS),
-    "GET /api/workloads": (_body, response) => send(response, 200, []),
-    "GET /api/volumes": (_body, response) => send(response, 200, []),
-    "GET /api/buckets": (_body, response) => send(response, 200, []),
+    "GET /api/workloads": (_body, response) => send(response, 200, WORKLOADS),
+    "GET /api/volumes": (_body, response) => send(response, 200, VOLUMES),
+    "GET /api/buckets": (_body, response) => send(response, 200, BUCKETS),
+    "GET /api/resource-groups": (_body, response) => send(response, 200, [GROUP]),
+    "GET /api/resource-groups/suggest-cidr": (_body, response) => send(response, 200, { internal_cidr: "10.101.1.0/24" }),
+    "GET /api/topology": (_body, response) => send(response, 200, TOPOLOGY),
     "POST /__reset": (_body, response) => {
         setupCompleted = false;
         send(response, 200, { state: "setup_required" });
@@ -237,7 +319,7 @@ const routes = {
 
 createServer(async (request, response) => {
     const path = request.url.split("?")[0];
-    const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path);
+    const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path) ?? groupRoute(request.method, path);
     if (!route) return send(response, 404, { error: "not found" });
     route(await readBody(request), response, new URL(request.url, "http://localhost").searchParams);
 }).listen(PORT, () => {

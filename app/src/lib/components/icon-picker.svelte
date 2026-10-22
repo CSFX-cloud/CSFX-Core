@@ -54,86 +54,67 @@
     ];
 </script>
 
-<div class="flex items-center gap-3">
-    <div
-        class="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border overflow-hidden"
-        style="background-color: {color}20; color: {color};"
-    >
+<div class="md__look">
+    <span class="tile tile--lg tint" style="--tint: {color}" aria-hidden="true">
         {#if imageUrl}
-            <img src={imageUrl} alt="" class="h-full w-full object-cover" />
+            <img src={imageUrl} alt="" />
         {:else}
             <Icon icon={icon || "mdi:cube-outline"} width={24} height={24} />
         {/if}
-    </div>
-    <div class="flex flex-col gap-1 flex-1">
-        <label class="text-xs text-muted-foreground" for="icon-name">Icon name</label>
-        <input
-            id="icon-name"
-            class="border rounded px-3 py-1.5 text-sm bg-background font-mono"
-            placeholder="mdi:cube-outline"
-            bind:value={icon}
-            disabled={!!imageUrl}
-        />
-    </div>
-</div>
-{#if onUploadImage}
-    <div class="flex items-center gap-2">
-        <input
-            bind:this={fileInput}
-            type="file"
-            accept="image/png,image/jpeg,image/svg+xml"
-            class="hidden"
-            id="icon-image-upload"
-            onchange={handleFileChange}
-        />
-        <label
-            for="icon-image-upload"
-            class="text-xs border rounded px-3 py-1.5 cursor-pointer hover:bg-muted transition-colors {uploadingImage ? 'opacity-50 pointer-events-none' : ''}"
-        >
-            {uploadingImage ? "Uploading..." : imageUrl ? "Replace image" : "Upload image"}
-        </label>
-        {#if imageUrl}
-            <button
-                type="button"
-                class="text-xs text-destructive hover:underline"
-                onclick={() => onRemoveImage?.()}
-            >
-                Remove
-            </button>
+    </span>
+    <div style="display: grid; gap: 16px; min-width: 0">
+        <div>
+            <p class="md-label">Icon</p>
+            <div class="md-icons" role="group" aria-label="Icon">
+                {#each SUGGESTED_ICONS as suggestion (suggestion)}
+                    <button
+                        type="button"
+                        class:on={icon === suggestion}
+                        aria-label={suggestion}
+                        aria-pressed={icon === suggestion}
+                        title={suggestion}
+                        onclick={() => (icon = suggestion)}
+                    >
+                        <Icon icon={suggestion} width={16} height={16} />
+                    </button>
+                {/each}
+            </div>
+            <div class="cx-field" style="margin-top: 10px">
+                <label class="cx-label" for="icon-name">Icon name</label>
+                <input class="cx-input cx-mono" id="icon-name" placeholder="mdi:cube-outline" bind:value={icon} disabled={!!imageUrl} />
+            </div>
+        </div>
+
+        {#if onUploadImage}
+            <div>
+                <input bind:this={fileInput} type="file" accept="image/png,image/jpeg,image/svg+xml" class="db-sr-only" id="icon-image-upload" onchange={handleFileChange} />
+                <div class="db-actions">
+                    <label for="icon-image-upload" class="cx-btn cx-btn--secondary cx-btn--sm" style={uploadingImage ? "opacity: .5; pointer-events: none" : ""}>
+                        {uploadingImage ? "Uploading" : imageUrl ? "Replace image" : "Upload image"}
+                    </label>
+                    {#if imageUrl}
+                        <button type="button" class="cx-btn cx-btn--ghost cx-btn--sm nd-danger" onclick={() => onRemoveImage?.()}>Remove</button>
+                    {/if}
+                </div>
+                {#if imageError}<p class="cx-hint cx-hint--error">{imageError}</p>{/if}
+            </div>
         {/if}
-    </div>
-    {#if imageError}
-        <p class="text-xs text-destructive">{imageError}</p>
-    {/if}
-{/if}
-<div class="flex flex-wrap gap-1.5">
-    {#each SUGGESTED_ICONS as suggestion (suggestion)}
-        <button
-            type="button"
-            class="flex items-center justify-center w-8 h-8 rounded border transition-colors {icon === suggestion ? 'border-foreground' : 'hover:bg-muted'}"
-            onclick={() => (icon = suggestion)}
-            aria-label={suggestion}
-            title={suggestion}
-        >
-            <Icon icon={suggestion} width={16} height={16} />
-        </button>
-    {/each}
-</div>
-<div class="flex flex-col gap-1">
-    <label class="text-xs text-muted-foreground" for="rg-color">Color</label>
-    <div class="flex items-center gap-2">
-        <input id="rg-color" type="color" class="w-9 h-8 rounded border bg-background cursor-pointer" bind:value={color} />
-        <div class="flex gap-1.5">
-            {#each SUGGESTED_COLORS as suggestion (suggestion)}
-                <button
-                    type="button"
-                    class="w-6 h-6 rounded-full border transition-transform {color === suggestion ? 'ring-2 ring-offset-2 ring-offset-background ring-foreground' : ''}"
-                    style="background-color: {suggestion};"
-                    onclick={() => (color = suggestion)}
-                    aria-label={suggestion}
-                    title={suggestion}
-                ></button>
-            {/each}
+
+        <div>
+            <p class="md-label">Color</p>
+            <div class="md-colors" role="group" aria-label="Color">
+                <input type="color" aria-label="Custom color" bind:value={color} />
+                {#each SUGGESTED_COLORS as suggestion (suggestion)}
+                    <button
+                        type="button"
+                        class:on={color === suggestion}
+                        style="background: {suggestion}"
+                        aria-label={suggestion}
+                        aria-pressed={color === suggestion}
+                        onclick={() => (color = suggestion)}
+                    ></button>
+                {/each}
+            </div>
         </div>
     </div>
 </div>

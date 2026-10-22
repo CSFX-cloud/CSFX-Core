@@ -43,6 +43,11 @@ export function resolveWorkloadIcon(image: string, runtimeClass: string): string
     return VM_ICONS.find(([needle]) => lowered.includes(needle))?.[1] ?? VM_FALLBACK_ICON;
 }
 
+export function knownWorkloadIcon(image: string, runtimeClass: string): string | null {
+    const icon = resolveWorkloadIcon(image, runtimeClass);
+    return icon === DOCKER_FALLBACK_ICON || icon === VM_FALLBACK_ICON ? null : icon;
+}
+
 export function resolveNodeOsIcon(osType: string): string {
     return osType.toLowerCase().includes('nix') ? 'logos:nixos' : 'logos:linux-tux';
 }

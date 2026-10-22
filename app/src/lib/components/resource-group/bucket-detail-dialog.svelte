@@ -65,7 +65,7 @@
     bind:this={dialog}
     title={bucket?.name ?? ""}
     subtitle={endpoint}
-    width="max-w-lg"
+    size="lg"
     onclose={() => {
         bucket = null;
         createdSecret = null;
