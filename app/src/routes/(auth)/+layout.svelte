@@ -1,28 +1,25 @@
 <script lang="ts">
+    import "@fontsource-variable/inter/index.css";
+    import "$lib/styles/csfx-design-system.css";
+    import "$lib/styles/csfx-setup.css";
     import type { Snippet } from "svelte";
+    import AuthStage from "$lib/components/auth/auth-stage.svelte";
 
     let { children }: { children: Snippet } = $props();
 </script>
 
-<div class="relative flex h-screen w-full items-center justify-start overflow-hidden">
-    <img
-        src="/login/login_dark.avif"
-        alt=""
-        class="absolute inset-0 hidden h-full w-full object-cover dark:block"
-        aria-hidden="true"
-    />
-    <img
-        src="/login/login_light.avif"
-        alt=""
-        class="absolute inset-0 block h-full w-full object-cover dark:hidden"
-        aria-hidden="true"
-    />
-
-    <div
-        class="relative z-10 ml-16 flex h-[92%] w-full max-w-2xl flex-col items-center justify-center rounded-2xl bg-card p-8 shadow-2xl"
-    >
-        <div class="w-full max-w-sm">
-            {@render children()}
-        </div>
-    </div>
+<div class="cx-root" style="min-height: 100vh">
+    <main class="cx-auth">
+        <section class="cx-card cx-auth__panel" aria-label="Account access">
+            <div class="cx-auth__top">
+                <span class="cx-wordmark">csfx.cloud</span>
+            </div>
+            <div class="cx-auth__body">
+                <div class="cx-auth__form" style="gap: 32px">
+                    {@render children()}
+                </div>
+            </div>
+        </section>
+        <AuthStage />
+    </main>
 </div>
