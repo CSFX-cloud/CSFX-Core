@@ -11,6 +11,7 @@ use sea_orm::{
     Statement,
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::auth::middleware::AuthenticatedUser;
 use crate::system_collector::{LocalSystemCollector, LocalSystemMetrics};
@@ -85,6 +86,7 @@ pub struct UsageHistoryPoint {
 #[derive(Debug, Deserialize)]
 pub struct HistoryRangeQuery {
     pub range: Option<String>,
+    pub agent_id: Option<Uuid>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -296,7 +298,10 @@ fn usage_range(range: Option<&str>) -> (&'static str, i64) {
     }
 }
 
-fn usage_history_sql(interval: &str, bucket_seconds: i64) -> String {
+fn usage_history_sql(interval: &str, bucket_seconds: i64, agent_id: Option<Uuid>) -> String {
+    let agent_filter = agent_id
+        .map(|id| format!("AND agent_id = '{id}'"))
+        .unwrap_or_default();
     format!(
         r#"
         SELECT
@@ -305,7 +310,7 @@ fn usage_history_sql(interval: &str, bucket_seconds: i64) -> String {
             AVG(memory_usage_percent) AS memory,
             AVG(disk_usage_percent) AS disk
         FROM agent_metrics
-        WHERE timestamp >= NOW() - INTERVAL '{interval}'
+        WHERE timestamp >= NOW() - INTERVAL '{interval}' {agent_filter}
         GROUP BY bucket
         ORDER BY bucket ASC
         "#
@@ -329,7 +334,7 @@ async fn get_usage_history(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<UsageHistoryPoint>>, StatusCode> {
     let (interval, bucket_seconds) = usage_range(params.range.as_deref());
-    let sql = usage_history_sql(interval, bucket_seconds);
+    let sql = usage_history_sql(interval, bucket_seconds, params.agent_id);
     let rows = state
         .db_conn
         .query_all(Statement::from_string(DatabaseBackend::Postgres, sql))
