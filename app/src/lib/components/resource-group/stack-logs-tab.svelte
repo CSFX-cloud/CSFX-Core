@@ -1,5 +1,6 @@
 <script lang="ts">
-    import { onMount } from "svelte";
+    import { onMount, tick } from "svelte";
+    import { FileText } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { streamWorkloadLogs, type Workload } from "$lib/api/resource-groups";
 
@@ -8,14 +9,16 @@
         text: string;
     }
 
-    const PALETTE = ["text-green-400", "text-sky-400", "text-amber-400", "text-fuchsia-400", "text-cyan-400", "text-rose-400"];
+    const PALETTE = ["#4ade80", "#38bdf8", "#fbbf24", "#e879f9", "#22d3ee", "#fb7185"];
 
     let { workloads }: { workloads: Workload[] } = $props();
 
     let lines = $state<LogLine[]>([]);
     let error = $state<string | null>(null);
+    let follow = $state(true);
+    let terminal = $state<HTMLDivElement | null>(null);
 
-    const services = $derived(workloads.map((w) => w.service_name ?? w.name));
+    const services = $derived(workloads.map((workload) => workload.service_name ?? workload.name));
 
     async function stream(workload: Workload, signal: AbortSignal) {
         if (!auth.token) return;
@@ -27,13 +30,18 @@
                 const { done, value } = await reader.read();
                 if (done) break;
                 const chunk = decoder.decode(value, { stream: true });
-                const fresh = chunk.split("\n").filter((l) => l.length > 0).map((text) => ({ service, text }));
+                const fresh = chunk.split("\n").filter((line) => line.length > 0).map((text) => ({ service, text }));
                 if (fresh.length > 0) lines = [...lines, ...fresh];
             }
         } catch (e) {
             if (e instanceof Error && e.name !== "AbortError") error = `${service}: ${e.message}`;
         }
     }
+
+    $effect(() => {
+        lines.length;
+        if (follow && terminal) tick().then(() => terminal && (terminal.scrollTop = terminal.scrollHeight));
+    });
 
     onMount(() => {
         const controller = new AbortController();
@@ -42,15 +50,22 @@
     });
 </script>
 
-<div class="h-full overflow-y-auto bg-black p-4 font-mono text-xs">
-    {#if error}
-        <p class="text-red-400">{error}</p>
-    {/if}
-    {#each lines as line}
-        <p class="whitespace-pre-wrap text-green-400">
-            <span class="{PALETTE[services.indexOf(line.service) % PALETTE.length]} font-semibold">{line.service}</span>
-            <span class="text-muted-foreground">|</span>
-            {line.text}
-        </p>
-    {/each}
-</div>
+<section aria-label="Stack logs" style="display: grid; gap: 12px">
+    <div class="term__bar">
+        <span class="cx-hint">{services.length} services streaming</span>
+        <label class="cx-check"><input type="checkbox" bind:checked={follow} /> Follow</label>
+    </div>
+    <div class="term" role="log" aria-label="Stack output" bind:this={terminal}>
+        {#if error}<div class="term__line" style="color: var(--danger)">{error}</div>{/if}
+        {#if lines.length === 0 && !error}
+            <div class="term__note"><FileText class="cx-i" aria-hidden="true" />Waiting for output from the services.</div>
+        {/if}
+        {#each lines as line, index (index)}
+            <div class="term__line">
+                <b style="color: {PALETTE[services.indexOf(line.service) % PALETTE.length]}">{line.service}</b>
+                <span style="color: var(--marker)">|</span>
+                {line.text}
+            </div>
+        {/each}
+    </div>
+</section>

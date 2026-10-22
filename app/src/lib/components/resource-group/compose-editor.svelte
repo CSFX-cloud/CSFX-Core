@@ -1,175 +1,177 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import { Upload } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { createWorkloadStack, getStack, redeployStack } from "$lib/api/resource-groups";
+    import ServiceIcon from "$lib/components/shell/service-icon.svelte";
     import { parseComposePreview } from "$lib/utils/compose-preview";
-    import { resolveImageIcon } from "$lib/utils/image-icon";
+    import { knownWorkloadIcon } from "$lib/utils/image-icon";
     import { highlightYaml } from "$lib/utils/yaml-highlight";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import Icon from "@iconify/svelte";
 
-    let {
-        rgId,
-        stackId = null,
-        onDone,
-    }: { rgId: string; stackId?: string | null; onDone: () => Promise<void> | void } = $props();
+    const STACK_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+    const PLACEHOLDER = 'services:\n  redis:\n    image: redis:7\n  web:\n    image: nginx:alpine\n    ports:\n      - "8080:80"';
 
-    let deployingStack = $state(false);
-    let composeError = $state<string | null>(null);
-    let composeStackName = $state("");
-    let composeYaml = $state("");
-    let editingStackId = $state<string | null>(null);
-    let composePreview = $derived(parseComposePreview(composeYaml));
-    let composeLineCount = $derived(Math.max(composeYaml.split("\n").length, 1));
-    let composeGutter = $state<HTMLDivElement | null>(null);
-    let composeTextarea = $state<HTMLTextAreaElement | null>(null);
-    let composeHighlightLayer = $state<HTMLPreElement | null>(null);
-    let composeHighlighted = $derived(highlightYaml(composeYaml));
-    function syncComposeScroll() {
-        if (composeGutter && composeTextarea) {
-            composeGutter.scrollTop = composeTextarea.scrollTop;
+    type Props = {
+        rgId: string;
+        groupName: string;
+        stackId?: string | null;
+        onDone: () => Promise<void> | void;
+        oncancel?: () => void;
+    };
+
+    let { rgId, groupName, stackId = null, onDone, oncancel }: Props = $props();
+
+    let deploying = $state(false);
+    let error = $state<string | null>(null);
+    let stackName = $state("");
+    let yaml = $state("");
+    let gutter = $state<HTMLDivElement | null>(null);
+    let textarea = $state<HTMLTextAreaElement | null>(null);
+    let layer = $state<HTMLPreElement | null>(null);
+
+    const editing = $derived(stackId !== null);
+    const preview = $derived(parseComposePreview(yaml));
+    const lineCount = $derived(Math.max(yaml.split("\n").length, 1));
+    const highlighted = $derived(highlightYaml(yaml));
+    const publishedPorts = $derived(preview.services.reduce((sum, service) => sum + service.ports.filter(isPublic).length, 0));
+    const nameValid = $derived(editing || STACK_NAME_PATTERN.test(stackName));
+    const valid = $derived(yaml.trim() !== "" && preview.error === null && preview.services.length > 0);
+
+    function isPublic(port: string): boolean {
+        return port.includes(":");
+    }
+
+    function portLabel(port: string): string {
+        const [host, container] = port.split(":");
+        return `Public · ${host} → ${container}`;
+    }
+
+    function syncScroll() {
+        if (!textarea) return;
+        if (gutter) gutter.scrollTop = textarea.scrollTop;
+        if (layer) {
+            layer.scrollTop = textarea.scrollTop;
+            layer.scrollLeft = textarea.scrollLeft;
         }
-        if (composeHighlightLayer && composeTextarea) {
-            composeHighlightLayer.scrollTop = composeTextarea.scrollTop;
-            composeHighlightLayer.scrollLeft = composeTextarea.scrollLeft;
+    }
+
+    async function loadStack(id: string) {
+        if (!auth.token) return;
+        error = null;
+        try {
+            const stack = await getStack(auth.token, id);
+            stackName = stack.name;
+            yaml = stack.compose_source ?? "";
+        } catch (e) {
+            error = e instanceof Error ? e.message : "Failed to load stack";
         }
+    }
+
+    async function deploy() {
+        if (!auth.token || !valid || !nameValid || (!editing && !stackName)) return;
+        deploying = true;
+        error = null;
+        try {
+            if (stackId) {
+                await redeployStack(auth.token, stackId, yaml);
+            } else {
+                await createWorkloadStack(auth.token, { name: stackName, resource_group_id: rgId, compose_yaml: yaml });
+            }
+            await onDone();
+        } catch (e) {
+            error = e instanceof Error ? e.message : "Failed to deploy stack";
+        } finally {
+            deploying = false;
+        }
+    }
+
+    function upload(event: Event) {
+        const file = (event.target as HTMLInputElement).files?.[0];
+        if (file) file.text().then((text) => (yaml = text));
     }
 
     onMount(() => {
         if (stackId) loadStack(stackId);
     });
-
-    async function handleDeployStack() {
-        if (!auth.token || !composeYaml.trim()) return;
-        if (!editingStackId && !composeStackName) return;
-        deployingStack = true;
-        composeError = null;
-        try {
-            if (editingStackId) {
-                await redeployStack(auth.token, editingStackId, composeYaml);
-            } else {
-                await createWorkloadStack(auth.token, {
-                    name: composeStackName,
-                    resource_group_id: rgId,
-                    compose_yaml: composeYaml,
-                });
-            }
-            await onDone();
-        } catch (e) {
-            composeError = e instanceof Error ? e.message : "Failed to deploy stack";
-        } finally {
-            deployingStack = false;
-        }
-    }
-
-    async function loadStack(stackId: string) {
-        if (!auth.token) return;
-        composeError = null;
-        editingStackId = stackId;
-        composeStackName = "";
-        composeYaml = "";
-        try {
-            const stack = await getStack(auth.token, stackId);
-            composeStackName = stack.name;
-            composeYaml = stack.compose_source ?? "";
-        } catch (e) {
-            composeError = e instanceof Error ? e.message : "Failed to load stack";
-        }
-    }
-
-    function handleComposeFileUpload(event: Event) {
-        const input = event.target as HTMLInputElement;
-        const file = input.files?.[0];
-        if (!file) return;
-        file.text().then((text) => {
-            composeYaml = text;
-        });
-    }
 </script>
 
-<div>
-    <div class="flex flex-col gap-4 p-6">
-        <h2 class="text-base font-semibold">{editingStackId ? "Edit Compose Stack" : "Deploy Docker Compose Stack"}</h2>
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="c-name">Stack Name</label>
-            <input id="c-name" class="border rounded px-3 py-1.5 text-sm bg-background disabled:opacity-60" placeholder="my-stack" bind:value={composeStackName} disabled={!!editingStackId} />
+<div style="display: grid; gap: 16px">
+    {#if !editing}
+        <div class="cx-field" style="max-width: 520px">
+            <label class="cx-label" for="cp-name">Stack name</label>
+            <input class="cx-input" id="cp-name" type="text" placeholder="my-stack" autocomplete="off" aria-describedby="cp-name-hint" aria-invalid={stackName !== "" && !nameValid} bind:value={stackName} />
+            <p class="cx-hint" id="cp-name-hint">Lowercase letters, numbers and dashes. Containers are named after it.</p>
         </div>
-        <div class="grid grid-cols-5 gap-4">
-            <div class="col-span-2 flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground">Preview</label>
-                <div class="border rounded flex flex-col gap-2 p-3 h-[32rem] overflow-y-auto bg-muted/20">
-                    {#if composePreview.services.length === 0 && composePreview.volumes.length === 0}
-                        <p class="text-xs text-muted-foreground">No services detected yet.</p>
-                    {:else}
-                        {#each composePreview.services as service (service.serviceName)}
-                            <div class="flex items-center gap-2.5 rounded border bg-background p-2">
-                                <Icon icon={resolveImageIcon(service.image ?? "")} width={20} height={20} class="shrink-0" />
-                                <div class="min-w-0">
-                                    <p class="text-sm font-medium leading-tight truncate">{service.serviceName}</p>
-                                    <p class="text-xs text-muted-foreground font-mono truncate">{service.image ?? "no image"}</p>
-                                    {#if service.ports.length > 0}
-                                        <p class="text-xs text-muted-foreground font-mono truncate">{service.ports.join(", ")}</p>
-                                    {/if}
-                                </div>
-                            </div>
-                        {/each}
-                        {#if composePreview.volumes.length > 0}
-                            <p class="text-xs text-muted-foreground mt-1">Volumes</p>
-                            {#each composePreview.volumes as volumeName (volumeName)}
-                                <div class="flex items-center gap-2.5 rounded border bg-background p-2">
-                                    <Icon icon="mdi:database-outline" width={20} height={20} class="shrink-0 text-muted-foreground" />
-                                    <p class="text-sm font-medium leading-tight truncate">{volumeName}</p>
-                                </div>
-                            {/each}
-                        {/if}
-                    {/if}
-                </div>
+    {/if}
+
+    <div class="cp-grid">
+        <section class="cx-panel cp-editor" aria-labelledby="cp-file">
+            <div class="cp-editor__bar">
+                <b id="cp-file">docker-compose.yml</b>
+                <label class="cx-btn cx-btn--secondary cx-btn--sm" style="cursor: pointer">
+                    <Upload class="cx-i" aria-hidden="true" />
+                    Upload file
+                    <input type="file" accept=".yml,.yaml" class="db-sr-only" onchange={upload} />
+                </label>
             </div>
-            <div class="col-span-3 flex flex-col gap-1">
-                <div class="flex items-center justify-between">
-                    <label class="text-xs text-muted-foreground" for="c-yaml">docker-compose.yml</label>
-                    <label class="text-xs text-primary cursor-pointer hover:underline">
-                        Upload file
-                        <input type="file" accept=".yml,.yaml" class="hidden" onchange={handleComposeFileUpload} />
-                    </label>
+            <div class="cp-code">
+                <div class="cp-code__nums" bind:this={gutter} aria-hidden="true">
+                    {#each { length: lineCount } as _, index (index)}<div>{index + 1}</div>{/each}
                 </div>
-                <div class="relative border rounded h-[32rem] overflow-hidden bg-background">
-                    <div
-                        bind:this={composeGutter}
-                        class="absolute left-0 top-0 bottom-0 w-9 overflow-hidden py-1.5 text-right text-xs leading-relaxed font-mono text-muted-foreground select-none bg-muted/30 border-r"
-                    >
-                        {#each Array(composeLineCount) as _, i}
-                            <div class="px-1.5">{i + 1}</div>
-                        {/each}
-                    </div>
-                    <pre
-                        bind:this={composeHighlightLayer}
-                        class="absolute inset-0 left-9 overflow-hidden pl-2 pr-3 py-1.5 text-xs leading-relaxed font-mono whitespace-pre-wrap break-words m-0 pointer-events-none"
-                    >{@html composeHighlighted}</pre>
-                    <textarea
-                        id="c-yaml"
-                        bind:this={composeTextarea}
-                        onscroll={syncComposeScroll}
-                        spellcheck="false"
-                        class="absolute inset-0 pl-11 pr-3 py-1.5 text-xs leading-relaxed bg-transparent font-mono resize-none outline-none w-full h-full text-transparent caret-foreground placeholder:text-muted-foreground"
-                        placeholder={"services:\n  redis:\n    image: redis:7\n  web:\n    image: nginx:alpine\n    ports:\n      - \"8080:80\""}
-                        bind:value={composeYaml}
-                    ></textarea>
-                </div>
+                <pre class="cp-code__layer" bind:this={layer}>{@html highlighted}</pre>
+                <textarea class="cp-code__input" aria-label="Compose file" spellcheck="false" placeholder={PLACEHOLDER} bind:this={textarea} onscroll={syncScroll} bind:value={yaml}></textarea>
             </div>
-        </div>
-        {#if composeError}
-            <p class="text-xs text-destructive">{composeError}</p>
-        {/if}
-        <div class="flex gap-2 justify-end">
-            <Button size="sm" variant="outline" onclick={() => onDone()}>Cancel</Button>
-            <Button size="sm" onclick={handleDeployStack} disabled={deployingStack || (!editingStackId && !composeStackName) || !composeYaml.trim()}>
-                {#if deployingStack}
-                    {editingStackId ? "Redeploying..." : "Deploying..."}
+        </section>
+
+        <section class="cx-panel" aria-labelledby="cp-prev">
+            <div class="cx-panel__head">
+                <div><h2 class="cx-panel__title" id="cp-prev">Preview</h2><p class="cx-panel__sub">What csfx.cloud will create</p></div>
+                {#if yaml.trim() === ""}
+                    <span class="cx-badge">Empty</span>
+                {:else if valid}
+                    <span class="cx-badge cx-badge--success">Valid</span>
                 {:else}
-                    {editingStackId ? "Redeploy" : "Deploy Stack"}
+                    <span class="cx-badge cx-badge--danger">Invalid</span>
                 {/if}
-            </Button>
+            </div>
+            {#if preview.error && yaml.trim() !== ""}<p class="cx-hint cx-hint--error">{preview.error}</p>{/if}
+            <div>
+                {#each preview.services as service (service.serviceName)}
+                    <div class="cp-svc">
+                        <ServiceIcon name="docker-containers" brand={knownWorkloadIcon(service.image ?? "", "firecracker")} />
+                        <div>
+                            <b>{service.serviceName}</b>
+                            <code>{service.image ?? "no image"}</code>
+                            <div class="cp-svc__ports">
+                                {#each service.ports.filter(isPublic) as port (port)}
+                                    <span class="cx-badge" style="color: var(--ink)">{portLabel(port)}</span>
+                                {:else}
+                                    <span class="cx-badge">Internal only</span>
+                                {/each}
+                            </div>
+                        </div>
+                    </div>
+                {:else}
+                    <p class="cx-hint">No services detected yet.</p>
+                {/each}
+            </div>
+            <dl class="nd-kv" style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-100)">
+                <div><dt>Containers</dt><dd class="mono">{preview.services.length}</dd></div>
+                <div><dt>Published ports</dt><dd class="mono">{publishedPorts}</dd></div>
+                <div><dt>Volumes</dt><dd class="mono">{preview.volumes.length}</dd></div>
+            </dl>
+        </section>
+    </div>
+
+    {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
+
+    <div class="cp-foot">
+        <p>Every service joins {groupName}'s network and reaches the others by its service name.</p>
+        <div class="db-actions">
+            {#if oncancel}<button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={oncancel}>Cancel</button>{/if}
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" disabled={deploying || !valid || !nameValid || (!editing && !stackName)} aria-busy={deploying} onclick={deploy}>
+                {#if deploying}{editing ? "Redeploying" : "Deploying"}{:else}{editing ? "Redeploy" : "Deploy stack"}{/if}
+            </button>
         </div>
     </div>
 </div>
