@@ -66,8 +66,8 @@ anyhow = "1.0"
 thiserror = "2.0"
 
 # OpenAPI
-utoipa = { version = "5.0", features = ["axum_extras", "uuid", "chrono"] }
-utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
+utoipa = { version = "6.0", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "10.0", features = ["axum"] }
 
 # etcd
 etcd-client = { version = "0.19", default-features = false, features = ["tls-roots"] }
