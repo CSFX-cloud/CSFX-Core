@@ -55,13 +55,19 @@ fn priority(severity: &str) -> &'static str {
 impl NtfyConfig {
     pub fn validate(&self) -> Result<(), NtfyError> {
         if !self.server_url.starts_with("https://") && !self.server_url.starts_with("http://") {
-            return Err(NtfyError::Invalid("server_url must start with http:// or https://"));
+            return Err(NtfyError::Invalid(
+                "server_url must start with http:// or https://",
+            ));
         }
         if self.topic.is_empty() || self.topic.contains(|c: char| c == '/' || c.is_whitespace()) {
-            return Err(NtfyError::Invalid("topic must be non-empty without slashes or spaces"));
+            return Err(NtfyError::Invalid(
+                "topic must be non-empty without slashes or spaces",
+            ));
         }
         if !SEVERITIES.contains(&self.min_severity.as_str()) {
-            return Err(NtfyError::Invalid("min_severity must be info, warning or critical"));
+            return Err(NtfyError::Invalid(
+                "min_severity must be info, warning or critical",
+            ));
         }
         Ok(())
     }
@@ -70,7 +76,12 @@ impl NtfyConfig {
         self.enabled && severity_rank(severity) >= severity_rank(&self.min_severity)
     }
 
-    pub async fn publish(&self, title: &str, message: &str, severity: &str) -> Result<(), NtfyError> {
+    pub async fn publish(
+        &self,
+        title: &str,
+        message: &str,
+        severity: &str,
+    ) -> Result<(), NtfyError> {
         let url = format!("{}/{}", self.server_url.trim_end_matches('/'), self.topic);
         let mut request = Client::new()
             .post(url)
@@ -116,7 +127,12 @@ pub async fn save_config(db: &DatabaseConnection, config: &NtfyConfig) -> Result
     Ok(())
 }
 
-pub async fn notify_event(db: &DatabaseConnection, event_type: &str, severity: &str, message: Option<&str>) {
+pub async fn notify_event(
+    db: &DatabaseConnection,
+    event_type: &str,
+    severity: &str,
+    message: Option<&str>,
+) {
     let config = match load_config(db).await {
         Ok(config) if config.wants(severity) => config,
         Ok(_) => return,
@@ -126,7 +142,10 @@ pub async fn notify_event(db: &DatabaseConnection, event_type: &str, severity: &
         }
     };
     let title = event_type.replace('_', " ");
-    if let Err(e) = config.publish(&title, message.unwrap_or(&title), severity).await {
+    if let Err(e) = config
+        .publish(&title, message.unwrap_or(&title), severity)
+        .await
+    {
         tracing::warn!(error = %e, event_type, "failed to publish ntfy notification");
     }
 }

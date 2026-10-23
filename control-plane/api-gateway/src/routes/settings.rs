@@ -276,7 +276,9 @@ pub async fn get_notification_settings(
     CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let config = ntfy::load_config(&state.db_conn).await.map_err(ntfy_error)?;
+    let config = ntfy::load_config(&state.db_conn)
+        .await
+        .map_err(ntfy_error)?;
     Ok((StatusCode::OK, notification_response(config)))
 }
 
@@ -285,7 +287,9 @@ pub async fn update_notification_settings(
     State(state): State<AppState>,
     Json(req): Json<UpdateNotificationSettingsRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let current = ntfy::load_config(&state.db_conn).await.map_err(ntfy_error)?;
+    let current = ntfy::load_config(&state.db_conn)
+        .await
+        .map_err(ntfy_error)?;
     let token = match req.token {
         Some(token) if token.is_empty() => None,
         Some(token) => Some(token),
@@ -309,10 +313,16 @@ pub async fn send_test_notification(
     CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let config = ntfy::load_config(&state.db_conn).await.map_err(ntfy_error)?;
+    let config = ntfy::load_config(&state.db_conn)
+        .await
+        .map_err(ntfy_error)?;
     config.validate().map_err(ntfy_error)?;
     config
-        .publish("test notification", "csfx notifications are working", "info")
+        .publish(
+            "test notification",
+            "csfx notifications are working",
+            "info",
+        )
         .await
         .map_err(ntfy_error)?;
     Ok(StatusCode::NO_CONTENT)
