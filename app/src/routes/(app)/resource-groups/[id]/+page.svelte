@@ -57,6 +57,7 @@
         <GroupHero
             group={rg.group}
             {base}
+            health={rg.health}
             onupdated={(updated) => (rg.group = updated)}
             onerror={(message) => (rg.error = message)}
             oneditappearance={() => appearanceDialog?.open(rg.group)}

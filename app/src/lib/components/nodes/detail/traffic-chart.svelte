@@ -4,8 +4,8 @@
     import { trafficCeiling, trafficPaths } from "$lib/utils/node-detail";
 
     const GRID_PATH = "M0 1H600M0 70H600M0 139H600";
-    const RX_COLOR = "#2dd4bf";
-    const TX_COLOR = "#3b82f6";
+    const RX_COLOR = "var(--chart-cpu)";
+    const TX_COLOR = "var(--chart-memory)";
 
     let { points, height = 140 }: { points: HistoryPoint[]; height?: number } = $props();
 

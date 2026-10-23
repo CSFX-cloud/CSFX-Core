@@ -11,6 +11,7 @@ import {
     type Volume,
     type Workload,
 } from "$lib/api/resource-groups";
+import { groupHealth } from "$lib/utils/group-health";
 import { isTransientStatus } from "$lib/utils/status.js";
 
 const CONTEXT_KEY = Symbol("resource-group-state");
@@ -29,6 +30,10 @@ export class ResourceGroupState {
         { label: "Volumes", running: this.volumes.filter((v) => v.status === "attached" || v.status === "in_use").length, total: this.volumes.length },
         { label: "Buckets", running: this.buckets.filter((b) => b.status === "active").length, total: this.buckets.length },
     ]);
+
+    health = $derived(
+        groupHealth(this.group?.status ?? "", [...this.workloads, ...this.volumes].map((resource) => resource.status)),
+    );
 
     hasTransientStatus = $derived(
         this.workloads.some((w) => isTransientStatus(w.status)) || this.volumes.some((v) => isTransientStatus(v.status)),
