@@ -1,11 +1,12 @@
 <script lang="ts">
     import "./layout.css";
-    import { browser } from "$app/environment";
+    import { onMount } from "svelte";
+    import { theme } from "$lib/utils/theme.svelte";
     import { Toaster } from "$lib/components/ui/sonner/index.js";
 
     let { children } = $props();
 
-    if (browser) document.documentElement.classList.add("dark");
+    onMount(theme.init);
 </script>
 
 <svelte:head>
@@ -13,4 +14,4 @@
 </svelte:head>
 
 {@render children()}
-<Toaster theme="dark" />
+<Toaster theme={theme.resolved} />

@@ -3,20 +3,21 @@
     import { auth } from "$lib/auth/store.svelte";
     import { updateResourceGroup, type ResourceGroup } from "$lib/api/resource-groups";
     import GroupTile from "$lib/components/resource-group/group-tile.svelte";
-    import { badgeClass, statusLabel } from "$lib/utils/tone";
+    import type { GroupHealth } from "$lib/utils/group-health";
 
     type EditField = "name" | "description";
 
     type Props = {
         group: ResourceGroup;
         base: string;
+        health: GroupHealth;
         onupdated: (group: ResourceGroup) => void;
         onerror: (message: string) => void;
         oneditappearance: () => void;
         ondelete: () => void;
     };
 
-    let { group, base, onupdated, onerror, oneditappearance, ondelete }: Props = $props();
+    let { group, base, health, onupdated, onerror, oneditappearance, ondelete }: Props = $props();
 
     let editing = $state<EditField | null>(null);
     let editValue = $state("");
@@ -93,7 +94,7 @@
                     {:else}
                         <button class="gd-name" type="button" title="Edit name" onclick={() => startEdit("name")}>{group.name}</button>
                     {/if}
-                    <span class={badgeClass(group.status)}>{statusLabel(group.status)}</span>
+                    <span class="cx-badge {health.tone ? `cx-badge--${health.tone}` : ''}">{health.label}</span>
                 </div>
                 {#if editing === "description"}
                     <input class="cx-input gd-edit" style="margin-top: 6px" aria-label="Description" placeholder="Description" bind:value={editValue} onblur={commitEdit} onkeydown={handleEditKey} use:focusOnMount />

@@ -2,7 +2,6 @@
     import { ChevronRight, Pin } from "@lucide/svelte";
     import type { ResourceGroup } from "$lib/api/resource-groups";
     import GroupTile from "$lib/components/resource-group/group-tile.svelte";
-    import { badgeClass, statusLabel } from "$lib/utils/tone";
 
     let { groups }: { groups: ResourceGroup[] } = $props();
 </script>
@@ -11,7 +10,7 @@
     <div class="db-scroll">
         <table class="cx-table">
             <thead>
-                <tr><th>Name</th><th>Network</th><th>Description</th><th>Status</th><th>Created</th><th><span class="db-sr-only">Open</span></th></tr>
+                <tr><th>Name</th><th>Network</th><th>Description</th><th>Created</th><th><span class="db-sr-only">Open</span></th></tr>
             </thead>
             <tbody>
                 {#each groups as group (group.id)}
@@ -24,7 +23,6 @@
                         </td>
                         <td class="cx-num">{group.internal_cidr}</td>
                         <td class="cx-soft">{group.description ?? "—"}</td>
-                        <td><span class={badgeClass(group.status)}>{statusLabel(group.status)}</span></td>
                         <td class="cx-num">{group.created_at.slice(0, 10)}</td>
                         <td><span class="nl-go"><ChevronRight class="cx-i" aria-hidden="true" /></span></td>
                     </tr>
