@@ -18,8 +18,8 @@ export interface SeriesPaths {
 }
 
 export const USAGE_SERIES = [
-    { key: "cpu", label: "CPU", color: "#2dd4bf", fillOpacity: 0.25 },
-    { key: "memory", label: "Memory", color: "#3b82f6", fillOpacity: 0.35 },
+    { key: "cpu", label: "CPU", color: "var(--chart-cpu)", fillOpacity: 0.25 },
+    { key: "memory", label: "Memory", color: "var(--chart-memory)", fillOpacity: 0.35 },
 ] as const;
 
 const CHART_WIDTH = 600;

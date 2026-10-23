@@ -11,6 +11,13 @@
         type SshAccess,
     } from "$lib/auth/api";
     import { Blobatar } from "@blobatar/svelte";
+    import { theme, type ThemePreference } from "$lib/utils/theme.svelte";
+
+    const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
+        { value: "system", label: "System" },
+        { value: "light", label: "Light" },
+        { value: "dark", label: "Dark" },
+    ];
 
     function initials(name: string): string {
         return name.slice(0, 2).toUpperCase();
@@ -95,6 +102,20 @@
 {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 
 <SettingsPage title="General" description="Cluster-wide preferences.">
+    <section class="cx-panel st-panel" aria-labelledby="st-look">
+        <div class="st-toggle">
+            <div>
+                <h3 id="st-look">Appearance</h3>
+                <p>System follows your device setting. Applies to this browser only.</p>
+            </div>
+            <div class="cx-tabs cx-tabs--contained cx-tabs--sm" role="tablist" aria-label="Theme">
+                {#each THEME_OPTIONS as option (option.value)}
+                    <button class="cx-tab" role="tab" type="button" aria-selected={theme.preference === option.value} onclick={() => theme.set(option.value)}>{option.label}</button>
+                {/each}
+            </div>
+        </div>
+    </section>
+
     <section class="cx-panel st-panel" aria-labelledby="st-avatar">
         <div class="st-split">
             <div>

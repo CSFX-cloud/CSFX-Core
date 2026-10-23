@@ -2,6 +2,7 @@
     import { onMount, onDestroy, untrack } from "svelte";
     import { SvelteFlow, Background, Controls, type Node, type Edge } from "@xyflow/svelte";
     import "@xyflow/svelte/dist/style.css";
+    import { theme } from "$lib/utils/theme.svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { getTopology, type Topology } from "$lib/api/topology";
     import {
@@ -197,7 +198,7 @@
                 bind:nodes
                 bind:edges
                 nodeTypes={NODE_TYPES}
-                colorMode="dark"
+                colorMode={theme.resolved}
                 fitView
                 nodesConnectable={false}
                 deleteKey={null}

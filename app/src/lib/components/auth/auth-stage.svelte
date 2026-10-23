@@ -160,8 +160,8 @@
                         <div class="su-range"><span>1H</span><span class="on">24H</span><span>7D</span></div>
                     </div>
                     <div class="su-legend">
-                        <span><i style="background: #2dd4bf"></i>CPU usage</span>
-                        <span><i style="background: #3b82f6"></i>Memory usage</span>
+                        <span><i style="background: var(--chart-cpu)"></i>CPU usage</span>
+                        <span><i style="background: var(--chart-memory)"></i>Memory usage</span>
                     </div>
                     <div class="su-chart">
                         <div class="su-chart__y" aria-hidden="true">
@@ -170,12 +170,12 @@
                         <svg viewBox="0 0 600 240" preserveAspectRatio="none" role="img" aria-label="CPU rising from 45 to 82 percent, memory steady around 50 percent">
                             <defs>
                                 <linearGradient id="su-gradient-cpu" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="0" style="stop-color: #2dd4bf; stop-opacity: 0.3"></stop>
-                                    <stop offset="1" style="stop-color: #2dd4bf; stop-opacity: 0"></stop>
+                                    <stop offset="0" style="stop-color: var(--chart-cpu); stop-opacity: 0.3"></stop>
+                                    <stop offset="1" style="stop-color: var(--chart-cpu); stop-opacity: 0"></stop>
                                 </linearGradient>
                                 <linearGradient id="su-gradient-memory" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="0" style="stop-color: #3b82f6; stop-opacity: 0.4"></stop>
-                                    <stop offset="1" style="stop-color: #3b82f6; stop-opacity: 0"></stop>
+                                    <stop offset="0" style="stop-color: var(--chart-memory); stop-opacity: 0.4"></stop>
+                                    <stop offset="1" style="stop-color: var(--chart-memory); stop-opacity: 0"></stop>
                                 </linearGradient>
                             </defs>
                             <path class="su-grid" d="M0 2H600M0 61H600M0 120H600M0 179H600M0 238H600"></path>

@@ -2,7 +2,6 @@
     import { Pin, Plus } from "@lucide/svelte";
     import type { ResourceGroup } from "$lib/api/resource-groups";
     import GroupTile from "$lib/components/resource-group/group-tile.svelte";
-    import { badgeClass, statusLabel } from "$lib/utils/tone";
 
     let { groups, oncreate }: { groups: ResourceGroup[]; oncreate: () => void } = $props();
 </script>
@@ -12,7 +11,6 @@
         <a class="cx-card rg-card" href="/resource-groups/{group.id}">
             <div class="rg-card__top">
                 <GroupTile {group} size="lg" />
-                <span class={badgeClass(group.status)}>{statusLabel(group.status)}</span>
             </div>
             <div>
                 <h3 style="display: flex; align-items: center; gap: 6px">{group.name}{#if group.pinned}<Pin class="cx-i rg-pin" aria-label="Pinned" />{/if}</h3>
