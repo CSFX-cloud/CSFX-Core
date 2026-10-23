@@ -37,7 +37,8 @@
 .db-main{min-width:0;min-height:0;display:flex;flex-direction:column;overflow-y:auto}
 .db-view{display:flex;flex:1;min-height:0;flex-direction:column}
 .db-brand{justify-content:space-between}
-.db-version{font:400 11px/1 var(--font-mono);color:var(--ink-muted)}
+.db-shell .db-brand{height:auto;min-height:36px;padding-block:8px;flex-wrap:wrap;row-gap:4px}
+.db-version{font:400 11px/1 var(--font-mono);color:var(--ink-muted);white-space:nowrap}
 .db-search{width:100%;background:transparent;font-family:inherit;cursor:pointer}
 .db-action{width:100%;background:transparent;border:0;font-family:inherit;text-align:left;cursor:pointer}
 .db-update{display:flex;align-items:flex-start;gap:10px;margin:var(--space-3) 0 0;padding:10px 12px;border:1px solid rgba(251,191,36,.3);border-radius:var(--radius-md);background:var(--warning-tint);color:var(--ink);font-size:13px;line-height:18px;text-decoration:none}

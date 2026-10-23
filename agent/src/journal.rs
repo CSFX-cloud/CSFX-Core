@@ -16,6 +16,7 @@ const BATCH_SIZE: usize = 100;
 const FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 const RESTART_DELAY: Duration = Duration::from_secs(5);
 const ERROR_PRIORITY_MAX: u8 = 3;
+const IGNORED_UNIT_PREFIXES: [&str; 1] = ["serial-getty@"];
 
 #[derive(Deserialize)]
 struct RawJournalLine {
@@ -46,10 +47,20 @@ fn message_text(value: serde_json::Value) -> Option<String> {
     }
 }
 
+fn is_ignored(unit: &str, message: &str) -> bool {
+    IGNORED_UNIT_PREFIXES
+        .iter()
+        .any(|prefix| unit.starts_with(prefix) || message.starts_with(prefix))
+}
+
 fn parse_line(line: &str) -> Option<JournalEntry> {
     let raw: RawJournalLine = serde_json::from_str(line).ok()?;
     let priority: u8 = raw.priority.as_deref()?.parse().ok()?;
     let message = message_text(raw.message?)?;
+    let unit = raw.unit.or(raw.identifier).unwrap_or_default();
+    if is_ignored(&unit, &message) {
+        return None;
+    }
     Some(JournalEntry {
         level: if priority <= ERROR_PRIORITY_MAX {
             "ERROR"
@@ -57,7 +68,7 @@ fn parse_line(line: &str) -> Option<JournalEntry> {
             "WARN"
         }
         .to_string(),
-        unit: raw.unit.or(raw.identifier).unwrap_or_default(),
+        unit,
         message,
         timestamp_micros: raw.timestamp_micros.and_then(|t| t.parse().ok()),
     })
