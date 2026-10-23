@@ -2,13 +2,14 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use entity::{entities::system_settings, SystemSettings};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::ntfy::{self, NtfyConfig, NtfyError};
 
 use crate::{
     auth::rbac::{AuthenticatedUser, CanManageLogs, CanManageSystem},
@@ -223,11 +224,113 @@ pub async fn update_avatar_fallback(
     ))
 }
 
+#[derive(Debug, Serialize)]
+pub struct NotificationSettingsResponse {
+    pub enabled: bool,
+    pub server_url: String,
+    pub topic: String,
+    pub token_set: bool,
+    pub min_severity: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateNotificationSettingsRequest {
+    pub enabled: bool,
+    pub server_url: String,
+    pub topic: String,
+    pub token: Option<String>,
+    pub min_severity: String,
+}
+
+fn ntfy_error(error: NtfyError) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        NtfyError::Invalid(reason) => (StatusCode::BAD_REQUEST, Json(json!({ "error": reason }))),
+        NtfyError::Request(e) => {
+            tracing::warn!(error = %e, "ntfy request failed");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("ntfy request failed: {e}") })),
+            )
+        }
+        NtfyError::Database(e) => {
+            tracing::error!(error = %e, "failed to access notification settings");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        }
+    }
+}
+
+fn notification_response(config: NtfyConfig) -> Json<serde_json::Value> {
+    Json(json!(NotificationSettingsResponse {
+        enabled: config.enabled,
+        server_url: config.server_url,
+        topic: config.topic,
+        token_set: config.token.is_some(),
+        min_severity: config.min_severity,
+    }))
+}
+
+pub async fn get_notification_settings(
+    CanManageSystem(_claims): CanManageSystem,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let config = ntfy::load_config(&state.db_conn).await.map_err(ntfy_error)?;
+    Ok((StatusCode::OK, notification_response(config)))
+}
+
+pub async fn update_notification_settings(
+    CanManageSystem(_claims): CanManageSystem,
+    State(state): State<AppState>,
+    Json(req): Json<UpdateNotificationSettingsRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let current = ntfy::load_config(&state.db_conn).await.map_err(ntfy_error)?;
+    let token = match req.token {
+        Some(token) if token.is_empty() => None,
+        Some(token) => Some(token),
+        None => current.token,
+    };
+    let config = NtfyConfig {
+        enabled: req.enabled,
+        server_url: req.server_url,
+        topic: req.topic,
+        token,
+        min_severity: req.min_severity,
+    };
+    config.validate().map_err(ntfy_error)?;
+    ntfy::save_config(&state.db_conn, &config)
+        .await
+        .map_err(ntfy_error)?;
+    Ok((StatusCode::OK, notification_response(config)))
+}
+
+pub async fn send_test_notification(
+    CanManageSystem(_claims): CanManageSystem,
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let config = ntfy::load_config(&state.db_conn).await.map_err(ntfy_error)?;
+    config.validate().map_err(ntfy_error)?;
+    config
+        .publish("test notification", "csfx notifications are working", "info")
+        .await
+        .map_err(ntfy_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub fn settings_routes() -> Router<AppState> {
     Router::new()
         .route(
             "/admin/settings/logs-retention",
             get(get_logs_retention).put(update_logs_retention),
+        )
+        .route(
+            "/admin/settings/notifications",
+            get(get_notification_settings).put(update_notification_settings),
+        )
+        .route(
+            "/admin/settings/notifications/test",
+            post(send_test_notification),
         )
         .route(
             "/settings/avatar-fallback",

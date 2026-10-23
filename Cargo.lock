@@ -5190,6 +5190,7 @@ dependencies = [
  "dotenvy",
  "entity",
  "etcd-client",
+ "reqwest",
  "sea-orm",
  "serde",
  "serde_json",

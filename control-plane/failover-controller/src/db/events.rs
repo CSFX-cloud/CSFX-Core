@@ -53,7 +53,17 @@ pub async fn insert_with_severity(
         message: Set(message),
     };
 
-    Ok(model.insert(db).await?)
+    let inserted = model.insert(db).await?;
+
+    let db = db.clone();
+    let event_type = inserted.event_type.clone();
+    let severity = inserted.severity.clone();
+    let message = inserted.message.clone();
+    tokio::spawn(async move {
+        shared::ntfy::notify_event(&db, &event_type, &severity, message.as_deref()).await;
+    });
+
+    Ok(inserted)
 }
 
 pub async fn find_open(

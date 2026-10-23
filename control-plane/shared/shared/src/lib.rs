@@ -3,6 +3,7 @@ pub mod db_log_layer;
 pub mod leader;
 pub mod log_writer;
 pub mod logger;
+pub mod ntfy;
 pub mod ssh_access;
 
 pub use db::establish_connection;
