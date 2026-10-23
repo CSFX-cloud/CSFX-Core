@@ -1,6 +1,7 @@
 <script lang="ts">
-    import { Copy, X } from "@lucide/svelte";
+    import { Check, Copy, X } from "@lucide/svelte";
     import type { LogEntry } from "$lib/api/logs";
+    import { createClipboard } from "$lib/utils/clipboard.svelte";
     import { describeAction, levelMeta } from "$lib/utils/logs";
 
     type Props = {
@@ -30,9 +31,8 @@
     const fieldRows = $derived(Object.entries(entry.fields ?? {}));
     const description = $derived(entry.kind === "user" ? `${actorLabel(entry.actor_user_id)} ${describeAction(entry)}` : entry.message);
 
-    function copyRaw() {
-        navigator.clipboard.writeText(entry.cef);
-    }
+    const clipboard = createClipboard();
+    const copied = $derived(clipboard.copiedKey === entry.cef);
 </script>
 
 <aside class="lg-detail" aria-label="Log entry">
@@ -63,8 +63,8 @@
     <section class="cx-panel lg-detail__panel">
         <div class="cx-panel__head" style="margin-bottom: 8px; align-items: center">
             <h3 class="cx-panel__title">CEF log</h3>
-            <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label="Copy CEF log" onclick={copyRaw}>
-                <Copy class="cx-i" aria-hidden="true" />
+            <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label={copied ? "Copied" : "Copy CEF log"} onclick={() => clipboard.copy(entry.cef, entry.cef)}>
+                {#if copied}<Check class="cx-i" aria-hidden="true" />{:else}<Copy class="cx-i" aria-hidden="true" />{/if}
             </button>
         </div>
         <pre class="lg-detail__raw">{entry.cef}</pre>

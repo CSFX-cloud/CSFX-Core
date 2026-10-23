@@ -278,16 +278,21 @@ async fn get_health_history(
     let points = rows
         .into_iter()
         .map(|row| {
-            let bucket: chrono::NaiveDateTime = row.try_get("", "bucket").unwrap_or_default();
+            let bucket = bucket_timestamp(&row);
             let online_count: i64 = row.try_get("", "online_count").unwrap_or(0);
             HealthHistoryPoint {
-                bucket: bucket.format("%Y-%m-%dT%H:%M:%S").to_string(),
+                bucket,
                 online_count,
             }
         })
         .collect();
 
     Ok(Json(points))
+}
+
+fn bucket_timestamp(row: &QueryResult) -> String {
+    let bucket: chrono::DateTime<chrono::Utc> = row.try_get("", "bucket").unwrap_or_default();
+    bucket.format("%Y-%m-%dT%H:%M:%S").to_string()
 }
 
 fn usage_range(range: Option<&str>) -> (&'static str, i64) {
@@ -318,10 +323,10 @@ fn usage_history_sql(interval: &str, bucket_seconds: i64, agent_id: Option<Uuid>
 }
 
 fn usage_point(row: QueryResult) -> UsageHistoryPoint {
-    let bucket: chrono::NaiveDateTime = row.try_get("", "bucket").unwrap_or_default();
+    let bucket = bucket_timestamp(&row);
     let percent = |column: &str| row.try_get::<Option<f64>>("", column).ok().flatten().unwrap_or(0.0);
     UsageHistoryPoint {
-        bucket: bucket.format("%Y-%m-%dT%H:%M:%S").to_string(),
+        bucket,
         cpu: percent("cpu"),
         memory: percent("memory"),
         disk: percent("disk"),
