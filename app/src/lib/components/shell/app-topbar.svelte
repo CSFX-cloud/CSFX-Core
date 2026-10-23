@@ -1,10 +1,23 @@
 <script lang="ts">
+    import { onMount } from "svelte";
     import { page } from "$app/state";
+    import { auth } from "$lib/auth/store.svelte";
+    import { notifications } from "$lib/components/shell/notifications.svelte";
     import { Bell } from "@lucide/svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
-    import { findSection } from "$lib/components/shell/navigation";
+    import { NOTIFICATIONS_NAV, findSection } from "$lib/components/shell/navigation";
+
+    const REFRESH_INTERVAL_MS = 60_000;
 
     const section = $derived(findSection(page.url.pathname));
+    const label = $derived(notifications.openCount ? `Notifications, ${notifications.openCount} open` : "Notifications");
+
+    onMount(() => {
+        const refresh = () => auth.token && notifications.refresh(auth.token);
+        refresh();
+        const timer = setInterval(refresh, REFRESH_INTERVAL_MS);
+        return () => clearInterval(timer);
+    });
 </script>
 
 <header class="cx-topbar">
@@ -18,7 +31,8 @@
             {section.title}
         {/if}
     </nav>
-    <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label="Notifications">
-        <Bell class="cx-i" aria-hidden="true" />
-    </button>
+    <a class="cx-icon-btn cx-icon-btn--sm nt-bell" href={NOTIFICATIONS_NAV.href} aria-label={label} aria-current={section === NOTIFICATIONS_NAV ? "page" : undefined}>
+        <Bell class="cx-i" aria-hidden="true" fill={notifications.openCount ? "currentColor" : "none"} />
+        {#if notifications.openCount}<span class="nt-count" aria-hidden="true">{notifications.openCount > 99 ? "99+" : notifications.openCount}</span>{/if}
+    </a>
 </header>
