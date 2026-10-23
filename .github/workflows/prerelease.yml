@@ -3,10 +3,6 @@ name: Pre-release Build
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Pre-release version (e.g. 0.9.0-alpha.1)"
-        required: true
-        type: string
       channel:
         description: "Channel"
         required: true
@@ -31,7 +27,10 @@ jobs:
 
       - name: Determine version
         id: v
-        run: echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+        run: |
+          BASE=$(grep -m1 '^version' Cargo.toml | sed 's/[^"]*"\([^"]*\)".*/\1/')
+          COUNT=$(git rev-list --count HEAD)
+          echo "version=${BASE}-${{ inputs.channel }}.${COUNT}" >> $GITHUB_OUTPUT
 
   build-binaries:
     name: Build ${{ matrix.binary }} (${{ matrix.arch }})
