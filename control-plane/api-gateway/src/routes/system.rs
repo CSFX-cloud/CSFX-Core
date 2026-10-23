@@ -7,8 +7,8 @@ use axum::{
 };
 use entity::entities::{agent_metrics, agents};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, QueryResult,
-    Statement,
+    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder,
+    QueryResult, Statement,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -319,7 +319,12 @@ fn usage_history_sql(interval: &str, bucket_seconds: i64, agent_id: Option<Uuid>
 
 fn usage_point(row: QueryResult) -> UsageHistoryPoint {
     let bucket: chrono::NaiveDateTime = row.try_get("", "bucket").unwrap_or_default();
-    let percent = |column: &str| row.try_get::<Option<f64>>("", column).ok().flatten().unwrap_or(0.0);
+    let percent = |column: &str| {
+        row.try_get::<Option<f64>>("", column)
+            .ok()
+            .flatten()
+            .unwrap_or(0.0)
+    };
     UsageHistoryPoint {
         bucket: bucket.format("%Y-%m-%dT%H:%M:%S").to_string(),
         cpu: percent("cpu"),
