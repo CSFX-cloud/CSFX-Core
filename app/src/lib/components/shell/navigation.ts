@@ -1,4 +1,4 @@
-import { Database, Layers, LayoutDashboard, ScrollText, Network, Server, Settings } from "@lucide/svelte";
+import { Bell, Database, Layers, LayoutDashboard, ScrollText, Network, Server, Settings } from "@lucide/svelte";
 
 export interface NavItem {
     title: string;
@@ -18,7 +18,9 @@ export const RESOURCE_NAV: NavItem[] = [{ title: "S3 buckets", href: "/buckets",
 
 export const SETTINGS_NAV: NavItem = { title: "Settings", href: "/admin/settings", icon: Settings };
 
-const SECTIONS = [...PRIMARY_NAV, ...RESOURCE_NAV, SETTINGS_NAV];
+export const NOTIFICATIONS_NAV: NavItem = { title: "Notifications", href: "/notifications", icon: Bell };
+
+const SECTIONS = [...PRIMARY_NAV, NOTIFICATIONS_NAV, ...RESOURCE_NAV, SETTINGS_NAV];
 
 export function isActive(href: string, pathname: string): boolean {
     if (href === "/") return pathname === "/";
