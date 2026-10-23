@@ -1,9 +1,6 @@
 name: Pre-release Build
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       version:
@@ -34,14 +31,7 @@ jobs:
 
       - name: Determine version
         id: v
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            BASE=$(grep -m1 '^version' Cargo.toml | sed 's/[^"]*"\([^"]*\)".*/\1/')
-            COUNT=$(git rev-list --count HEAD)
-            echo "version=${BASE}-alpha.${COUNT}" >> $GITHUB_OUTPUT
-          fi
+        run: echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
 
   build-binaries:
     name: Build ${{ matrix.binary }} (${{ matrix.arch }})
