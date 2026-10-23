@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { Component, Snippet } from "svelte";
-    import { KeyRound, ScrollText, ShieldCheck, SlidersHorizontal, User, Users, Download } from "@lucide/svelte";
+    import { Bell, KeyRound, ScrollText, ShieldCheck, SlidersHorizontal, User, Users, Download } from "@lucide/svelte";
     import { page } from "$app/state";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
 
@@ -25,6 +25,7 @@
                 { href: `${BASE}/general`, label: "General", icon: SlidersHorizontal },
                 { href: `${BASE}/update`, label: "Update", icon: Download },
                 { href: `${BASE}/logs`, label: "Logs", icon: ScrollText },
+                { href: `${BASE}/notifications`, label: "Notifications", icon: Bell },
             ],
         },
         {
