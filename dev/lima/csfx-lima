@@ -140,9 +140,24 @@ rustup_path() {
   dirname "$(rustup which rustc)"
 }
 
+changed_package() {
+  local dir="${WATCHEXEC_COMMON_PATH:-}"
+  [ -f "$dir" ] && dir="$(dirname "$dir")"
+  while [ -n "$dir" ] && [ "$dir" != "$CORE_DIR" ] && [ "$dir" != / ]; do
+    if [ -f "$dir/Cargo.toml" ]; then
+      [ -f "$dir/src/main.rs" ] && [ ! -f "$dir/src/lib.rs" ] && sed -n 's/^name = "\(.*\)"$/\1/p' "$dir/Cargo.toml" | head -1
+      return 0
+    fi
+    dir="$(dirname "$dir")"
+  done
+}
+
 build() {
+  local package="${1:-}" wrapper="" scope=(--workspace --bins --exclude csfx-updater)
+  [ -n "$package" ] && [ "$package" != csfx-updater ] && scope=(-p "$package" --bins)
+  command -v sccache > /dev/null && wrapper=sccache
   mkdir -p "$BIN_DIR"
-  (cd "$CORE_DIR" && PATH="$(rustup_path):$PATH" CARGO_TARGET_DIR="$BUILD_DIR" CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo zigbuild --quiet --target "$TARGET_TRIPLE" --workspace --bins --exclude csfx-updater)
+  (cd "$CORE_DIR" && PATH="$(rustup_path):$PATH" RUSTC_WRAPPER="$wrapper" CARGO_TARGET_DIR="$BUILD_DIR" CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo zigbuild --quiet --target "$TARGET_TRIPLE" "${scope[@]}")
 }
 
 build_ui() {
@@ -176,7 +191,7 @@ restart_units() {
 reload() {
   local before after units
   before="$(binary_stamps)"
-  build
+  build "$(changed_package)"
   after="$(binary_stamps)"
   units="$(changed_units "$before" "$after")"
   [ -n "$units" ] || { log INFO "reload nothing_changed=true"; return 0; }
@@ -228,7 +243,7 @@ join_node() {
 
 bootstrap() {
   local node
-  for node in $(nodes); do rebuild_node "$node" boot; done
+  on_all_nodes rebuild_node_with_action boot
   stop_all
   start_all
   wait_gateway
@@ -252,17 +267,26 @@ snapshot_path() {
   echo "$STATE_DIR/snapshots/$(mode)/$1"
 }
 
+stop_node() {
+  [ "$(node_state "$1")" = Running ] || return 0
+  limactl stop "$(instance "$1")" > /dev/null
+}
+
 stop_all() {
-  local node
-  for node in $(nodes); do
-    [ "$(node_state "$node")" = Running ] && limactl stop "$(instance "$node")" > /dev/null
-  done
-  return 0
+  on_all_nodes stop_node
 }
 
 start_all() {
-  local node
-  for node in $(nodes); do start_node "$node"; done
+  on_all_nodes start_node
+}
+
+prepare_node() {
+  create_node "$1"
+  ensure_ui_mount "$1"
+}
+
+rebuild_node_with_action() {
+  rebuild_node "$2" "$1"
 }
 
 snapshot() {
@@ -293,14 +317,16 @@ restore() {
 }
 
 up() {
-  local node
+  local build_pid
   mkdir -p "$STATE_DIR"
   [ "${1:-}" = ha ] && echo ha > "$STATE_DIR/mode" || echo single > "$STATE_DIR/mode"
   require_tools
   mkdir -p "$UI_BUILD_DIR"
-  build
+  build &
+  build_pid=$!
   build_ui
-  for node in $(nodes); do create_node "$node"; ensure_ui_mount "$node"; done
+  wait "$build_pid"
+  on_all_nodes prepare_node
   start_all
   [ -d "$(snapshot_path seeded)" ] || bootstrap
   log INFO "ready api=https://localhost:$API_PORT admin=$ADMIN_EMAIL"
@@ -344,7 +370,7 @@ main() {
     reload) reload ;;
     watch) watch ;;
     ui) build_ui ;;
-    switch) if [ $# -gt 0 ]; then rebuild_node "$1" switch; else for node in $(nodes); do rebuild_node "$node" switch; done; fi ;;
+    switch) if [ $# -gt 0 ]; then rebuild_node "$1" switch; else on_all_nodes rebuild_node_with_action switch; fi ;;
     logs) on_node "${1:?node}" sudo journalctl -f ${2:+-u "$2"} ;;
     shell) limactl shell "$(instance "${1:?node}")" ;;
     status) status ;;
