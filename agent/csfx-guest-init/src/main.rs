@@ -40,6 +40,7 @@ struct MmdsNetwork {
     prefix: String,
     gateway: Option<String>,
     dns: Option<String>,
+    search: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -369,7 +370,7 @@ fn configure_network(iface: &str, network: &MmdsNetwork) -> Result<()> {
     }
 
     if let Some(dns) = &network.dns {
-        write_resolv_conf(dns)?;
+        write_resolv_conf(dns, network.search.as_deref())?;
     }
 
     info!(iface = %iface, ip = %ip, prefix = prefix, "Guest network configured");
@@ -386,8 +387,11 @@ fn write_container_etc_hosts() {
     }
 }
 
-fn write_resolv_conf(dns: &str) -> Result<()> {
-    let contents = format!("nameserver {}\n", dns);
+fn write_resolv_conf(dns: &str, search: Option<&str>) -> Result<()> {
+    let contents = match search {
+        Some(search) => format!("nameserver {}\nsearch {}\n", dns, search),
+        None => format!("nameserver {}\n", dns),
+    };
 
     std::fs::create_dir_all("/etc").context("Failed to create /etc")?;
     std::fs::write(RESOLV_CONF_PATH, &contents).context("Failed to write guest resolv.conf")?;

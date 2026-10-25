@@ -144,6 +144,7 @@ impl RgDhcpSupervisor {
         let child = Command::new("dnsmasq")
             .arg("--keep-in-foreground")
             .arg("--no-daemon")
+            .arg("--port=0")
             .arg("--no-resolv")
             .arg("--no-hosts")
             .arg(format!("--interface={}", bridge_iface))
