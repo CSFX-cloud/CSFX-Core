@@ -118,7 +118,7 @@ create_node() {
 ensure_ui_mount() {
   local node="$1" name
   name="$(instance "$node")"
-  grep -q /csfx-ui "$HOME/.lima/$name/lima.yaml" && return 0
+  grep -q /csfx-ui "${LIMA_HOME:-$HOME/.lima}/$name/lima.yaml" && return 0
   log INFO "adding ui mount node=$node"
   [ "$(node_state "$node")" = Running ] && limactl stop "$name" > /dev/null
   limactl edit --tty=false --set ".mounts += [{\"location\": \"$UI_BUILD_DIR\", \"mountPoint\": \"/csfx-ui\"}]" "$name" > /dev/null
@@ -133,8 +133,13 @@ start_node() {
 }
 
 rebuild_node() {
-  log INFO "rebuilding node=$1 action=$2"
-  on_node "$1" sudo nixos-rebuild "$2" --flake "path:/csfx-dev#$1" $(flake_overrides)
+  local rebuild_log="$STATE_DIR/rebuild-$1.log"
+  log INFO "rebuilding node=$1 action=$2 log=$rebuild_log"
+  mkdir -p "$STATE_DIR"
+  on_node "$1" sudo nixos-rebuild "$2" --flake "path:/csfx-dev#$1" $(flake_overrides) > "$rebuild_log" 2>&1 && return 0
+  tail -n 40 "$rebuild_log" >&2
+  log ERROR "rebuild failed node=$1"
+  return 1
 }
 
 rustup_path() {
@@ -297,8 +302,8 @@ snapshot() {
   rm -rf "$target"
   mkdir -p "$target"
   for node in $(nodes); do
-    cp -c "$HOME/.lima/$(instance "$node")/diffdisk" "$target/$node.diffdisk"
-    cp -c "$HOME/.lima/_disks/$(instance "$node")-data/datadisk" "$target/$node.datadisk"
+    cp -c "${LIMA_HOME:-$HOME/.lima}/$(instance "$node")/diffdisk" "$target/$node.diffdisk"
+    cp -c "${LIMA_HOME:-$HOME/.lima}/_disks/$(instance "$node")-data/datadisk" "$target/$node.datadisk"
   done
   start_all
   log INFO "snapshot saved name=$1"
@@ -310,15 +315,15 @@ restore() {
   [ -d "$source" ] || die "snapshot missing name=$1"
   stop_all
   for node in $(nodes); do
-    cp -c "$source/$node.diffdisk" "$HOME/.lima/$(instance "$node")/diffdisk"
-    cp -c "$source/$node.datadisk" "$HOME/.lima/_disks/$(instance "$node")-data/datadisk"
+    cp -c "$source/$node.diffdisk" "${LIMA_HOME:-$HOME/.lima}/$(instance "$node")/diffdisk"
+    cp -c "$source/$node.datadisk" "${LIMA_HOME:-$HOME/.lima}/_disks/$(instance "$node")-data/datadisk"
   done
   start_all
   log INFO "snapshot restored name=$1"
 }
 
 up() {
-  local build_pid
+  local build_pid node
   mkdir -p "$STATE_DIR"
   [ "${1:-}" = ha ] && echo ha > "$STATE_DIR/mode" || echo single > "$STATE_DIR/mode"
   require_tools
@@ -327,7 +332,7 @@ up() {
   build_pid=$!
   build_ui
   wait "$build_pid"
-  on_all_nodes prepare_node
+  for node in $(nodes); do prepare_node "$node"; done
   start_all
   [ -d "$(snapshot_path seeded)" ] || bootstrap
   log INFO "ready api=https://localhost:$API_PORT admin=$ADMIN_EMAIL"

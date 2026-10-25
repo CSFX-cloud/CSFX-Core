@@ -97,6 +97,13 @@ export interface CreateBucketRequest {
 export interface CreateBucketAccessKeyRequest {
     name: string;
     permissions?: string;
+    expires_at?: string;
+}
+
+export interface UpdateBucketRequest {
+    exposure?: 'internal' | 'external';
+    quota_max_size?: number;
+    quota_max_objects?: number;
 }
 
 export interface Workload {
@@ -561,6 +568,22 @@ export async function createBucket(token: string, req: CreateBucketRequest): Pro
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.status }));
         throw new Error(err.error ?? `Failed to create bucket: ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function updateBucket(token: string, id: string, req: UpdateBucketRequest): Promise<Bucket> {
+    const res = await authedFetch(`${API_BASE}/buckets/${id}`, {
+        method: 'PATCH',
+        headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(req),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.status }));
+        throw new Error(err.error ?? `Failed to update bucket: ${res.status}`);
     }
     return res.json();
 }
