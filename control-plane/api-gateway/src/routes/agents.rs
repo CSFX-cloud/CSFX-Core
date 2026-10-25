@@ -88,6 +88,11 @@ impl From<agents::Model> for AgentResponse {
     }
 }
 
+fn percent_of(used: Option<u64>, total: Option<u64>) -> Option<f32> {
+    let total = total.filter(|total| *total > 0)?;
+    Some(used? as f32 / total as f32 * 100.0)
+}
+
 /// Receive metrics from agent
 pub async fn receive_metrics(
     State(state): State<AppState>,
@@ -104,10 +109,18 @@ pub async fn receive_metrics(
         cpu_usage_percent: ActiveValue::Set(metrics.cpu_usage_percent),
         memory_total_bytes: ActiveValue::Set(metrics.memory_total_bytes.map(|v| v as i64)),
         memory_used_bytes: ActiveValue::Set(metrics.memory_used_bytes.map(|v| v as i64)),
-        memory_usage_percent: ActiveValue::Set(metrics.memory_usage_percent),
+        memory_usage_percent: ActiveValue::Set(
+            metrics
+                .memory_usage_percent
+                .or_else(|| percent_of(metrics.memory_used_bytes, metrics.memory_total_bytes)),
+        ),
         disk_total_bytes: ActiveValue::Set(metrics.disk_total_bytes.map(|v| v as i64)),
         disk_used_bytes: ActiveValue::Set(metrics.disk_used_bytes.map(|v| v as i64)),
-        disk_usage_percent: ActiveValue::Set(metrics.disk_usage_percent),
+        disk_usage_percent: ActiveValue::Set(
+            metrics
+                .disk_usage_percent
+                .or_else(|| percent_of(metrics.disk_used_bytes, metrics.disk_total_bytes)),
+        ),
         network_rx_bytes: ActiveValue::Set(metrics.network_rx_bytes.map(|v| v as i64)),
         network_tx_bytes: ActiveValue::Set(metrics.network_tx_bytes.map(|v| v as i64)),
         os_name: ActiveValue::Set(metrics.os_name),
