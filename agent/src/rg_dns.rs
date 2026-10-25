@@ -18,7 +18,7 @@ fn next_zone_serial() -> u32 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs() as u32);
     let previous = LAST_ZONE_SERIAL
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
             Some(now.max(last.wrapping_add(1)))
         })
         .unwrap_or_else(|last| last);
