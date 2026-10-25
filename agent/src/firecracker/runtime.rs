@@ -149,6 +149,7 @@ struct GuestNetwork {
     prefix: String,
     gateway: Option<String>,
     dns: Option<String>,
+    search: String,
 }
 
 pub struct FirecrackerRuntime {
@@ -330,6 +331,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
                     prefix,
                     gateway,
                     dns,
+                    search: crate::rg_dns::zone_name(resource_group_id),
                 })
             }
             _ => None,
@@ -1325,6 +1327,7 @@ async fn configure_mmds(
             "prefix": net.prefix,
             "gateway": net.gateway,
             "dns": net.dns,
+            "search": net.search,
         })
     });
 

@@ -30,6 +30,7 @@ declare -A UNIT_FOR_BIN=(
   [sdn-controller]=csfx-sdn-controller
   [object-storage]=csfx-object-storage
   [csfx-agent]=csfx-agent
+  [csfx-guest-init]=csfx-guest-init-link
 )
 
 log() {

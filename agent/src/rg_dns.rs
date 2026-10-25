@@ -1,17 +1,31 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::sync::Mutex;
 use tracing::info;
 
 const DNS_DIR: &str = "/var/lib/csfx-agent/dns";
 const ZONE_TTL_SECS: u32 = 30;
-const ZONE_SERIAL_BASE: u32 = 1;
+static LAST_ZONE_SERIAL: AtomicU32 = AtomicU32::new(0);
 const DEFAULT_LOCAL_ZONE: &str = "csfx.internal";
 const FORWARD_CACHE_SECS: u32 = 10;
 
-fn zone_name(resource_group_id: &str) -> String {
+fn next_zone_serial() -> u32 {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as u32);
+    let previous = LAST_ZONE_SERIAL
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
+            Some(now.max(last.wrapping_add(1)))
+        })
+        .unwrap_or_else(|last| last);
+    now.max(previous.wrapping_add(1))
+}
+
+pub fn zone_name(resource_group_id: &str) -> String {
     format!("svc.{}.internal", resource_group_id)
 }
 
@@ -74,7 +88,7 @@ async fn write_zone_file(resource_group_id: &str, records: &HashMap<String, Stri
         "$TTL {ttl}\n@ IN SOA ns.{zone}. admin.{zone}. ( {serial} {ttl} {ttl} {ttl} {ttl} )\n@ IN NS ns.{zone}.\nns IN A 127.0.0.1\n",
         ttl = ZONE_TTL_SECS,
         zone = zone,
-        serial = ZONE_SERIAL_BASE,
+        serial = next_zone_serial(),
     );
 
     for (service_name, ip_address) in records {
@@ -131,6 +145,9 @@ fn corefile_contents(
     let mut contents = format!(
         "{zone}:53 {{\n    bind {listen_ip}\n    file {zone_path}\n    reload 2s\n    log\n    errors\n}}\n"
     );
+    contents.push_str(&format!(
+        ".:53 {{\n    bind {listen_ip}\n    forward . /etc/resolv.conf\n    cache {FORWARD_CACHE_SECS}\n    errors\n}}\n"
+    ));
     if let Some(forward) = forward {
         contents.push_str(&format!(
             "{}:53 {{\n    bind {listen_ip}\n    forward . {}\n    cache {FORWARD_CACHE_SECS}\n    errors\n}}\n",
@@ -178,11 +195,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn corefile_without_forward_serves_only_the_group_zone() {
+    fn zone_serial_increases_on_every_call() {
+        let first = next_zone_serial();
+        let second = next_zone_serial();
+        assert!(second > first);
+    }
+
+    #[test]
+    fn corefile_without_platform_forward_still_forwards_everything_else() {
         let contents = corefile_contents("svc.rg.internal", "10.0.0.2", "/z/rg.zone", None);
         assert!(contents.contains("svc.rg.internal:53"));
         assert!(contents.contains("file /z/rg.zone"));
-        assert!(!contents.contains("forward"));
+        assert!(contents.contains(".:53 {\n    bind 10.0.0.2\n    forward . /etc/resolv.conf"));
+        assert!(!contents.contains("csfx.internal:53"));
     }
 
     #[test]
@@ -196,6 +221,6 @@ mod tests {
         assert!(contents.contains(
             "csfx.internal:53 {\n    bind 10.0.0.2\n    forward . 192.168.1.10 192.168.1.11"
         ));
-        assert_eq!(contents.matches("bind 10.0.0.2").count(), 2);
+        assert_eq!(contents.matches("bind 10.0.0.2").count(), 3);
     }
 }
