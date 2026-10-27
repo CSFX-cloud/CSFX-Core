@@ -152,6 +152,15 @@ pub struct MasterBundle {
     pub patroni_replication_password: String,
     pub etcd_name: String,
     pub etcd_initial_cluster: String,
+    #[serde(default)]
+    pub vip: Option<ClusterVip>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ClusterVip {
+    pub address: String,
+    pub prefix_length: u8,
+    pub router_id: u8,
 }
 
 pub async fn fetch_cluster_ca(gateway_url: &str) -> Result<String> {

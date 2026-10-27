@@ -8,7 +8,7 @@ use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::client::{ApiClient, MasterBundle};
+use crate::client::{ApiClient, ClusterVip, MasterBundle};
 use crate::{config, pki};
 
 const PENDING_MARKER: &str = "/etc/csfx/master-join-pending";
@@ -18,6 +18,7 @@ const CA_CERT_PATH: &str = "/var/lib/csfx-cp/ca.crt";
 const CA_KEY_PATH: &str = "/var/lib/csfx-cp/ca.key";
 const CP_ENV_PATH: &str = "/etc/csfx/cp.env";
 const GARAGE_ENV_PATH: &str = "/etc/csfx/garage.env";
+const CLUSTER_ENV_PATH: &str = "/etc/csfx/cluster.env";
 const ETCD_JOIN_ENV_PATH: &str = "/etc/csfx/etcd-join.env";
 const PATRONI_SUPERUSER_PATH: &str = "/etc/csfx/patroni-superuser-password";
 const PATRONI_REPLICATION_PATH: &str = "/etc/csfx/patroni-replication-password";
@@ -136,6 +137,7 @@ async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
     write_file(CP_ENV_PATH, &render_cp_env(bundle), 0o600)?;
     write_file(GARAGE_ENV_PATH, &render_garage_env(bundle), 0o600)?;
     write_file(ETCD_JOIN_ENV_PATH, &render_etcd_env(bundle), 0o600)?;
+    apply_vip(bundle.vip.as_ref())?;
     write_file(
         PATRONI_SUPERUSER_PATH,
         &bundle.patroni_superuser_password,
@@ -152,6 +154,13 @@ async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
     )
     .await?;
     write_file(SETUP_DONE_FILE, "", 0o600)
+}
+
+fn apply_vip(vip: Option<&ClusterVip>) -> Result<()> {
+    match vip {
+        Some(vip) => write_file(CLUSTER_ENV_PATH, &render_cluster_env(vip), 0o644),
+        None => Ok(()),
+    }
 }
 
 async fn grant_group(group: &str, paths: &[&str]) -> Result<()> {
@@ -220,6 +229,13 @@ fn render_garage_env(bundle: &MasterBundle) -> String {
     )
 }
 
+fn render_cluster_env(vip: &ClusterVip) -> String {
+    format!(
+        "CSFX_VIP_ADDRESS={}\nCSFX_VIP_PREFIX={}\nCSFX_VIP_ROUTER_ID={}\nTLS_SANS=localhost,127.0.0.1,{}\n",
+        vip.address, vip.prefix_length, vip.router_id, vip.address
+    )
+}
+
 fn render_etcd_env(bundle: &MasterBundle) -> String {
     format!(
         "ETCD_NAME={}\nETCD_INITIAL_CLUSTER={}\nETCD_INITIAL_CLUSTER_STATE=existing\n",
@@ -245,6 +261,7 @@ mod tests {
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),
+            vip: None,
         }
     }
 
@@ -265,6 +282,19 @@ mod tests {
         assert!(env.contains(
             "ETCD_INITIAL_CLUSTER=node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380\n"
         ));
+    }
+
+    #[test]
+    fn cluster_env_carries_vip_and_tls_names() {
+        let vip = ClusterVip {
+            address: "192.168.1.50".into(),
+            prefix_length: 24,
+            router_id: 51,
+        };
+        assert_eq!(
+            render_cluster_env(&vip),
+            "CSFX_VIP_ADDRESS=192.168.1.50\nCSFX_VIP_PREFIX=24\nCSFX_VIP_ROUTER_ID=51\nTLS_SANS=localhost,127.0.0.1,192.168.1.50\n"
+        );
     }
 
     #[test]
