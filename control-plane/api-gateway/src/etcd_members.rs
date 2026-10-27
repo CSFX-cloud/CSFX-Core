@@ -1,4 +1,5 @@
 use etcd_client::{Client, Member, MemberAddOptions};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EtcdMember {
@@ -51,11 +52,11 @@ pub fn has_loopback_voter(members: &[EtcdMember]) -> bool {
         .any(|url| url.contains("//127.0.0.1:") || url.contains("//localhost:"))
 }
 
-pub fn stale_learner_ids(members: &[EtcdMember], keep_url: &str) -> Vec<u64> {
+pub fn stale_learner_ids(members: &[EtcdMember], known_urls: &HashSet<String>) -> Vec<u64> {
     members
         .iter()
-        .filter(|member| member.is_learner && member.name.is_empty())
-        .filter(|member| !member.peer_urls.iter().any(|url| url == keep_url))
+        .filter(|member| member.is_learner)
+        .filter(|member| !member.peer_urls.iter().any(|url| known_urls.contains(url)))
         .map(|member| member.id)
         .collect()
 }
@@ -244,10 +245,11 @@ mod tests {
         members.push(member(4, "", "http://10.100.0.4:2380", true));
         members.push(member(5, "", "http://10.100.0.5:2380", true));
         members.push(member(6, "named", "http://10.100.0.6:2380", true));
-        assert_eq!(
-            stale_learner_ids(&members, "http://10.100.0.5:2380"),
-            vec![4]
-        );
+        let known = HashSet::from([
+            "http://10.100.0.5:2380".to_string(),
+            "http://10.100.0.6:2380".to_string(),
+        ]);
+        assert_eq!(stale_learner_ids(&members, &known), vec![4]);
     }
 
     #[test]

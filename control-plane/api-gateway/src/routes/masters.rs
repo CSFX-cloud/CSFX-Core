@@ -8,9 +8,10 @@ use axum::{
 use chrono::{Duration, Utc};
 use entity::entities::agents;
 use etcd_client::Client;
-use sea_orm::EntityTrait;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::cluster::{error, internal, ApiError};
@@ -91,6 +92,19 @@ fn tunnel_ip(node: &agents::Model) -> Result<&str, ApiError> {
         .ok_or_else(|| error(StatusCode::CONFLICT, "node has no management tunnel ip"))
 }
 
+async fn master_peer_urls(state: &AppState) -> Result<HashSet<String>, ApiError> {
+    let masters = agents::Entity::find()
+        .filter(agents::Column::Role.eq(ROLE_MASTER))
+        .all(&state.db_conn)
+        .await
+        .map_err(internal)?;
+    Ok(masters
+        .iter()
+        .filter_map(|master| master.wg_tunnel_ip.as_deref())
+        .map(peer_url)
+        .collect())
+}
+
 fn find_member<'a>(members: &'a [EtcdMember], url: &str) -> Option<&'a EtcdMember> {
     members
         .iter()
@@ -125,7 +139,8 @@ pub async fn join_master(
             "existing master still advertises a loopback peer url",
         ));
     }
-    for stale in etcd_members::stale_learner_ids(&members, &url) {
+    let known_urls = master_peer_urls(&state).await?;
+    for stale in etcd_members::stale_learner_ids(&members, &known_urls) {
         etcd_members::remove(&mut etcd, stale)
             .await
             .map_err(internal)?;
