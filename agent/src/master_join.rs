@@ -231,8 +231,8 @@ fn render_garage_env(bundle: &MasterBundle) -> String {
 
 fn render_cluster_env(vip: &ClusterVip) -> String {
     format!(
-        "CSFX_VIP_ADDRESS={}\nCSFX_VIP_PREFIX={}\nCSFX_VIP_ROUTER_ID={}\nTLS_SANS=localhost,127.0.0.1,{}\n",
-        vip.address, vip.prefix_length, vip.router_id, vip.address
+        "CSFX_VIP_ADDRESS={}\nCSFX_VIP_PREFIX={}\nCSFX_VIP_ROUTER_ID={}\nTLS_SANS=localhost,127.0.0.1,{}\nCSFX_LOCAL_DNS_ADDRESSES={}\n",
+        vip.address, vip.prefix_length, vip.router_id, vip.address, vip.address
     )
 }
 
@@ -293,7 +293,7 @@ mod tests {
         };
         assert_eq!(
             render_cluster_env(&vip),
-            "CSFX_VIP_ADDRESS=192.168.1.50\nCSFX_VIP_PREFIX=24\nCSFX_VIP_ROUTER_ID=51\nTLS_SANS=localhost,127.0.0.1,192.168.1.50\n"
+            "CSFX_VIP_ADDRESS=192.168.1.50\nCSFX_VIP_PREFIX=24\nCSFX_VIP_ROUTER_ID=51\nTLS_SANS=localhost,127.0.0.1,192.168.1.50\nCSFX_LOCAL_DNS_ADDRESSES=192.168.1.50\n"
         );
     }
 
