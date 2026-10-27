@@ -26,13 +26,28 @@ pub async fn ensure_mgmt_interface(
         run_ip(&["link", "add", "dev", iface, "type", "wireguard"]).await?;
         set_private_key(iface, private_key_b64).await?;
         run_wg(&["set", iface, "listen-port", &listen_port.to_string()]).await?;
-        run_ip(&["address", "add", &format!("{}/32", tunnel_ip), "dev", iface]).await?;
-        run_ip(&["link", "set", "up", "dev", iface]).await?;
-
-        info!(iface = %iface, tunnel_ip = %tunnel_ip, "Management WireGuard interface ready");
     }
+    ensure_address(iface, tunnel_ip).await?;
+    run_ip(&["link", "set", "up", "dev", iface]).await?;
+
+    info!(iface = %iface, tunnel_ip = %tunnel_ip, "Management WireGuard interface ready");
 
     Ok(())
+}
+
+async fn ensure_address(iface: &str, tunnel_ip: &str) -> Result<()> {
+    let wanted = format!("{}/32", tunnel_ip);
+    let output = Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "dev", iface])
+        .output()
+        .await
+        .context("failed to execute ip addr show")?;
+    let current = String::from_utf8_lossy(&output.stdout);
+    if current.split_whitespace().any(|field| field == wanted) {
+        return Ok(());
+    }
+    run_ip(&["address", "flush", "dev", iface]).await?;
+    run_ip(&["address", "add", &wanted, "dev", iface]).await
 }
 
 pub fn save_peer_cache(peers: &[Peer]) -> Result<()> {
