@@ -1,8 +1,12 @@
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::info;
 
+const PEER_CACHE_FILE: &str = "/var/lib/csfx-agent/mgmt-peers.json";
+
+#[derive(Serialize, Deserialize)]
 pub struct Peer {
     pub public_key: String,
     pub endpoint: Option<String>,
@@ -28,6 +32,29 @@ pub async fn ensure_mgmt_interface(
         info!(iface = %iface, tunnel_ip = %tunnel_ip, "Management WireGuard interface ready");
     }
 
+    Ok(())
+}
+
+pub fn save_peer_cache(peers: &[Peer]) -> Result<()> {
+    let data = serde_json::to_string(peers).context("failed to serialize peer cache")?;
+    std::fs::write(PEER_CACHE_FILE, data).context("failed to write peer cache")
+}
+
+pub fn load_peer_cache() -> Result<Vec<Peer>> {
+    match std::fs::read_to_string(PEER_CACHE_FILE) {
+        Ok(data) => serde_json::from_str(&data).context("failed to parse peer cache"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(err).context("failed to read peer cache"),
+    }
+}
+
+pub async fn apply_mgmt_peers(peers: &[Peer]) -> Result<()> {
+    reconcile_peers(MGMT_INTERFACE_NAME, peers).await?;
+    for peer in peers {
+        if let Err(e) = set_route(MGMT_INTERFACE_NAME, &peer.allowed_ips).await {
+            tracing::warn!(allowed_ips = %peer.allowed_ips, error = %e, "Failed to set management route");
+        }
+    }
     Ok(())
 }
 

@@ -8,6 +8,7 @@ mod firecracker;
 mod join;
 mod journal;
 mod master_join;
+mod mgmt_up;
 mod nftables;
 mod pki;
 mod qemu;
@@ -67,6 +68,10 @@ async fn main() -> Result<()> {
         )
         .with_target(false)
         .init();
+
+    if std::env::args().nth(1).as_deref() == Some("--mgmt-up") {
+        return mgmt_up::run().await;
+    }
 
     let join_ticket = std::env::var("CSFX_JOIN")
         .ok()
@@ -1099,17 +1104,13 @@ async fn sync_mgmt_peers(
     };
     wg_peers.extend(fetch_vpn_wg_peers(client, api_key, resource_group_ids).await);
 
-    if let Err(e) = wireguard::reconcile_peers(wireguard::MGMT_INTERFACE_NAME, &wg_peers).await {
+    if let Err(e) = wireguard::apply_mgmt_peers(&wg_peers).await {
         warn!(error = %e, "Failed to sync management WireGuard peers");
         return;
     }
 
-    for peer in &wg_peers {
-        if let Err(e) =
-            wireguard::set_route(wireguard::MGMT_INTERFACE_NAME, &peer.allowed_ips).await
-        {
-            warn!(allowed_ips = %peer.allowed_ips, error = %e, "Failed to set management route");
-        }
+    if let Err(e) = wireguard::save_peer_cache(&wg_peers) {
+        warn!(error = %e, "Failed to cache management WireGuard peers");
     }
 }
 
