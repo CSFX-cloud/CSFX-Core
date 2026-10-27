@@ -38,7 +38,7 @@ CSFX runs on **NixOS**. The full stack is distributed as a bootable ISO image.
 
 **Installation:**
 1. Download the latest ISO from [CSFX-Infra Releases](https://github.com/csfx-cloud/CSFX-Infra/releases)
-2. Boot the target machine from the ISO, confirm the target disk by typing `ERASE`, and wait for the reboot
+2. Boot the target machine from the ISO, confirm the target disk by selecting Yes in the erase dialog, and wait for the reboot
 3. Read the setup URL, setup code, and CA fingerprint from the node console
 4. Open `https://<device-ip>:8000/setup`, compare the fingerprint with the browser certificate warning, and enter the setup code
 5. Choose the organization name, administrator email and password, and a console PIN, then store the recovery key shown at the end
