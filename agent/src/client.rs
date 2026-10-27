@@ -85,6 +85,8 @@ pub struct HeartbeatResponse {
     pub post_update_heartbeats: Option<u32>,
     #[serde(default)]
     pub ssh_enabled: bool,
+    #[serde(default)]
+    pub gateway_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -224,6 +226,10 @@ impl ApiClient {
     pub fn with_certificate(mut self, cert_pem: String) -> Self {
         self.cert_pem = Some(cert_pem);
         self
+    }
+
+    pub fn gateway_url(&self) -> &str {
+        &self.gateway_url
     }
 
     pub async fn request_master_bundle(&self, api_key: &str) -> Result<MasterBundle> {

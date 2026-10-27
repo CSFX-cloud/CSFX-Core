@@ -147,6 +147,7 @@ pub struct HeartbeatResponse {
     pub desired_flake_rev: Option<String>,
     pub post_update_heartbeats: Option<u32>,
     pub ssh_enabled: bool,
+    pub gateway_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

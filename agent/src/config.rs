@@ -6,6 +6,7 @@ use uuid::Uuid;
 const STATE_DIR: &str = "/var/lib/csfx-agent";
 const CREDENTIALS_FILE: &str = "/var/lib/csfx-agent/credentials";
 const CONFIG_FILE: &str = "/var/lib/csfx-agent/config.json";
+const GATEWAY_OVERRIDE_FILE: &str = "/var/lib/csfx-agent/gateway-url";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
@@ -46,6 +47,21 @@ pub fn save_config(config: &DaemonConfig) -> Result<()> {
     std::fs::create_dir_all(STATE_DIR).context("Failed to create state directory")?;
     let data = serde_json::to_string_pretty(config).context("Failed to serialize config")?;
     std::fs::write(CONFIG_FILE, data).context("Failed to write daemon config")
+}
+
+pub fn is_loopback_url(url: &str) -> bool {
+    url.contains("//localhost") || url.contains("//127.")
+}
+
+pub fn load_gateway_override() -> Option<String> {
+    let value = std::fs::read_to_string(GATEWAY_OVERRIDE_FILE).ok()?;
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+pub fn save_gateway_override(url: &str) -> Result<()> {
+    std::fs::create_dir_all(STATE_DIR).context("Failed to create state directory")?;
+    std::fs::write(GATEWAY_OVERRIDE_FILE, url).context("Failed to write gateway override")
 }
 
 pub fn load_credentials() -> Result<Credentials> {

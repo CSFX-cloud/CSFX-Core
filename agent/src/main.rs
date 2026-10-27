@@ -87,6 +87,9 @@ async fn main() -> Result<()> {
         None => std::env::var("CSFX_GATEWAY_URL")
             .context("CSFX_GATEWAY_URL environment variable is required")?,
     };
+    let gateway_url = config::load_gateway_override()
+        .filter(|_| !config::is_loopback_url(&gateway_url))
+        .unwrap_or(gateway_url);
 
     if let Some(username) = std::env::args()
         .nth(1)
@@ -443,6 +446,8 @@ async fn reconcile_tick(
             if ssh_control::control_enabled() {
                 ssh_control::apply(resp.ssh_enabled).await;
             }
+
+            adopt_advertised_gateway(client.gateway_url(), resp.gateway_url.as_deref());
 
             if let Some(count) = resp.post_update_heartbeats {
                 update_watch::write_heartbeat_counter(count).await;
@@ -1050,6 +1055,18 @@ async fn register_service_dns(
         .await
     {
         warn!(resource_group_id = %resource_group_id, service_name = %service_name, error = %e, "Failed to write service dns record");
+    }
+}
+
+fn adopt_advertised_gateway(current: &str, advertised: Option<&str>) {
+    let Some(advertised) =
+        advertised.filter(|url| *url != current && !config::is_loopback_url(current))
+    else {
+        return;
+    };
+    match config::save_gateway_override(advertised) {
+        Ok(()) => info!(gateway_url = %advertised, "Adopted advertised gateway address"),
+        Err(e) => warn!(error = %e, "Failed to store advertised gateway address"),
     }
 }
 
