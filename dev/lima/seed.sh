@@ -33,7 +33,9 @@ response_status() {
 encrypt() {
   local key_file
   key_file="$(mktemp)"
-  curl -sk "$API/api/public-key" | jq -r .public_key > "$key_file"
+  until curl -skf -m 5 "$API/api/public-key" | jq -er .public_key > "$key_file"; do
+    sleep 3
+  done
   printf '%s' "$1" | openssl pkeyutl -encrypt -pubin -inkey "$key_file" \
     -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 | base64 | tr -d '\n'
   rm -f "$key_file"
