@@ -22,7 +22,15 @@ const ETCD_JOIN_ENV_PATH: &str = "/etc/csfx/etcd-join.env";
 const PATRONI_SUPERUSER_PATH: &str = "/etc/csfx/patroni-superuser-password";
 const PATRONI_REPLICATION_PATH: &str = "/etc/csfx/patroni-replication-password";
 const PATRONI_GROUP: &str = "patroni";
-const LOCAL_STATE_DIRS: [&str; 3] = ["/var/lib/etcd", "/var/lib/patroni", "/var/lib/csfx-cp"];
+const LOCAL_STATE_DIRS: [&str; 6] = [
+    "/var/lib/etcd",
+    "/var/lib/patroni",
+    "/var/lib/postgresql",
+    "/var/lib/csfx-cp",
+    "/var/lib/csfx-garage/meta",
+    "/var/lib/csfx-garage/data",
+];
+const ETCD_UNIT: &str = "etcd.service";
 const CONTROL_PLANE_TARGET: &str = "csfx-cp.target";
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const REGISTRATION_ATTEMPTS: u32 = 120;
@@ -68,16 +76,21 @@ async fn join(gateway_url: &str) -> Result<()> {
     reset_local_control_plane()?;
     apply_bundle(&bundle).await?;
     write_file(PROMOTE_MARKER, "", 0o600)?;
-    std::fs::remove_file(PENDING_MARKER).context("Failed to remove join marker")?;
-    start_control_plane().await
+    std::fs::remove_file(PENDING_MARKER).context("Failed to remove join marker")
 }
 
 async fn promote(gateway_url: &str) -> Result<()> {
     let (client, api_key) = authenticated_client(gateway_url).await?;
+    start_unit(ETCD_UNIT).await?;
+    wait_for_promotion(&client, &api_key).await?;
+    info!("etcd member promoted to voter");
+    start_unit(CONTROL_PLANE_TARGET).await?;
+    std::fs::remove_file(PROMOTE_MARKER).context("Failed to remove promote marker")
+}
+
+async fn wait_for_promotion(client: &ApiClient, api_key: &str) -> Result<()> {
     for _ in 0..PROMOTE_ATTEMPTS {
-        if client.promote_master(&api_key).await? {
-            std::fs::remove_file(PROMOTE_MARKER).context("Failed to remove promote marker")?;
-            info!("etcd member promoted to voter");
+        if client.promote_master(api_key).await? {
             return Ok(());
         }
         sleep(POLL_INTERVAL).await;
@@ -150,19 +163,16 @@ async fn grant_group(group: &str, paths: &[&str]) -> Result<()> {
     Ok(())
 }
 
-async fn start_control_plane() -> Result<()> {
+async fn start_unit(unit: &str) -> Result<()> {
     let status = Command::new("systemctl")
         .arg("start")
-        .arg(CONTROL_PLANE_TARGET)
+        .arg(unit)
         .status()
         .await
         .context("Failed to run systemctl")?;
     if !status.success() {
-        warn!(
-            target = CONTROL_PLANE_TARGET,
-            "control plane target did not start cleanly"
-        );
-        bail!("systemctl start failed target={CONTROL_PLANE_TARGET}");
+        warn!(unit, "unit did not start cleanly");
+        bail!("systemctl start failed unit={unit}");
     }
     Ok(())
 }
