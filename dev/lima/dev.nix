@@ -44,7 +44,13 @@ in
       enable = true;
       dataPart = "/dev/vdb";
     };
-    csfx-cluster.enable = true;
+    csfx-cluster = {
+      enable = true;
+      vip = lib.mkIf (hostName == "cp1") {
+        address = "192.168.64.200";
+        interface = "enp0s2";
+      };
+    };
     csfx-garage.enable = true;
   };
 
@@ -56,6 +62,7 @@ in
       csfx-api-gateway.environment.STATIC_DIR = lib.mkForce "/csfx-ui";
       csfx-updater.enable = lib.mkForce false;
       csfx-guest-init-link.serviceConfig.ExecStart = lib.mkForce "${pkgs.coreutils}/bin/install -m 0755 ${binDir}/csfx-guest-init /var/lib/csfx-agent/csfx-guest-init";
+      csfx-mgmt-up.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --mgmt-up";
       csfx-master-join.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --join-master";
     }
   ];

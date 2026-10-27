@@ -5,6 +5,7 @@ LIMA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "$LIMA_DIR/../.." && pwd)"
 INFRA_DIR="${CSFX_INFRA_DIR:-$(cd "$CORE_DIR/../CSFX-Infra" && pwd)}"
 STATE_DIR="${CSFX_LIMA_STATE:-$HOME/.csfx-lima}"
+LIMA_STORE="${LIMA_HOME:-$HOME/.lima}"
 TARGET_TRIPLE="aarch64-unknown-linux-musl"
 BUILD_DIR="$CORE_DIR/target/lima"
 UI_DIR="$CORE_DIR/app"
@@ -118,7 +119,7 @@ create_node() {
 ensure_ui_mount() {
   local node="$1" name
   name="$(instance "$node")"
-  grep -q /csfx-ui "$HOME/.lima/$name/lima.yaml" && return 0
+  grep -q /csfx-ui "$LIMA_STORE/$name/lima.yaml" && return 0
   log INFO "adding ui mount node=$node"
   [ "$(node_state "$node")" = Running ] && limactl stop "$name" > /dev/null
   limactl edit --tty=false --set ".mounts += [{\"location\": \"$UI_BUILD_DIR\", \"mountPoint\": \"/csfx-ui\"}]" "$name" > /dev/null
@@ -297,8 +298,8 @@ snapshot() {
   rm -rf "$target"
   mkdir -p "$target"
   for node in $(nodes); do
-    cp -c "$HOME/.lima/$(instance "$node")/diffdisk" "$target/$node.diffdisk"
-    cp -c "$HOME/.lima/_disks/$(instance "$node")-data/datadisk" "$target/$node.datadisk"
+    cp -c "$LIMA_STORE/$(instance "$node")/diffdisk" "$target/$node.diffdisk"
+    cp -c "$LIMA_STORE/_disks/$(instance "$node")-data/datadisk" "$target/$node.datadisk"
   done
   start_all
   log INFO "snapshot saved name=$1"
@@ -310,8 +311,8 @@ restore() {
   [ -d "$source" ] || die "snapshot missing name=$1"
   stop_all
   for node in $(nodes); do
-    cp -c "$source/$node.diffdisk" "$HOME/.lima/$(instance "$node")/diffdisk"
-    cp -c "$source/$node.datadisk" "$HOME/.lima/_disks/$(instance "$node")-data/datadisk"
+    cp -c "$source/$node.diffdisk" "$LIMA_STORE/$(instance "$node")/diffdisk"
+    cp -c "$source/$node.datadisk" "$LIMA_STORE/_disks/$(instance "$node")-data/datadisk"
   done
   start_all
   log INFO "snapshot restored name=$1"
