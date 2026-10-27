@@ -5,7 +5,6 @@
     import { listNodes } from "$lib/api/nodes";
     import { deleteResourceGroup } from "$lib/api/resource-groups";
     import AppearanceDialog from "$lib/components/resource-group/appearance-dialog.svelte";
-    import BucketDetailDialog from "$lib/components/resource-group/bucket-detail-dialog.svelte";
     import GroupHero from "$lib/components/resource-group/group-hero.svelte";
     import GroupStats from "$lib/components/resource-group/group-stats.svelte";
     import ResourceTable from "$lib/components/resource-group/resource-table.svelte";
@@ -16,7 +15,6 @@
     const base = `/resource-groups/${rg.rgId}`;
 
     let appearanceDialog = $state<AppearanceDialog | null>(null);
-    let bucketDetailDialog = $state<BucketDetailDialog | null>(null);
     let nodeNames = $state(new Map<string, string>());
 
     async function loadNodeNames() {
@@ -46,7 +44,6 @@
 </script>
 
 <AppearanceDialog bind:this={appearanceDialog} group={rg.group} onUpdated={(updated) => (rg.group = updated)} />
-<BucketDetailDialog bind:this={bucketDetailDialog} rgId={rg.rgId} />
 
 <div class="db-content">
     {#if rg.loading}
@@ -75,7 +72,6 @@
             buckets={rg.buckets}
             gateways={rg.gateways}
             {nodeNames}
-            onOpenBucket={(bucket) => bucketDetailDialog?.open(bucket)}
             onChanged={rg.load}
             onError={(message) => (rg.error = message)}
         />

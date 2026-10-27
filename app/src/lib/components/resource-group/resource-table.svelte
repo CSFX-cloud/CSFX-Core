@@ -37,12 +37,11 @@
         buckets: Bucket[];
         gateways: Gateway[];
         nodeNames: Map<string, string>;
-        onOpenBucket: (bucket: Bucket) => void;
         onChanged: () => Promise<void>;
         onError: (message: string) => void;
     };
 
-    let { groupName, base, workloads, volumes, buckets, gateways, nodeNames, onOpenBucket, onChanged, onError }: Props = $props();
+    let { groupName, base, workloads, volumes, buckets, gateways, nodeNames, onChanged, onError }: Props = $props();
 
     let activeTab = $state<ResourceTab>("all");
     let expandedStacks = $state<Set<string>>(new Set());
@@ -152,7 +151,6 @@
                         {:else}
                             <BucketRow
                                 b={item.data}
-                                onOpen={() => onOpenBucket(item.data)}
                                 onDelete={() => run(() => deleteBucket(token(), item.data.id), "Failed to delete bucket")}
                             />
                         {/if}

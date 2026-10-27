@@ -30,10 +30,21 @@ response_status() {
   tail -n 1
 }
 
+fetch_public_key() {
+  local key_file="$1" attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    curl -skf "$API/api/public-key" | jq -er .public_key > "$key_file" 2> /dev/null && return 0
+    log WARN "public key unavailable attempt=$attempt"
+    sleep 3
+  done
+  rm -f "$key_file"
+  die "public key fetch failed api=$API"
+}
+
 encrypt() {
   local key_file
   key_file="$(mktemp)"
-  curl -sk "$API/api/public-key" | jq -r .public_key > "$key_file"
+  fetch_public_key "$key_file"
   printf '%s' "$1" | openssl pkeyutl -encrypt -pubin -inkey "$key_file" \
     -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 | base64 | tr -d '\n'
   rm -f "$key_file"

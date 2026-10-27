@@ -14,15 +14,29 @@
         type ObjectEntry,
     } from "$lib/api/resource-groups";
     import EmptyState from "$lib/components/dashboard/empty-state.svelte";
+    import BucketIntegrationTab from "$lib/components/resource-group/bucket-integration-tab.svelte";
+    import BucketSettingsTab from "$lib/components/resource-group/bucket-settings-tab.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
     import { fmtBytes, formatBytes } from "$lib/utils/format";
     import { folderName, objectName, prefixCrumbs } from "$lib/utils/bucket-objects";
     import { badgeClass, statusLabel } from "$lib/utils/tone";
+    import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
+
+    type Tab = "objects" | "integration" | "settings";
+
+    const TABS: { id: Tab; label: string }[] = [
+        { id: "objects", label: "Objects" },
+        { id: "integration", label: "Integration" },
+        { id: "settings", label: "Settings" },
+    ];
 
     const SKELETON_ROWS = 3;
 
     const bucketId: string = $page.params.id ?? "";
 
+    const requestedTab = $page.url.searchParams.get("tab");
+
+    let tab = $state<Tab>(TABS.find((entry) => entry.id === requestedTab)?.id ?? "objects");
     let bucket = $state<Bucket | null>(null);
     let objects = $state<ObjectEntry[]>([]);
     let folders = $state<string[]>([]);
@@ -151,6 +165,13 @@
 
         {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 
+        <WorkloadTabs tabs={TABS} active={tab} label="Bucket sections" onselect={(id) => (tab = id)} />
+
+        {#if tab === "integration"}
+            <BucketIntegrationTab {bucket} />
+        {:else if tab === "settings"}
+            <BucketSettingsTab {bucket} onUpdated={(updated) => (bucket = updated)} />
+        {:else}
         <section class="cx-panel" aria-label="Objects">
             <nav class="bk-crumbs" aria-label="Folder path">
                 <button class="bk-crumb" type="button" onclick={() => openFolder("")}>{bucket.name}</button>
@@ -207,5 +228,6 @@
                 </div>
             {/if}
         </section>
+        {/if}
     {/if}
 </div>
