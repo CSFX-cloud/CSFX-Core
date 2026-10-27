@@ -89,6 +89,10 @@ pub struct HistoryRangeQuery {
     pub agent_id: Option<Uuid>,
 }
 
+pub fn readiness_routes() -> Router<AppState> {
+    Router::new().route("/ready", get(readiness))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/system/health", get(health_check))
@@ -104,6 +108,17 @@ async fn health_check() -> Json<serde_json::Value> {
         "status": "healthy",
         "service": "csfx-core-backend"
     }))
+}
+
+async fn readiness(State(state): State<AppState>) -> StatusCode {
+    let probe = Statement::from_string(DatabaseBackend::Postgres, "SELECT 1");
+    match state.db_conn.execute(probe).await {
+        Ok(_) => StatusCode::NO_CONTENT,
+        Err(error) => {
+            tracing::warn!(error = %error, "readiness probe failed");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }
 }
 
 async fn get_system_info(

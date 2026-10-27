@@ -173,6 +173,7 @@ pub fn create_router() -> Router<AppState> {
 
     let api_router = Router::new()
         .merge(agent_unmetered_router)
+        .merge(system::readiness_routes())
         .merge(rate_limited_router)
         .merge(login_rate_limited_router)
         .merge(update::routes())
