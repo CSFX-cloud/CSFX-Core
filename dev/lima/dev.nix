@@ -47,7 +47,7 @@ in
     csfx-cluster = {
       enable = true;
       vip = lib.mkIf (hostName == "cp1") {
-        address = "192.168.64.200";
+        address = "192.168.105.200";
         interface = "enp0s2";
       };
     };

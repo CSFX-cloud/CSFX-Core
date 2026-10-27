@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::fs::{OpenOptions, Permissions};
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{chown, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::time::Duration;
 use tokio::process::Command;
@@ -134,6 +134,7 @@ fn clear_directory(path: &str) -> Result<()> {
 async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
     write_file(CA_CERT_PATH, &bundle.ca_cert_pem, 0o644)?;
     write_file(CA_KEY_PATH, &bundle.ca_key_pem, 0o600)?;
+    adopt_directory_owner(&[CA_CERT_PATH, CA_KEY_PATH])?;
     write_file(CP_ENV_PATH, &render_cp_env(bundle), 0o600)?;
     write_file(GARAGE_ENV_PATH, &render_garage_env(bundle), 0o600)?;
     write_file(ETCD_JOIN_ENV_PATH, &render_etcd_env(bundle), 0o600)?;
@@ -161,6 +162,19 @@ fn apply_vip(vip: Option<&ClusterVip>) -> Result<()> {
         Some(vip) => write_file(CLUSTER_ENV_PATH, &render_cluster_env(vip), 0o644),
         None => Ok(()),
     }
+}
+
+fn adopt_directory_owner(paths: &[&str]) -> Result<()> {
+    for path in paths {
+        let Some(parent) = Path::new(path).parent() else {
+            continue;
+        };
+        let owner = std::fs::metadata(parent)
+            .with_context(|| format!("Failed to stat {}", parent.display()))?;
+        chown(path, Some(owner.uid()), Some(owner.gid()))
+            .with_context(|| format!("Failed to change owner of {path}"))?;
+    }
+    Ok(())
 }
 
 async fn grant_group(group: &str, paths: &[&str]) -> Result<()> {

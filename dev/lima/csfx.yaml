@@ -11,7 +11,7 @@ disk: 30GiB
 mountType: virtiofs
 mountInotify: false
 networks:
-  - vzNAT: true
+  - lima: shared
 portForwards:
   - proto: udp
     guestPort: 68
