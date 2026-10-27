@@ -16,7 +16,7 @@ use uuid::Uuid;
 use super::cluster::{error, internal, ApiError};
 use crate::{
     auth::{agent::AgentApiKey, rbac::CanManageSystem},
-    cluster_bundle::{BundleError, ClusterSecrets},
+    cluster_bundle::{BundleError, ClusterSecrets, ClusterVip},
     etcd_members::{self, EtcdMember},
     tls, AppState,
 };
@@ -35,6 +35,7 @@ pub struct JoinBundle {
     etcd_member_id: u64,
     etcd_name: String,
     etcd_initial_cluster: String,
+    vip: Option<ClusterVip>,
 }
 
 pub fn member_name(agent_id: Uuid) -> String {
@@ -147,6 +148,7 @@ pub async fn join_master(
         etcd_member_id: plan.member_id,
         etcd_name: name,
         etcd_initial_cluster: plan.initial_cluster,
+        vip: ClusterVip::from_env(),
     }))
 }
 

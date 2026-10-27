@@ -12,10 +12,13 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use super::masters::{self, ROLE_MASTER};
-use crate::{auth::rbac::CanManageSystem, setup::ca_fingerprint, AppState};
+use crate::{
+    auth::rbac::CanManageSystem, cluster_bundle::ClusterVip, setup::ca_fingerprint, AppState,
+};
 
 const DEFAULT_TTL_HOURS: i64 = 1;
 const MAX_TTL_HOURS: i64 = 24 * 7;
+const DEFAULT_GATEWAY_PORT: &str = "8000";
 const ROLE_WORKER: &str = "worker";
 const ACTIVE_WORKLOAD_STATUSES: [&str; 3] = ["pending", "scheduled", "running"];
 
@@ -60,6 +63,18 @@ fn gateway_host(headers: &HeaderMap) -> Result<&str, ApiError> {
         ));
     }
     Ok(host)
+}
+
+fn join_host(headers: &HeaderMap) -> Result<String, ApiError> {
+    let Some(vip) = ClusterVip::from_env() else {
+        return gateway_host(headers).map(str::to_string);
+    };
+    let port = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|host| host.rsplit_once(':'))
+        .map_or(DEFAULT_GATEWAY_PORT, |(_, port)| port);
+    Ok(format!("{}:{port}", vip.address))
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -109,7 +124,7 @@ pub async fn create_join_token(
         ));
     }
     let role = join_role(request.role)?;
-    let host = gateway_host(&headers)?;
+    let host = join_host(&headers)?;
     let fingerprint = ca_fingerprint()
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "cluster CA unavailable"))?;
 
