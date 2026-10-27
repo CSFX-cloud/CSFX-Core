@@ -30,6 +30,8 @@ const LOCAL_STATE_DIRS: [&str; 6] = [
     "/var/lib/csfx-garage/meta",
     "/var/lib/csfx-garage/data",
 ];
+const AGENT_JOIN_ENV_PATH: &str = "/etc/csfx/agent-join.env";
+const AGENT_UNIT: &str = "csfx-agent.service";
 const ETCD_UNIT: &str = "etcd.service";
 const CONTROL_PLANE_TARGET: &str = "csfx-cp.target";
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -85,7 +87,9 @@ async fn promote(gateway_url: &str) -> Result<()> {
     wait_for_promotion(&client, &api_key).await?;
     info!("etcd member promoted to voter");
     start_unit(CONTROL_PLANE_TARGET).await?;
-    std::fs::remove_file(PROMOTE_MARKER).context("Failed to remove promote marker")
+    std::fs::remove_file(PROMOTE_MARKER).context("Failed to remove promote marker")?;
+    std::fs::remove_file(AGENT_JOIN_ENV_PATH).context("Failed to remove agent join env")?;
+    systemctl("restart", AGENT_UNIT).await
 }
 
 async fn wait_for_promotion(client: &ApiClient, api_key: &str) -> Result<()> {
@@ -164,15 +168,19 @@ async fn grant_group(group: &str, paths: &[&str]) -> Result<()> {
 }
 
 async fn start_unit(unit: &str) -> Result<()> {
+    systemctl("start", unit).await
+}
+
+async fn systemctl(action: &str, unit: &str) -> Result<()> {
     let status = Command::new("systemctl")
-        .arg("start")
+        .arg(action)
         .arg(unit)
         .status()
         .await
         .context("Failed to run systemctl")?;
     if !status.success() {
-        warn!(unit, "unit did not start cleanly");
-        bail!("systemctl start failed unit={unit}");
+        warn!(action, unit, "systemctl action failed");
+        bail!("systemctl {action} failed unit={unit}");
     }
     Ok(())
 }
