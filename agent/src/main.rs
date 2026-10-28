@@ -8,6 +8,7 @@ mod firecracker;
 mod join;
 mod journal;
 mod master_join;
+mod mgmt_up;
 mod nftables;
 mod pki;
 mod qemu;
@@ -68,6 +69,10 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
 
+    if std::env::args().nth(1).as_deref() == Some("--mgmt-up") {
+        return mgmt_up::run().await;
+    }
+
     let join_ticket = std::env::var("CSFX_JOIN")
         .ok()
         .filter(|value| !value.is_empty())
@@ -82,6 +87,9 @@ async fn main() -> Result<()> {
         None => std::env::var("CSFX_GATEWAY_URL")
             .context("CSFX_GATEWAY_URL environment variable is required")?,
     };
+    let gateway_url = config::load_gateway_override()
+        .filter(|_| !config::is_loopback_url(&gateway_url))
+        .unwrap_or(gateway_url);
 
     if let Some(username) = std::env::args()
         .nth(1)
@@ -438,6 +446,8 @@ async fn reconcile_tick(
             if ssh_control::control_enabled() {
                 ssh_control::apply(resp.ssh_enabled).await;
             }
+
+            adopt_advertised_gateway(client.gateway_url(), resp.gateway_url.as_deref());
 
             if let Some(count) = resp.post_update_heartbeats {
                 update_watch::write_heartbeat_counter(count).await;
@@ -1048,6 +1058,18 @@ async fn register_service_dns(
     }
 }
 
+fn adopt_advertised_gateway(current: &str, advertised: Option<&str>) {
+    let Some(advertised) =
+        advertised.filter(|url| *url != current && !config::is_loopback_url(current))
+    else {
+        return;
+    };
+    match config::save_gateway_override(advertised) {
+        Ok(()) => info!(gateway_url = %advertised, "Adopted advertised gateway address"),
+        Err(e) => warn!(error = %e, "Failed to store advertised gateway address"),
+    }
+}
+
 async fn sync_wireguard_peers(
     client: &client::ApiClient,
     api_key: &str,
@@ -1099,17 +1121,13 @@ async fn sync_mgmt_peers(
     };
     wg_peers.extend(fetch_vpn_wg_peers(client, api_key, resource_group_ids).await);
 
-    if let Err(e) = wireguard::reconcile_peers(wireguard::MGMT_INTERFACE_NAME, &wg_peers).await {
+    if let Err(e) = wireguard::apply_mgmt_peers(&wg_peers).await {
         warn!(error = %e, "Failed to sync management WireGuard peers");
         return;
     }
 
-    for peer in &wg_peers {
-        if let Err(e) =
-            wireguard::set_route(wireguard::MGMT_INTERFACE_NAME, &peer.allowed_ips).await
-        {
-            warn!(allowed_ips = %peer.allowed_ips, error = %e, "Failed to set management route");
-        }
+    if let Err(e) = wireguard::save_peer_cache(&wg_peers) {
+        warn!(error = %e, "Failed to cache management WireGuard peers");
     }
 }
 

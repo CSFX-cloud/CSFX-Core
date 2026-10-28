@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 const CREDENTIAL_GARAGE_ENV: &str = "garage-env";
@@ -23,6 +23,46 @@ pub enum BundleError {
     MissingCa,
     #[error("garage rpc secret is missing from the garage environment file")]
     MissingGarageSecret,
+}
+
+const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
+const VIP_PREFIX_VAR: &str = "CSFX_VIP_PREFIX";
+const VIP_ROUTER_ID_VAR: &str = "CSFX_VIP_ROUTER_ID";
+const DEFAULT_VIP_PREFIX: u8 = 24;
+const DEFAULT_VIP_ROUTER_ID: u8 = 51;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClusterVip {
+    pub address: String,
+    pub prefix_length: u8,
+    pub router_id: u8,
+}
+
+impl ClusterVip {
+    pub fn from_env() -> Option<Self> {
+        Self::from_values(
+            std::env::var(VIP_ADDRESS_VAR).ok(),
+            std::env::var(VIP_PREFIX_VAR).ok(),
+            std::env::var(VIP_ROUTER_ID_VAR).ok(),
+        )
+    }
+
+    pub fn from_values(
+        address: Option<String>,
+        prefix_length: Option<String>,
+        router_id: Option<String>,
+    ) -> Option<Self> {
+        let address = address.filter(|value| !value.is_empty())?;
+        Some(Self {
+            address,
+            prefix_length: parse_or(prefix_length, DEFAULT_VIP_PREFIX),
+            router_id: parse_or(router_id, DEFAULT_VIP_ROUTER_ID),
+        })
+    }
+}
+
+fn parse_or(value: Option<String>, default: u8) -> u8 {
+    value.and_then(|raw| raw.parse().ok()).unwrap_or(default)
 }
 
 #[derive(Debug, Serialize)]
@@ -88,6 +128,27 @@ pub fn database_password(database_url: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vip_defaults_apply_when_only_the_address_is_set() {
+        let vip = ClusterVip::from_values(Some("192.168.1.50".into()), None, None).unwrap();
+        assert_eq!(vip.prefix_length, 24);
+        assert_eq!(vip.router_id, 51);
+    }
+
+    #[test]
+    fn vip_is_absent_without_an_address() {
+        assert!(ClusterVip::from_values(None, Some("16".into()), None).is_none());
+        assert!(ClusterVip::from_values(Some(String::new()), None, None).is_none());
+    }
+
+    #[test]
+    fn vip_uses_explicit_values() {
+        let vip =
+            ClusterVip::from_values(Some("10.0.0.5".into()), Some("16".into()), Some("7".into()))
+                .unwrap();
+        assert_eq!((vip.prefix_length, vip.router_id), (16, 7));
+    }
 
     #[test]
     fn extracts_database_password() {

@@ -1,14 +1,14 @@
 use anyhow::{bail, Context, Result};
 use std::fs::{OpenOptions, Permissions};
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{chown, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::client::{ApiClient, MasterBundle};
+use crate::client::{ApiClient, ClusterVip, MasterBundle};
 use crate::{config, pki};
 
 const PENDING_MARKER: &str = "/etc/csfx/master-join-pending";
@@ -18,11 +18,24 @@ const CA_CERT_PATH: &str = "/var/lib/csfx-cp/ca.crt";
 const CA_KEY_PATH: &str = "/var/lib/csfx-cp/ca.key";
 const CP_ENV_PATH: &str = "/etc/csfx/cp.env";
 const GARAGE_ENV_PATH: &str = "/etc/csfx/garage.env";
+const CLUSTER_ENV_PATH: &str = "/etc/csfx/cluster.env";
 const ETCD_JOIN_ENV_PATH: &str = "/etc/csfx/etcd-join.env";
 const PATRONI_SUPERUSER_PATH: &str = "/etc/csfx/patroni-superuser-password";
 const PATRONI_REPLICATION_PATH: &str = "/etc/csfx/patroni-replication-password";
 const PATRONI_GROUP: &str = "patroni";
-const LOCAL_STATE_DIRS: [&str; 3] = ["/var/lib/etcd", "/var/lib/patroni", "/var/lib/csfx-cp"];
+const ETCD_DATA_DIR: &str = "/var/lib/etcd";
+const LOCAL_STATE_DIRS: [&str; 6] = [
+    ETCD_DATA_DIR,
+    "/var/lib/patroni",
+    "/var/lib/postgresql",
+    "/var/lib/csfx-cp",
+    "/var/lib/csfx-garage/meta",
+    "/var/lib/csfx-garage/data",
+];
+const AGENT_JOIN_ENV_PATH: &str = "/etc/csfx/agent-join.env";
+const GARAGE_HA_REPLICATION_FACTOR: u32 = 3;
+const AGENT_UNIT: &str = "csfx-agent.service";
+const ETCD_UNIT: &str = "etcd.service";
 const CONTROL_PLANE_TARGET: &str = "csfx-cp.target";
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const REGISTRATION_ATTEMPTS: u32 = 120;
@@ -68,16 +81,29 @@ async fn join(gateway_url: &str) -> Result<()> {
     reset_local_control_plane()?;
     apply_bundle(&bundle).await?;
     write_file(PROMOTE_MARKER, "", 0o600)?;
-    std::fs::remove_file(PENDING_MARKER).context("Failed to remove join marker")?;
-    start_control_plane().await
+    std::fs::remove_file(PENDING_MARKER).context("Failed to remove join marker")
 }
 
 async fn promote(gateway_url: &str) -> Result<()> {
     let (client, api_key) = authenticated_client(gateway_url).await?;
+    start_fresh_etcd().await?;
+    wait_for_promotion(&client, &api_key).await?;
+    info!("etcd member promoted to voter");
+    start_unit(CONTROL_PLANE_TARGET).await?;
+    std::fs::remove_file(PROMOTE_MARKER).context("Failed to remove promote marker")?;
+    std::fs::remove_file(AGENT_JOIN_ENV_PATH).context("Failed to remove agent join env")?;
+    systemctl("restart", AGENT_UNIT).await
+}
+
+async fn start_fresh_etcd() -> Result<()> {
+    systemctl("stop", ETCD_UNIT).await?;
+    clear_directory(ETCD_DATA_DIR)?;
+    start_unit(ETCD_UNIT).await
+}
+
+async fn wait_for_promotion(client: &ApiClient, api_key: &str) -> Result<()> {
     for _ in 0..PROMOTE_ATTEMPTS {
-        if client.promote_master(&api_key).await? {
-            std::fs::remove_file(PROMOTE_MARKER).context("Failed to remove promote marker")?;
-            info!("etcd member promoted to voter");
+        if client.promote_master(api_key).await? {
             return Ok(());
         }
         sleep(POLL_INTERVAL).await;
@@ -116,9 +142,11 @@ fn clear_directory(path: &str) -> Result<()> {
 async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
     write_file(CA_CERT_PATH, &bundle.ca_cert_pem, 0o644)?;
     write_file(CA_KEY_PATH, &bundle.ca_key_pem, 0o600)?;
+    adopt_directory_owner(&[CA_CERT_PATH, CA_KEY_PATH])?;
     write_file(CP_ENV_PATH, &render_cp_env(bundle), 0o600)?;
     write_file(GARAGE_ENV_PATH, &render_garage_env(bundle), 0o600)?;
     write_file(ETCD_JOIN_ENV_PATH, &render_etcd_env(bundle), 0o600)?;
+    apply_vip(bundle.vip.as_ref())?;
     write_file(
         PATRONI_SUPERUSER_PATH,
         &bundle.patroni_superuser_password,
@@ -137,6 +165,26 @@ async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
     write_file(SETUP_DONE_FILE, "", 0o600)
 }
 
+fn apply_vip(vip: Option<&ClusterVip>) -> Result<()> {
+    match vip {
+        Some(vip) => write_file(CLUSTER_ENV_PATH, &render_cluster_env(vip), 0o644),
+        None => Ok(()),
+    }
+}
+
+fn adopt_directory_owner(paths: &[&str]) -> Result<()> {
+    for path in paths {
+        let Some(parent) = Path::new(path).parent() else {
+            continue;
+        };
+        let owner = std::fs::metadata(parent)
+            .with_context(|| format!("Failed to stat {}", parent.display()))?;
+        chown(path, Some(owner.uid()), Some(owner.gid()))
+            .with_context(|| format!("Failed to change owner of {path}"))?;
+    }
+    Ok(())
+}
+
 async fn grant_group(group: &str, paths: &[&str]) -> Result<()> {
     let status = Command::new("chgrp")
         .arg(group)
@@ -150,19 +198,20 @@ async fn grant_group(group: &str, paths: &[&str]) -> Result<()> {
     Ok(())
 }
 
-async fn start_control_plane() -> Result<()> {
+async fn start_unit(unit: &str) -> Result<()> {
+    systemctl("start", unit).await
+}
+
+async fn systemctl(action: &str, unit: &str) -> Result<()> {
     let status = Command::new("systemctl")
-        .arg("start")
-        .arg(CONTROL_PLANE_TARGET)
+        .arg(action)
+        .arg(unit)
         .status()
         .await
         .context("Failed to run systemctl")?;
     if !status.success() {
-        warn!(
-            target = CONTROL_PLANE_TARGET,
-            "control plane target did not start cleanly"
-        );
-        bail!("systemctl start failed target={CONTROL_PLANE_TARGET}");
+        warn!(action, unit, "systemctl action failed");
+        bail!("systemctl {action} failed unit={unit}");
     }
     Ok(())
 }
@@ -196,9 +245,19 @@ fn render_cp_env(bundle: &MasterBundle) -> String {
 }
 
 fn render_garage_env(bundle: &MasterBundle) -> String {
+    let replication = bundle.vip.as_ref().map_or_else(String::new, |_| {
+        format!("GARAGE_REPLICATION_FACTOR={GARAGE_HA_REPLICATION_FACTOR}\n")
+    });
     format!(
-        "GARAGE_RPC_SECRET={}\nGARAGE_ADMIN_TOKEN={}\n",
+        "GARAGE_RPC_SECRET={}\nGARAGE_ADMIN_TOKEN={}\n{replication}",
         bundle.garage_rpc_secret, bundle.garage_admin_token
+    )
+}
+
+fn render_cluster_env(vip: &ClusterVip) -> String {
+    format!(
+        "CSFX_VIP_ADDRESS={}\nCSFX_VIP_PREFIX={}\nCSFX_VIP_ROUTER_ID={}\nTLS_SANS=localhost,127.0.0.1,{}\nCSFX_LOCAL_DNS_ADDRESSES={}\n",
+        vip.address, vip.prefix_length, vip.router_id, vip.address, vip.address
     )
 }
 
@@ -227,6 +286,7 @@ mod tests {
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),
+            vip: None,
         }
     }
 
@@ -247,6 +307,30 @@ mod tests {
         assert!(env.contains(
             "ETCD_INITIAL_CLUSTER=node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380\n"
         ));
+    }
+
+    #[test]
+    fn cluster_env_carries_vip_and_tls_names() {
+        let vip = ClusterVip {
+            address: "192.168.1.50".into(),
+            prefix_length: 24,
+            router_id: 51,
+        };
+        assert_eq!(
+            render_cluster_env(&vip),
+            "CSFX_VIP_ADDRESS=192.168.1.50\nCSFX_VIP_PREFIX=24\nCSFX_VIP_ROUTER_ID=51\nTLS_SANS=localhost,127.0.0.1,192.168.1.50\nCSFX_LOCAL_DNS_ADDRESSES=192.168.1.50\n"
+        );
+    }
+
+    #[test]
+    fn garage_env_requests_full_replication_behind_a_vip() {
+        let mut bundle = bundle();
+        bundle.vip = Some(ClusterVip {
+            address: "192.168.1.50".into(),
+            prefix_length: 24,
+            router_id: 51,
+        });
+        assert!(render_garage_env(&bundle).ends_with("GARAGE_REPLICATION_FACTOR=3\n"));
     }
 
     #[test]

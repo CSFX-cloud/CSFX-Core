@@ -8,15 +8,16 @@ use axum::{
 use chrono::{Duration, Utc};
 use entity::entities::agents;
 use etcd_client::Client;
-use sea_orm::EntityTrait;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::cluster::{error, internal, ApiError};
 use crate::{
     auth::{agent::AgentApiKey, rbac::CanManageSystem},
-    cluster_bundle::{BundleError, ClusterSecrets},
+    cluster_bundle::{BundleError, ClusterSecrets, ClusterVip},
     etcd_members::{self, EtcdMember},
     tls, AppState,
 };
@@ -35,6 +36,7 @@ pub struct JoinBundle {
     etcd_member_id: u64,
     etcd_name: String,
     etcd_initial_cluster: String,
+    vip: Option<ClusterVip>,
 }
 
 pub fn member_name(agent_id: Uuid) -> String {
@@ -64,7 +66,7 @@ async fn load_agent(state: &AppState, agent_id: Uuid) -> Result<agents::Model, A
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "node not found"))
 }
 
-async fn joining_master(state: &AppState, agent_id: Uuid) -> Result<agents::Model, ApiError> {
+async fn registered_master(state: &AppState, agent_id: Uuid) -> Result<agents::Model, ApiError> {
     let node = load_agent(state, agent_id).await?;
     if node.role != ROLE_MASTER {
         return Err(error(
@@ -72,6 +74,11 @@ async fn joining_master(state: &AppState, agent_id: Uuid) -> Result<agents::Mode
             "node was not registered as master",
         ));
     }
+    Ok(node)
+}
+
+async fn joining_master(state: &AppState, agent_id: Uuid) -> Result<agents::Model, ApiError> {
+    let node = registered_master(state, agent_id).await?;
     let age = Utc::now().naive_utc() - node.registered_at;
     if age > Duration::minutes(JOIN_WINDOW_MINUTES) {
         return Err(error(StatusCode::FORBIDDEN, "master join window expired"));
@@ -83,6 +90,19 @@ fn tunnel_ip(node: &agents::Model) -> Result<&str, ApiError> {
     node.wg_tunnel_ip
         .as_deref()
         .ok_or_else(|| error(StatusCode::CONFLICT, "node has no management tunnel ip"))
+}
+
+async fn master_peer_urls(state: &AppState) -> Result<HashSet<String>, ApiError> {
+    let masters = agents::Entity::find()
+        .filter(agents::Column::Role.eq(ROLE_MASTER))
+        .all(&state.db_conn)
+        .await
+        .map_err(internal)?;
+    Ok(masters
+        .iter()
+        .filter_map(|master| master.wg_tunnel_ip.as_deref())
+        .map(peer_url)
+        .collect())
 }
 
 fn find_member<'a>(members: &'a [EtcdMember], url: &str) -> Option<&'a EtcdMember> {
@@ -113,10 +133,38 @@ pub async fn join_master(
         ));
     }
 
+    if etcd_members::has_loopback_voter(&members) {
+        return Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "existing master still advertises a loopback peer url",
+        ));
+    }
+    let known_urls = master_peer_urls(&state).await?;
+    let stale = etcd_members::stale_learner_ids(&members, &known_urls);
+    for id in &stale {
+        etcd_members::remove(&mut etcd, *id)
+            .await
+            .map_err(internal)?;
+    }
+    let active: Vec<_> = members
+        .iter()
+        .filter(|member| !stale.contains(&member.id))
+        .cloned()
+        .collect();
+    if etcd_members::other_learner_pending(&active, &url) {
+        return Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "another master join is still in progress",
+        ));
+    }
+
     let name = member_name(node.id);
     let plan = etcd_members::add_learner(&mut etcd, &name, &url)
         .await
-        .map_err(internal)?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, agent_id = %node.id, "etcd refused the learner");
+            error(StatusCode::CONFLICT, "etcd refused the new learner")
+        })?;
 
     tracing::info!(agent_id = %node.id, member_id = plan.member_id, "master join bundle issued");
 
@@ -127,6 +175,7 @@ pub async fn join_master(
         etcd_member_id: plan.member_id,
         etcd_name: name,
         etcd_initial_cluster: plan.initial_cluster,
+        vip: ClusterVip::from_env(),
     }))
 }
 
@@ -134,7 +183,7 @@ pub async fn promote_master(
     agent: AgentApiKey,
     State(state): State<AppState>,
 ) -> Result<StatusCode, ApiError> {
-    let node = joining_master(&state, agent.agent_id).await?;
+    let node = registered_master(&state, agent.agent_id).await?;
     let url = peer_url(tunnel_ip(&node)?);
 
     let mut etcd = etcd_client().await?;

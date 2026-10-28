@@ -5,6 +5,7 @@ LIMA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "$LIMA_DIR/../.." && pwd)"
 INFRA_DIR="${CSFX_INFRA_DIR:-$(cd "$CORE_DIR/../CSFX-Infra" && pwd)}"
 STATE_DIR="${CSFX_LIMA_STATE:-$HOME/.csfx-lima}"
+LIMA_STORE="${LIMA_HOME:-$HOME/.lima}"
 TARGET_TRIPLE="aarch64-unknown-linux-musl"
 BUILD_DIR="$CORE_DIR/target/lima"
 UI_DIR="$CORE_DIR/app"
@@ -118,7 +119,7 @@ create_node() {
 ensure_ui_mount() {
   local node="$1" name
   name="$(instance "$node")"
-  grep -q /csfx-ui "${LIMA_HOME:-$HOME/.lima}/$name/lima.yaml" && return 0
+  grep -q /csfx-ui "$LIMA_STORE/$name/lima.yaml" && return 0
   log INFO "adding ui mount node=$node"
   [ "$(node_state "$node")" = Running ] && limactl stop "$name" > /dev/null
   limactl edit --tty=false --set ".mounts += [{\"location\": \"$UI_BUILD_DIR\", \"mountPoint\": \"/csfx-ui\"}]" "$name" > /dev/null
@@ -140,6 +141,21 @@ rebuild_node() {
   tail -n 40 "$rebuild_log" >&2
   log ERROR "rebuild failed node=$1"
   return 1
+}
+
+copy_closure() {
+  local node="$1" out
+  out="$(on_node cp1 nix build --no-link --print-out-paths "path:/csfx-dev#nixosConfigurations.$node.config.system.build.toplevel" $(flake_overrides))"
+  log INFO "copying closure node=$node"
+  on_node cp1 sh -c "nix-store --export \$(nix-store --query --requisites $out)" | on_node "$node" sudo nix-store --import > /dev/null
+}
+
+prebuild_on_first() {
+  local node
+  rebuild_node cp1 boot
+  for node in $(nodes); do
+    [ "$node" = cp1 ] || copy_closure "$node"
+  done
 }
 
 rustup_path() {
@@ -219,6 +235,15 @@ wait_gateway() {
   die "gateway not ready port=$API_PORT"
 }
 
+wait_node_gateway() {
+  local address="$1" attempt
+  for attempt in $(seq 1 60); do
+    curl -skf -m 3 "https://$address:$API_PORT/api/public-key" > /dev/null && return 0
+    sleep 5
+  done
+  die "gateway not ready address=$address"
+}
+
 setup_code() {
   on_node "$1" sudo cat /run/csfx/setup-code
 }
@@ -236,11 +261,13 @@ wait_running() {
 }
 
 join_node() {
-  local node="$1" role="$2" ip join_string
+  local node="$1" role="$2" ip node_address join_string
   ip="$(node_ip cp1)"
+  node_address="$(node_ip "$node")"
+  wait_node_gateway "$node_address"
   join_string="$(CSFX_HOST="$ip:$API_PORT" "$LIMA_DIR/seed.sh" join-string "$role")"
   log INFO "joining node=$node role=$role"
-  curl -skf -X POST "https://$(node_ip "$node"):$API_PORT/api/setup/join" \
+  curl -skf -X POST "https://$node_address:$API_PORT/api/setup/join" \
     -H 'Content-Type: application/json' \
     -d "$(jq -n --arg code "$(setup_code "$node")" --arg join "$join_string" '{setup_code: $code, join_string: $join}')" > /dev/null
   sleep 10
@@ -249,6 +276,7 @@ join_node() {
 
 bootstrap() {
   local node
+  prebuild_on_first
   on_all_nodes rebuild_node_with_action boot
   stop_all
   start_all
@@ -302,8 +330,8 @@ snapshot() {
   rm -rf "$target"
   mkdir -p "$target"
   for node in $(nodes); do
-    cp -c "${LIMA_HOME:-$HOME/.lima}/$(instance "$node")/diffdisk" "$target/$node.diffdisk"
-    cp -c "${LIMA_HOME:-$HOME/.lima}/_disks/$(instance "$node")-data/datadisk" "$target/$node.datadisk"
+    cp -c "$LIMA_STORE/$(instance "$node")/disk" "$target/$node.disk"
+    cp -c "$LIMA_STORE/_disks/$(instance "$node")-data/datadisk" "$target/$node.datadisk"
   done
   start_all
   log INFO "snapshot saved name=$1"
@@ -315,8 +343,8 @@ restore() {
   [ -d "$source" ] || die "snapshot missing name=$1"
   stop_all
   for node in $(nodes); do
-    cp -c "$source/$node.diffdisk" "${LIMA_HOME:-$HOME/.lima}/$(instance "$node")/diffdisk"
-    cp -c "$source/$node.datadisk" "${LIMA_HOME:-$HOME/.lima}/_disks/$(instance "$node")-data/datadisk"
+    cp -c "$source/$node.disk" "$LIMA_STORE/$(instance "$node")/disk"
+    cp -c "$source/$node.datadisk" "$LIMA_STORE/_disks/$(instance "$node")-data/datadisk"
   done
   start_all
   log INFO "snapshot restored name=$1"

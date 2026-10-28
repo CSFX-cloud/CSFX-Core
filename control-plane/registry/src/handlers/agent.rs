@@ -13,6 +13,9 @@ use crate::{
     services::registry::RegisterAgentParams,
 };
 
+const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
+const GATEWAY_PORT: u16 = 8000;
+
 pub async fn register_agent(
     State(state): State<AppState>,
     Json(request): Json<RegisterRequest>,
@@ -257,6 +260,7 @@ pub async fn heartbeat(
                 desired_flake_rev,
                 post_update_heartbeats,
                 ssh_enabled: read_ssh_enabled(&state).await,
+                gateway_url: advertised_gateway_url(std::env::var(VIP_ADDRESS_VAR).ok().as_deref()),
             }))
         }
         Err(e) => Err((
@@ -266,6 +270,12 @@ pub async fn heartbeat(
             }),
         )),
     }
+}
+
+fn advertised_gateway_url(vip_address: Option<&str>) -> Option<String> {
+    vip_address
+        .filter(|address| !address.is_empty())
+        .map(|address| format!("https://{address}:{GATEWAY_PORT}"))
 }
 
 async fn read_ssh_enabled(state: &AppState) -> bool {
@@ -407,4 +417,23 @@ async fn forward_metrics(
         "agent_handler",
         &format!("Metrics forward permanently failed agent_id={}", agent_id)
     );
+}
+
+#[cfg(test)]
+mod gateway_url_tests {
+    use super::advertised_gateway_url;
+
+    #[test]
+    fn advertises_the_vip_when_configured() {
+        assert_eq!(
+            advertised_gateway_url(Some("192.168.1.50")).as_deref(),
+            Some("https://192.168.1.50:8000")
+        );
+    }
+
+    #[test]
+    fn advertises_nothing_without_a_vip() {
+        assert!(advertised_gateway_url(None).is_none());
+        assert!(advertised_gateway_url(Some("")).is_none());
+    }
 }

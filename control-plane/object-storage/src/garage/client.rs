@@ -44,6 +44,8 @@ pub struct GarageKey {
 #[derive(Debug, Deserialize)]
 pub struct ClusterStatusNode {
     pub id: String,
+    #[serde(default)]
+    pub addr: Option<String>,
     #[serde(rename = "isUp", default)]
     pub is_up: bool,
     #[serde(default)]
@@ -56,6 +58,11 @@ pub struct ClusterStatusNodeRole {
     pub zone: String,
     #[serde(default)]
     pub capacity: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeInfoResponse {
+    success: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -239,6 +246,26 @@ impl GarageClient {
             .json::<ClusterStatus>()
             .await
             .context("failed to parse get_cluster_status response")
+    }
+
+    pub async fn get_self_node_id(&self) -> Result<String> {
+        let response = self
+            .http
+            .get(self.url("/v2/GetNodeInfo?node=self"))
+            .bearer_auth(&self.admin_token)
+            .send()
+            .await
+            .context("get_self_node_id request failed")?;
+
+        let response = Self::check_status(response, "get_self_node_id").await?;
+        let info = response
+            .json::<NodeInfoResponse>()
+            .await
+            .context("failed to parse get_self_node_id response")?;
+        info.success
+            .into_keys()
+            .next()
+            .context("garage returned no node info for self")
     }
 
     pub async fn connect_cluster_nodes(&self, node_addrs: &[String]) -> Result<()> {

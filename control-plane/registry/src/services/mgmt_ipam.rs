@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use etcd_client::Client;
+use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp};
 use std::net::Ipv4Addr;
 use uuid::Uuid;
 
@@ -28,16 +28,11 @@ impl MgmtIpamService {
             let ip_str = candidate.to_string();
             let key = format!("{}{}", MGMT_IPAM_PREFIX, ip_str);
 
-            let resp = client
-                .get(key.as_str(), None)
-                .await
-                .context("etcd get failed")?;
-
-            if resp.kvs().is_empty() {
-                client
-                    .put(key.as_str(), agent_id.to_string(), None)
-                    .await
-                    .context("etcd put failed")?;
+            let claim = Txn::new()
+                .when([Compare::create_revision(key.as_str(), CompareOp::Equal, 0)])
+                .and_then([TxnOp::put(key.as_str(), agent_id.to_string(), None)]);
+            let resp = client.txn(claim).await.context("etcd txn failed")?;
+            if resp.succeeded() {
                 return Ok(ip_str);
             }
         }

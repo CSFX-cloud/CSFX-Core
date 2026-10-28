@@ -137,6 +137,7 @@ impl AgentRegistry {
                     params.architecture.clone(),
                     tags_json,
                     None,
+                    params.role.clone(),
                 )
                 .await
                 .map_err(|e| format!("Failed to update existing agent: {}", e))?;

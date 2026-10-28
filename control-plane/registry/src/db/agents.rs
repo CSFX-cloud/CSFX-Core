@@ -30,6 +30,7 @@ pub async fn update_registration(
     architecture: String,
     tags: Option<serde_json::Value>,
     public_key_pem: Option<String>,
+    role: String,
 ) -> Result<agents::Model> {
     let mut agent: agents::ActiveModel = agents::Entity::find_by_id(agent_id)
         .one(db)
@@ -42,6 +43,8 @@ pub async fn update_registration(
     agent.os_version = Set(os_version);
     agent.architecture = Set(architecture);
     agent.status = Set("Online".to_string());
+    agent.role = Set(role);
+    agent.registered_at = Set(chrono::Utc::now().naive_utc());
     agent.last_heartbeat = Set(Some(chrono::Utc::now().naive_utc()));
     agent.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
     if tags.is_some() {

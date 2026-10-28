@@ -1,4 +1,5 @@
 use etcd_client::{Client, Member, MemberAddOptions};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EtcdMember {
@@ -43,6 +44,23 @@ pub fn voter_count(members: &[EtcdMember]) -> usize {
     members.iter().filter(|member| !member.is_learner).count()
 }
 
+pub fn has_loopback_voter(members: &[EtcdMember]) -> bool {
+    members
+        .iter()
+        .filter(|member| !member.is_learner)
+        .flat_map(|member| member.peer_urls.iter())
+        .any(|url| url.contains("//127.0.0.1:") || url.contains("//localhost:"))
+}
+
+pub fn stale_learner_ids(members: &[EtcdMember], known_urls: &HashSet<String>) -> Vec<u64> {
+    members
+        .iter()
+        .filter(|member| member.is_learner)
+        .filter(|member| !member.peer_urls.iter().any(|url| known_urls.contains(url)))
+        .map(|member| member.id)
+        .collect()
+}
+
 pub fn check_removal(members: &[EtcdMember], id: u64) -> Result<(), MembershipError> {
     let member = members
         .iter()
@@ -56,6 +74,13 @@ pub fn check_removal(members: &[EtcdMember], id: u64) -> Result<(), MembershipEr
         return Err(MembershipError::InvalidQuorum(remaining));
     }
     Ok(())
+}
+
+pub fn other_learner_pending(members: &[EtcdMember], url: &str) -> bool {
+    members
+        .iter()
+        .filter(|member| member.is_learner)
+        .any(|member| !member.peer_urls.iter().any(|candidate| candidate == url))
 }
 
 pub fn initial_cluster(members: &[EtcdMember], new_id: u64, new_name: &str) -> String {
@@ -182,6 +207,18 @@ mod tests {
     }
 
     #[test]
+    fn other_learner_blocks_a_second_join() {
+        let mut members = three_voters();
+        members.push(member(4, "", "http://10.100.0.4:2380", true));
+        assert!(other_learner_pending(&members, "http://10.100.0.5:2380"));
+        assert!(!other_learner_pending(&members, "http://10.100.0.4:2380"));
+        assert!(!other_learner_pending(
+            &three_voters(),
+            "http://10.100.0.4:2380"
+        ));
+    }
+
+    #[test]
     fn removal_from_three_voters_is_refused() {
         assert!(matches!(
             check_removal(&three_voters(), 3),
@@ -210,6 +247,28 @@ mod tests {
         let mut members = three_voters();
         members.push(member(4, "", "http://10.100.0.4:2380", true));
         assert!(check_removal(&members, 4).is_ok());
+    }
+
+    #[test]
+    fn loopback_voter_is_detected_but_learner_is_ignored() {
+        let mut members = three_voters();
+        members.push(member(4, "", "http://127.0.0.1:2380", true));
+        assert!(!has_loopback_voter(&members));
+        members[0] = member(1, "a", "http://127.0.0.1:2380", false);
+        assert!(has_loopback_voter(&members));
+    }
+
+    #[test]
+    fn stale_learners_exclude_the_joining_url() {
+        let mut members = three_voters();
+        members.push(member(4, "", "http://10.100.0.4:2380", true));
+        members.push(member(5, "", "http://10.100.0.5:2380", true));
+        members.push(member(6, "named", "http://10.100.0.6:2380", true));
+        let known = HashSet::from([
+            "http://10.100.0.5:2380".to_string(),
+            "http://10.100.0.6:2380".to_string(),
+        ]);
+        assert_eq!(stale_learner_ids(&members, &known), vec![4]);
     }
 
     #[test]
