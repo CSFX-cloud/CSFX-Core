@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { FolderOpen, Trash2 } from "@lucide/svelte";
+    import { FolderOpen, Settings, Trash2 } from "@lucide/svelte";
     import { goto } from "$app/navigation";
     import type { Bucket } from "$lib/api/resource-groups";
     import ActionMenu from "$lib/components/resource-group/action-menu.svelte";
@@ -8,10 +8,13 @@
     import { fmtBytes } from "$lib/utils/format";
     import { badgeClass, statusLabel } from "$lib/utils/tone";
 
-    let { b, onOpen, onDelete }: { b: Bucket; onOpen: () => void; onDelete: () => void } = $props();
+    let { b, onDelete }: { b: Bucket; onDelete: () => void } = $props();
+
+    const browse = () => goto(`/buckets/${b.id}`);
 
     const actions = $derived<MenuAction[]>([
-        { label: "Browse", icon: FolderOpen, onselect: () => goto(`/buckets/${b.id}`) },
+        { label: "Browse", icon: FolderOpen, onselect: browse },
+        { label: "Settings", icon: Settings, onselect: () => goto(`/buckets/${b.id}?tab=settings`) },
         { label: "Delete", icon: Trash2, onselect: onDelete, danger: true },
     ]);
 </script>
@@ -21,7 +24,7 @@
         <div class="rs-name">
             <ServiceIcon name="object-storage" />
             <span class="rs-text">
-                <button class="rs-link" type="button" onclick={onOpen}>{b.name}</button>
+                <button class="rs-link" type="button" onclick={browse}>{b.name}</button>
                 <span>{b.global_alias}</span>
             </span>
         </div>
