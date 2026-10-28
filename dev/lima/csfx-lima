@@ -235,6 +235,15 @@ wait_gateway() {
   die "gateway not ready port=$API_PORT"
 }
 
+wait_node_gateway() {
+  local address="$1" attempt
+  for attempt in $(seq 1 60); do
+    curl -skf -m 3 "https://$address:$API_PORT/api/public-key" > /dev/null && return 0
+    sleep 5
+  done
+  die "gateway not ready address=$address"
+}
+
 setup_code() {
   on_node "$1" sudo cat /run/csfx/setup-code
 }
@@ -252,11 +261,13 @@ wait_running() {
 }
 
 join_node() {
-  local node="$1" role="$2" ip join_string
+  local node="$1" role="$2" ip node_address join_string
   ip="$(node_ip cp1)"
+  node_address="$(node_ip "$node")"
+  wait_node_gateway "$node_address"
   join_string="$(CSFX_HOST="$ip:$API_PORT" "$LIMA_DIR/seed.sh" join-string "$role")"
   log INFO "joining node=$node role=$role"
-  curl -skf -X POST "https://$(node_ip "$node"):$API_PORT/api/setup/join" \
+  curl -skf -X POST "https://$node_address:$API_PORT/api/setup/join" \
     -H 'Content-Type: application/json' \
     -d "$(jq -n --arg code "$(setup_code "$node")" --arg join "$join_string" '{setup_code: $code, join_string: $join}')" > /dev/null
   sleep 10
