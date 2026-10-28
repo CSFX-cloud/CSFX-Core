@@ -330,7 +330,7 @@ snapshot() {
   rm -rf "$target"
   mkdir -p "$target"
   for node in $(nodes); do
-    cp -c "$LIMA_STORE/$(instance "$node")/diffdisk" "$target/$node.diffdisk"
+    cp -c "$LIMA_STORE/$(instance "$node")/disk" "$target/$node.disk"
     cp -c "$LIMA_STORE/_disks/$(instance "$node")-data/datadisk" "$target/$node.datadisk"
   done
   start_all
@@ -343,7 +343,7 @@ restore() {
   [ -d "$source" ] || die "snapshot missing name=$1"
   stop_all
   for node in $(nodes); do
-    cp -c "$source/$node.diffdisk" "$LIMA_STORE/$(instance "$node")/diffdisk"
+    cp -c "$source/$node.disk" "$LIMA_STORE/$(instance "$node")/disk"
     cp -c "$source/$node.datadisk" "$LIMA_STORE/_disks/$(instance "$node")-data/datadisk"
   done
   start_all
