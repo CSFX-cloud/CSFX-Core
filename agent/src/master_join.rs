@@ -33,6 +33,7 @@ const LOCAL_STATE_DIRS: [&str; 6] = [
     "/var/lib/csfx-garage/data",
 ];
 const AGENT_JOIN_ENV_PATH: &str = "/etc/csfx/agent-join.env";
+const GARAGE_HA_REPLICATION_FACTOR: u32 = 3;
 const AGENT_UNIT: &str = "csfx-agent.service";
 const ETCD_UNIT: &str = "etcd.service";
 const CONTROL_PLANE_TARGET: &str = "csfx-cp.target";
@@ -244,8 +245,11 @@ fn render_cp_env(bundle: &MasterBundle) -> String {
 }
 
 fn render_garage_env(bundle: &MasterBundle) -> String {
+    let replication = bundle.vip.as_ref().map_or_else(String::new, |_| {
+        format!("GARAGE_REPLICATION_FACTOR={GARAGE_HA_REPLICATION_FACTOR}\n")
+    });
     format!(
-        "GARAGE_RPC_SECRET={}\nGARAGE_ADMIN_TOKEN={}\n",
+        "GARAGE_RPC_SECRET={}\nGARAGE_ADMIN_TOKEN={}\n{replication}",
         bundle.garage_rpc_secret, bundle.garage_admin_token
     )
 }
@@ -316,6 +320,17 @@ mod tests {
             render_cluster_env(&vip),
             "CSFX_VIP_ADDRESS=192.168.1.50\nCSFX_VIP_PREFIX=24\nCSFX_VIP_ROUTER_ID=51\nTLS_SANS=localhost,127.0.0.1,192.168.1.50\nCSFX_LOCAL_DNS_ADDRESSES=192.168.1.50\n"
         );
+    }
+
+    #[test]
+    fn garage_env_requests_full_replication_behind_a_vip() {
+        let mut bundle = bundle();
+        bundle.vip = Some(ClusterVip {
+            address: "192.168.1.50".into(),
+            prefix_length: 24,
+            router_id: 51,
+        });
+        assert!(render_garage_env(&bundle).ends_with("GARAGE_REPLICATION_FACTOR=3\n"));
     }
 
     #[test]
