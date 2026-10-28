@@ -1,8 +1,9 @@
 use anyhow::Result;
 use entity::entities::{agents, garage_nodes};
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use shared::leader::LeaderLease;
 use tokio::time::{sleep, Duration};
+use uuid::Uuid;
 
 use crate::{
     db::garage_nodes as garage_nodes_db,
@@ -174,6 +175,17 @@ fn available_capacity_bytes(data_dir: &str) -> Option<i64> {
     }
 }
 
+async fn agent_id_for_addr(db: &DatabaseConnection, addr: Option<&str>) -> Result<Option<Uuid>> {
+    let Some((ip, _port)) = addr.and_then(|addr| addr.rsplit_once(':')) else {
+        return Ok(None);
+    };
+    let agent = agents::Entity::find()
+        .filter(agents::Column::WgTunnelIp.eq(ip))
+        .one(db)
+        .await?;
+    Ok(agent.map(|agent| agent.id))
+}
+
 pub async fn register_self_as_node(
     db: &DatabaseConnection,
     garage: &GarageClient,
@@ -181,16 +193,23 @@ pub async fn register_self_as_node(
     data_dir: &str,
 ) {
     for attempt in 1..=SELF_REGISTER_MAX_ATTEMPTS {
-        match garage.get_cluster_status().await {
-            Ok(status) => {
-                let Some(self_node) = status.nodes.first() else {
+        let status = match garage.get_cluster_status().await {
+            Ok(status) => garage.get_self_node_id().await.map(|id| (status, id)),
+            Err(e) => Err(e),
+        };
+        match status {
+            Ok((status, self_id)) => {
+                let Some(self_node) = status.nodes.iter().find(|node| node.id == self_id) else {
                     log_warn!(
                         "garage::layout",
-                        "garage cluster status returned no nodes yet"
+                        "garage cluster status does not list the local node yet"
                     );
                     sleep(Duration::from_secs(SELF_REGISTER_RETRY_SECONDS)).await;
                     continue;
                 };
+                let agent_id = agent_id_for_addr(db, self_node.addr.as_deref())
+                    .await
+                    .unwrap_or(None);
 
                 let capacity_bytes = self_node
                     .role
@@ -207,6 +226,7 @@ pub async fn register_self_as_node(
                 match crate::db::garage_nodes::upsert_self(
                     db,
                     &self_node.id,
+                    agent_id,
                     node_zone,
                     capacity_bytes,
                 )

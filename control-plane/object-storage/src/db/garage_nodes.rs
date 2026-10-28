@@ -29,6 +29,7 @@ pub async fn mark_down(db: &DatabaseConnection, id: Uuid) -> Result<()> {
 pub async fn upsert_self(
     db: &DatabaseConnection,
     garage_node_id: &str,
+    agent_id: Option<Uuid>,
     zone: &str,
     capacity_bytes: Option<i64>,
 ) -> Result<garage_nodes::Model> {
@@ -43,6 +44,7 @@ pub async fn upsert_self(
     if let Some(existing) = existing {
         let mut model: garage_nodes::ActiveModel = existing.into();
         model.status = Set("up".to_string());
+        model.agent_id = Set(agent_id);
         model.capacity_bytes = Set(capacity_bytes);
         model.role = Set(if capacity_bytes.is_some() {
             "storage".to_string()
@@ -59,7 +61,7 @@ pub async fn upsert_self(
 
     let model = garage_nodes::ActiveModel {
         id: Set(Uuid::new_v4()),
-        agent_id: Set(None),
+        agent_id: Set(agent_id),
         garage_node_id: Set(Some(garage_node_id.to_string())),
         zone: Set(zone.to_string()),
         capacity_bytes: Set(capacity_bytes),
