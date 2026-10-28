@@ -76,6 +76,13 @@ pub fn check_removal(members: &[EtcdMember], id: u64) -> Result<(), MembershipEr
     Ok(())
 }
 
+pub fn other_learner_pending(members: &[EtcdMember], url: &str) -> bool {
+    members
+        .iter()
+        .filter(|member| member.is_learner)
+        .any(|member| !member.peer_urls.iter().any(|candidate| candidate == url))
+}
+
 pub fn initial_cluster(members: &[EtcdMember], new_id: u64, new_name: &str) -> String {
     members
         .iter()
@@ -197,6 +204,18 @@ mod tests {
             .any(|member| member.id == plan.member_id && member.is_learner));
         let after = list_members(&mut client).await.unwrap();
         assert!(after.iter().all(|member| member.id != plan.member_id));
+    }
+
+    #[test]
+    fn other_learner_blocks_a_second_join() {
+        let mut members = three_voters();
+        members.push(member(4, "", "http://10.100.0.4:2380", true));
+        assert!(other_learner_pending(&members, "http://10.100.0.5:2380"));
+        assert!(!other_learner_pending(&members, "http://10.100.0.4:2380"));
+        assert!(!other_learner_pending(
+            &three_voters(),
+            "http://10.100.0.4:2380"
+        ));
     }
 
     #[test]

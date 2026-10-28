@@ -140,10 +140,22 @@ pub async fn join_master(
         ));
     }
     let known_urls = master_peer_urls(&state).await?;
-    for stale in etcd_members::stale_learner_ids(&members, &known_urls) {
-        etcd_members::remove(&mut etcd, stale)
+    let stale = etcd_members::stale_learner_ids(&members, &known_urls);
+    for id in &stale {
+        etcd_members::remove(&mut etcd, *id)
             .await
             .map_err(internal)?;
+    }
+    let active: Vec<_> = members
+        .iter()
+        .filter(|member| !stale.contains(&member.id))
+        .cloned()
+        .collect();
+    if etcd_members::other_learner_pending(&active, &url) {
+        return Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "another master join is still in progress",
+        ));
     }
 
     let name = member_name(node.id);
