@@ -23,8 +23,9 @@ const ETCD_JOIN_ENV_PATH: &str = "/etc/csfx/etcd-join.env";
 const PATRONI_SUPERUSER_PATH: &str = "/etc/csfx/patroni-superuser-password";
 const PATRONI_REPLICATION_PATH: &str = "/etc/csfx/patroni-replication-password";
 const PATRONI_GROUP: &str = "patroni";
+const ETCD_DATA_DIR: &str = "/var/lib/etcd";
 const LOCAL_STATE_DIRS: [&str; 6] = [
-    "/var/lib/etcd",
+    ETCD_DATA_DIR,
     "/var/lib/patroni",
     "/var/lib/postgresql",
     "/var/lib/csfx-cp",
@@ -84,13 +85,19 @@ async fn join(gateway_url: &str) -> Result<()> {
 
 async fn promote(gateway_url: &str) -> Result<()> {
     let (client, api_key) = authenticated_client(gateway_url).await?;
-    start_unit(ETCD_UNIT).await?;
+    start_fresh_etcd().await?;
     wait_for_promotion(&client, &api_key).await?;
     info!("etcd member promoted to voter");
     start_unit(CONTROL_PLANE_TARGET).await?;
     std::fs::remove_file(PROMOTE_MARKER).context("Failed to remove promote marker")?;
     std::fs::remove_file(AGENT_JOIN_ENV_PATH).context("Failed to remove agent join env")?;
     systemctl("restart", AGENT_UNIT).await
+}
+
+async fn start_fresh_etcd() -> Result<()> {
+    systemctl("stop", ETCD_UNIT).await?;
+    clear_directory(ETCD_DATA_DIR)?;
+    start_unit(ETCD_UNIT).await
 }
 
 async fn wait_for_promotion(client: &ApiClient, api_key: &str) -> Result<()> {
