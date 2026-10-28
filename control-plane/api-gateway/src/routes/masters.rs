@@ -14,7 +14,10 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use super::cluster::{error, internal, ApiError};
+use super::{
+    cluster::{error, internal, ApiError},
+    cluster_vip::effective_vip,
+};
 use crate::{
     auth::{agent::AgentApiKey, rbac::CanManageSystem},
     cluster_bundle::{BundleError, ClusterSecrets, ClusterVip},
@@ -66,7 +69,10 @@ async fn load_agent(state: &AppState, agent_id: Uuid) -> Result<agents::Model, A
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "node not found"))
 }
 
-async fn registered_master(state: &AppState, agent_id: Uuid) -> Result<agents::Model, ApiError> {
+pub(super) async fn registered_master(
+    state: &AppState,
+    agent_id: Uuid,
+) -> Result<agents::Model, ApiError> {
     let node = load_agent(state, agent_id).await?;
     if node.role != ROLE_MASTER {
         return Err(error(
@@ -175,7 +181,7 @@ pub async fn join_master(
         etcd_member_id: plan.member_id,
         etcd_name: name,
         etcd_initial_cluster: plan.initial_cluster,
-        vip: ClusterVip::from_env(),
+        vip: effective_vip(&state).await?,
     }))
 }
 

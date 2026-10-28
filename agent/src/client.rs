@@ -257,6 +257,24 @@ impl ApiClient {
             .context("Failed to parse master join bundle")
     }
 
+    pub async fn fetch_cluster_vip(&self, api_key: &str) -> Result<Option<ClusterVip>> {
+        let url = format!("{}/api/cluster/masters/vip", self.gateway_url);
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("Failed to request cluster vip")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Cluster vip request failed status={}", resp.status());
+        }
+
+        resp.json().await.context("Failed to parse cluster vip")
+    }
+
     pub async fn promote_master(&self, api_key: &str) -> Result<bool> {
         let url = format!("{}/api/cluster/masters/promote", self.gateway_url);
 

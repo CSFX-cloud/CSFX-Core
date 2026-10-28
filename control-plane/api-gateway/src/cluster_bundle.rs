@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{net::Ipv4Addr, path::Path};
 
 const CREDENTIAL_GARAGE_ENV: &str = "garage-env";
 const GARAGE_RPC_SECRET_KEY: &str = "GARAGE_RPC_SECRET";
@@ -39,6 +39,23 @@ pub struct ClusterVip {
 }
 
 impl ClusterVip {
+    pub fn validated(self) -> Result<Self, &'static str> {
+        let usable = self
+            .address
+            .parse::<Ipv4Addr>()
+            .is_ok_and(|ip| !(ip.is_loopback() || ip.is_unspecified() || ip.is_multicast()));
+        if !usable {
+            return Err("address must be a unicast ipv4 address");
+        }
+        if !(8..=30).contains(&self.prefix_length) {
+            return Err("prefix_length must be between 8 and 30");
+        }
+        if self.router_id == 0 {
+            return Err("router_id must be between 1 and 255");
+        }
+        Ok(self)
+    }
+
     pub fn from_env() -> Option<Self> {
         Self::from_values(
             std::env::var(VIP_ADDRESS_VAR).ok(),
@@ -128,6 +145,29 @@ pub fn database_password(database_url: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn vip(address: &str, prefix_length: u8, router_id: u8) -> ClusterVip {
+        ClusterVip {
+            address: address.into(),
+            prefix_length,
+            router_id,
+        }
+    }
+
+    #[test]
+    fn validation_accepts_a_unicast_address() {
+        assert!(vip("192.168.1.50", 24, 51).validated().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_unusable_values() {
+        assert!(vip("not-an-ip", 24, 51).validated().is_err());
+        assert!(vip("127.0.0.1", 24, 51).validated().is_err());
+        assert!(vip("0.0.0.0", 24, 51).validated().is_err());
+        assert!(vip("224.0.0.1", 24, 51).validated().is_err());
+        assert!(vip("192.168.1.50", 31, 51).validated().is_err());
+        assert!(vip("192.168.1.50", 24, 0).validated().is_err());
+    }
 
     #[test]
     fn vip_defaults_apply_when_only_the_address_is_set() {

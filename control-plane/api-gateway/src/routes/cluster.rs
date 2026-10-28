@@ -11,10 +11,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use super::masters::{self, ROLE_MASTER};
-use crate::{
-    auth::rbac::CanManageSystem, cluster_bundle::ClusterVip, setup::ca_fingerprint, AppState,
+use super::{
+    cluster_vip::effective_vip,
+    masters::{self, ROLE_MASTER},
 };
+use crate::{auth::rbac::CanManageSystem, setup::ca_fingerprint, AppState};
 
 const DEFAULT_TTL_HOURS: i64 = 1;
 const MAX_TTL_HOURS: i64 = 24 * 7;
@@ -65,8 +66,8 @@ fn gateway_host(headers: &HeaderMap) -> Result<&str, ApiError> {
     Ok(host)
 }
 
-fn join_host(headers: &HeaderMap) -> Result<String, ApiError> {
-    let Some(vip) = ClusterVip::from_env() else {
+async fn join_host(state: &AppState, headers: &HeaderMap) -> Result<String, ApiError> {
+    let Some(vip) = effective_vip(state).await? else {
         return gateway_host(headers).map(str::to_string);
     };
     let port = headers
@@ -124,7 +125,7 @@ pub async fn create_join_token(
         ));
     }
     let role = join_role(request.role)?;
-    let host = join_host(&headers)?;
+    let host = join_host(&state, &headers).await?;
     let fingerprint = ca_fingerprint()
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "cluster CA unavailable"))?;
 

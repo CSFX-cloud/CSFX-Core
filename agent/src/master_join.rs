@@ -18,7 +18,7 @@ const CA_CERT_PATH: &str = "/var/lib/csfx-cp/ca.crt";
 const CA_KEY_PATH: &str = "/var/lib/csfx-cp/ca.key";
 const CP_ENV_PATH: &str = "/etc/csfx/cp.env";
 const GARAGE_ENV_PATH: &str = "/etc/csfx/garage.env";
-const CLUSTER_ENV_PATH: &str = "/etc/csfx/cluster.env";
+pub(crate) const CLUSTER_ENV_PATH: &str = "/etc/csfx/cluster.env";
 const ETCD_JOIN_ENV_PATH: &str = "/etc/csfx/etcd-join.env";
 const PATRONI_SUPERUSER_PATH: &str = "/etc/csfx/patroni-superuser-password";
 const PATRONI_REPLICATION_PATH: &str = "/etc/csfx/patroni-replication-password";
@@ -51,7 +51,7 @@ pub async fn run(gateway_url: &str) -> Result<()> {
     Ok(())
 }
 
-async fn authenticated_client(gateway_url: &str) -> Result<(ApiClient, String)> {
+pub(crate) async fn authenticated_client(gateway_url: &str) -> Result<(ApiClient, String)> {
     wait_for_registration().await?;
     let credentials = config::load_credentials().context("Failed to load credentials")?;
     let ca_pem = pki::AgentPki::load_ca_pem().context("Failed to load cluster CA")?;
@@ -202,7 +202,7 @@ async fn start_unit(unit: &str) -> Result<()> {
     systemctl("start", unit).await
 }
 
-async fn systemctl(action: &str, unit: &str) -> Result<()> {
+pub(crate) async fn systemctl(action: &str, unit: &str) -> Result<()> {
     let status = Command::new("systemctl")
         .arg(action)
         .arg(unit)
@@ -216,7 +216,7 @@ async fn systemctl(action: &str, unit: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_file(path: &str, contents: &str, mode: u32) -> Result<()> {
+pub(crate) fn write_file(path: &str, contents: &str, mode: u32) -> Result<()> {
     if let Some(parent) = Path::new(path).parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {path} parent"))?;
@@ -254,7 +254,7 @@ fn render_garage_env(bundle: &MasterBundle) -> String {
     )
 }
 
-fn render_cluster_env(vip: &ClusterVip) -> String {
+pub(crate) fn render_cluster_env(vip: &ClusterVip) -> String {
     format!(
         "CSFX_VIP_ADDRESS={}\nCSFX_VIP_PREFIX={}\nCSFX_VIP_ROUTER_ID={}\nTLS_SANS=localhost,127.0.0.1,{}\nCSFX_LOCAL_DNS_ADDRESSES={}\n",
         vip.address, vip.prefix_length, vip.router_id, vip.address, vip.address
