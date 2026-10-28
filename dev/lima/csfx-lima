@@ -143,6 +143,21 @@ rebuild_node() {
   return 1
 }
 
+copy_closure() {
+  local node="$1" out
+  out="$(on_node cp1 nix build --no-link --print-out-paths "path:/csfx-dev#nixosConfigurations.$node.config.system.build.toplevel" $(flake_overrides))"
+  log INFO "copying closure node=$node"
+  on_node cp1 sh -c "nix-store --export \$(nix-store --query --requisites $out)" | on_node "$node" sudo nix-store --import > /dev/null
+}
+
+prebuild_on_first() {
+  local node
+  rebuild_node cp1 boot
+  for node in $(nodes); do
+    [ "$node" = cp1 ] || copy_closure "$node"
+  done
+}
+
 rustup_path() {
   dirname "$(rustup which rustc)"
 }
@@ -250,6 +265,7 @@ join_node() {
 
 bootstrap() {
   local node
+  prebuild_on_first
   on_all_nodes rebuild_node_with_action boot
   stop_all
   start_all
