@@ -25,6 +25,7 @@ mod ssh_control;
 mod ssh_keys;
 mod system;
 mod update_watch;
+mod vip_sync;
 mod wg_identity;
 mod wireguard;
 
@@ -105,6 +106,10 @@ async fn main() -> Result<()> {
 
     if std::env::args().nth(1).as_deref() == Some("--join-master") {
         return master_join::run(&gateway_url).await;
+    }
+
+    if std::env::args().nth(1).as_deref() == Some("--sync-vip") {
+        return vip_sync::run(&gateway_url).await;
     }
 
     info!(version = env!("CARGO_PKG_VERSION"), "csfx-agent starting");
