@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
-    import { Cpu, HardDrive, MemoryStick, Server, TriangleAlert } from "@lucide/svelte";
+    import { Cpu, HardDrive, MemoryStick, Server, ServerOff, TriangleAlert } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { listEvents, resolveEvent, type AlertEvent } from "$lib/api/events";
     import { notifications } from "$lib/components/shell/notifications.svelte";
@@ -10,7 +10,7 @@
 
     const SEVERITIES = ["critical", "warning", "info"] as const;
     const SEVERITY_BADGE: Record<string, string> = { critical: "cx-badge--danger", warning: "cx-badge--warning", info: "" };
-    const EVENT_ICONS = { high_cpu: Cpu, high_memory: MemoryStick, high_disk: HardDrive, degraded: Server } as const;
+    const EVENT_ICONS = { high_cpu: Cpu, high_memory: MemoryStick, high_disk: HardDrive, degraded: Server, offline: ServerOff, online: Server } as const;
     const SOURCES: { value: Source; label: string }[] = [
         { value: "all", label: "Everything" },
         { value: "cluster", label: "Cluster and nodes" },

@@ -8,12 +8,11 @@ use tokio::time::{interval, Duration};
 use uuid::Uuid;
 
 use crate::db::agents as agent_db;
-use crate::db::events;
 use crate::services::failover::FailoverService;
-use crate::services::hardware_alerts;
+use crate::services::{hardware_alerts, status_alerts};
 
-const POLL_INTERVAL_SECS: u64 = 30;
-const SOFT_THRESHOLD_SECS: i64 = 120;
+const POLL_INTERVAL_SECS: u64 = 15;
+const SOFT_THRESHOLD_SECS: i64 = 50;
 const HARD_THRESHOLD_SECS: i64 = 300;
 
 type InFlight = Arc<Mutex<HashSet<Uuid>>>;
@@ -46,6 +45,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
 
         mark_degraded(&db, degraded).await;
         handle_offline(&db, &failover, &in_flight, offline).await;
+        check_status_alerts(&db).await;
     }
 }
 
@@ -60,6 +60,22 @@ async fn check_hardware_alerts(db: &DatabaseConnection) {
             crate::log_error!(
                 "monitor",
                 &format!("Failed to query agents for alerting err={}", e)
+            );
+        }
+    }
+}
+
+async fn check_status_alerts(db: &DatabaseConnection) {
+    match agent_db::get_agents_for_alerting(db).await {
+        Ok(agents) => {
+            for agent in &agents {
+                status_alerts::check_agent(db, agent).await;
+            }
+        }
+        Err(e) => {
+            crate::log_error!(
+                "monitor",
+                &format!("Failed to query agents for status alerts err={}", e)
             );
         }
     }
@@ -85,16 +101,6 @@ async fn mark_degraded(db: &DatabaseConnection, degraded: Vec<agents::Model>) {
                 agent.id, agent.last_heartbeat
             )
         );
-
-        if let Err(e) = events::insert(db, Some(agent.id), "degraded", None, None).await {
-            crate::log_error!(
-                "monitor",
-                &format!(
-                    "Failed to insert degraded event agent_id={} err={}",
-                    agent.id, e
-                )
-            );
-        }
     }
 }
 
