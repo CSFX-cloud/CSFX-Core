@@ -56,6 +56,12 @@ impl StartTracker {
     }
 }
 
+fn effective_gateway_url(gateway_url: String) -> String {
+    config::load_gateway_override()
+        .filter(|_| !config::is_loopback_url(&gateway_url))
+        .unwrap_or(gateway_url)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     rustls::crypto::ring::default_provider()
@@ -74,6 +80,17 @@ async fn main() -> Result<()> {
         return mgmt_up::run().await;
     }
 
+    if let Some(username) = std::env::args()
+        .nth(1)
+        .filter(|a| a == "--authorized-keys")
+        .and_then(|_| std::env::args().nth(2))
+    {
+        let config = config::load_config().context("Failed to load daemon config")?;
+        let gateway_url = effective_gateway_url(config.gateway_url);
+        ssh_keys::run_authorized_keys_command(&gateway_url, config.agent_id, &username).await;
+        return Ok(());
+    }
+
     let join_ticket = std::env::var("CSFX_JOIN")
         .ok()
         .filter(|value| !value.is_empty())
@@ -88,21 +105,7 @@ async fn main() -> Result<()> {
         None => std::env::var("CSFX_GATEWAY_URL")
             .context("CSFX_GATEWAY_URL environment variable is required")?,
     };
-    let gateway_url = config::load_gateway_override()
-        .filter(|_| !config::is_loopback_url(&gateway_url))
-        .unwrap_or(gateway_url);
-
-    if let Some(username) = std::env::args()
-        .nth(1)
-        .filter(|a| a == "--authorized-keys")
-        .and_then(|_| std::env::args().nth(2))
-    {
-        let agent_id = config::load_config()
-            .context("Failed to load daemon config")?
-            .agent_id;
-        ssh_keys::run_authorized_keys_command(&gateway_url, agent_id, &username).await;
-        return Ok(());
-    }
+    let gateway_url = effective_gateway_url(gateway_url);
 
     if std::env::args().nth(1).as_deref() == Some("--join-master") {
         return master_join::run(&gateway_url).await;

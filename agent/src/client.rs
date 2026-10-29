@@ -130,7 +130,7 @@ pub struct VpnPeer {
     pub client_tunnel_ip: String,
 }
 
-fn build_http_client(ca_pem: Option<&str>) -> Result<Client> {
+pub(crate) fn build_http_client(ca_pem: Option<&str>) -> Result<Client> {
     let builder = Client::builder().timeout(std::time::Duration::from_secs(30));
     let builder = match ca_pem {
         Some(pem) => builder.tls_certs_only([
