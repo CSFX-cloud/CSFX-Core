@@ -36,6 +36,38 @@ fn describe(agent: &agents::Model, rule: &StatusRule) -> String {
     format!("Node {} is {}{}", agent.name, rule.event_type, silence)
 }
 
+async fn announce_recovery(db: &DatabaseConnection, agent: &agents::Model) {
+    let message = format!("Node {} is back online", agent.name);
+    let result = async {
+        let event = events::insert_with_severity(
+            db,
+            Some(agent.id),
+            "online",
+            "info",
+            Some(message.clone()),
+            None,
+            None,
+        )
+        .await?;
+        events::resolve(db, event.id).await
+    }
+    .await;
+    if let Err(e) = result {
+        crate::log_error!(
+            "status_alerts",
+            &format!(
+                "Failed to announce recovery agent_id={} err={}",
+                agent.id, e
+            )
+        );
+        return;
+    }
+    crate::log_info!(
+        "status_alerts",
+        &format!("agent_id={} alert=online message={}", agent.id, message)
+    );
+}
+
 pub async fn check_agent(db: &DatabaseConnection, agent: &agents::Model) {
     for rule in RULES {
         let existing = match events::find_open(db, agent.id, rule.event_type).await {
@@ -98,6 +130,9 @@ pub async fn check_agent(db: &DatabaseConnection, agent: &agents::Model) {
                     "status_alerts",
                     &format!("agent_id={} alert={} resolved", agent.id, rule.event_type)
                 );
+                if agent.status == "Online" {
+                    announce_recovery(db, agent).await;
+                }
             }
             _ => {}
         }

@@ -10,7 +10,7 @@
 
     const SEVERITIES = ["critical", "warning", "info"] as const;
     const SEVERITY_BADGE: Record<string, string> = { critical: "cx-badge--danger", warning: "cx-badge--warning", info: "" };
-    const EVENT_ICONS = { high_cpu: Cpu, high_memory: MemoryStick, high_disk: HardDrive, degraded: Server, offline: ServerOff } as const;
+    const EVENT_ICONS = { high_cpu: Cpu, high_memory: MemoryStick, high_disk: HardDrive, degraded: Server, offline: ServerOff, online: Server } as const;
     const SOURCES: { value: Source; label: string }[] = [
         { value: "all", label: "Everything" },
         { value: "cluster", label: "Cluster and nodes" },
