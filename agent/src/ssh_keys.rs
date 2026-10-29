@@ -2,6 +2,11 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::client::build_http_client;
+use crate::pki::AgentPki;
+
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[derive(Deserialize)]
 struct AuthorizedKeysResponse {
     keys: Vec<String>,
@@ -14,14 +19,13 @@ pub async fn fetch_authorized_keys(
 ) -> Result<Vec<String>> {
     let url = format!("{}/api/agents/{}/authorized-keys", gateway_url, agent_id);
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .context("failed to build http client")?;
+    let ca_pem = AgentPki::load_ca_pem()?;
+    let client = build_http_client(Some(&ca_pem))?;
 
     let resp = client
         .get(&url)
         .query(&[("user", username)])
+        .timeout(REQUEST_TIMEOUT)
         .send()
         .await
         .context("failed to fetch authorized keys")?;
