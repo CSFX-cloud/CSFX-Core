@@ -46,20 +46,9 @@ impl SchedulerService {
             .await
             .map_err(|e| format!("Failed to persist workload: {}", e))?;
 
-        let mut agents = crate::db::agents::get_online_agents_with_resources(&self.db)
+        let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
             .map_err(|e| format!("Failed to fetch agent resources: {}", e))?;
-
-        for agent in agents.iter_mut() {
-            let (reserved_cpu, reserved_mem, reserved_disk) =
-                crate::db::agents::get_assigned_workload_resources(&self.db, agent.agent_id)
-                    .await
-                    .map_err(|e| format!("Failed to fetch reserved resources: {}", e))?;
-
-            agent.free_cpu_millicores -= reserved_cpu;
-            agent.free_memory_bytes -= reserved_mem;
-            agent.free_disk_bytes -= reserved_disk;
-        }
 
         let volume_pinned_agent = self.resolve_volume_affinity(&req).await?;
 
@@ -293,20 +282,9 @@ impl SchedulerService {
         resource_group_id: Uuid,
         services: &[ComposeServiceSpec],
     ) -> Result<Vec<CreateWorkloadResponse>, String> {
-        let mut agents = crate::db::agents::get_online_agents_with_resources(&self.db)
+        let agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
             .map_err(|e| format!("Failed to fetch agent resources: {}", e))?;
-
-        for agent in agents.iter_mut() {
-            let (reserved_cpu, reserved_mem, reserved_disk) =
-                crate::db::agents::get_assigned_workload_resources(&self.db, agent.agent_id)
-                    .await
-                    .map_err(|e| format!("Failed to fetch reserved resources: {}", e))?;
-
-            agent.free_cpu_millicores -= reserved_cpu;
-            agent.free_memory_bytes -= reserved_mem;
-            agent.free_disk_bytes -= reserved_disk;
-        }
 
         let total_cpu: i32 = services.iter().map(|s| s.cpu_millicores).sum();
         let total_memory: i64 = services.iter().map(|s| s.memory_bytes).sum();
@@ -488,22 +466,11 @@ impl SchedulerService {
         dead_agent_id: Uuid,
         workload_ids: &[Uuid],
     ) -> Result<Vec<CreateWorkloadResponse>, String> {
-        let mut agents = crate::db::agents::get_online_agents_with_resources(&self.db)
+        let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
             .map_err(|e| format!("Failed to fetch agent resources: {}", e))?;
 
         agents.retain(|a| a.agent_id != dead_agent_id);
-
-        for agent in agents.iter_mut() {
-            let (reserved_cpu, reserved_mem, reserved_disk) =
-                crate::db::agents::get_assigned_workload_resources(&self.db, agent.agent_id)
-                    .await
-                    .map_err(|e| format!("Failed to fetch reserved resources: {}", e))?;
-
-            agent.free_cpu_millicores -= reserved_cpu;
-            agent.free_memory_bytes -= reserved_mem;
-            agent.free_disk_bytes -= reserved_disk;
-        }
 
         let mut responses = Vec::with_capacity(workload_ids.len());
 
@@ -597,20 +564,9 @@ impl SchedulerService {
             return Ok(0);
         }
 
-        let mut agents = crate::db::agents::get_online_agents_with_resources(&self.db)
+        let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
             .map_err(|e| format!("Failed to fetch agent resources: {}", e))?;
-
-        for agent in agents.iter_mut() {
-            let (reserved_cpu, reserved_mem, reserved_disk) =
-                crate::db::agents::get_assigned_workload_resources(&self.db, agent.agent_id)
-                    .await
-                    .map_err(|e| format!("Failed to fetch reserved resources: {}", e))?;
-
-            agent.free_cpu_millicores -= reserved_cpu;
-            agent.free_memory_bytes -= reserved_mem;
-            agent.free_disk_bytes -= reserved_disk;
-        }
 
         let mut placed_count = 0;
 
