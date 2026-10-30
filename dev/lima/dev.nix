@@ -27,6 +27,7 @@ in
     csfx-agent = {
       enable = true;
       gatewayUrl = "https://localhost:8000";
+      enableSsh = true;
       enableFirecracker = true;
       advertiseInterface = "enp0s2";
       localDns.servers = [ "127.0.0.1" ];
@@ -64,6 +65,15 @@ in
       csfx-guest-init-link.serviceConfig.ExecStart = lib.mkForce "${pkgs.coreutils}/bin/install -m 0755 ${binDir}/csfx-guest-init /var/lib/csfx-agent/csfx-guest-init";
       csfx-mgmt-up.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --mgmt-up";
       csfx-master-join.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --join-master";
+      csfx-agent.environment.CSFX_SSH_CONTROL = lib.mkForce "0";
+      sshd.wantedBy = lib.mkForce [ "multi-user.target" ];
     }
   ];
+
+  security.wrappers.csfx-authorized-keys.source = lib.mkForce "${binDir}/csfx-agent";
+
+  services.openssh = {
+    authorizedKeysFiles = lib.mkForce [ ".ssh/authorized_keys" "/etc/ssh/authorized_keys.d/%u" ];
+    settings.AllowUsers = lib.mkForce [ "*" ];
+  };
 }
