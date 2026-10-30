@@ -247,7 +247,10 @@ impl SchedulerService {
         let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
             .map_err(|e| format!("Failed to fetch agent resources: {}", e))?;
-        let preferred = self.hosting_agents(Some(resource_group_id)).await?;
+        let mut preferred = self
+            .hosting_agents(Some(resource_group_id))
+            .await?
+            .unwrap_or_default();
 
         let mut responses = Vec::with_capacity(services.len());
         for service in services {
@@ -256,7 +259,7 @@ impl SchedulerService {
                 .await
                 .map_err(|e| format!("Failed to persist workload: {}", e))?;
 
-            let demand = demand_for(&workload, preferred.as_ref());
+            let demand = demand_for(&workload, Some(&preferred));
             let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
                 responses.push(pending_response(workload.id));
                 continue;
@@ -264,6 +267,7 @@ impl SchedulerService {
 
             self.assign_workload(&workload, agent_id).await?;
             placement::commit(&mut agents, agent_id, &demand);
+            preferred.insert(agent_id);
             responses.push(scheduled_response(
                 workload.id,
                 agent_id,
@@ -411,7 +415,8 @@ impl SchedulerService {
                 .map_err(|e| format!("Failed to fetch workload: {}", e))?
                 .ok_or_else(|| format!("Workload {} not found", workload_id))?;
 
-            let demand = demand_for(&workload, None);
+            let preferred = self.hosting_agents(workload.resource_group_id).await?;
+            let demand = demand_for(&workload, preferred.as_ref());
             let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
                 crate::log_warn!(
                     "scheduler",
@@ -461,7 +466,8 @@ impl SchedulerService {
         let mut placed_count = 0;
 
         for workload in pending {
-            let demand = demand_for(&workload, None);
+            let preferred = self.hosting_agents(workload.resource_group_id).await?;
+            let demand = demand_for(&workload, preferred.as_ref());
             let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
                 crate::log_debug!(
                     "scheduler",
@@ -565,7 +571,7 @@ fn stack_service_request(
         memory_limit_bytes: service.memory_limit_bytes,
         auto_resources: false,
         replicas: None,
-        spread_key: Some(stack_id.to_string()),
+        spread_key: None,
     }
 }
 

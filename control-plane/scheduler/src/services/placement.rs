@@ -4,7 +4,6 @@ use uuid::Uuid;
 use crate::models::workload::AgentResources;
 
 const SPREAD_PENALTY: f64 = 30.0;
-const PREFERRED_BONUS: f64 = 10.0;
 const BALANCE_WEIGHT: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,9 +31,25 @@ pub struct Demand<'a> {
 }
 
 pub fn pick(demand: &Demand, agents: &[AgentResources], strategy: Strategy) -> Option<Uuid> {
+    let preferred = demand.preferred_agents.filter(|agents| !agents.is_empty());
+    preferred
+        .and_then(|preferred| {
+            best(demand, agents, strategy, |agent| {
+                preferred.contains(&agent.agent_id)
+            })
+        })
+        .or_else(|| best(demand, agents, strategy, |_| true))
+}
+
+fn best(
+    demand: &Demand,
+    agents: &[AgentResources],
+    strategy: Strategy,
+    eligible: impl Fn(&AgentResources) -> bool,
+) -> Option<Uuid> {
     agents
         .iter()
-        .filter(|agent| fits(demand, agent))
+        .filter(|agent| eligible(agent) && fits(demand, agent))
         .map(|agent| (agent.agent_id, score(demand, agent, strategy)))
         .max_by(|left, right| left.1.total_cmp(&right.1))
         .map(|(agent_id, _)| agent_id)
@@ -86,12 +101,8 @@ fn score(demand: &Demand, agent: &AgentResources, strategy: Strategy) -> f64 {
         .and_then(|key| agent.spread_counts.get(key))
         .copied()
         .unwrap_or(0) as f64;
-    let preferred = demand
-        .preferred_agents
-        .is_some_and(|agents| agents.contains(&agent.agent_id));
 
     packing * (1.0 - BALANCE_WEIGHT) + balance * BALANCE_WEIGHT - colocated * SPREAD_PENALTY
-        + if preferred { PREFERRED_BONUS } else { 0.0 }
 }
 
 #[cfg(test)]
@@ -154,9 +165,37 @@ mod tests {
     }
 
     #[test]
-    fn preferred_agent_wins_between_equal_agents() {
-        let agents = vec![agent(7000, 14, true), agent(7000, 14, true)];
+    fn preferred_agent_wins_even_when_another_agent_is_emptier() {
+        let agents = vec![agent(7000, 14, true), agent(2000, 4, true)];
         let preferred: HashSet<Uuid> = [agents[1].agent_id].into_iter().collect();
+        let demand = Demand {
+            preferred_agents: Some(&preferred),
+            ..demand(None)
+        };
+        assert_eq!(
+            pick(&demand, &agents, Strategy::Spread),
+            Some(agents[1].agent_id)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_other_agents_when_preferred_cannot_fit() {
+        let agents = vec![agent(7000, 14, true), agent(500, 4, true)];
+        let preferred: HashSet<Uuid> = [agents[1].agent_id].into_iter().collect();
+        let demand = Demand {
+            preferred_agents: Some(&preferred),
+            ..demand(None)
+        };
+        assert_eq!(
+            pick(&demand, &agents, Strategy::Spread),
+            Some(agents[0].agent_id)
+        );
+    }
+
+    #[test]
+    fn empty_preferred_set_places_by_score() {
+        let agents = vec![agent(2000, 4, true), agent(7000, 14, true)];
+        let preferred = HashSet::new();
         let demand = Demand {
             preferred_agents: Some(&preferred),
             ..demand(None)
