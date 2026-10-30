@@ -29,6 +29,9 @@ pub struct Model {
     pub maintenance_until: Option<DateTime>,
     pub role: String,
     pub machine_id: Option<String>,
+    pub cpu_overcommit_ratio: f64,
+    pub memory_overcommit_ratio: f64,
+    pub disk_overcommit_ratio: f64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -16,8 +16,20 @@ pub async fn create_workload(
     State(state): State<AppState>,
     Json(req): Json<CreateWorkloadRequest>,
 ) -> impl IntoResponse {
-    match state.scheduler.schedule(req).await {
-        Ok(resp) => (StatusCode::CREATED, Json(serde_json::json!(resp))).into_response(),
+    if let Err(e) = req.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response();
+    }
+    match state.scheduler.schedule_replicas(req).await {
+        Ok(mut responses) if responses.len() == 1 => (
+            StatusCode::CREATED,
+            Json(serde_json::json!(responses.remove(0))),
+        )
+            .into_response(),
+        Ok(responses) => (StatusCode::CREATED, Json(serde_json::json!(responses))).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),

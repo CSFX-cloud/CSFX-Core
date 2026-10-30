@@ -12,6 +12,8 @@ pub struct ComposeServiceSpec {
     pub cpu_millicores: i32,
     pub memory_bytes: i64,
     pub disk_bytes: i64,
+    pub cpu_limit_millicores: Option<i32>,
+    pub memory_limit_bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

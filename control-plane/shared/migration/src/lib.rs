@@ -46,6 +46,7 @@ mod m20261023_000000_add_agent_machine_id;
 mod m20261024_000000_extend_logs;
 mod m20261025_000000_add_ingress_gateways;
 mod m20261025_010000_add_dns_records;
+mod m20261026_000000_add_resource_scheduling;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -98,6 +99,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261024_000000_extend_logs::Migration),
             Box::new(m20261025_000000_add_ingress_gateways::Migration),
             Box::new(m20261025_010000_add_dns_records::Migration),
+            Box::new(m20261026_000000_add_resource_scheduling::Migration),
         ]
     }
 }

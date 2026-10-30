@@ -1,6 +1,9 @@
 use anyhow::Result;
 use entity::agents;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
+    QueryFilter, Set,
+};
 use uuid::Uuid;
 
 pub async fn get_by_machine_id(
@@ -100,6 +103,9 @@ pub async fn create(
         maintenance_until: Set(None),
         role: Set(role),
         machine_id: Set(machine_id),
+        cpu_overcommit_ratio: NotSet,
+        memory_overcommit_ratio: NotSet,
+        disk_overcommit_ratio: NotSet,
     };
 
     Ok(model.insert(db).await?)

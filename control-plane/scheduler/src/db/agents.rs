@@ -6,47 +6,64 @@ use uuid::Uuid;
 use crate::models::workload::AgentResources;
 
 const MILLICORES_PER_CORE: i32 = 1000;
+const SYSTEM_RESERVE_FRACTION: f64 = 0.1;
 const RESERVING_STATUSES: [&str; 5] = ["scheduled", "pulling", "creating", "starting", "running"];
 
 pub async fn get_schedulable_agents(
     db: &DatabaseConnection,
 ) -> Result<Vec<AgentResources>, sea_orm::DbErr> {
     let mut agents = get_online_agents_with_capacity(db).await?;
-    let reserved = get_reserved_by_agent(db).await?;
+    let mut reserved = get_reserved_by_agent(db).await?;
 
     for agent in agents.iter_mut() {
-        let Some((cpu, memory, disk)) = reserved.get(&agent.agent_id) else {
+        let Some(reservation) = reserved.remove(&agent.agent_id) else {
             continue;
         };
-        agent.free_cpu_millicores -= cpu;
-        agent.free_memory_bytes -= memory;
-        agent.free_disk_bytes -= disk;
+        agent.free_cpu_millicores -= reservation.cpu_millicores;
+        agent.free_memory_bytes -= reservation.memory_bytes;
+        agent.free_disk_bytes -= reservation.disk_bytes;
+        agent.spread_counts = reservation.spread_counts;
     }
 
     Ok(agents)
 }
 
+#[derive(Default)]
+struct Reservation {
+    cpu_millicores: i32,
+    memory_bytes: i64,
+    disk_bytes: i64,
+    spread_counts: HashMap<String, u32>,
+}
+
 async fn get_reserved_by_agent(
     db: &DatabaseConnection,
-) -> Result<HashMap<Uuid, (i32, i64, i64)>, sea_orm::DbErr> {
+) -> Result<HashMap<Uuid, Reservation>, sea_orm::DbErr> {
     let active = workloads::Entity::find()
         .filter(workloads::Column::AssignedAgentId.is_not_null())
         .filter(workloads::Column::Status.is_in(RESERVING_STATUSES))
         .all(db)
         .await?;
 
-    let mut reserved: HashMap<Uuid, (i32, i64, i64)> = HashMap::new();
+    let mut reserved: HashMap<Uuid, Reservation> = HashMap::new();
     for workload in active {
         let Some(agent_id) = workload.assigned_agent_id else {
             continue;
         };
         let entry = reserved.entry(agent_id).or_default();
-        entry.0 += workload.cpu_millicores;
-        entry.1 += workload.memory_bytes;
-        entry.2 += workload.disk_bytes;
+        entry.cpu_millicores += workload.cpu_millicores;
+        entry.memory_bytes += workload.memory_bytes;
+        entry.disk_bytes += workload.disk_bytes;
+        if let Some(key) = workload.spread_key {
+            *entry.spread_counts.entry(key).or_default() += 1;
+        }
     }
 
     Ok(reserved)
+}
+
+fn allocatable(total: f64, ratio: f64) -> f64 {
+    total * (1.0 - SYSTEM_RESERVE_FRACTION) * ratio
 }
 
 async fn get_online_agents_with_capacity(
@@ -71,12 +88,28 @@ async fn get_online_agents_with_capacity(
             continue;
         };
 
+        let cpu_millicores = allocatable(
+            (m.cpu_cores.unwrap_or(0) * MILLICORES_PER_CORE) as f64,
+            agent.cpu_overcommit_ratio,
+        ) as i32;
+        let memory_bytes = allocatable(
+            m.memory_total_bytes.unwrap_or(0) as f64,
+            agent.memory_overcommit_ratio,
+        ) as i64;
+        let disk_bytes = allocatable(
+            m.disk_total_bytes.unwrap_or(0) as f64,
+            agent.disk_overcommit_ratio,
+        ) as i64;
+
         result.push(AgentResources {
             agent_id: agent.id,
-            free_cpu_millicores: m.cpu_cores.unwrap_or(0) * MILLICORES_PER_CORE,
-            free_memory_bytes: m.memory_total_bytes.unwrap_or(0),
-            free_disk_bytes: m.disk_total_bytes.unwrap_or(0),
+            allocatable_cpu_millicores: cpu_millicores,
+            allocatable_memory_bytes: memory_bytes,
+            free_cpu_millicores: cpu_millicores,
+            free_memory_bytes: memory_bytes,
+            free_disk_bytes: disk_bytes,
             kvm_capable: agent.kvm_capable,
+            spread_counts: HashMap::new(),
         });
     }
 

@@ -1,46 +1,65 @@
 use chrono::Utc;
+use entity::entities::workloads;
 use etcd_client::Client as EtcdClient;
 use sea_orm::DatabaseConnection;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::models::compose::{ComposeServiceSpec, CreateStackRequest, CreateStackResponse};
 use crate::models::workload::{
-    AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, UpdateWorkloadRequest,
-    WorkloadStatus,
+    AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, RuntimeClass,
+    UpdateWorkloadRequest, WorkloadStatus,
 };
 use crate::services::compose_parser::{self, ComposeParseError};
 use crate::services::etcd::{delete_placement, put_placement, PlacementRecord};
+use crate::services::placement::{self, Demand, Strategy};
 
 pub struct SchedulerService {
     db: DatabaseConnection,
     etcd: Arc<Mutex<EtcdClient>>,
+    strategy: Strategy,
 }
 
 impl SchedulerService {
     pub fn new(db: DatabaseConnection, etcd: Arc<Mutex<EtcdClient>>) -> Self {
-        Self { db, etcd }
+        let strategy = Strategy::from_name(
+            &std::env::var("SCHEDULER_STRATEGY").unwrap_or_else(|_| "spread".to_string()),
+        );
+        Self { db, etcd, strategy }
+    }
+
+    pub async fn schedule_replicas(
+        &self,
+        req: CreateWorkloadRequest,
+    ) -> Result<Vec<CreateWorkloadResponse>, String> {
+        req.validate()?;
+        let count = req.replicas.unwrap_or(1);
+        if count == 1 {
+            return Ok(vec![self.schedule(req).await?]);
+        }
+
+        let spread_key = req.spread_key.clone().unwrap_or_else(|| req.name.clone());
+        let mut responses = Vec::with_capacity(count as usize);
+        for index in 1..=count {
+            let replica = CreateWorkloadRequest {
+                name: format!("{}-{}", req.name, index),
+                spread_key: Some(spread_key.clone()),
+                replicas: None,
+                ..req.clone()
+            };
+            responses.push(self.schedule(replica).await?);
+        }
+        Ok(responses)
     }
 
     pub async fn schedule(
         &self,
         mut req: CreateWorkloadRequest,
     ) -> Result<CreateWorkloadResponse, String> {
-        if let Some(bindings) = req.bucket_bindings.clone() {
-            if !bindings.is_empty() {
-                let placeholder_id = Uuid::new_v4();
-                let bucket_env = crate::services::bucket_bindings::resolve_env_vars(
-                    placeholder_id,
-                    req.resource_group_id,
-                    &bindings,
-                )
-                .await;
-                req.env_vars
-                    .get_or_insert_with(std::collections::HashMap::new)
-                    .extend(bucket_env);
-            }
-        }
+        req.validate()?;
+        inject_bucket_env(&mut req).await;
 
         let workload = crate::db::workloads::create(&self.db, &req)
             .await
@@ -50,95 +69,38 @@ impl SchedulerService {
             .await
             .map_err(|e| format!("Failed to fetch agent resources: {}", e))?;
 
-        let volume_pinned_agent = self.resolve_volume_affinity(&req).await?;
-
-        let placement = if let Some(required_agent) = volume_pinned_agent {
+        if let Some(required_agent) = self.resolve_volume_affinity(&req).await? {
             agents.retain(|a| a.agent_id == required_agent);
-            self.first_fit(&req, &agents)
-        } else if let Some(resource_group_id) = req.resource_group_id {
-            let preferred = self
-                .preferred_resource_group_agents(resource_group_id, &agents)
-                .await?;
-            self.first_fit(&req, &preferred)
-                .or_else(|| self.first_fit(&req, &agents))
-        } else {
-            self.first_fit(&req, &agents)
+        }
+
+        let preferred = self.hosting_agents(req.resource_group_id).await?;
+        let demand = demand_for(&workload, preferred.as_ref());
+
+        let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
+            log_unplaceable(&workload, &demand, &agents);
+            return Ok(pending_response(workload.id));
         };
 
-        match placement {
-            Some(agent_id) => {
-                crate::db::workloads::assign(&self.db, workload.id, agent_id)
-                    .await
-                    .map_err(|e| format!("Failed to assign workload: {}", e))?;
+        crate::db::workloads::assign(&self.db, workload.id, agent_id)
+            .await
+            .map_err(|e| format!("Failed to assign workload: {}", e))?;
+        self.persist_node_ports(&workload, agent_id, req.ports)
+            .await?;
+        self.record_placement(&workload, agent_id).await?;
 
-                if let Some(mut ports) = req.ports.clone() {
-                    crate::services::port_allocator::allocate_node_ports(
-                        &self.db,
-                        agent_id,
-                        workload.id,
-                        &mut ports,
-                    )
-                    .await?;
-                    let ports_json = crate::services::port_allocator::ports_to_json(&ports)?;
-                    crate::db::workloads::update_ports(&self.db, workload.id, ports_json)
-                        .await
-                        .map_err(|e| format!("Failed to persist allocated node ports: {}", e))?;
-                }
+        crate::log_info!(
+            "scheduler",
+            &format!(
+                "Workload scheduled workload_id={} agent_id={}",
+                workload.id, agent_id
+            )
+        );
 
-                let record = PlacementRecord {
-                    workload_id: workload.id,
-                    agent_id,
-                    image: req.image.clone(),
-                    cpu_millicores: req.cpu_millicores,
-                    memory_bytes: req.memory_bytes,
-                    disk_bytes: req.disk_bytes,
-                    scheduled_at: Utc::now().to_rfc3339(),
-                    stack_id: req.stack_id,
-                    service_name: req.service_name.clone(),
-                    runtime_class: req.runtime_class.as_str().to_string(),
-                };
-
-                tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
-
-                put_placement(&self.etcd, &record).await?;
-
-                crate::log_info!(
-                    "scheduler",
-                    &format!(
-                        "Workload scheduled workload_id={} agent_id={}",
-                        workload.id, agent_id
-                    )
-                );
-
-                Ok(CreateWorkloadResponse {
-                    workload_id: workload.id,
-                    status: WorkloadStatus::Scheduled,
-                    assigned_agent_id: Some(agent_id),
-                    message: format!("Workload assigned to agent {}", agent_id),
-                })
-            }
-            None => {
-                crate::log_warn!(
-                    "scheduler",
-                    &format!(
-                        "No suitable agent found workload_id={} required_cpu={} required_memory={} required_disk={} requires_kvm={} {}",
-                        workload.id,
-                        req.cpu_millicores,
-                        req.memory_bytes,
-                        req.disk_bytes,
-                        req.runtime_class.requires_kvm(),
-                        describe_agents(&agents)
-                    )
-                );
-
-                Ok(CreateWorkloadResponse {
-                    workload_id: workload.id,
-                    status: WorkloadStatus::Pending,
-                    assigned_agent_id: None,
-                    message: "No agent with sufficient resources available".to_string(),
-                })
-            }
-        }
+        Ok(scheduled_response(
+            workload.id,
+            agent_id,
+            "Workload assigned to agent",
+        ))
     }
 
     pub async fn schedule_stack(
@@ -282,84 +244,38 @@ impl SchedulerService {
         resource_group_id: Uuid,
         services: &[ComposeServiceSpec],
     ) -> Result<Vec<CreateWorkloadResponse>, String> {
-        let agents = crate::db::agents::get_schedulable_agents(&self.db)
+        let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
             .map_err(|e| format!("Failed to fetch agent resources: {}", e))?;
-
-        let total_cpu: i32 = services.iter().map(|s| s.cpu_millicores).sum();
-        let total_memory: i64 = services.iter().map(|s| s.memory_bytes).sum();
-        let total_disk: i64 = services.iter().map(|s| s.disk_bytes).sum();
-
-        let agent_id =
-            self.first_fit_resources(total_cpu, total_memory, total_disk, false, &agents);
+        let preferred = self.hosting_agents(Some(resource_group_id)).await?;
 
         let mut responses = Vec::with_capacity(services.len());
         for service in services {
-            let req = CreateWorkloadRequest {
-                name: format!("{}-{}", stack_id, service.service_name),
-                image: service.image.clone(),
-                cpu_millicores: service.cpu_millicores,
-                memory_bytes: service.memory_bytes,
-                disk_bytes: service.disk_bytes,
-                env_vars: service.env_vars.clone(),
-                ports: service.ports.clone(),
-                volume_mounts: None,
-                bucket_bindings: None,
-                resource_group_id: Some(resource_group_id),
-                stack_id: Some(stack_id),
-                service_name: Some(service.service_name.clone()),
-                restart_policy: crate::models::workload::RestartPolicy::Always,
-                max_restarts: None,
-                runtime_class: crate::models::workload::RuntimeClass::Firecracker,
-            };
-
+            let req = stack_service_request(stack_id, resource_group_id, service);
             let workload = crate::db::workloads::create(&self.db, &req)
                 .await
                 .map_err(|e| format!("Failed to persist workload: {}", e))?;
 
-            responses.push(match agent_id {
-                Some(agent_id) => {
-                    crate::db::workloads::assign(&self.db, workload.id, agent_id)
-                        .await
-                        .map_err(|e| format!("Failed to assign workload: {}", e))?;
+            let demand = demand_for(&workload, preferred.as_ref());
+            let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
+                responses.push(pending_response(workload.id));
+                continue;
+            };
 
-                    let record = PlacementRecord {
-                        workload_id: workload.id,
-                        agent_id,
-                        image: req.image.clone(),
-                        cpu_millicores: req.cpu_millicores,
-                        memory_bytes: req.memory_bytes,
-                        disk_bytes: req.disk_bytes,
-                        scheduled_at: Utc::now().to_rfc3339(),
-                        stack_id: Some(stack_id),
-                        service_name: Some(service.service_name.clone()),
-                        runtime_class: req.runtime_class.as_str().to_string(),
-                    };
-                    put_placement(&self.etcd, &record).await?;
-                    tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
-
-                    CreateWorkloadResponse {
-                        workload_id: workload.id,
-                        status: WorkloadStatus::Scheduled,
-                        assigned_agent_id: Some(agent_id),
-                        message: format!("Workload assigned to agent {}", agent_id),
-                    }
-                }
-                None => CreateWorkloadResponse {
-                    workload_id: workload.id,
-                    status: WorkloadStatus::Pending,
-                    assigned_agent_id: None,
-                    message: "No agent with sufficient resources available".to_string(),
-                },
-            });
+            self.assign_workload(&workload, agent_id).await?;
+            placement::commit(&mut agents, agent_id, &demand);
+            responses.push(scheduled_response(
+                workload.id,
+                agent_id,
+                "Workload assigned to agent",
+            ));
         }
 
         crate::log_info!(
             "scheduler",
             &format!(
-                "Stack scheduled stack_id={} agent_id={:?} services={}",
+                "Stack scheduled stack_id={} services={}",
                 stack_id,
-                agent_id,
                 services.len()
             )
         );
@@ -367,21 +283,17 @@ impl SchedulerService {
         Ok(responses)
     }
 
-    async fn preferred_resource_group_agents(
+    async fn hosting_agents(
         &self,
-        resource_group_id: Uuid,
-        agents: &[AgentResources],
-    ) -> Result<Vec<AgentResources>, String> {
-        let hosting_agents =
-            crate::db::agents::get_agents_hosting_resource_group(&self.db, resource_group_id)
-                .await
-                .map_err(|e| format!("Failed to resolve resource group affinity: {}", e))?;
-
-        Ok(agents
-            .iter()
-            .filter(|a| hosting_agents.contains(&a.agent_id))
-            .cloned()
-            .collect())
+        resource_group_id: Option<Uuid>,
+    ) -> Result<Option<HashSet<Uuid>>, String> {
+        let Some(resource_group_id) = resource_group_id else {
+            return Ok(None);
+        };
+        crate::db::agents::get_agents_hosting_resource_group(&self.db, resource_group_id)
+            .await
+            .map(Some)
+            .map_err(|e| format!("Failed to resolve resource group affinity: {}", e))
     }
 
     async fn resolve_volume_affinity(
@@ -417,40 +329,59 @@ impl SchedulerService {
         Ok(pinned)
     }
 
-    fn first_fit(&self, req: &CreateWorkloadRequest, agents: &[AgentResources]) -> Option<Uuid> {
-        self.first_fit_resources(
-            req.cpu_millicores,
-            req.memory_bytes,
-            req.disk_bytes,
-            req.runtime_class.requires_kvm(),
-            agents,
+    async fn persist_node_ports(
+        &self,
+        workload: &workloads::Model,
+        agent_id: Uuid,
+        ports: Option<Vec<crate::models::workload::PortMapping>>,
+    ) -> Result<(), String> {
+        let Some(mut ports) = ports else {
+            return Ok(());
+        };
+        crate::services::port_allocator::allocate_node_ports(
+            &self.db,
+            agent_id,
+            workload.id,
+            &mut ports,
         )
+        .await?;
+        let ports_json = crate::services::port_allocator::ports_to_json(&ports)?;
+        crate::db::workloads::update_ports(&self.db, workload.id, ports_json)
+            .await
+            .map_err(|e| format!("Failed to persist allocated node ports: {}", e))
     }
 
-    fn first_fit_resources(
+    async fn assign_workload(
         &self,
-        cpu_millicores: i32,
-        memory_bytes: i64,
-        disk_bytes: i64,
-        requires_kvm: bool,
-        agents: &[AgentResources],
-    ) -> Option<Uuid> {
-        let mut sorted: Vec<&AgentResources> = agents.iter().collect();
-        sorted.sort_by(|a, b| {
-            let score_a = a.free_cpu_millicores as i64 + a.free_memory_bytes / (1024 * 1024);
-            let score_b = b.free_cpu_millicores as i64 + b.free_memory_bytes / (1024 * 1024);
-            score_b.cmp(&score_a)
-        });
+        workload: &workloads::Model,
+        agent_id: Uuid,
+    ) -> Result<(), String> {
+        crate::db::workloads::assign(&self.db, workload.id, agent_id)
+            .await
+            .map_err(|e| format!("Failed to assign workload: {}", e))?;
+        self.record_placement(workload, agent_id).await
+    }
 
-        sorted
-            .into_iter()
-            .find(|a| {
-                a.free_cpu_millicores >= cpu_millicores
-                    && a.free_memory_bytes >= memory_bytes
-                    && a.free_disk_bytes >= disk_bytes
-                    && (!requires_kvm || a.kvm_capable)
-            })
-            .map(|a| a.agent_id)
+    async fn record_placement(
+        &self,
+        workload: &workloads::Model,
+        agent_id: Uuid,
+    ) -> Result<(), String> {
+        let record = PlacementRecord {
+            workload_id: workload.id,
+            agent_id,
+            image: workload.image.clone(),
+            cpu_millicores: workload.cpu_millicores,
+            memory_bytes: workload.memory_bytes,
+            disk_bytes: workload.disk_bytes,
+            scheduled_at: Utc::now().to_rfc3339(),
+            stack_id: workload.stack_id,
+            service_name: workload.service_name.clone(),
+            runtime_class: workload.runtime_class.clone(),
+        };
+        put_placement(&self.etcd, &record).await?;
+        tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
+        Ok(())
     }
 
     pub async fn list_workloads(
@@ -480,76 +411,35 @@ impl SchedulerService {
                 .map_err(|e| format!("Failed to fetch workload: {}", e))?
                 .ok_or_else(|| format!("Workload {} not found", workload_id))?;
 
-            let runtime_class =
-                crate::models::workload::RuntimeClass::from_str(&workload.runtime_class);
+            let demand = demand_for(&workload, None);
+            let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
+                crate::log_warn!(
+                    "scheduler",
+                    &format!(
+                        "No suitable agent found for reschedule workload_id={}",
+                        workload_id
+                    )
+                );
+                responses.push(pending_response(workload_id));
+                continue;
+            };
 
-            let placed = self.first_fit_resources(
-                workload.cpu_millicores,
-                workload.memory_bytes,
-                workload.disk_bytes,
-                runtime_class.requires_kvm(),
-                &agents,
+            self.assign_workload(&workload, agent_id).await?;
+            placement::commit(&mut agents, agent_id, &demand);
+
+            crate::log_info!(
+                "scheduler",
+                &format!(
+                    "Workload rescheduled workload_id={} from_agent_id={} to_agent_id={}",
+                    workload_id, dead_agent_id, agent_id
+                )
             );
 
-            match placed {
-                Some(agent_id) => {
-                    crate::db::workloads::assign(&self.db, workload_id, agent_id)
-                        .await
-                        .map_err(|e| format!("Failed to assign workload: {}", e))?;
-
-                    let record = PlacementRecord {
-                        workload_id,
-                        agent_id,
-                        image: workload.image.clone(),
-                        cpu_millicores: workload.cpu_millicores,
-                        memory_bytes: workload.memory_bytes,
-                        disk_bytes: workload.disk_bytes,
-                        scheduled_at: Utc::now().to_rfc3339(),
-                        stack_id: workload.stack_id,
-                        service_name: workload.service_name.clone(),
-                        runtime_class: workload.runtime_class.clone(),
-                    };
-                    put_placement(&self.etcd, &record).await?;
-                    tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
-
-                    if let Some(agent) = agents.iter_mut().find(|a| a.agent_id == agent_id) {
-                        agent.free_cpu_millicores -= workload.cpu_millicores;
-                        agent.free_memory_bytes -= workload.memory_bytes;
-                        agent.free_disk_bytes -= workload.disk_bytes;
-                    }
-
-                    crate::log_info!(
-                        "scheduler",
-                        &format!(
-                            "Workload rescheduled workload_id={} from_agent_id={} to_agent_id={}",
-                            workload_id, dead_agent_id, agent_id
-                        )
-                    );
-
-                    responses.push(CreateWorkloadResponse {
-                        workload_id,
-                        status: WorkloadStatus::Scheduled,
-                        assigned_agent_id: Some(agent_id),
-                        message: format!("Workload rescheduled to agent {}", agent_id),
-                    });
-                }
-                None => {
-                    crate::log_warn!(
-                        "scheduler",
-                        &format!(
-                            "No suitable agent found for reschedule workload_id={}",
-                            workload_id
-                        )
-                    );
-
-                    responses.push(CreateWorkloadResponse {
-                        workload_id,
-                        status: WorkloadStatus::Pending,
-                        assigned_agent_id: None,
-                        message: "No agent with sufficient resources available".to_string(),
-                    });
-                }
-            }
+            responses.push(scheduled_response(
+                workload_id,
+                agent_id,
+                "Workload rescheduled to agent",
+            ));
         }
 
         Ok(responses)
@@ -571,55 +461,25 @@ impl SchedulerService {
         let mut placed_count = 0;
 
         for workload in pending {
-            let runtime_class =
-                crate::models::workload::RuntimeClass::from_str(&workload.runtime_class);
-
-            let Some(agent_id) = self.first_fit_resources(
-                workload.cpu_millicores,
-                workload.memory_bytes,
-                workload.disk_bytes,
-                runtime_class.requires_kvm(),
-                &agents,
-            ) else {
+            let demand = demand_for(&workload, None);
+            let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
                 crate::log_debug!(
                     "scheduler",
                     &format!(
                         "Pending workload not placeable workload_id={} required_cpu={} required_memory={} required_disk={} requires_kvm={} {}",
                         workload.id,
-                        workload.cpu_millicores,
-                        workload.memory_bytes,
-                        workload.disk_bytes,
-                        runtime_class.requires_kvm(),
+                        demand.cpu_millicores,
+                        demand.memory_bytes,
+                        demand.disk_bytes,
+                        demand.requires_kvm,
                         describe_agents(&agents)
                     )
                 );
                 continue;
             };
 
-            crate::db::workloads::assign(&self.db, workload.id, agent_id)
-                .await
-                .map_err(|e| format!("Failed to assign workload: {}", e))?;
-
-            let record = PlacementRecord {
-                workload_id: workload.id,
-                agent_id,
-                image: workload.image.clone(),
-                cpu_millicores: workload.cpu_millicores,
-                memory_bytes: workload.memory_bytes,
-                disk_bytes: workload.disk_bytes,
-                scheduled_at: Utc::now().to_rfc3339(),
-                stack_id: workload.stack_id,
-                service_name: workload.service_name.clone(),
-                runtime_class: workload.runtime_class.clone(),
-            };
-            put_placement(&self.etcd, &record).await?;
-            tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
-
-            if let Some(agent) = agents.iter_mut().find(|a| a.agent_id == agent_id) {
-                agent.free_cpu_millicores -= workload.cpu_millicores;
-                agent.free_memory_bytes -= workload.memory_bytes;
-                agent.free_disk_bytes -= workload.disk_bytes;
-            }
+            self.assign_workload(&workload, agent_id).await?;
+            placement::commit(&mut agents, agent_id, &demand);
 
             crate::log_info!(
                 "scheduler",
@@ -651,6 +511,97 @@ impl SchedulerService {
     }
 }
 
+async fn inject_bucket_env(req: &mut CreateWorkloadRequest) {
+    let Some(bindings) = req.bucket_bindings.clone().filter(|b| !b.is_empty()) else {
+        return;
+    };
+    let bucket_env = crate::services::bucket_bindings::resolve_env_vars(
+        Uuid::new_v4(),
+        req.resource_group_id,
+        &bindings,
+    )
+    .await;
+    req.env_vars
+        .get_or_insert_with(std::collections::HashMap::new)
+        .extend(bucket_env);
+}
+
+fn demand_for<'a>(
+    workload: &'a workloads::Model,
+    preferred_agents: Option<&'a HashSet<Uuid>>,
+) -> Demand<'a> {
+    Demand {
+        cpu_millicores: workload.cpu_millicores,
+        memory_bytes: workload.memory_bytes,
+        disk_bytes: workload.disk_bytes,
+        requires_kvm: RuntimeClass::from_str(&workload.runtime_class).requires_kvm(),
+        spread_key: workload.spread_key.as_deref(),
+        preferred_agents,
+    }
+}
+
+fn stack_service_request(
+    stack_id: Uuid,
+    resource_group_id: Uuid,
+    service: &ComposeServiceSpec,
+) -> CreateWorkloadRequest {
+    CreateWorkloadRequest {
+        name: format!("{}-{}", stack_id, service.service_name),
+        image: service.image.clone(),
+        cpu_millicores: service.cpu_millicores,
+        memory_bytes: service.memory_bytes,
+        disk_bytes: service.disk_bytes,
+        env_vars: service.env_vars.clone(),
+        ports: service.ports.clone(),
+        volume_mounts: None,
+        bucket_bindings: None,
+        resource_group_id: Some(resource_group_id),
+        stack_id: Some(stack_id),
+        service_name: Some(service.service_name.clone()),
+        restart_policy: crate::models::workload::RestartPolicy::Always,
+        max_restarts: None,
+        runtime_class: RuntimeClass::Firecracker,
+        cpu_limit_millicores: service.cpu_limit_millicores,
+        memory_limit_bytes: service.memory_limit_bytes,
+        auto_resources: false,
+        replicas: None,
+        spread_key: Some(stack_id.to_string()),
+    }
+}
+
+fn scheduled_response(workload_id: Uuid, agent_id: Uuid, message: &str) -> CreateWorkloadResponse {
+    CreateWorkloadResponse {
+        workload_id,
+        status: WorkloadStatus::Scheduled,
+        assigned_agent_id: Some(agent_id),
+        message: format!("{} {}", message, agent_id),
+    }
+}
+
+fn pending_response(workload_id: Uuid) -> CreateWorkloadResponse {
+    CreateWorkloadResponse {
+        workload_id,
+        status: WorkloadStatus::Pending,
+        assigned_agent_id: None,
+        message: "No agent with sufficient resources available".to_string(),
+    }
+}
+
+fn log_unplaceable(workload: &workloads::Model, demand: &Demand, agents: &[AgentResources]) {
+    crate::log_warn!(
+        "scheduler",
+        &format!(
+            "No suitable agent found workload_id={} required_cpu={} required_memory={} required_disk={} requires_kvm={} {}",
+            workload.id,
+            demand.cpu_millicores,
+            demand.memory_bytes,
+            demand.disk_bytes,
+            demand.requires_kvm,
+            describe_agents(agents)
+        )
+    );
+}
+
 fn describe_agents(agents: &[AgentResources]) -> String {
     if agents.is_empty() {
         return "agents=none_online_with_metrics".to_string();
@@ -680,6 +631,9 @@ fn format_compose_error(error: &ComposeParseError) -> String {
         }
         ComposeParseError::MissingImage(service) => {
             format!("service '{}' has no image", service)
+        }
+        ComposeParseError::InvalidResources(service) => {
+            format!("service '{}' has invalid deploy resources", service)
         }
     }
 }

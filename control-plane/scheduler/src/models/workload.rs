@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+pub const MAX_REPLICAS: u32 = 32;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkloadStatus {
@@ -173,6 +175,71 @@ pub struct CreateWorkloadRequest {
     pub max_restarts: Option<i32>,
     #[serde(default = "default_runtime_class")]
     pub runtime_class: RuntimeClass,
+    #[serde(default)]
+    pub cpu_limit_millicores: Option<i32>,
+    #[serde(default)]
+    pub memory_limit_bytes: Option<i64>,
+    #[serde(default)]
+    pub auto_resources: bool,
+    #[serde(default)]
+    pub replicas: Option<u32>,
+    #[serde(default)]
+    pub spread_key: Option<String>,
+}
+
+impl CreateWorkloadRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.cpu_millicores < 0 || self.memory_bytes < 0 || self.disk_bytes < 0 {
+            return Err("resource requests must not be negative".to_string());
+        }
+        if self
+            .cpu_limit_millicores
+            .is_some_and(|limit| limit < self.cpu_millicores)
+        {
+            return Err("cpu limit must not be below the cpu request".to_string());
+        }
+        if self
+            .memory_limit_bytes
+            .is_some_and(|limit| limit < self.memory_bytes)
+        {
+            return Err("memory limit must not be below the memory request".to_string());
+        }
+        if self
+            .replicas
+            .is_some_and(|count| !(1..=MAX_REPLICAS).contains(&count))
+        {
+            return Err(format!("replicas must be between 1 and {}", MAX_REPLICAS));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum QosClass {
+    Guaranteed,
+    Burstable,
+    BestEffort,
+}
+
+impl QosClass {
+    pub fn classify(
+        cpu_millicores: i32,
+        cpu_limit_millicores: Option<i32>,
+        memory_bytes: i64,
+        memory_limit_bytes: Option<i64>,
+    ) -> Self {
+        if cpu_millicores == 0 && memory_bytes == 0 {
+            return QosClass::BestEffort;
+        }
+        let cpu_fixed = cpu_limit_millicores.is_none_or(|limit| limit == cpu_millicores);
+        let memory_fixed = memory_limit_bytes.is_none_or(|limit| limit == memory_bytes);
+        if cpu_fixed && memory_fixed {
+            QosClass::Guaranteed
+        } else {
+            QosClass::Burstable
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +266,12 @@ pub struct WorkloadResponse {
     pub cpu_millicores: i32,
     pub memory_bytes: i64,
     pub disk_bytes: i64,
+    pub cpu_limit_millicores: Option<i32>,
+    pub memory_limit_bytes: Option<i64>,
+    pub qos_class: QosClass,
+    pub auto_resources: bool,
+    pub recommended_cpu_millicores: Option<i32>,
+    pub recommended_memory_bytes: Option<i64>,
     pub status: WorkloadStatus,
     pub assigned_agent_id: Option<Uuid>,
     pub container_id: Option<String>,
@@ -225,8 +298,11 @@ pub struct WorkloadResponse {
 #[derive(Debug, Clone)]
 pub struct AgentResources {
     pub agent_id: Uuid,
+    pub allocatable_cpu_millicores: i32,
+    pub allocatable_memory_bytes: i64,
     pub free_cpu_millicores: i32,
     pub free_memory_bytes: i64,
     pub free_disk_bytes: i64,
     pub kvm_capable: bool,
+    pub spread_counts: HashMap<String, u32>,
 }
