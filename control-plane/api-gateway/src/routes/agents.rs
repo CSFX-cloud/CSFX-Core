@@ -66,6 +66,9 @@ pub struct AgentResponse {
     pub cordoned: bool,
     pub maintenance_until: Option<String>,
     pub role: String,
+    pub cpu_overcommit_ratio: f64,
+    pub memory_overcommit_ratio: f64,
+    pub disk_overcommit_ratio: f64,
 }
 
 impl From<agents::Model> for AgentResponse {
@@ -85,6 +88,9 @@ impl From<agents::Model> for AgentResponse {
             cordoned: model.cordoned,
             maintenance_until: model.maintenance_until.map(|dt| dt.and_utc().to_rfc3339()),
             role: model.role,
+            cpu_overcommit_ratio: model.cpu_overcommit_ratio,
+            memory_overcommit_ratio: model.memory_overcommit_ratio,
+            disk_overcommit_ratio: model.disk_overcommit_ratio,
         }
     }
 }

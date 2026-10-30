@@ -17,6 +17,9 @@ export interface Node {
     cordoned: boolean;
     maintenance_until: string | null;
     role: 'master' | 'worker';
+    cpu_overcommit_ratio: number;
+    memory_overcommit_ratio: number;
+    disk_overcommit_ratio: number;
 }
 
 export interface NodeMetrics {
