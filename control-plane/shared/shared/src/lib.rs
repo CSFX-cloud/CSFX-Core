@@ -4,6 +4,7 @@ pub mod leader;
 pub mod log_writer;
 pub mod logger;
 pub mod ntfy;
+pub mod qos;
 pub mod ssh_access;
 
 pub use db::establish_connection;

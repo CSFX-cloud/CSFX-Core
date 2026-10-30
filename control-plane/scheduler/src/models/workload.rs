@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use shared::qos::QosClass;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -211,34 +212,6 @@ impl CreateWorkloadRequest {
             return Err(format!("replicas must be between 1 and {}", MAX_REPLICAS));
         }
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum QosClass {
-    Guaranteed,
-    Burstable,
-    BestEffort,
-}
-
-impl QosClass {
-    pub fn classify(
-        cpu_millicores: i32,
-        cpu_limit_millicores: Option<i32>,
-        memory_bytes: i64,
-        memory_limit_bytes: Option<i64>,
-    ) -> Self {
-        if cpu_millicores == 0 && memory_bytes == 0 {
-            return QosClass::BestEffort;
-        }
-        let cpu_fixed = cpu_limit_millicores.is_none_or(|limit| limit == cpu_millicores);
-        let memory_fixed = memory_limit_bytes.is_none_or(|limit| limit == memory_bytes);
-        if cpu_fixed && memory_fixed {
-            QosClass::Guaranteed
-        } else {
-            QosClass::Burstable
-        }
     }
 }
 

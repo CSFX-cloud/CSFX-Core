@@ -7,10 +7,11 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::models::workload::{
-    CreateWorkloadRequest, DesiredState, QosClass, RestartPolicy, RuntimeClass, WorkloadResponse,
+    CreateWorkloadRequest, DesiredState, RestartPolicy, RuntimeClass, WorkloadResponse,
     WorkloadStatus,
 };
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
+use shared::qos::QosClass;
 
 pub async fn create(
     db: &DatabaseConnection,
