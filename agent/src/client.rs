@@ -101,6 +101,10 @@ pub struct AssignedWorkload {
     pub image: String,
     pub cpu_millicores: i32,
     pub memory_bytes: i64,
+    #[serde(default)]
+    pub cpu_limit_millicores: Option<i32>,
+    #[serde(default)]
+    pub memory_limit_bytes: Option<i64>,
     pub env_vars: Option<HashMap<String, String>>,
     pub ports: Option<Vec<crate::spec::PortMapping>>,
     pub volume_mounts: Option<Vec<VolumeMount>>,

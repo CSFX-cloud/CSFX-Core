@@ -963,7 +963,15 @@ async fn start_or_restart_workload(
         workload_id: workload.id.clone(),
         image: workload.image.clone(),
         cpu_millicores: workload.cpu_millicores,
+        cpu_limit_millicores: workload
+            .cpu_limit_millicores
+            .unwrap_or(workload.cpu_millicores)
+            .max(workload.cpu_millicores),
         memory_bytes: workload.memory_bytes,
+        memory_limit_bytes: workload
+            .memory_limit_bytes
+            .unwrap_or(workload.memory_bytes)
+            .max(workload.memory_bytes),
         env_vars: workload.env_vars,
         ports: workload.ports,
         volume_mounts: workload.volume_mounts.map(|mounts| {
