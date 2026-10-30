@@ -118,6 +118,8 @@ pub struct AssignedWorkload {
     #[serde(default)]
     pub runtime_class: String,
     pub disk_bytes: i64,
+    #[serde(default)]
+    pub guest_ip: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -126,6 +128,13 @@ pub struct ResourceGroupPeer {
     pub wg_public_key: String,
     pub wg_endpoint: String,
     pub wg_tunnel_ip: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ResourceGroupMember {
+    pub agent_id: String,
+    pub service_name: Option<String>,
+    pub guest_ip: String,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -440,6 +449,38 @@ impl ApiClient {
         resp.json::<HeartbeatResponse>()
             .await
             .context("Failed to parse heartbeat response")
+    }
+
+    pub async fn fetch_resource_group_members(
+        &self,
+        api_key: &str,
+        resource_group_id: &str,
+    ) -> Result<Vec<ResourceGroupMember>> {
+        let url = format!(
+            "{}/api/resource-groups/{}/members",
+            self.gateway_url, resource_group_id
+        );
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("Failed to fetch resource group members")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!(
+                "Failed to fetch resource group members status={} {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            );
+        }
+
+        resp.json::<Vec<ResourceGroupMember>>()
+            .await
+            .context("Failed to parse resource group members response")
     }
 
     pub async fn fetch_resource_group_peers(

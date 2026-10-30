@@ -134,7 +134,7 @@ impl QemuRuntime {
         .await
         .context("Failed to ensure resource group bridge")?;
 
-        if let Some(cidr) = resource_group_cidr {
+        if resource_group_cidr.is_some() {
             let listen_port = crate::spec::rg_wireguard_port(resource_group_id);
             let wg_iface = crate::wireguard::ensure_interface(
                 resource_group_id,
@@ -144,9 +144,9 @@ impl QemuRuntime {
             .await
             .context("Failed to bring up resource group WireGuard interface")?;
 
-            crate::wireguard::set_route(&wg_iface, cidr)
+            crate::rg_network::ensure_mesh_forwarding(resource_group_id, &wg_iface)
                 .await
-                .context("Failed to route resource group CIDR over WireGuard interface")?;
+                .context("Failed to prepare resource group mesh forwarding")?;
         }
 
         Ok(iface)
@@ -210,9 +210,15 @@ impl crate::runtime::Runtime for QemuRuntime {
         };
 
         let guest_ip = match (&spec.resource_group_id, &spec.resource_group_cidr) {
-            (Some(resource_group_id), Some(cidr)) => {
-                Some(crate::rg_ipam::allocate(resource_group_id, cidr, &spec.workload_id).await?)
-            }
+            (Some(resource_group_id), Some(cidr)) => Some(
+                crate::rg_ipam::allocate(
+                    resource_group_id,
+                    cidr,
+                    &spec.workload_id,
+                    spec.guest_ip.as_deref(),
+                )
+                .await?,
+            ),
             _ => None,
         };
 

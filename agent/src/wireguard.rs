@@ -130,6 +130,48 @@ pub async fn set_route(iface: &str, cidr: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn sync_host_routes(
+    iface: &str,
+    desired: &std::collections::HashSet<String>,
+) -> Result<Vec<String>> {
+    let current = list_host_routes(iface).await?;
+
+    for stale in current.difference(desired) {
+        run_ip(&["route", "del", &format!("{}/32", stale), "dev", iface]).await?;
+    }
+
+    let added: Vec<String> = desired.difference(&current).cloned().collect();
+    for address in &added {
+        run_ip(&["route", "replace", &format!("{}/32", address), "dev", iface]).await?;
+    }
+
+    Ok(added)
+}
+
+async fn list_host_routes(iface: &str) -> Result<std::collections::HashSet<String>> {
+    let output = Command::new("ip")
+        .args(["-4", "route", "show", "dev", iface])
+        .output()
+        .await
+        .context("failed to execute ip route show")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "ip route show failed iface={} stderr={}",
+            iface,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter_map(|destination| destination.strip_suffix("/32").or(Some(destination)))
+        .filter(|destination| destination.parse::<std::net::Ipv4Addr>().is_ok())
+        .map(str::to_string)
+        .collect())
+}
+
 pub async fn remove_interface(iface: &str) -> Result<()> {
     let output = Command::new("ip")
         .args(["link", "delete", "dev", iface])

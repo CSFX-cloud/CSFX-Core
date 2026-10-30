@@ -6,11 +6,20 @@ use crate::spec::{cidr_host_count, nth_host_ip};
 const IPAM_REGISTRY_DIR: &str = "/var/lib/csfx-agent/rg-ipam";
 const FIRST_GUEST_OFFSET: u32 = 3;
 
-pub async fn allocate(resource_group_id: &str, cidr: &str, workload_id: &str) -> Result<String> {
+pub async fn allocate(
+    resource_group_id: &str,
+    cidr: &str,
+    workload_id: &str,
+    assigned_ip: Option<&str>,
+) -> Result<String> {
     let rg_dir = registry_dir(resource_group_id);
     tokio::fs::create_dir_all(&rg_dir)
         .await
         .context("failed to create rg ipam registry directory")?;
+
+    if let Some(assigned_ip) = assigned_ip {
+        return claim_assigned(&rg_dir, workload_id, assigned_ip).await;
+    }
 
     if let Some(existing) = find_existing(&rg_dir, workload_id).await? {
         return Ok(existing);
@@ -49,6 +58,22 @@ pub async fn allocate(resource_group_id: &str, cidr: &str, workload_id: &str) ->
         resource_group_id,
         cidr
     )
+}
+
+async fn claim_assigned(rg_dir: &Path, workload_id: &str, assigned_ip: &str) -> Result<String> {
+    while let Some(existing) = find_existing(rg_dir, workload_id).await? {
+        if existing == assigned_ip {
+            return Ok(existing);
+        }
+        tokio::fs::remove_file(rg_dir.join(&existing))
+            .await
+            .context("failed to drop stale ipam claim")?;
+    }
+
+    tokio::fs::write(rg_dir.join(assigned_ip), workload_id.as_bytes())
+        .await
+        .context("failed to write assigned ipam claim")?;
+    Ok(assigned_ip.to_string())
 }
 
 pub async fn is_claimed(resource_group_id: &str, ip: &str) -> bool {

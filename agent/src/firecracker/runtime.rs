@@ -226,9 +226,9 @@ impl FirecrackerRuntime {
             .await
             .context("Failed to bring up resource group WireGuard interface")?;
 
-            crate::wireguard::set_route(&wg_iface, cidr)
+            crate::rg_network::ensure_mesh_forwarding(resource_group_id, &wg_iface)
                 .await
-                .context("Failed to route resource group CIDR over WireGuard interface")?;
+                .context("Failed to prepare resource group mesh forwarding")?;
         }
 
         Ok(iface)
@@ -322,9 +322,14 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
 
         let guest_network = match (&spec.resource_group_id, &spec.resource_group_cidr) {
             (Some(resource_group_id), Some(cidr)) => {
-                let ip = crate::rg_ipam::allocate(resource_group_id, cidr, &spec.workload_id)
-                    .await
-                    .context("Failed to allocate resource group ip address")?;
+                let ip = crate::rg_ipam::allocate(
+                    resource_group_id,
+                    cidr,
+                    &spec.workload_id,
+                    spec.guest_ip.as_deref(),
+                )
+                .await
+                .context("Failed to allocate resource group ip address")?;
                 let prefix = cidr.split('/').nth(1).unwrap_or("24").to_string();
                 let gateway = crate::spec::second_host_ip(cidr);
                 let dns = crate::spec::second_host_ip(cidr);

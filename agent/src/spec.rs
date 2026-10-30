@@ -30,6 +30,7 @@ pub struct WorkloadSpec {
     pub service_name: Option<String>,
     pub resource_group_id: Option<String>,
     pub resource_group_cidr: Option<String>,
+    pub guest_ip: Option<String>,
     pub vm_spec: Option<VmSpec>,
 }
 
@@ -150,6 +151,7 @@ mod tests {
             service_name: None,
             resource_group_id: None,
             resource_group_cidr: None,
+            guest_ip: None,
             vm_spec: None,
         }
     }
