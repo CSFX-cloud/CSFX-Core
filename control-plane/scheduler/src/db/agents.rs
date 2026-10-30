@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::models::workload::AgentResources;
+use shared::workload_status::ACTIVE_STATUSES;
 
 const MILLICORES_PER_CORE: i32 = 1000;
 const SYSTEM_RESERVE_FRACTION: f64 = 0.1;
-const RESERVING_STATUSES: [&str; 5] = ["scheduled", "pulling", "creating", "starting", "running"];
 
 pub async fn get_schedulable_agents(
     db: &DatabaseConnection,
@@ -41,7 +41,7 @@ async fn get_reserved_by_agent(
 ) -> Result<HashMap<Uuid, Reservation>, sea_orm::DbErr> {
     let active = workloads::Entity::find()
         .filter(workloads::Column::AssignedAgentId.is_not_null())
-        .filter(workloads::Column::Status.is_in(RESERVING_STATUSES))
+        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
         .all(db)
         .await?;
 
@@ -123,11 +123,7 @@ pub async fn get_agents_hosting_resource_group(
     let rows = workloads::Entity::find()
         .filter(workloads::Column::ResourceGroupId.eq(resource_group_id))
         .filter(workloads::Column::AssignedAgentId.is_not_null())
-        .filter(
-            workloads::Column::Status
-                .eq("scheduled")
-                .or(workloads::Column::Status.eq("running")),
-        )
+        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
         .all(db)
         .await?;
 

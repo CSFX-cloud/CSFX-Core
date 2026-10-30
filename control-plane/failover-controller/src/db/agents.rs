@@ -100,7 +100,7 @@ pub async fn count_online(db: &DatabaseConnection) -> Result<u64> {
 pub async fn has_active_assignments(db: &DatabaseConnection, agent_id: Uuid) -> Result<bool> {
     let workload_count = workloads::Entity::find()
         .filter(workloads::Column::AssignedAgentId.eq(agent_id))
-        .filter(workloads::Column::Status.is_in(["scheduled", "running"]))
+        .filter(workloads::Column::Status.is_in(shared::workload_status::ACTIVE_STATUSES))
         .count(db)
         .await?;
     if workload_count > 0 {

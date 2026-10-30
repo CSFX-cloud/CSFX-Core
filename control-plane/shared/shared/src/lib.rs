@@ -6,6 +6,7 @@ pub mod logger;
 pub mod ntfy;
 pub mod qos;
 pub mod ssh_access;
+pub mod workload_status;
 
 pub use db::establish_connection;
 pub use db_log_layer::DbLogLayer;

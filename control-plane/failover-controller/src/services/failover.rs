@@ -69,11 +69,7 @@ impl FailoverService {
 
         let rows = workloads::Entity::find()
             .filter(workloads::Column::AssignedAgentId.eq(agent_id))
-            .filter(
-                workloads::Column::Status
-                    .eq("scheduled")
-                    .or(workloads::Column::Status.eq("running")),
-            )
+            .filter(workloads::Column::Status.is_in(shared::workload_status::ACTIVE_STATUSES))
             .all(&self.db)
             .await?;
 
