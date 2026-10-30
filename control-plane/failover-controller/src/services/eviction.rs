@@ -121,17 +121,6 @@ fn has_volumes(workload: &workloads::Model) -> bool {
         .is_some_and(|mounts| !mounts.is_empty())
 }
 
-fn is_alone_in_group(workload: &workloads::Model, candidates: &[workloads::Model]) -> bool {
-    let Some(group) = workload.resource_group_id else {
-        return true;
-    };
-    candidates
-        .iter()
-        .filter(|other| other.resource_group_id == Some(group))
-        .count()
-        == 1
-}
-
 fn usage(workload: &workloads::Model, pressure: Pressure) -> f64 {
     match pressure {
         Pressure::Cpu => workload.cpu_usage_percent.unwrap_or(0.0),
@@ -144,7 +133,6 @@ pub fn pick_victim(candidates: &[workloads::Model], pressure: Pressure) -> Optio
         .iter()
         .filter(|workload| workload.status == "running")
         .filter(|workload| !has_volumes(workload))
-        .filter(|workload| is_alone_in_group(workload, candidates))
         .map(|workload| (qos_of(workload), usage(workload, pressure), workload.id))
         .filter(|(qos, _, _)| *qos != QosClass::Guaranteed)
         .min_by(|left, right| left.0.cmp(&right.0).then(right.1.total_cmp(&left.1)))
@@ -180,6 +168,7 @@ mod tests {
             cpu_limit_millicores: cpu_limit,
             memory_limit_bytes: None,
             spread_key: None,
+            guest_ip: None,
             auto_resources: false,
             cpu_usage_peak_percent: None,
             memory_usage_peak_bytes: None,
@@ -217,23 +206,6 @@ mod tests {
             workload(500, Some(1000), 100, true),
         ];
         assert_eq!(pick_victim(&candidates, Pressure::Memory), None);
-    }
-
-    #[test]
-    fn never_splits_a_resource_group() {
-        let group = Uuid::new_v4();
-        let mut first = workload(500, Some(1000), 900, false);
-        let mut second = workload(500, Some(1000), 100, false);
-        first.resource_group_id = Some(group);
-        second.resource_group_id = Some(group);
-        assert_eq!(
-            pick_victim(&[first.clone(), second], Pressure::Memory),
-            None
-        );
-        assert_eq!(
-            pick_victim(&[first.clone()], Pressure::Memory),
-            Some(first.id)
-        );
     }
 
     #[test]

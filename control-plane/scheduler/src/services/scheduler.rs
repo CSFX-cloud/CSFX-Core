@@ -16,6 +16,8 @@ use crate::services::compose_parser::{self, ComposeParseError};
 use crate::services::etcd::{delete_placement, put_placement, PlacementRecord};
 use crate::services::placement::{self, Demand, Strategy};
 
+const GUEST_IP_ATTEMPTS: usize = 5;
+
 pub struct SchedulerService {
     db: DatabaseConnection,
     etcd: Arc<Mutex<EtcdClient>>,
@@ -61,9 +63,7 @@ impl SchedulerService {
         req.validate()?;
         inject_bucket_env(&mut req).await;
 
-        let workload = crate::db::workloads::create(&self.db, &req)
-            .await
-            .map_err(|e| format!("Failed to persist workload: {}", e))?;
+        let workload = self.create_with_guest_ip(&req).await?;
 
         let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
@@ -255,9 +255,7 @@ impl SchedulerService {
         let mut responses = Vec::with_capacity(services.len());
         for service in services {
             let req = stack_service_request(stack_id, resource_group_id, service);
-            let workload = crate::db::workloads::create(&self.db, &req)
-                .await
-                .map_err(|e| format!("Failed to persist workload: {}", e))?;
+            let workload = self.create_with_guest_ip(&req).await?;
 
             let demand = demand_for(&workload, Some(&preferred));
             let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
@@ -285,6 +283,66 @@ impl SchedulerService {
         );
 
         Ok(responses)
+    }
+
+    async fn create_with_guest_ip(
+        &self,
+        req: &CreateWorkloadRequest,
+    ) -> Result<workloads::Model, String> {
+        let Some(group) = req.resource_group_id else {
+            return crate::db::workloads::create(&self.db, req, None)
+                .await
+                .map_err(|e| format!("Failed to persist workload: {}", e));
+        };
+
+        for _ in 0..GUEST_IP_ATTEMPTS {
+            let guest_ip = self.next_guest_ip(group).await?;
+            match crate::db::workloads::create(&self.db, req, Some(guest_ip)).await {
+                Ok(workload) => return Ok(workload),
+                Err(e) if is_unique_violation(&e) => continue,
+                Err(e) => return Err(format!("Failed to persist workload: {}", e)),
+            }
+        }
+        Err(format!(
+            "Could not reserve a guest ip in resource group {}",
+            group
+        ))
+    }
+
+    async fn next_guest_ip(&self, resource_group_id: Uuid) -> Result<String, String> {
+        let cidr = crate::db::resource_groups::internal_cidr(&self.db, resource_group_id)
+            .await
+            .map_err(|e| format!("Failed to fetch resource group cidr: {}", e))?
+            .ok_or_else(|| format!("Resource group {} not found", resource_group_id))?;
+        let used = crate::db::workloads::used_guest_ips(&self.db, resource_group_id)
+            .await
+            .map_err(|e| format!("Failed to fetch used guest ips: {}", e))?;
+
+        crate::services::guest_ip::next_free(&cidr, &used).ok_or_else(|| {
+            format!(
+                "Resource group {} has no free guest ip in {}",
+                resource_group_id, cidr
+            )
+        })
+    }
+
+    pub async fn backfill_guest_ips(&self) -> Result<usize, String> {
+        let missing = crate::db::workloads::get_without_guest_ip(&self.db)
+            .await
+            .map_err(|e| format!("Failed to fetch workloads without guest ip: {}", e))?;
+
+        let mut assigned = 0;
+        for workload in missing {
+            let Some(group) = workload.resource_group_id else {
+                continue;
+            };
+            let guest_ip = self.next_guest_ip(group).await?;
+            crate::db::workloads::set_guest_ip(&self.db, workload.id, guest_ip)
+                .await
+                .map_err(|e| format!("Failed to store guest ip: {}", e))?;
+            assigned += 1;
+        }
+        Ok(assigned)
     }
 
     async fn hosting_agents(
@@ -517,6 +575,13 @@ impl SchedulerService {
     }
 }
 
+fn is_unique_violation(error: &sea_orm::DbErr) -> bool {
+    matches!(
+        error.sql_err(),
+        Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
+    )
+}
+
 async fn inject_bucket_env(req: &mut CreateWorkloadRequest) {
     let Some(bindings) = req.bucket_bindings.clone().filter(|b| !b.is_empty()) else {
         return;
@@ -571,7 +636,7 @@ fn stack_service_request(
         memory_limit_bytes: service.memory_limit_bytes,
         auto_resources: false,
         replicas: None,
-        spread_key: None,
+        spread_key: Some(stack_id.to_string()),
     }
 }
 

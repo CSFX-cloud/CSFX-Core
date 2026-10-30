@@ -14,6 +14,7 @@ pub struct Model {
     pub cpu_limit_millicores: Option<i32>,
     pub memory_limit_bytes: Option<i64>,
     pub spread_key: Option<String>,
+    pub guest_ip: Option<String>,
     pub auto_resources: bool,
     pub cpu_usage_peak_percent: Option<f64>,
     pub memory_usage_peak_bytes: Option<i64>,

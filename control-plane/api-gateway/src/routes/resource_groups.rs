@@ -21,6 +21,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::workload_status::ACTIVE_STATUSES;
 use uuid::Uuid;
 
 use crate::{
@@ -798,11 +799,7 @@ pub async fn list_resource_group_peers(
     let hosting_agents = Workloads::find()
         .filter(workloads::Column::ResourceGroupId.eq(id))
         .filter(workloads::Column::AssignedAgentId.is_not_null())
-        .filter(
-            workloads::Column::Status
-                .eq("scheduled")
-                .or(workloads::Column::Status.eq("running")),
-        )
+        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
         .all(&state.db_conn)
         .await
         .map_err(|e| {
@@ -852,6 +849,50 @@ pub async fn list_resource_group_peers(
         .collect();
 
     Ok((StatusCode::OK, Json(json!(peers))))
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResourceGroupMember {
+    pub workload_id: Uuid,
+    pub agent_id: Uuid,
+    pub service_name: Option<String>,
+    pub guest_ip: String,
+}
+
+pub async fn list_resource_group_members(
+    _agent: crate::auth::agent::AgentApiKey,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let rows = Workloads::find()
+        .filter(workloads::Column::ResourceGroupId.eq(id))
+        .filter(workloads::Column::AssignedAgentId.is_not_null())
+        .filter(workloads::Column::GuestIp.is_not_null())
+        .filter(workloads::Column::DesiredState.ne("stopped"))
+        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
+        .all(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to list resource group members");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?;
+
+    let members: Vec<ResourceGroupMember> = rows
+        .into_iter()
+        .filter_map(|w| {
+            Some(ResourceGroupMember {
+                workload_id: w.id,
+                agent_id: w.assigned_agent_id?,
+                service_name: w.service_name,
+                guest_ip: w.guest_ip?,
+            })
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(json!(members))))
 }
 
 pub async fn list_mesh_peers(
@@ -947,11 +988,7 @@ pub async fn get_vpn_config(
     let hosting_agents = Workloads::find()
         .filter(workloads::Column::ResourceGroupId.eq(id))
         .filter(workloads::Column::AssignedAgentId.is_not_null())
-        .filter(
-            workloads::Column::Status
-                .eq("scheduled")
-                .or(workloads::Column::Status.eq("running")),
-        )
+        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
         .all(&state.db_conn)
         .await
         .map_err(|e| {
@@ -1230,6 +1267,10 @@ pub fn resource_groups_agent_routes() -> Router<AppState> {
         .route(
             "/resource-groups/{id}/peers",
             get(list_resource_group_peers),
+        )
+        .route(
+            "/resource-groups/{id}/members",
+            get(list_resource_group_members),
         )
         .route(
             "/resource-groups/{id}/vpn-peers",

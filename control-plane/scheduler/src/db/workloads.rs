@@ -4,6 +4,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait,
     QueryFilter,
 };
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::models::workload::{
@@ -16,6 +17,7 @@ use shared::qos::QosClass;
 pub async fn create(
     db: &DatabaseConnection,
     req: &CreateWorkloadRequest,
+    guest_ip: Option<String>,
 ) -> Result<workloads::Model, sea_orm::DbErr> {
     let env_vars = req
         .env_vars
@@ -40,6 +42,7 @@ pub async fn create(
         cpu_limit_millicores: Set(req.cpu_limit_millicores),
         memory_limit_bytes: Set(req.memory_limit_bytes),
         spread_key: Set(req.spread_key.clone()),
+        guest_ip: Set(guest_ip),
         auto_resources: Set(req.auto_resources),
         cpu_usage_peak_percent: Set(None),
         memory_usage_peak_bytes: Set(None),
@@ -70,6 +73,46 @@ pub async fn create(
     };
 
     model.insert(db).await
+}
+
+pub async fn used_guest_ips(
+    db: &DatabaseConnection,
+    resource_group_id: Uuid,
+) -> Result<HashSet<String>, sea_orm::DbErr> {
+    Ok(workloads::Entity::find()
+        .filter(workloads::Column::ResourceGroupId.eq(resource_group_id))
+        .filter(workloads::Column::GuestIp.is_not_null())
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|workload| workload.guest_ip)
+        .collect())
+}
+
+pub async fn get_without_guest_ip(
+    db: &DatabaseConnection,
+) -> Result<Vec<workloads::Model>, sea_orm::DbErr> {
+    workloads::Entity::find()
+        .filter(workloads::Column::ResourceGroupId.is_not_null())
+        .filter(workloads::Column::GuestIp.is_null())
+        .all(db)
+        .await
+}
+
+pub async fn set_guest_ip(
+    db: &DatabaseConnection,
+    workload_id: Uuid,
+    guest_ip: String,
+) -> Result<(), sea_orm::DbErr> {
+    let workload = workloads::Entity::find_by_id(workload_id)
+        .one(db)
+        .await?
+        .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
+
+    let mut active: workloads::ActiveModel = workload.into();
+    active.guest_ip = Set(Some(guest_ip));
+    active.update(db).await?;
+    Ok(())
 }
 
 pub async fn assign(
@@ -363,6 +406,7 @@ fn into_response(m: workloads::Model) -> WorkloadResponse {
             m.memory_limit_bytes,
         ),
         auto_resources: m.auto_resources,
+        guest_ip: m.guest_ip,
         recommended_cpu_millicores: m.cpu_usage_peak_percent.map(recommend_cpu_millicores),
         recommended_memory_bytes: m.memory_usage_peak_bytes.map(recommend_memory_bytes),
         status: WorkloadStatus::from_str(&m.status),

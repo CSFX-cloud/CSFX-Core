@@ -117,6 +117,7 @@ export interface Workload {
     memory_limit_bytes: number | null;
     qos_class: 'guaranteed' | 'burstable' | 'besteffort';
     auto_resources: boolean;
+    guest_ip: string | null;
     recommended_cpu_millicores: number | null;
     recommended_memory_bytes: number | null;
     status: string;

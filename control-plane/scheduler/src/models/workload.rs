@@ -243,6 +243,7 @@ pub struct WorkloadResponse {
     pub memory_limit_bytes: Option<i64>,
     pub qos_class: QosClass,
     pub auto_resources: bool,
+    pub guest_ip: Option<String>,
     pub recommended_cpu_millicores: Option<i32>,
     pub recommended_memory_bytes: Option<i64>,
     pub status: WorkloadStatus,
