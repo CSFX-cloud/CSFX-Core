@@ -113,6 +113,12 @@ export interface Workload {
     cpu_millicores: number;
     memory_bytes: number;
     disk_bytes: number;
+    cpu_limit_millicores: number | null;
+    memory_limit_bytes: number | null;
+    qos_class: 'guaranteed' | 'burstable' | 'besteffort';
+    auto_resources: boolean;
+    recommended_cpu_millicores: number | null;
+    recommended_memory_bytes: number | null;
     status: string;
     assigned_agent_id: string | null;
     container_id: string | null;
@@ -142,6 +148,10 @@ export interface CreateWorkloadRequest {
     cpu_millicores: number;
     memory_bytes: number;
     disk_bytes: number;
+    cpu_limit_millicores?: number;
+    memory_limit_bytes?: number;
+    auto_resources?: boolean;
+    replicas?: number;
     env_vars: Record<string, string> | null;
     ports: PortMapping[] | null;
     volume_mounts: VolumeMount[] | null;
@@ -149,6 +159,13 @@ export interface CreateWorkloadRequest {
     restart_policy?: 'always' | 'on-failure' | 'never';
     max_restarts?: number | null;
     runtime_class?: 'firecracker' | 'vm';
+}
+
+export interface CreateWorkloadResult {
+    workload_id: string;
+    status: string;
+    assigned_agent_id: string | null;
+    message: string;
 }
 
 export interface UpdateWorkloadRequest {
@@ -304,7 +321,7 @@ export async function listWorkloads(token: string): Promise<Workload[]> {
     return res.json();
 }
 
-export async function createWorkload(token: string, req: CreateWorkloadRequest): Promise<{ workload_id: string; status: string; assigned_agent_id: string | null; message: string }> {
+export async function createWorkload(token: string, req: CreateWorkloadRequest): Promise<CreateWorkloadResult | CreateWorkloadResult[]> {
     const res = await authedFetch(`${API_BASE}/workloads`, {
         method: 'POST',
         headers: {

@@ -17,8 +17,8 @@
     const ceiling = $derived(chartCeiling(samples, ["cpu", "memory"]));
     const latest = $derived(samples.length ? samples[samples.length - 1] : null);
     const stats = $derived([
-        { label: "CPU", value: workload.cpu_usage_percent !== null ? formatPercent(workload.cpu_usage_percent) : "—", note: `of ${workload.cpu_millicores}m requested` },
-        { label: "Memory", value: workload.memory_usage_bytes !== null ? formatBytes(workload.memory_usage_bytes) : "—", note: `of ${formatBytes(workload.memory_bytes)} requested` },
+        { label: "CPU", value: workload.cpu_usage_percent !== null ? formatPercent(workload.cpu_usage_percent) : "—", note: `of ${workload.cpu_millicores}m requested${workload.cpu_limit_millicores ? `, limit ${workload.cpu_limit_millicores}m` : ""}` },
+        { label: "Memory", value: workload.memory_usage_bytes !== null ? formatBytes(workload.memory_usage_bytes) : "—", note: `of ${formatBytes(workload.memory_bytes)} requested${workload.memory_limit_bytes ? `, limit ${formatBytes(workload.memory_limit_bytes)}` : ""}` },
         { label: "Network in", value: workload.network_rx_bytes !== null ? formatBytes(workload.network_rx_bytes) : "—", note: "Received" },
         { label: "Network out", value: workload.network_tx_bytes !== null ? formatBytes(workload.network_tx_bytes) : "—", note: "Transmitted" },
     ]);

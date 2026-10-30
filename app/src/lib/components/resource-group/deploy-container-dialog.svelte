@@ -24,11 +24,20 @@
     let formCpu = $state("500");
     let formMemory = $state("512");
     let formDisk = $state("1024");
+    let formMode = $state<"fixed" | "burst" | "auto">("fixed");
+    let formCpuLimit = $state("1000");
+    let formMemoryLimit = $state("1024");
+    let formReplicas = $state("1");
     let formEnv = $state("");
     let formPortRows = $state<
         { containerPort: string; rgPort: string; nodePort: string; protocol: "tcp" | "udp" }[]
     >([]);
     let formVolumeMounts = $state("");
+
+    const limitInvalid = $derived(
+        formMode === "burst" &&
+            (parseInt(formCpuLimit) < parseInt(formCpu) || parseInt(formMemoryLimit) < parseInt(formMemory)),
+    );
 
     export function open() {
         dialog?.showModal();
@@ -96,6 +105,10 @@
                 cpu_millicores: parseInt(formCpu),
                 memory_bytes: parseInt(formMemory) * 1024 * 1024,
                 disk_bytes: parseInt(formDisk) * 1024 * 1024,
+                cpu_limit_millicores: formMode === "burst" ? parseInt(formCpuLimit) : undefined,
+                memory_limit_bytes: formMode === "burst" ? parseInt(formMemoryLimit) * 1024 * 1024 : undefined,
+                auto_resources: formMode === "auto",
+                replicas: parseInt(formReplicas) > 1 ? parseInt(formReplicas) : undefined,
                 env_vars: parseEnvVars(formEnv),
                 ports: buildPortMappings(),
                 volume_mounts: parseVolumeMounts(formVolumeMounts),
@@ -117,6 +130,10 @@
         formCpu = "500";
         formMemory = "512";
         formDisk = "1024";
+        formMode = "fixed";
+        formCpuLimit = "1000";
+        formMemoryLimit = "1024";
+        formReplicas = "1";
         formEnv = "";
         formPortRows = [];
         formVolumeMounts = "";
@@ -151,13 +168,42 @@
                 <input id="d-image" class="border rounded px-3 py-1.5 text-sm bg-background font-mono" placeholder="nginx:latest" bind:value={formImage} />
             </div>
             <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-cpu">CPU (millicores)</label>
+                <label class="text-xs text-muted-foreground" for="d-mode">Resources</label>
+                <select id="d-mode" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={formMode}>
+                    <option value="fixed">Fixed</option>
+                    <option value="burst">Burst up to a limit</option>
+                    <option value="auto">Auto (right-size from usage)</option>
+                </select>
+            </div>
+            <div class="flex flex-col gap-1">
+                <label class="text-xs text-muted-foreground" for="d-replicas">Replicas</label>
+                <input id="d-replicas" type="number" min="1" max="32" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={formReplicas} />
+            </div>
+            <div class="flex flex-col gap-1">
+                <label class="text-xs text-muted-foreground" for="d-cpu">{formMode === "fixed" ? "CPU (millicores)" : "CPU request (millicores)"}</label>
                 <input id="d-cpu" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="500" bind:value={formCpu} />
             </div>
             <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-mem">Memory (MB)</label>
+                <label class="text-xs text-muted-foreground" for="d-mem">{formMode === "fixed" ? "Memory (MB)" : "Memory request (MB)"}</label>
                 <input id="d-mem" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="512" bind:value={formMemory} />
             </div>
+            {#if formMode === "burst"}
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-muted-foreground" for="d-cpu-limit">CPU limit (millicores)</label>
+                    <input id="d-cpu-limit" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={formCpuLimit} />
+                </div>
+                <div class="flex flex-col gap-1">
+                    <label class="text-xs text-muted-foreground" for="d-mem-limit">Memory limit (MB)</label>
+                    <input id="d-mem-limit" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={formMemoryLimit} />
+                </div>
+                {#if limitInvalid}
+                    <p class="text-xs text-destructive sm:col-span-2">Limits must not be below the requests.</p>
+                {/if}
+            {:else if formMode === "auto"}
+                <p class="text-xs text-muted-foreground sm:col-span-2">
+                    Starts with the values above. On the next restart the request shrinks to the observed peak plus 20 percent, and the original value becomes the burst limit.
+                </p>
+            {/if}
             <div class="flex flex-col gap-1">
                 <label class="text-xs text-muted-foreground" for="d-disk">Disk (MB)</label>
                 <input id="d-disk" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="1024" bind:value={formDisk} />
@@ -271,7 +317,7 @@
         {/if}
         <div class="flex gap-2 justify-end">
             <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
-            <Button size="sm" onclick={handleDeploy} disabled={deploying || !formName || !formImage}>
+            <Button size="sm" onclick={handleDeploy} disabled={deploying || !formName || !formImage || limitInvalid}>
                 {deploying ? "Deploying..." : "Deploy"}
             </Button>
         </div>
