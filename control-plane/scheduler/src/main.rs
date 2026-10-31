@@ -88,6 +88,12 @@ async fn main() -> anyhow::Result<()> {
     let leader = LeaderLease::connect(LEADER_KEY).await?;
     spawn_pending_retry(state.scheduler.clone(), leader);
 
+    match state.scheduler.backfill_guest_ips().await {
+        Ok(0) => {}
+        Ok(count) => log_info!("main", &format!("Backfilled guest ips count={}", count)),
+        Err(e) => log_error!("main", &format!("Guest ip backfill failed err={}", e)),
+    }
+
     let port = std::env::var("SCHEDULER_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())

@@ -1,7 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use shared::qos::QosClass;
 use std::collections::HashMap;
 use uuid::Uuid;
+
+pub const MAX_REPLICAS: u32 = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -173,6 +176,43 @@ pub struct CreateWorkloadRequest {
     pub max_restarts: Option<i32>,
     #[serde(default = "default_runtime_class")]
     pub runtime_class: RuntimeClass,
+    #[serde(default)]
+    pub cpu_limit_millicores: Option<i32>,
+    #[serde(default)]
+    pub memory_limit_bytes: Option<i64>,
+    #[serde(default)]
+    pub auto_resources: bool,
+    #[serde(default)]
+    pub replicas: Option<u32>,
+    #[serde(default)]
+    pub spread_key: Option<String>,
+}
+
+impl CreateWorkloadRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.cpu_millicores < 0 || self.memory_bytes < 0 || self.disk_bytes < 0 {
+            return Err("resource requests must not be negative".to_string());
+        }
+        if self
+            .cpu_limit_millicores
+            .is_some_and(|limit| limit < self.cpu_millicores)
+        {
+            return Err("cpu limit must not be below the cpu request".to_string());
+        }
+        if self
+            .memory_limit_bytes
+            .is_some_and(|limit| limit < self.memory_bytes)
+        {
+            return Err("memory limit must not be below the memory request".to_string());
+        }
+        if self
+            .replicas
+            .is_some_and(|count| !(1..=MAX_REPLICAS).contains(&count))
+        {
+            return Err(format!("replicas must be between 1 and {}", MAX_REPLICAS));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,6 +239,13 @@ pub struct WorkloadResponse {
     pub cpu_millicores: i32,
     pub memory_bytes: i64,
     pub disk_bytes: i64,
+    pub cpu_limit_millicores: Option<i32>,
+    pub memory_limit_bytes: Option<i64>,
+    pub qos_class: QosClass,
+    pub auto_resources: bool,
+    pub guest_ip: Option<String>,
+    pub recommended_cpu_millicores: Option<i32>,
+    pub recommended_memory_bytes: Option<i64>,
     pub status: WorkloadStatus,
     pub assigned_agent_id: Option<Uuid>,
     pub container_id: Option<String>,
@@ -225,8 +272,11 @@ pub struct WorkloadResponse {
 #[derive(Debug, Clone)]
 pub struct AgentResources {
     pub agent_id: Uuid,
+    pub allocatable_cpu_millicores: i32,
+    pub allocatable_memory_bytes: i64,
     pub free_cpu_millicores: i32,
     pub free_memory_bytes: i64,
     pub free_disk_bytes: i64,
     pub kvm_capable: bool,
+    pub spread_counts: HashMap<String, u32>,
 }

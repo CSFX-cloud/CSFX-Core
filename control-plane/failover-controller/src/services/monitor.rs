@@ -8,8 +8,15 @@ use tokio::time::{interval, Duration};
 use uuid::Uuid;
 
 use crate::db::agents as agent_db;
+use crate::db::events;
+use crate::services::eviction::{EvictionService, Pressure};
 use crate::services::failover::FailoverService;
 use crate::services::{hardware_alerts, status_alerts};
+
+const PRESSURE_RULES: [(&str, Pressure); 2] = [
+    ("high_memory", Pressure::Memory),
+    ("high_cpu", Pressure::Cpu),
+];
 
 const POLL_INTERVAL_SECS: u64 = 15;
 const SOFT_THRESHOLD_SECS: i64 = 50;
@@ -19,6 +26,7 @@ type InFlight = Arc<Mutex<HashSet<Uuid>>>;
 
 pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
     let failover = Arc::new(FailoverService::new(db.clone()));
+    let eviction = EvictionService::new(db.clone());
     let in_flight = InFlight::default();
     let mut tick = interval(Duration::from_secs(POLL_INTERVAL_SECS));
 
@@ -30,6 +38,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
         }
 
         check_hardware_alerts(&db).await;
+        relieve_pressure(&db, &eviction).await;
 
         let (degraded, offline) =
             match agent_db::get_stale_agents(&db, SOFT_THRESHOLD_SECS, HARD_THRESHOLD_SECS).await {
@@ -61,6 +70,50 @@ async fn check_hardware_alerts(db: &DatabaseConnection) {
                 "monitor",
                 &format!("Failed to query agents for alerting err={}", e)
             );
+        }
+    }
+}
+
+async fn relieve_pressure(db: &DatabaseConnection, eviction: &EvictionService) {
+    let agents = match agent_db::get_agents_for_alerting(db).await {
+        Ok(agents) => agents,
+        Err(e) => {
+            crate::log_error!(
+                "monitor",
+                &format!("Failed to query agents for eviction err={}", e)
+            );
+            return;
+        }
+    };
+
+    for agent in agents.iter().filter(|agent| agent.status == "Online") {
+        for (event_type, pressure) in PRESSURE_RULES {
+            if !has_open_event(db, agent.id, event_type).await {
+                continue;
+            }
+            if let Err(e) = eviction.relieve(agent.id, pressure).await {
+                crate::log_error!(
+                    "monitor",
+                    &format!("Eviction failed agent_id={} err={}", agent.id, e)
+                );
+            }
+            break;
+        }
+    }
+}
+
+async fn has_open_event(db: &DatabaseConnection, agent_id: Uuid, event_type: &str) -> bool {
+    match events::find_open(db, agent_id, event_type).await {
+        Ok(event) => event.is_some(),
+        Err(e) => {
+            crate::log_error!(
+                "monitor",
+                &format!(
+                    "Failed to query open event agent_id={} event_type={} err={}",
+                    agent_id, event_type, e
+                )
+            );
+            false
         }
     }
 }

@@ -4,16 +4,20 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait,
     QueryFilter,
 };
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::models::workload::{
     CreateWorkloadRequest, DesiredState, RestartPolicy, RuntimeClass, WorkloadResponse,
     WorkloadStatus,
 };
+use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
+use shared::qos::QosClass;
 
 pub async fn create(
     db: &DatabaseConnection,
     req: &CreateWorkloadRequest,
+    guest_ip: Option<String>,
 ) -> Result<workloads::Model, sea_orm::DbErr> {
     let env_vars = req
         .env_vars
@@ -35,6 +39,13 @@ pub async fn create(
         cpu_millicores: Set(req.cpu_millicores),
         memory_bytes: Set(req.memory_bytes),
         disk_bytes: Set(req.disk_bytes),
+        cpu_limit_millicores: Set(req.cpu_limit_millicores),
+        memory_limit_bytes: Set(req.memory_limit_bytes),
+        spread_key: Set(req.spread_key.clone()),
+        guest_ip: Set(guest_ip),
+        auto_resources: Set(req.auto_resources),
+        cpu_usage_peak_percent: Set(None),
+        memory_usage_peak_bytes: Set(None),
         env_vars: Set(env_vars),
         ports: Set(ports),
         volume_mounts: Set(volume_mounts),
@@ -62,6 +73,46 @@ pub async fn create(
     };
 
     model.insert(db).await
+}
+
+pub async fn used_guest_ips(
+    db: &DatabaseConnection,
+    resource_group_id: Uuid,
+) -> Result<HashSet<String>, sea_orm::DbErr> {
+    Ok(workloads::Entity::find()
+        .filter(workloads::Column::ResourceGroupId.eq(resource_group_id))
+        .filter(workloads::Column::GuestIp.is_not_null())
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|workload| workload.guest_ip)
+        .collect())
+}
+
+pub async fn get_without_guest_ip(
+    db: &DatabaseConnection,
+) -> Result<Vec<workloads::Model>, sea_orm::DbErr> {
+    workloads::Entity::find()
+        .filter(workloads::Column::ResourceGroupId.is_not_null())
+        .filter(workloads::Column::GuestIp.is_null())
+        .all(db)
+        .await
+}
+
+pub async fn set_guest_ip(
+    db: &DatabaseConnection,
+    workload_id: Uuid,
+    guest_ip: String,
+) -> Result<(), sea_orm::DbErr> {
+    let workload = workloads::Entity::find_by_id(workload_id)
+        .one(db)
+        .await?
+        .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
+
+    let mut active: workloads::ActiveModel = workload.into();
+    active.guest_ip = Set(Some(guest_ip));
+    active.update(db).await?;
+    Ok(())
 }
 
 pub async fn assign(
@@ -110,7 +161,7 @@ pub async fn update_spec(
         .await?
         .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
 
-    let mut active: workloads::ActiveModel = workload.into();
+    let mut active: workloads::ActiveModel = workload.clone().into();
 
     if let Some(ref image) = req.image {
         active.image = Set(image.clone());
@@ -128,6 +179,7 @@ pub async fn update_spec(
         active.max_restarts = Set(req.max_restarts);
     }
 
+    apply_auto_resources(&workload, &mut active);
     active.restart_requested = Set(true);
     active.status = Set(WorkloadStatus::Starting.as_str().to_string());
     active.updated_at = Set(Some(Utc::now().naive_utc()));
@@ -227,7 +279,8 @@ pub async fn request_restart(
         .await?
         .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
 
-    let mut active: workloads::ActiveModel = workload.into();
+    let mut active: workloads::ActiveModel = workload.clone().into();
+    apply_auto_resources(&workload, &mut active);
     active.desired_state = Set(DesiredState::Running.as_str().to_string());
     active.restart_requested = Set(true);
     active.status = Set(WorkloadStatus::Starting.as_str().to_string());
@@ -266,7 +319,16 @@ pub async fn update_stats(
         .await?
         .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
 
+    let cpu_peak = peak(workload.cpu_usage_peak_percent, cpu_usage_percent, f64::max);
+    let memory_peak = peak(
+        workload.memory_usage_peak_bytes,
+        memory_usage_bytes,
+        i64::max,
+    );
+
     let mut active: workloads::ActiveModel = workload.into();
+    active.cpu_usage_peak_percent = Set(cpu_peak);
+    active.memory_usage_peak_bytes = Set(memory_peak);
     active.cpu_usage_percent = Set(cpu_usage_percent);
     active.memory_usage_bytes = Set(memory_usage_bytes);
     active.network_rx_bytes = Set(network_rx_bytes);
@@ -285,6 +347,33 @@ pub async fn delete(db: &DatabaseConnection, workload_id: Uuid) -> Result<(), se
 
     workload.delete(db).await?;
     Ok(())
+}
+
+fn peak<T: Copy>(stored: Option<T>, sample: Option<T>, larger: fn(T, T) -> T) -> Option<T> {
+    match (stored, sample) {
+        (Some(stored), Some(sample)) => Some(larger(stored, sample)),
+        (stored, sample) => stored.or(sample),
+    }
+}
+
+fn apply_auto_resources(workload: &workloads::Model, active: &mut workloads::ActiveModel) {
+    if !workload.auto_resources {
+        return;
+    }
+    if let Some(peak) = workload.cpu_usage_peak_percent {
+        let ceiling = workload
+            .cpu_limit_millicores
+            .unwrap_or(workload.cpu_millicores);
+        active.cpu_limit_millicores = Set(Some(ceiling));
+        active.cpu_millicores = Set(recommend_cpu_millicores(peak).min(ceiling));
+    }
+    if let Some(peak) = workload.memory_usage_peak_bytes {
+        let ceiling = workload.memory_limit_bytes.unwrap_or(workload.memory_bytes);
+        active.memory_limit_bytes = Set(Some(ceiling));
+        active.memory_bytes = Set(recommend_memory_bytes(peak).min(ceiling));
+    }
+    active.cpu_usage_peak_percent = Set(None);
+    active.memory_usage_peak_bytes = Set(None);
 }
 
 fn into_response(m: workloads::Model) -> WorkloadResponse {
@@ -308,6 +397,18 @@ fn into_response(m: workloads::Model) -> WorkloadResponse {
         cpu_millicores: m.cpu_millicores,
         memory_bytes: m.memory_bytes,
         disk_bytes: m.disk_bytes,
+        cpu_limit_millicores: m.cpu_limit_millicores,
+        memory_limit_bytes: m.memory_limit_bytes,
+        qos_class: QosClass::classify(
+            m.cpu_millicores,
+            m.cpu_limit_millicores,
+            m.memory_bytes,
+            m.memory_limit_bytes,
+        ),
+        auto_resources: m.auto_resources,
+        guest_ip: m.guest_ip,
+        recommended_cpu_millicores: m.cpu_usage_peak_percent.map(recommend_cpu_millicores),
+        recommended_memory_bytes: m.memory_usage_peak_bytes.map(recommend_memory_bytes),
         status: WorkloadStatus::from_str(&m.status),
         assigned_agent_id: m.assigned_agent_id,
         container_id: m.container_id,

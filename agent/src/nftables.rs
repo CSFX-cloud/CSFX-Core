@@ -169,6 +169,30 @@ pub async fn dnat_bridge_port(bridge_name: &str, rg_gateway_ip: &str, port: u16)
     .await
 }
 
+pub async fn allow_mesh_forwarding(bridge_name: &str, wg_iface: &str) -> Result<()> {
+    let comment = format!("\"{}\"", mesh_comment(bridge_name));
+    delete_rules_containing("ip", NAT_TABLE_NAME, SNAT_CHAIN_NAME, &comment).await?;
+    run_nft(&[
+        "insert",
+        "rule",
+        "ip",
+        NAT_TABLE_NAME,
+        SNAT_CHAIN_NAME,
+        "iifname",
+        bridge_name,
+        "oifname",
+        wg_iface,
+        "accept",
+        "comment",
+        &comment,
+    ])
+    .await
+}
+
+fn mesh_comment(bridge_name: &str) -> String {
+    format!("{bridge_name}-mesh")
+}
+
 pub async fn masquerade_bridge_traffic(bridge_name: &str) -> Result<()> {
     let comment = format!("\"{}\"", snat_comment(bridge_name));
     run_nft(&[
@@ -226,6 +250,13 @@ pub async fn remove_bridge_rules(bridge_name: &str) -> Result<()> {
         NAT_TABLE_NAME,
         SNAT_CHAIN_NAME,
         &format!("\"{}\"", snat_comment(bridge_name)),
+    )
+    .await?;
+    delete_rules_containing(
+        "ip",
+        NAT_TABLE_NAME,
+        SNAT_CHAIN_NAME,
+        &format!("\"{}\"", mesh_comment(bridge_name)),
     )
     .await
 }

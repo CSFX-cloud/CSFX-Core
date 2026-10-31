@@ -1,4 +1,5 @@
 mod agent_stream;
+mod arp;
 mod client;
 mod config;
 mod disks;
@@ -17,6 +18,7 @@ mod rg_dhcp;
 mod rg_dns;
 mod rg_dns_process;
 mod rg_ipam;
+mod rg_mesh;
 mod rg_network;
 mod runtime;
 mod server;
@@ -417,7 +419,14 @@ async fn reconcile_tick(
         rg_dns_registry,
     )
     .await;
-    sync_wireguard_peers(client, api_key, agent_id, &resource_group_ids).await;
+    rg_mesh::sync(
+        client,
+        api_key,
+        agent_id,
+        &resource_group_ids,
+        rg_dns_registry,
+    )
+    .await;
     sync_mgmt_peers(client, api_key, agent_id, &resource_group_ids).await;
     firecracker.check_dns_liveness().await;
     qemu.check_dhcp_liveness().await;
@@ -963,7 +972,15 @@ async fn start_or_restart_workload(
         workload_id: workload.id.clone(),
         image: workload.image.clone(),
         cpu_millicores: workload.cpu_millicores,
+        cpu_limit_millicores: workload
+            .cpu_limit_millicores
+            .unwrap_or(workload.cpu_millicores)
+            .max(workload.cpu_millicores),
         memory_bytes: workload.memory_bytes,
+        memory_limit_bytes: workload
+            .memory_limit_bytes
+            .unwrap_or(workload.memory_bytes)
+            .max(workload.memory_bytes),
         env_vars: workload.env_vars,
         ports: workload.ports,
         volume_mounts: workload.volume_mounts.map(|mounts| {
@@ -982,6 +999,7 @@ async fn start_or_restart_workload(
         service_name: workload.service_name,
         resource_group_id: workload.resource_group_id,
         resource_group_cidr: workload.resource_group_cidr,
+        guest_ip: workload.guest_ip,
         vm_spec,
     };
 
@@ -1075,46 +1093,6 @@ fn adopt_advertised_gateway(current: &str, advertised: Option<&str>) {
     match config::save_gateway_override(advertised) {
         Ok(()) => info!(gateway_url = %advertised, "Adopted advertised gateway address"),
         Err(e) => warn!(error = %e, "Failed to store advertised gateway address"),
-    }
-}
-
-async fn sync_wireguard_peers(
-    client: &client::ApiClient,
-    api_key: &str,
-    agent_id: uuid::Uuid,
-    resource_group_ids: &[String],
-) {
-    for resource_group_id in resource_group_ids {
-        let peers = match client
-            .fetch_resource_group_peers(api_key, resource_group_id)
-            .await
-        {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(resource_group_id = %resource_group_id, error = %e, "Failed to fetch resource group peers");
-                continue;
-            }
-        };
-
-        let agent_id_str = agent_id.to_string();
-        let wg_peers: Vec<wireguard::Peer> = peers
-            .into_iter()
-            .filter(|p| p.agent_id != agent_id_str)
-            .map(|p| wireguard::Peer {
-                public_key: p.wg_public_key,
-                endpoint: Some(p.wg_endpoint),
-                allowed_ips: format!("{}/32", p.wg_tunnel_ip),
-            })
-            .collect();
-
-        if wg_peers.is_empty() {
-            continue;
-        }
-
-        let iface = wireguard::rg_interface_name(resource_group_id);
-        if let Err(e) = wireguard::set_peers(&iface, &wg_peers).await {
-            warn!(resource_group_id = %resource_group_id, iface = %iface, error = %e, "Failed to sync WireGuard peers");
-        }
     }
 }
 

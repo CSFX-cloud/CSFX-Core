@@ -63,6 +63,30 @@ impl RgDnsRegistry {
         write_zone_file(resource_group_id, &snapshot).await
     }
 
+    pub async fn sync_services(
+        &self,
+        resource_group_id: &str,
+        services: HashMap<String, String>,
+    ) -> Result<()> {
+        let mut records = self.records.lock().await;
+        let rg_records = records.entry(resource_group_id.to_string()).or_default();
+
+        let mut desired: HashMap<String, String> = rg_records
+            .iter()
+            .filter(|(name, _)| is_platform_record(name))
+            .map(|(name, ip)| (name.clone(), ip.clone()))
+            .collect();
+        desired.extend(services);
+
+        if *rg_records == desired {
+            return Ok(());
+        }
+        *rg_records = desired.clone();
+        drop(records);
+
+        write_zone_file(resource_group_id, &desired).await
+    }
+
     pub async fn remove(&self, resource_group_id: &str, service_name: &str) -> Result<()> {
         let mut records = self.records.lock().await;
         let snapshot = match records.get_mut(resource_group_id) {
@@ -76,6 +100,10 @@ impl RgDnsRegistry {
 
         write_zone_file(resource_group_id, &snapshot).await
     }
+}
+
+fn is_platform_record(name: &str) -> bool {
+    name == crate::rg_network::S3_SERVICE_NAME || name == crate::rg_network::PLATFORM_SERVICE_NAME
 }
 
 async fn write_zone_file(resource_group_id: &str, records: &HashMap<String, String>) -> Result<()> {

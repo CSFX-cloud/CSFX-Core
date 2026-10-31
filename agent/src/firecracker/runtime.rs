@@ -21,6 +21,8 @@ const GUEST_KERNEL_PATH: &str = "/var/lib/csfx-agent/vmlinux";
 const GUEST_CID_BASE: u32 = 1000;
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const CGROUP_PARENT: &str = "csfx-firecracker";
+const BYTES_PER_MIB: i64 = 1024 * 1024;
+const MIN_MEMORY_MIB: i64 = 128;
 const DEFAULT_FIRECRACKER_BIN_PATH: &str = "/usr/bin/firecracker";
 const API_SOCKET_NAME: &str = "firecracker.socket";
 const METRICS_FILE_NAME: &str = "metrics.fifo";
@@ -224,9 +226,9 @@ impl FirecrackerRuntime {
             .await
             .context("Failed to bring up resource group WireGuard interface")?;
 
-            crate::wireguard::set_route(&wg_iface, cidr)
+            crate::rg_network::ensure_mesh_forwarding(resource_group_id, &wg_iface)
                 .await
-                .context("Failed to route resource group CIDR over WireGuard interface")?;
+                .context("Failed to prepare resource group mesh forwarding")?;
         }
 
         Ok(iface)
@@ -320,9 +322,14 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
 
         let guest_network = match (&spec.resource_group_id, &spec.resource_group_cidr) {
             (Some(resource_group_id), Some(cidr)) => {
-                let ip = crate::rg_ipam::allocate(resource_group_id, cidr, &spec.workload_id)
-                    .await
-                    .context("Failed to allocate resource group ip address")?;
+                let ip = crate::rg_ipam::allocate(
+                    resource_group_id,
+                    cidr,
+                    &spec.workload_id,
+                    spec.guest_ip.as_deref(),
+                )
+                .await
+                .context("Failed to allocate resource group ip address")?;
                 let prefix = cidr.split('/').nth(1).unwrap_or("24").to_string();
                 let gateway = crate::spec::second_host_ip(cidr);
                 let dns = crate::spec::second_host_ip(cidr);
@@ -345,7 +352,8 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
 
         let jailer_uid = process_uid();
 
-        let jailer_pid = spawn_jailer(&jailer_id, &chroot_dir, API_SOCKET_NAME, jailer_uid).await?;
+        let jailer_pid =
+            spawn_jailer(&jailer_id, &chroot_dir, API_SOCKET_NAME, jailer_uid, spec).await?;
         debug!(
             workload_id = %spec.workload_id,
             jailer_pid = jailer_pid,
@@ -797,9 +805,12 @@ async fn spawn_jailer(
     chroot_dir: &Path,
     api_socket: &str,
     jailer_uid: u32,
+    spec: &WorkloadSpec,
 ) -> Result<u32> {
     let uid_arg = jailer_uid.to_string();
     let gid_arg = process_gid().to_string();
+    let cpu_weight_arg = format!("cpu.weight={}", spec.cpu_weight());
+    let cpu_max_arg = format!("cpu.max={}", spec.cpu_max());
     let firecracker_bin = firecracker_bin_path();
     let chroot_base_dir = jailer_chroot_base_dir(chroot_dir);
     if chroot_base_dir.exists() {
@@ -834,6 +845,10 @@ async fn spawn_jailer(
             "2",
             "--parent-cgroup",
             CGROUP_PARENT,
+            "--cgroup",
+            &cpu_weight_arg,
+            "--cgroup",
+            &cpu_max_arg,
             "--",
             "--api-sock",
             api_socket,
@@ -1083,8 +1098,8 @@ async fn configure_and_boot_vm(
 
     let client = FirecrackerApiClient::new(boot_config.api_socket.clone());
 
-    let vcpu_count = ((spec.cpu_millicores.max(100)) as f64 / 1000.0).ceil() as i64;
-    let mem_size_mib = (spec.memory_bytes / 1024 / 1024).max(128);
+    let vcpu_count = spec.vcpu_count();
+    let mem_size_mib = (spec.memory_limit_bytes / BYTES_PER_MIB).max(MIN_MEMORY_MIB);
 
     debug!(
         vcpu_count = vcpu_count,
@@ -1101,6 +1116,8 @@ async fn configure_and_boot_vm(
             }),
         )
         .await?;
+
+    configure_balloon(&client, spec, mem_size_mib).await?;
 
     debug!(stage = "metrics_config", "Configuring metrics socket");
     client
@@ -1198,6 +1215,34 @@ async fn configure_and_boot_vm(
     );
 
     Ok(())
+}
+
+async fn configure_balloon(
+    client: &FirecrackerApiClient,
+    spec: &WorkloadSpec,
+    mem_size_mib: i64,
+) -> Result<()> {
+    let balloon_mib = (spec.balloon_bytes() / BYTES_PER_MIB).min(mem_size_mib - MIN_MEMORY_MIB);
+    if balloon_mib <= 0 {
+        return Ok(());
+    }
+
+    debug!(
+        balloon_mib = balloon_mib,
+        stage = "balloon_config",
+        "Configuring memory balloon"
+    );
+    client
+        .put(
+            "/balloon",
+            &json!({
+                "amount_mib": balloon_mib,
+                "deflate_on_oom": true,
+                "stats_polling_interval_s": 0,
+            }),
+        )
+        .await
+        .context("Failed to configure balloon")
 }
 
 struct MountedVolume {

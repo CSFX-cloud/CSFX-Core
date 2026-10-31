@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use entity::entities::{agent_metrics, agents, resource_groups, volumes, workloads};
@@ -10,6 +10,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
+use shared::workload_status::ACTIVE_STATUSES;
 use uuid::Uuid;
 
 use crate::auth::agent::AgentApiKey;
@@ -65,6 +66,9 @@ pub struct AgentResponse {
     pub cordoned: bool,
     pub maintenance_until: Option<String>,
     pub role: String,
+    pub cpu_overcommit_ratio: f64,
+    pub memory_overcommit_ratio: f64,
+    pub disk_overcommit_ratio: f64,
 }
 
 impl From<agents::Model> for AgentResponse {
@@ -84,6 +88,9 @@ impl From<agents::Model> for AgentResponse {
             cordoned: model.cordoned,
             maintenance_until: model.maintenance_until.map(|dt| dt.and_utc().to_rfc3339()),
             role: model.role,
+            cpu_overcommit_ratio: model.cpu_overcommit_ratio,
+            memory_overcommit_ratio: model.memory_overcommit_ratio,
+            disk_overcommit_ratio: model.disk_overcommit_ratio,
         }
     }
 }
@@ -353,11 +360,7 @@ pub async fn drain_agent(
 
     let workload_ids: Vec<Uuid> = workloads::Entity::find()
         .filter(workloads::Column::AssignedAgentId.eq(agent_id))
-        .filter(
-            workloads::Column::Status
-                .eq("scheduled")
-                .or(workloads::Column::Status.eq("running")),
-        )
+        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
         .all(&state.db_conn)
         .await
         .map_err(|e| {
@@ -433,8 +436,70 @@ pub async fn uncordon_agent(
     set_cordoned(&state, agent_id, false).await
 }
 
+const MAX_CPU_OVERCOMMIT_RATIO: f64 = 16.0;
+const MAX_MEMORY_OVERCOMMIT_RATIO: f64 = 4.0;
+const MAX_DISK_OVERCOMMIT_RATIO: f64 = 4.0;
+
+#[derive(Debug, Deserialize)]
+pub struct OvercommitRequest {
+    cpu_ratio: Option<f64>,
+    memory_ratio: Option<f64>,
+    disk_ratio: Option<f64>,
+}
+
+fn is_valid_ratio(ratio: Option<f64>, max: f64) -> bool {
+    ratio.is_none_or(|value| value.is_finite() && (1.0..=max).contains(&value))
+}
+
+pub async fn set_agent_overcommit(
+    CanManageSystem(claims): CanManageSystem,
+    State(state): State<AppState>,
+    Path(agent_id): Path<Uuid>,
+    Json(req): Json<OvercommitRequest>,
+) -> Result<impl IntoResponse, StatusCode> {
+    if !is_valid_ratio(req.cpu_ratio, MAX_CPU_OVERCOMMIT_RATIO)
+        || !is_valid_ratio(req.memory_ratio, MAX_MEMORY_OVERCOMMIT_RATIO)
+        || !is_valid_ratio(req.disk_ratio, MAX_DISK_OVERCOMMIT_RATIO)
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let agent = agents::Entity::find_by_id(agent_id)
+        .one(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to fetch agent for overcommit change");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let mut active: agents::ActiveModel = agent.into();
+    if let Some(ratio) = req.cpu_ratio {
+        active.cpu_overcommit_ratio = ActiveValue::Set(ratio);
+    }
+    if let Some(ratio) = req.memory_ratio {
+        active.memory_overcommit_ratio = ActiveValue::Set(ratio);
+    }
+    if let Some(ratio) = req.disk_ratio {
+        active.disk_overcommit_ratio = ActiveValue::Set(ratio);
+    }
+    active.update(&state.db_conn).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to change agent overcommit ratios");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    tracing::info!(
+        user_id = %claims.user_id,
+        agent_id = %agent_id,
+        "agent overcommit ratios changed"
+    );
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub fn agents_routes() -> Router<AppState> {
     Router::new()
+        .route("/agents/{id}/overcommit", put(set_agent_overcommit))
         .route("/agents", get(list_agents))
         .route("/agents/{id}", get(get_agent))
         .route("/agents/{id}/metrics", get(get_agent_metrics))

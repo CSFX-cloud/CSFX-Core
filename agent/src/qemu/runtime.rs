@@ -15,6 +15,8 @@ const VM_STATE_DIR: &str = "/var/lib/csfx-agent/qemu";
 const DEFAULT_QEMU_BIN_PATH: &str = "/usr/bin/qemu-system-x86_64";
 const QMP_SOCKET_NAME: &str = "qmp.sock";
 const VNC_SOCKET_NAME: &str = "vnc.sock";
+const BYTES_PER_MIB: i64 = 1024 * 1024;
+const MIN_MEMORY_MIB: i64 = 512;
 
 fn qemu_bin_path() -> String {
     std::env::var("CSFX_QEMU_BIN_PATH").unwrap_or_else(|_| DEFAULT_QEMU_BIN_PATH.to_string())
@@ -132,7 +134,7 @@ impl QemuRuntime {
         .await
         .context("Failed to ensure resource group bridge")?;
 
-        if let Some(cidr) = resource_group_cidr {
+        if resource_group_cidr.is_some() {
             let listen_port = crate::spec::rg_wireguard_port(resource_group_id);
             let wg_iface = crate::wireguard::ensure_interface(
                 resource_group_id,
@@ -142,9 +144,9 @@ impl QemuRuntime {
             .await
             .context("Failed to bring up resource group WireGuard interface")?;
 
-            crate::wireguard::set_route(&wg_iface, cidr)
+            crate::rg_network::ensure_mesh_forwarding(resource_group_id, &wg_iface)
                 .await
-                .context("Failed to route resource group CIDR over WireGuard interface")?;
+                .context("Failed to prepare resource group mesh forwarding")?;
         }
 
         Ok(iface)
@@ -208,9 +210,15 @@ impl crate::runtime::Runtime for QemuRuntime {
         };
 
         let guest_ip = match (&spec.resource_group_id, &spec.resource_group_cidr) {
-            (Some(resource_group_id), Some(cidr)) => {
-                Some(crate::rg_ipam::allocate(resource_group_id, cidr, &spec.workload_id).await?)
-            }
+            (Some(resource_group_id), Some(cidr)) => Some(
+                crate::rg_ipam::allocate(
+                    resource_group_id,
+                    cidr,
+                    &spec.workload_id,
+                    spec.guest_ip.as_deref(),
+                )
+                .await?,
+            ),
             _ => None,
         };
 
@@ -560,8 +568,8 @@ async fn spawn_vm(
     qmp_socket_path: &Path,
     vnc_socket_path: &Path,
 ) -> Result<()> {
-    let vcpu_count = ((spec.cpu_millicores.max(100)) as f64 / 1000.0).ceil() as i64;
-    let mem_size_mib = (spec.memory_bytes / 1024 / 1024).max(512);
+    let vcpu_count = spec.vcpu_count();
+    let mem_size_mib = (spec.memory_limit_bytes / BYTES_PER_MIB).max(MIN_MEMORY_MIB);
     let qemu_bin = qemu_bin_path();
 
     let mut args: Vec<String> = vec![
@@ -587,6 +595,8 @@ async fn spawn_vm(
         format!("tap,id=net0,ifname={},script=no,downscript=no", tap_device),
         "-device".to_string(),
         format!("virtio-net-pci,netdev=net0,mac={}", mac_address),
+        "-device".to_string(),
+        "virtio-balloon-pci,deflate-on-oom=on".to_string(),
         "-qmp".to_string(),
         format!("unix:{},server,nowait", qmp_socket_path.display()),
         "-vnc".to_string(),
@@ -604,6 +614,8 @@ async fn spawn_vm(
 
     let uid_arg = format!("--uid={}", process_uid());
     let gid_arg = format!("--gid={}", process_gid());
+    let cpu_weight_arg = format!("--property=CPUWeight={}", spec.cpu_weight());
+    let cpu_quota_arg = format!("--property=CPUQuota={}%", spec.cpu_quota_percent());
 
     let status = Command::new("systemd-run")
         .args([
@@ -612,6 +624,8 @@ async fn spawn_vm(
             "--collect",
             &uid_arg,
             &gid_arg,
+            &cpu_weight_arg,
+            &cpu_quota_arg,
             "--property=SupplementaryGroups=kvm",
             "--property=StandardOutput=journal",
             "--property=StandardError=journal",
@@ -626,7 +640,33 @@ async fn spawn_vm(
         anyhow::bail!("systemd-run failed to start qemu unit for {}", workload_id);
     }
 
-    wait_for_qmp(qmp_socket_path).await
+    wait_for_qmp(qmp_socket_path).await?;
+    set_balloon_target(qmp_socket_path, spec, mem_size_mib).await
+}
+
+async fn set_balloon_target(
+    qmp_socket_path: &Path,
+    spec: &WorkloadSpec,
+    mem_size_mib: i64,
+) -> Result<()> {
+    if spec.balloon_bytes() == 0 {
+        return Ok(());
+    }
+
+    let target_bytes =
+        (mem_size_mib * BYTES_PER_MIB - spec.balloon_bytes()).max(MIN_MEMORY_MIB * BYTES_PER_MIB);
+    let socket_str = qmp_socket_path.display().to_string();
+    let mut client = QmpClient::connect(&socket_str)
+        .await
+        .context("Failed to connect to QMP for balloon")?;
+    client
+        .send_command(
+            "balloon",
+            Some(serde_json::json!({ "value": target_bytes })),
+        )
+        .await
+        .context("Failed to set balloon target")?;
+    Ok(())
 }
 
 async fn query_vm_status(qmp_socket_path: &Path) -> Option<String> {

@@ -7,8 +7,8 @@ use crate::rg_dns::RgDnsRegistry;
 use crate::spec::{rg_bridge_iface_name, second_host_ip};
 
 const RG_REGISTRY_DIR: &str = "/var/lib/csfx-agent/rg-networks";
-const S3_SERVICE_NAME: &str = "s3";
-const PLATFORM_SERVICE_NAME: &str = "csfx";
+pub const S3_SERVICE_NAME: &str = "s3";
+pub const PLATFORM_SERVICE_NAME: &str = "csfx";
 const S3_DNAT_PORT: u16 = 3900;
 
 pub async fn ensure_bridge(
@@ -82,6 +82,28 @@ async fn list_other_bridge_ifaces(exclude_resource_group_id: &str) -> Result<Vec
         .filter(|id| id != exclude_resource_group_id)
         .map(|id| rg_bridge_iface_name(&id))
         .collect())
+}
+
+pub async fn ensure_mesh_forwarding(resource_group_id: &str, wg_iface: &str) -> Result<()> {
+    let iface = rg_bridge_iface_name(resource_group_id);
+
+    tokio::fs::write(format!("/proc/sys/net/ipv4/conf/{}/proxy_arp", iface), b"1")
+        .await
+        .with_context(|| format!("failed to enable proxy arp iface={}", iface))?;
+
+    crate::nftables::allow_mesh_forwarding(&iface, wg_iface)
+        .await
+        .context("Failed to exempt mesh traffic from masquerade")
+}
+
+pub async fn announce_remote_guest(resource_group_id: &str, guest_ip: &str) -> Result<()> {
+    let iface = rg_bridge_iface_name(resource_group_id);
+    let address: std::net::Ipv4Addr = guest_ip
+        .parse()
+        .with_context(|| format!("invalid guest ip {}", guest_ip))?;
+
+    run_ip(&["neigh", "flush", "to", guest_ip, "dev", &iface]).await?;
+    crate::arp::announce(&iface, address)
 }
 
 pub async fn teardown_bridge(resource_group_id: &str) -> Result<()> {
