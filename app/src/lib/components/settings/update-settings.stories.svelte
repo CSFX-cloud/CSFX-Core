@@ -10,7 +10,7 @@
 </script>
 
 <Story name="Default">
-	<div class="w-[640px]">
+	<div class="w-160">
 		<UpdateSettings />
 	</div>
 </Story>
