@@ -10,8 +10,8 @@ mod server;
 mod services;
 
 const LEADER_KEY: &str = "/csfx/leaders/registry-health";
-const DEGRADED_AFTER_SECS: i64 = 75;
-const OFFLINE_AFTER_SECS: i64 = 120;
+const DEGRADED_AFTER_SECS: i64 = 50;
+const OFFLINE_AFTER_SECS: i64 = 90;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
     let health_check_handle = {
         let registry = agent_registry.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
             loop {
                 interval.tick().await;
                 if !leader.is_leader() {
