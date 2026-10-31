@@ -10,7 +10,7 @@
 </script>
 
 <Story name="Default">
-	<div class="w-[560px]">
+	<div class="w-140">
 		<LogsSettings />
 	</div>
 </Story>

@@ -24,7 +24,7 @@
 </script>
 
 <Story name="Default">
-	<div class="h-[500px] w-full overflow-hidden rounded-lg border border-border">
+	<div class="h-125 w-full overflow-hidden rounded-lg border border-border">
 		<SidebarProvider>
 			<Sidebar collapsible="none">
 				<SidebarHeader>
