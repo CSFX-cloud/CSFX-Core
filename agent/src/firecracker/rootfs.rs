@@ -538,21 +538,28 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn layer_header(path: &str, entry_type: tar::EntryType, size: u64, mode: u32) -> tar::Header {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(path).unwrap();
+        header.set_entry_type(entry_type);
+        header.set_size(size);
+        header.set_mode(mode);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_cksum();
+        header
+    }
+
     fn build_gzip_layer(entries: &[(&str, &[u8], bool)]) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
         for (path, contents, is_dir) in entries {
             if *is_dir {
-                let mut header = tar::Header::new_gnu();
-                header.set_path(path).unwrap();
-                header.set_entry_type(tar::EntryType::Directory);
-                header.set_size(0);
-                header.set_cksum();
+                let header = layer_header(path, tar::EntryType::Directory, 0, 0o755);
                 builder.append(&header, std::io::empty()).unwrap();
             } else {
-                let mut header = tar::Header::new_gnu();
-                header.set_path(path).unwrap();
-                header.set_size(contents.len() as u64);
-                header.set_cksum();
+                let header =
+                    layer_header(path, tar::EntryType::Regular, contents.len() as u64, 0o644);
                 builder.append(&header, *contents).unwrap();
             }
         }
