@@ -217,13 +217,19 @@ impl PatroniClient {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn test_client(nodes: Vec<String>) -> PatroniClient {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
+        PatroniClient::new("test".to_string(), nodes)
+    }
 
     #[test]
     fn test_extract_node_name() {
-        let client =
-            PatroniClient::new("test".to_string(), vec!["http://patroni1:8008".to_string()]);
+        let client = test_client(vec!["http://patroni1:8008".to_string()]);
 
         assert_eq!(client.extract_node_name("http://patroni1:8008"), "patroni1");
         assert_eq!(
@@ -234,8 +240,7 @@ mod tests {
 
     #[test]
     fn test_build_postgres_url() {
-        let client =
-            PatroniClient::new("test".to_string(), vec!["http://patroni1:8008".to_string()]);
+        let client = test_client(vec!["http://patroni1:8008".to_string()]);
 
         assert_eq!(
             client.build_postgres_url("http://patroni1:8008"),

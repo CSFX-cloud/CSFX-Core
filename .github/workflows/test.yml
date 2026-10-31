@@ -1,0 +1,168 @@
+name: Test
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://postgres:postgres@localhost:5432/csfx
+  HISTORY_BRANCH: coverage-data
+  HISTORY_LIMIT: 100
+
+jobs:
+  test:
+    name: Test and coverage
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: csfx
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libpq-dev protobuf-compiler jq
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-test-
+
+      - name: Unit and workspace tests
+        run: cargo llvm-cov --no-report --workspace
+
+      - name: Database integration tests
+        run: cargo llvm-cov --no-report -p shared -- --ignored
+
+      - name: Coverage reports
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov report --json --summary-only --output-path coverage.json
+          cargo llvm-cov report --html --output-dir coverage-html
+
+      - name: Build coverage summary
+        id: summary
+        run: |
+          TOTAL=$(jq -r '.data[0].totals.lines.percent * 100 | round / 100' coverage.json)
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          jq -r '
+            .data[0].files
+            | map({crate: (.filename | capture("(?<c>[^/]+)/src/").c), c: .summary.lines.count, v: .summary.lines.covered})
+            | group_by(.crate)
+            | map({crate: .[0].crate, count: (map(.c) | add), covered: (map(.v) | add)})
+            | sort_by(.crate)
+            | map("| \(.crate) | \(if .count == 0 then 0 else (.covered * 10000 / .count | round / 100) end)% | \(.covered) / \(.count) |")
+            | .[]
+          ' coverage.json > crates.md
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            lcov.info
+            coverage.json
+            coverage-html
+
+      - name: Update coverage history
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          TOTAL: ${{ steps.summary.outputs.total }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin "$HISTORY_BRANCH" >/dev/null; then
+            git fetch origin "$HISTORY_BRANCH"
+            git worktree add history "origin/$HISTORY_BRANCH"
+            git -C history checkout -B "$HISTORY_BRANCH"
+          else
+            git worktree add --orphan -b "$HISTORY_BRANCH" history
+            echo '[]' > history/history.json
+          fi
+          jq --arg sha "${GITHUB_SHA::7}" --arg date "$(date -u +%F)" --argjson lines "$TOTAL" --argjson limit "$HISTORY_LIMIT" \
+            '(. + [{sha: $sha, date: $date, lines: $lines}]) | .[-$limit:]' \
+            history/history.json > history/history.next
+          mv history/history.next history/history.json
+          git -C history add history.json
+          git -C history commit -m "chore: record coverage ${TOTAL} for ${GITHUB_SHA::7}"
+          git -C history push origin "$HISTORY_BRANCH"
+
+      - name: Render report
+        env:
+          TOTAL: ${{ steps.summary.outputs.total }}
+        run: |
+          git fetch origin "$HISTORY_BRANCH" 2>/dev/null || true
+          HISTORY=$(git show "origin/$HISTORY_BRANCH:history.json" 2>/dev/null || echo '[]')
+          BASE=$(jq -r 'if length == 0 then "" else .[-1].lines end' <<<"$HISTORY")
+          {
+            echo "<!-- csfx-coverage -->"
+            echo "## Test coverage"
+            echo
+            if [ -n "$BASE" ]; then
+              DELTA=$(jq -n --argjson a "$TOTAL" --argjson b "$BASE" '($a - $b) * 100 | round / 100')
+              echo "Line coverage **${TOTAL}%** (${DELTA} pp against main at ${BASE}%)"
+            else
+              echo "Line coverage **${TOTAL}%**"
+            fi
+            echo
+            echo "| Crate | Lines | Covered / total |"
+            echo "|---|---|---|"
+            cat crates.md
+            echo
+            echo "### Trend on main"
+            echo
+            echo "| Date | Commit | Lines |"
+            echo "|---|---|---|"
+            jq -r '.[-10:] | reverse | .[] | "| \(.date) | \(.sha) | \(.lines)% |"' <<<"$HISTORY"
+          } > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on pull request
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- csfx-coverage -->")) | .id' | head -n 1)
+          if [ -n "$COMMENT_ID" ]; then
+            gh api --method PATCH "repos/${{ github.repository }}/issues/comments/${COMMENT_ID}" -F body=@report.md >/dev/null
+          else
+            gh pr comment "$PR_NUMBER" --body-file report.md
+          fi

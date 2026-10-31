@@ -187,16 +187,14 @@ impl PatroniMonitor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::patroni::client::tests::test_client;
 
     #[tokio::test]
     async fn test_monitor_creation() {
-        let client = PatroniClient::new(
-            "test-scope".to_string(),
-            vec![
-                "http://patroni1:8008".to_string(),
-                "http://patroni2:8008".to_string(),
-            ],
-        );
+        let client = test_client(vec![
+            "http://patroni1:8008".to_string(),
+            "http://patroni2:8008".to_string(),
+        ]);
 
         let monitor = PatroniMonitor::new(client, 10);
         assert_eq!(monitor.check_interval, Duration::from_secs(10));
