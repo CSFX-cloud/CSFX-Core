@@ -544,8 +544,8 @@ mod tests {
         header.set_entry_type(entry_type);
         header.set_size(size);
         header.set_mode(mode);
-        header.set_uid(0);
-        header.set_gid(0);
+        header.set_uid(u64::from(unsafe { libc::geteuid() }));
+        header.set_gid(u64::from(unsafe { libc::getegid() }));
         header.set_mtime(0);
         header.set_cksum();
         header
