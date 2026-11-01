@@ -131,27 +131,42 @@ write_registry_credentials() {
     chmod 0600 "$KANIKO_ROOT/kaniko/.docker/config.json"
 }
 
+create_devices() {
+    local spec
+    mkdir -p "$KANIKO_ROOT/dev"
+    for spec in "null 3" "zero 5" "random 8" "urandom 9"; do
+        set -- $spec
+        mknod -m 666 "$KANIKO_ROOT/dev/$1" c 1 "$2" 2> /dev/null || : > "$KANIKO_ROOT/dev/$1"
+    done
+}
+
+create_mount_table() {
+    mkdir -p "$KANIKO_ROOT/proc/self"
+    printf '%s\n' \
+        '1 0 0:1 / / rw - rootfs rootfs rw' \
+        '2 1 0:2 / /proc rw - proc proc rw' \
+        '3 1 0:3 / /dev rw - tmpfs tmpfs rw' \
+        '4 1 0:4 / /sys rw - sysfs sysfs rw' > "$KANIKO_ROOT/proc/self/mountinfo"
+}
+
 prepare_kaniko_root() {
     local dockerfile=$1
-    mkdir -p "$KANIKO_ROOT"/{kaniko,workspace,etc/ssl/certs,tmp,proc,dev,var/run}
+    mkdir -p "$KANIKO_ROOT"/{kaniko,workspace,etc/ssl/certs,tmp,var/run,sys}
     write_registry_credentials
     cp /usr/local/bin/kaniko-executor "$KANIKO_ROOT/kaniko/executor"
     cp /etc/ssl/certs/ca-certificates.crt "$KANIKO_ROOT/etc/ssl/certs/ca-certificates.crt"
     cp /etc/resolv.conf "$KANIKO_ROOT/etc/resolv.conf"
     rm -rf "$PROJECT_DIR/.git"
     mv "$PROJECT_DIR" "$KANIKO_ROOT/workspace/context"
-    mount --bind /proc "$KANIKO_ROOT/proc"
-    mount --bind /dev "$KANIKO_ROOT/dev"
+    create_devices
+    create_mount_table
     echo "/workspace/context/$dockerfile"
 }
 
 run_kaniko() {
     local dockerfile_path=$1
-    chroot "$KANIKO_ROOT" /kaniko/executor --force --context /workspace/context \
+    DOCKER_CONFIG=/kaniko/.docker HOME=/root chroot "$KANIKO_ROOT" /kaniko/executor --force --context /workspace/context \
         --dockerfile "$dockerfile_path" --destination "$CSFX_IMAGE_REF" "${KANIKO_ARGS[@]}" >> "$LOG_FILE" 2>&1
-    local status=$?
-    umount "$KANIKO_ROOT/proc" "$KANIKO_ROOT/dev" 2> /dev/null
-    return $status
 }
 
 collect_kaniko_arguments() {
