@@ -12,6 +12,7 @@ let
     csfx-failover-controller = "failover-controller";
     csfx-sdn-controller = "sdn-controller";
     csfx-object-storage = "object-storage";
+    csfx-site-builder = "site-builder";
     csfx-agent = "csfx-agent";
   };
 in
@@ -54,6 +55,7 @@ in
     };
     csfx-garage.enable = true;
     csfx-openbao.enable = true;
+    csfx-site-registry.enable = true;
   };
 
   systemd.services = lib.mkMerge [
@@ -62,6 +64,7 @@ in
       devUnits)
     {
       csfx-api-gateway.environment.STATIC_DIR = lib.mkForce "/csfx-ui";
+      csfx-site-builder.serviceConfig.EnvironmentFile = lib.mkAfter [ "-/etc/csfx/site-dev.env" ];
       csfx-updater.enable = lib.mkForce false;
       csfx-guest-init-link.serviceConfig.ExecStart = lib.mkForce "${pkgs.coreutils}/bin/install -m 0755 ${binDir}/csfx-guest-init /var/lib/csfx-agent/csfx-guest-init";
       csfx-mgmt-up.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --mgmt-up";

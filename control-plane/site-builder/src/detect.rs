@@ -186,18 +186,6 @@ fn detect_hugo(files: &HashSet<String>) -> Option<Detection> {
     })
 }
 
-fn detect_jekyll(files: &HashSet<String>) -> Option<Detection> {
-    (files.contains("_config.yml") && files.contains("Gemfile")).then(|| Detection {
-        framework: "jekyll",
-        mode: Mode::Static,
-        install_command: Some("bundle install".to_string()),
-        build_command: Some("bundle exec jekyll build".to_string()),
-        output_dir: Some("_site".to_string()),
-        start_command: None,
-        port: None,
-    })
-}
-
 fn plain_static(files: &HashSet<String>) -> Option<Detection> {
     files.contains("index.html").then(|| Detection {
         framework: "static",
@@ -230,9 +218,7 @@ pub fn detect(snapshot: &RepoSnapshot) -> Option<Detection> {
         let manager = PackageManager::detect(&snapshot.files);
         return detect_node(&Packages { json }, manager);
     }
-    detect_hugo(&snapshot.files)
-        .or_else(|| detect_jekyll(&snapshot.files))
-        .or_else(|| plain_static(&snapshot.files))
+    detect_hugo(&snapshot.files).or_else(|| plain_static(&snapshot.files))
 }
 
 #[cfg(test)]
@@ -328,15 +314,14 @@ mod tests {
     }
 
     #[test]
-    fn hugo_jekyll_and_plain_html_are_static() {
+    fn hugo_and_plain_html_are_static() {
         assert_eq!(
             detect(&snapshot(&["hugo.toml"], None)).unwrap().framework,
             "hugo"
         );
-        let jekyll = detect(&snapshot(&["_config.yml", "Gemfile"], None)).unwrap();
-        assert_eq!(jekyll.output_dir.as_deref(), Some("_site"));
         let plain = detect(&snapshot(&["index.html"], None)).unwrap();
         assert_eq!(plain.output_dir.as_deref(), Some("."));
         assert!(detect(&snapshot(&["README.md"], None)).is_none());
+        assert!(detect(&snapshot(&["_config.yml", "Gemfile"], None)).is_none());
     }
 }
