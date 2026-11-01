@@ -570,6 +570,14 @@ pub async fn delete_resource_group(
         )
     })?;
 
+    if let Err(error) = crate::vault_service::teardown_resource_group(&state, id).await {
+        tracing::error!(resource_group_id = %id, error = %error, "vault cleanup failed, deletion will be retried");
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": "vault cleanup failed, deletion will be retried" })),
+        ));
+    }
+
     ResourceGroups::delete_by_id(id)
         .exec(&state.db_conn)
         .await

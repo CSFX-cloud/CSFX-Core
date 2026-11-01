@@ -180,6 +180,24 @@ pub async fn initialize_database(
             "Create, update and delete buckets and access keys",
         ),
         (
+            "secrets.view",
+            "secrets",
+            "view",
+            "View vaults, secret metadata and the vault audit log",
+        ),
+        (
+            "secrets.manage",
+            "secrets",
+            "manage",
+            "Create, update and delete vaults, secrets and access grants",
+        ),
+        (
+            "secrets.reveal",
+            "secrets",
+            "reveal",
+            "Reveal secret values with two factor authentication and a reason",
+        ),
+        (
             "roles.manage",
             "roles",
             "manage",
@@ -313,6 +331,8 @@ pub async fn initialize_database(
             "logs.view",
             "buckets.view",
             "buckets.manage",
+            "secrets.view",
+            "secrets.manage",
         ];
         for perm_name in operator_perms {
             if let Some(perm_id) = permission_map.get(perm_name) {
@@ -359,6 +379,7 @@ pub async fn initialize_database(
             "resource_groups.view",
             "logs.view",
             "buckets.view",
+            "secrets.view",
         ];
         for perm_name in viewer_perms {
             if let Some(perm_id) = permission_map.get(perm_name) {
