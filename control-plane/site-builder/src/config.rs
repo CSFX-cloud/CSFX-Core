@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::time::Duration;
 
+const DEFAULT_KEEP_DEPLOYMENTS: usize = 5;
 const DEFAULT_PORT: u16 = 8007;
 const DEFAULT_EDGE_PORT: u16 = 8008;
 const DEFAULT_BUILD_TIMEOUT_SECS: u64 = 900;
@@ -16,6 +17,7 @@ pub struct Config {
     pub registry: Option<String>,
     pub registry_insecure: bool,
     pub registry_mirror: Option<String>,
+    pub keep_deployments: usize,
     pub scheduler_url: String,
     pub preview_domain: Option<String>,
     pub build_timeout: Duration,
@@ -53,6 +55,7 @@ impl Config {
             registry: optional("CSFX_SITE_REGISTRY"),
             registry_insecure: flag("CSFX_SITE_REGISTRY_INSECURE"),
             registry_mirror: optional("CSFX_REGISTRY_MIRROR"),
+            keep_deployments: parsed("CSFX_SITE_KEEP_DEPLOYMENTS", DEFAULT_KEEP_DEPLOYMENTS)?,
             scheduler_url: optional("SCHEDULER_SERVICE_URL")
                 .unwrap_or_else(|| DEFAULT_SCHEDULER_URL.to_string()),
             preview_domain: optional("CSFX_SITE_PREVIEW_DOMAIN"),

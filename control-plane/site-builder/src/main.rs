@@ -5,6 +5,7 @@ mod edge;
 mod error;
 mod git;
 mod job;
+mod prune;
 mod registry;
 mod routes;
 mod scheduler;
@@ -55,14 +56,27 @@ async fn main() -> anyhow::Result<()> {
     let config = Arc::new(config::Config::from_environment()?);
     let db = shared::establish_connection().await?;
     let scheduler = scheduler::SchedulerClient::new(&config.scheduler_url)?;
-    let builds = Arc::new(builds::Builds::new(db.clone(), config.clone(), scheduler));
+    let registry_keys = Arc::new(registry::keys::load_or_create(&db).await?);
+    let registry_client = match config.registry.as_deref() {
+        Some(registry) => Some(registry::client::RegistryClient::new(
+            registry,
+            config.registry_insecure,
+            registry_keys.clone(),
+        )?),
+        None => None,
+    };
+    let builds = Arc::new(builds::Builds::new(
+        db.clone(),
+        config.clone(),
+        scheduler,
+        registry_client,
+    ));
     spawn_reaper(builds.clone());
 
-    let registry_keys = registry::keys::load_or_create(&db).await?;
     let registry_state = registry::RegistryState {
         db: db.clone(),
         config: config.clone(),
-        keys: Arc::new(registry_keys),
+        keys: registry_keys,
     };
     let control_app = server::control_router(builds).merge(registry::router(registry_state));
     let control = listen(control_app, config.port, "control");

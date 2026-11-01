@@ -87,6 +87,16 @@ async fn reconcile_handler(
     Ok(StatusCode::OK)
 }
 
+async fn purge_handler(
+    State(builds): State<Arc<Builds>>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ServiceError> {
+    require_admin(&builds, &headers)?;
+    builds.purge_site(id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn log_handler(
     State(builds): State<Arc<Builds>>,
     headers: HeaderMap,
@@ -134,6 +144,7 @@ pub fn control_router(builds: Arc<Builds>) -> Router {
         .route("/internal/builds", post(start_build))
         .route("/internal/deployments/{id}/promote", post(promote_handler))
         .route("/internal/sites/{id}/reconcile", post(reconcile_handler))
+        .route("/internal/sites/{id}/purge", post(purge_handler))
         .route(
             "/callbacks/{id}/log",
             post(log_handler).layer(DefaultBodyLimit::max(MAX_LOG_CHUNK_BYTES)),

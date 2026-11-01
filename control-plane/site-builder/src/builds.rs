@@ -1,9 +1,11 @@
 use crate::config::Config;
 use crate::error::ServiceError;
 use crate::job::{builder_request, stored_reference, BuildJob};
+use crate::prune::{self, Candidate};
+use crate::registry::client::RegistryClient;
 use crate::scheduler::SchedulerClient;
 use chrono::Utc;
-use entity::{site_deployments, SiteDeployments};
+use entity::{site_deployments, SiteArtifacts, SiteDeployments};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     Set, Statement,
@@ -23,6 +25,17 @@ pub struct Completion {
     pub commit_message: Option<String>,
     pub image_ref: Option<String>,
     pub error: Option<String>,
+}
+
+fn candidate_of(deployment: &site_deployments::Model) -> Candidate {
+    Candidate {
+        id: deployment.id,
+        branch: deployment.branch.clone(),
+        created_at: deployment.created_at,
+        ready: deployment.status == "ready",
+        bound_to_workload: deployment.workload_id.is_some(),
+        has_payload: deployment.image_ref.is_some() || deployment.artifact_key.is_some(),
+    }
 }
 
 fn trusted_image(
@@ -45,15 +58,22 @@ pub struct Builds {
     pub db: DatabaseConnection,
     pub config: Arc<Config>,
     pub scheduler: SchedulerClient,
+    registry: Option<RegistryClient>,
     pending: Mutex<HashMap<Uuid, BuildJob>>,
 }
 
 impl Builds {
-    pub fn new(db: DatabaseConnection, config: Arc<Config>, scheduler: SchedulerClient) -> Self {
+    pub fn new(
+        db: DatabaseConnection,
+        config: Arc<Config>,
+        scheduler: SchedulerClient,
+        registry: Option<RegistryClient>,
+    ) -> Self {
         Self {
             db,
             config,
             scheduler,
+            registry,
             pending: Mutex::new(HashMap::new()),
         }
     }
@@ -194,6 +214,7 @@ impl Builds {
         } else {
             crate::sites::ensure_preview_domain(self, id).await?;
         }
+        self.prune_site(site.id).await;
         tracing::info!(deployment = %id, "deployment ready");
         Ok(())
     }
@@ -231,6 +252,60 @@ impl Builds {
         env: BTreeMap<String, String>,
     ) -> Result<(), ServiceError> {
         crate::sites::promote(self, id, env).await
+    }
+
+    pub async fn prune_site(&self, site_id: Uuid) {
+        if let Err(error) = self.prune(site_id).await {
+            tracing::warn!(site = %site_id, error = %error, "pruning old deployments failed");
+        }
+    }
+
+    async fn prune(&self, site_id: Uuid) -> Result<(), ServiceError> {
+        let site = crate::sites::load(&self.db, site_id).await?;
+        let deployments = SiteDeployments::find()
+            .filter(site_deployments::Column::SiteId.eq(site_id))
+            .all(&self.db)
+            .await?;
+        let candidates: Vec<Candidate> = deployments.iter().map(candidate_of).collect();
+        let expired = prune::expired(
+            &candidates,
+            site.current_deployment_id,
+            self.config.keep_deployments,
+        );
+        for deployment in deployments.into_iter().filter(|d| expired.contains(&d.id)) {
+            let id = deployment.id;
+            if let Err(error) = self.drop_payload(deployment).await {
+                tracing::warn!(deployment = %id, error = %error, "could not remove old deployment data");
+            }
+        }
+        Ok(())
+    }
+
+    async fn drop_payload(&self, deployment: site_deployments::Model) -> Result<(), ServiceError> {
+        let id = deployment.id;
+        let site_id = deployment.site_id;
+        let image_tag = deployment
+            .image_ref
+            .as_deref()
+            .and_then(prune::image_tag)
+            .map(str::to_string);
+        let mut active: site_deployments::ActiveModel = deployment.into();
+        if let (Some(registry), Some(tag)) = (&self.registry, image_tag) {
+            registry.delete_tag(&site_id.to_string(), &tag).await?;
+        }
+        SiteArtifacts::delete_by_id(id).exec(&self.db).await?;
+        active.image_ref = Set(None);
+        active.artifact_key = Set(None);
+        active.update(&self.db).await?;
+        tracing::info!(deployment = %id, "old deployment data removed");
+        Ok(())
+    }
+
+    pub async fn purge_site(&self, site_id: Uuid) -> Result<(), ServiceError> {
+        match &self.registry {
+            Some(registry) => registry.delete_repository(&site_id.to_string()).await,
+            None => Ok(()),
+        }
     }
 
     pub async fn reap_stale(&self) -> Result<(), ServiceError> {

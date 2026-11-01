@@ -200,6 +200,7 @@ mod tests {
             registry: registry.map(str::to_string),
             registry_insecure: true,
             registry_mirror: Some("10.0.0.1:5050".to_string()),
+            keep_deployments: 5,
             scheduler_url: String::new(),
             preview_domain: None,
             build_timeout: Duration::from_secs(1),

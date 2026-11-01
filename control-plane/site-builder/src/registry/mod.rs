@@ -1,3 +1,4 @@
+pub mod client;
 pub mod keys;
 pub mod scope;
 
@@ -155,7 +156,7 @@ async fn authenticate(
     deployment_principal(state, id, &password).await
 }
 
-fn sign(
+pub(crate) fn sign(
     keys: &RegistryKeys,
     subject: String,
     access: Vec<AccessEntry>,
