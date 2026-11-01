@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::{debug, info};
 
+const DOCKER_HUB_REGISTRY: &str = "docker.io";
 const CONTAINER_BUNDLE_DIR: &str = "csfx-bundle";
 const CONTAINER_ROOTFS_DIR: &str = "rootfs";
 
@@ -59,6 +60,24 @@ fn store_digest(reference: &str, digest: &str) {
         .insert(reference.to_string(), (digest.to_string(), Instant::now()));
 }
 
+fn resolve_reference(image: &str, mirror: Option<&str>) -> Result<Reference> {
+    let reference: Reference = image.parse().context("Invalid image reference")?;
+    let Some(mirror) = mirror else {
+        return Ok(reference);
+    };
+    if reference.registry() != DOCKER_HUB_REGISTRY {
+        return Ok(reference);
+    }
+
+    let tag_or_digest = match (reference.tag(), reference.digest()) {
+        (_, Some(digest)) => format!("@{digest}"),
+        (Some(tag), None) => format!(":{tag}"),
+        (None, None) => String::new(),
+    };
+    let mirrored = format!("{mirror}/{}{tag_or_digest}", reference.repository());
+    mirrored.parse().context("Invalid mirrored image reference")
+}
+
 pub struct RootfsBuilder {
     client: Client,
     registry_mirror: Option<String>,
@@ -91,21 +110,6 @@ impl RootfsBuilder {
         }
     }
 
-    fn resolve_reference(&self, image: &str) -> Result<Reference> {
-        let reference: Reference = image.parse().context("Invalid image reference")?;
-        let Some(mirror) = &self.registry_mirror else {
-            return Ok(reference);
-        };
-
-        let tag_or_digest = match (reference.tag(), reference.digest()) {
-            (_, Some(digest)) => format!("@{digest}"),
-            (Some(tag), None) => format!(":{tag}"),
-            (None, None) => String::new(),
-        };
-        let mirrored = format!("{mirror}/{}{tag_or_digest}", reference.repository());
-        mirrored.parse().context("Invalid mirrored image reference")
-    }
-
     async fn resolve_digest(&self, reference: &Reference, auth: &RegistryAuth) -> Result<String> {
         if let Some(digest) = reference.digest() {
             return Ok(digest.to_string());
@@ -124,7 +128,7 @@ impl RootfsBuilder {
     }
 
     pub async fn ensure_rootfs(&self, image: &str) -> Result<PathBuf> {
-        let reference = self.resolve_reference(image)?;
+        let reference = resolve_reference(image, self.registry_mirror.as_deref())?;
         let auth = RegistryAuth::Anonymous;
         let digest = self.resolve_digest(&reference, &auth).await?;
 
@@ -537,6 +541,22 @@ async fn build_ext4_image(source_dir: &Path, image_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn docker_hub_images_are_routed_through_the_mirror() {
+        let reference = resolve_reference("nginx:1.27", Some("localhost:5050")).unwrap();
+        assert_eq!(reference.registry(), "localhost:5050");
+        assert_eq!(reference.repository(), "library/nginx");
+        assert_eq!(reference.tag(), Some("1.27"));
+    }
+
+    #[test]
+    fn other_registries_bypass_the_mirror() {
+        let image = "ghcr.io/csfx-cloud/csfx-site-builder:1";
+        let reference = resolve_reference(image, Some("localhost:5050")).unwrap();
+        assert_eq!(reference.registry(), "ghcr.io");
+        assert_eq!(reference.whole(), image);
+    }
 
     fn layer_header(path: &str, entry_type: tar::EntryType, size: u64, mode: u32) -> tar::Header {
         let mut header = tar::Header::new_gnu();
