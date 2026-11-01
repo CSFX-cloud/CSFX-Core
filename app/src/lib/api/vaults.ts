@@ -23,7 +23,6 @@ export interface SecretSummary {
     version: number;
     updated_at: string;
     expires_at: string | null;
-    used_by: string[];
     deleted: boolean;
 }
 
@@ -31,7 +30,6 @@ export interface SecretInput {
     name?: string;
     value: string;
     expires_at: string | null;
-    used_by: string[];
 }
 
 export interface RevealInput {
@@ -46,7 +44,7 @@ export interface RevealedSecret {
     value: string;
 }
 
-export type Capability = 'read_secrets' | 'sign_with_key' | 'reveal_secrets' | 'manage';
+export type Capability = 'read_secrets' | 'reveal_secrets' | 'manage';
 
 export interface VaultGrant {
     id: string;

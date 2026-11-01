@@ -6,7 +6,6 @@
 
     const CAPABILITY_LABELS: Record<Capability, string> = {
         read_secrets: "read secrets",
-        sign_with_key: "sign with key",
         reveal_secrets: "reveal secrets",
         manage: "manage everything",
     };
@@ -16,13 +15,14 @@
         rgId: string;
         vaultId: string;
         grants: VaultGrant[];
+        secretNames: string[];
         audit: VaultAuditEntry[];
         softDeleteDays: number;
         onChanged: () => Promise<void>;
         onError: (message: string) => void;
     };
 
-    let { rgId, vaultId, grants, audit, softDeleteDays, onChanged, onError }: Props = $props();
+    let { rgId, vaultId, grants, secretNames, audit, softDeleteDays, onChanged, onError }: Props = $props();
 
     let grantDialog = $state<GrantDialog | null>(null);
 
@@ -39,7 +39,7 @@
     const denied = (entry: VaultAuditEntry) => entry.result.startsWith("denied");
 </script>
 
-<GrantDialog bind:this={grantDialog} {rgId} {vaultId} onGranted={onChanged} />
+<GrantDialog bind:this={grantDialog} {rgId} {vaultId} {secretNames} onGranted={onChanged} />
 
 <div class="rs-stack">
     <div class="rs-cols">
@@ -62,7 +62,7 @@
                             <tr>
                                 <td>{grant.principal}</td>
                                 <td class="cx-soft">{CAPABILITY_LABELS[grant.capability]}</td>
-                                <td class="cx-num">{grant.requires_approval ? "needs approval" : grant.scope}</td>
+                                <td class="cx-num">{grant.requires_approval ? "needs approval" : grant.scope === "*" ? "all secrets" : grant.scope}</td>
                                 <td>
                                     <div class="db-actions" style="justify-content: flex-end">
                                         <button class="cx-icon-btn cx-icon-btn--sm nd-danger" type="button" aria-label="Revoke access of {grant.principal}" title="Revoke" onclick={() => revoke(grant)}>

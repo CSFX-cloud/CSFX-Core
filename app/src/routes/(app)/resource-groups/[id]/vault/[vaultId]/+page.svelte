@@ -158,10 +158,10 @@
             {#if vault.sealed}
                 <p class="cx-hint">This vault is sealed. Unseal it to read or change secrets.</p>
             {:else}
-                <VaultSecretsTab rgId={rg.rgId} {vaultId} {secrets} onChanged={load} onError={(message) => (error = message)} />
+                <VaultSecretsTab rgId={rg.rgId} {vaultId} {secrets} {grants} onChanged={load} onError={(message) => (error = message)} />
             {/if}
         {:else}
-            <VaultAccessTab rgId={rg.rgId} {vaultId} {grants} {audit} softDeleteDays={vault.soft_delete_days} onChanged={load} onError={(message) => (error = message)} />
+            <VaultAccessTab rgId={rg.rgId} {vaultId} {grants} {audit} secretNames={secrets.map((secret) => secret.name)} softDeleteDays={vault.soft_delete_days} onChanged={load} onError={(message) => (error = message)} />
         {/if}
     {/if}
 </div>

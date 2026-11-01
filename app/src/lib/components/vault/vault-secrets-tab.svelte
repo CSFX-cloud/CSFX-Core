@@ -1,7 +1,8 @@
 <script lang="ts">
     import { Check, Copy, Eye, EyeOff, Pencil, Plus, Trash2, Undo2 } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
-    import { deleteSecret, restoreSecret, type RevealedSecret, type SecretSummary } from "$lib/api/vaults";
+    import { deleteSecret, restoreSecret, type RevealedSecret, type SecretSummary, type VaultGrant } from "$lib/api/vaults";
+    import { scopeMatches } from "$lib/utils/vault-scope";
     import { createClipboard } from "$lib/utils/clipboard.svelte";
     import RevealDialog from "./reveal-dialog.svelte";
     import SecretDialog from "./secret-dialog.svelte";
@@ -13,17 +14,25 @@
         rgId: string;
         vaultId: string;
         secrets: SecretSummary[];
+        grants: VaultGrant[];
         onChanged: () => Promise<void>;
         onError: (message: string) => void;
     };
 
-    let { rgId, vaultId, secrets, onChanged, onError }: Props = $props();
+    let { rgId, vaultId, secrets, grants, onChanged, onError }: Props = $props();
 
     const clipboard = createClipboard();
 
     let secretDialog = $state<SecretDialog | null>(null);
     let revealDialog = $state<RevealDialog | null>(null);
     let revealed = $state<Record<string, string>>({});
+
+    function consumers(name: string): string[] {
+        const principals = grants
+            .filter((grant) => grant.capability === "read_secrets" && scopeMatches(grant.scope, name))
+            .map((grant) => grant.principal);
+        return [...new Set(principals)];
+    }
 
     function hide(name: string) {
         const { [name]: _removed, ...rest } = revealed;
@@ -96,7 +105,7 @@
                         <td class="cx-num">v{secret.version}</td>
                         <td>
                             <div class="rs-chips">
-                                {#each secret.used_by as consumer (consumer)}<span class="rs-chip">{consumer}</span>{/each}
+                                {#each consumers(secret.name) as consumer (consumer)}<span class="rs-chip">{consumer}</span>{/each}
                             </div>
                         </td>
                         <td class="cx-soft">{secret.updated_at.slice(0, 10)}</td>

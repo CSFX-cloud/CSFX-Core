@@ -26,8 +26,8 @@ use crate::{
 
 const MAX_REASON_LENGTH: usize = 500;
 const APPROVAL_VALIDITY_MINUTES: i64 = 10;
-const CAPABILITIES: [&str; 4] = ["read_secrets", "sign_with_key", "reveal_secrets", "manage"];
-const ROLE_CAPABILITIES: [&str; 2] = ["read_secrets", "sign_with_key"];
+const CAPABILITIES: [&str; 3] = ["read_secrets", "reveal_secrets", "manage"];
+const ROLE_CAPABILITIES: [&str; 1] = ["read_secrets"];
 
 pub struct ApiError(VaultError);
 

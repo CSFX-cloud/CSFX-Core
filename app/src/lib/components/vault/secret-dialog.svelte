@@ -10,7 +10,6 @@
     let name = $state("");
     let value = $state("");
     let expiresAt = $state("");
-    let usedBy = $state("");
     let saving = $state(false);
     let error = $state<string | null>(null);
 
@@ -19,16 +18,11 @@
         name = secret?.name ?? "";
         value = "";
         expiresAt = secret?.expires_at ?? "";
-        usedBy = secret?.used_by.join(", ") ?? "";
         dialog?.open();
     }
 
     function payload(): SecretInput {
-        return {
-            value,
-            expires_at: expiresAt || null,
-            used_by: usedBy.split(",").map((part) => part.trim()).filter(Boolean),
-        };
+        return { value, expires_at: expiresAt || null };
     }
 
     async function submit() {
@@ -69,10 +63,6 @@
         <div class="cx-field">
             <label class="cx-label" for="secret-expires">Expires</label>
             <input class="cx-input" id="secret-expires" type="date" bind:value={expiresAt} />
-        </div>
-        <div class="cx-field">
-            <label class="cx-label" for="secret-used">Used by</label>
-            <input class="cx-input" id="secret-used" placeholder="app-stack, fn-jobs" autocomplete="off" bind:value={usedBy} />
         </div>
         {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
         <div class="md__foot">
