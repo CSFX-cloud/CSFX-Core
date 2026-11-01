@@ -3,7 +3,7 @@ use crate::error::ServiceError;
 use crate::token::deployment_token;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use site_builder::{detect::Mode, validate};
+use site_builder::{detect::Mode, images::SITE_IMAGE_HOST, validate};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -48,6 +48,10 @@ pub fn image_reference(registry: &str, job: &BuildJob) -> String {
         job.site_id,
         short_id(job.deployment_id)
     )
+}
+
+pub fn stored_reference(job: &BuildJob) -> String {
+    image_reference(SITE_IMAGE_HOST, job)
 }
 
 impl BuildJob {

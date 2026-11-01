@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::ServiceError;
-use crate::job::{builder_request, image_reference, BuildJob};
+use crate::job::{builder_request, stored_reference, BuildJob};
 use crate::scheduler::SchedulerClient;
 use chrono::Utc;
 use entity::{site_deployments, SiteDeployments};
@@ -26,7 +26,6 @@ pub struct Completion {
 }
 
 fn trusted_image(
-    registry: Option<&str>,
     mode: Mode,
     completion: &Completion,
     job: Option<&BuildJob>,
@@ -39,8 +38,7 @@ fn trusted_image(
         return Err(invalid("build produced no image"));
     }
     let job = job.ok_or_else(|| invalid("build job state was lost"))?;
-    let registry = registry.ok_or_else(|| invalid("no site registry is configured"))?;
-    Ok(Some(image_reference(registry, job)))
+    Ok(Some(stored_reference(job)))
 }
 
 pub struct Builds {
@@ -185,12 +183,7 @@ impl Builds {
                 "build produced no artifact".to_string(),
             ));
         }
-        let image = trusted_image(
-            self.config.registry.as_deref(),
-            mode,
-            &completion,
-            job.as_ref(),
-        )?;
+        let image = trusted_image(mode, &completion, job.as_ref())?;
         let builder = deployment.workload_id;
         let production = deployment.environment == "production";
         self.mark_ready(deployment, completion, mode, image).await?;
@@ -293,28 +286,29 @@ mod tests {
     #[test]
     fn container_images_ignore_the_value_reported_by_the_vm() {
         let image = trusted_image(
-            Some("reg:5060"),
             Mode::Container,
             &reported(Some("evil/other:1")),
             Some(&job()),
         )
         .unwrap()
         .unwrap();
-        assert_eq!(image, format!("reg:5060/{}:00000000", Uuid::nil()));
+        assert_eq!(
+            image,
+            format!("sites.csfx.invalid/{}:00000000", Uuid::nil())
+        );
     }
 
     #[test]
-    fn container_images_need_a_report_a_job_and_a_registry() {
+    fn container_images_need_a_report_and_a_job() {
         let job = job();
-        assert!(trusted_image(Some("r"), Mode::Container, &reported(None), Some(&job)).is_err());
-        assert!(trusted_image(Some("r"), Mode::Container, &reported(Some("x")), None).is_err());
-        assert!(trusted_image(None, Mode::Container, &reported(Some("x")), Some(&job)).is_err());
+        assert!(trusted_image(Mode::Container, &reported(None), Some(&job)).is_err());
+        assert!(trusted_image(Mode::Container, &reported(Some("x")), None).is_err());
     }
 
     #[test]
     fn static_builds_have_no_image() {
         assert_eq!(
-            trusted_image(None, Mode::Static, &reported(None), None).unwrap(),
+            trusted_image(Mode::Static, &reported(None), None).unwrap(),
             None
         );
     }
