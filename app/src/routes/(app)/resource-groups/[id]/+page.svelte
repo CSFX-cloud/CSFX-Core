@@ -72,6 +72,7 @@
             buckets={rg.buckets}
             vaults={rg.vaults}
             sites={rg.sites}
+            registries={rg.registries}
             gateways={rg.gateways}
             {nodeNames}
             onChanged={rg.load}

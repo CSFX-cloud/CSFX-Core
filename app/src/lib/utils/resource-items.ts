@@ -1,5 +1,6 @@
 import type { Gateway } from "$lib/api/ingress";
 import type { Bucket, Volume, Workload } from "$lib/api/resource-groups";
+import type { Registry } from "$lib/api/registries";
 import type { SiteSummary } from "$lib/api/sites";
 import type { Vault } from "$lib/api/vaults";
 
@@ -18,7 +19,8 @@ export type ResourceItem =
     | { kind: "volume"; data: Volume }
     | { kind: "bucket"; data: Bucket }
     | { kind: "vault"; data: Vault }
-    | { kind: "site"; data: SiteSummary };
+    | { kind: "site"; data: SiteSummary }
+    | { kind: "registry"; data: Registry };
 
 export function groupWorkloadsByStack(items: Workload[]): ResourceItem[] {
     const standalone: Workload[] = [];
@@ -53,6 +55,7 @@ export function buildResourceItems(
     buckets: Bucket[],
     vaults: Vault[],
     sites: SiteSummary[],
+    registries: Registry[],
 ): ResourceItem[] {
     return [
         ...groupWorkloadsByStack(workloads),
@@ -60,6 +63,7 @@ export function buildResourceItems(
         ...buckets.map((data): ResourceItem => ({ kind: "bucket", data })),
         ...vaults.map((data): ResourceItem => ({ kind: "vault", data })),
         ...sites.map((data): ResourceItem => ({ kind: "site", data })),
+        ...registries.map((data): ResourceItem => ({ kind: "registry", data })),
     ];
 }
 
@@ -70,7 +74,7 @@ function matchesTab(item: ResourceItem, tab: ResourceTab): boolean {
         case "compute":
             return item.kind === "vm" || item.kind === "site";
         case "containers":
-            return item.kind === "container" || item.kind === "stack";
+            return item.kind === "container" || item.kind === "stack" || item.kind === "registry";
         case "storage":
             return item.kind === "volume" || item.kind === "bucket";
         case "security":

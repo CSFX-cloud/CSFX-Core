@@ -1,10 +1,12 @@
 <script lang="ts">
     import { ChevronLeft, Search } from "@lucide/svelte";
     import { goto } from "$app/navigation";
+    import type { Registry } from "$lib/api/registries";
     import type { Vault } from "$lib/api/vaults";
     import EmptyState from "$lib/components/dashboard/empty-state.svelte";
     import CreateBucketDialog from "$lib/components/resource-group/create-bucket-dialog.svelte";
     import CreateGatewayDialog from "$lib/components/resource-group/create-gateway-dialog.svelte";
+    import CreateRegistryDialog from "$lib/components/resource-group/create-registry-dialog.svelte";
     import CreateVaultDialog from "$lib/components/resource-group/create-vault-dialog.svelte";
     import CreateVolumeDialog from "$lib/components/resource-group/create-volume-dialog.svelte";
     import DeployContainerDialog from "$lib/components/resource-group/deploy-container-dialog.svelte";
@@ -32,6 +34,7 @@
     let bucketDialog = $state<CreateBucketDialog | null>(null);
     let gatewayDialog = $state<CreateGatewayDialog | null>(null);
     let vaultDialog = $state<CreateVaultDialog | null>(null);
+    let registryDialog = $state<CreateRegistryDialog | null>(null);
 
     const matching = $derived(
         RESOURCE_TYPES.filter((type) => `${type.label} ${type.description} ${type.equivalent}`.toLowerCase().includes(searchText.trim().toLowerCase())),
@@ -69,6 +72,11 @@
         goto(`${base}/vault/${vault.id}`);
     }
 
+    async function openRegistry(registry: Registry) {
+        await rg.load();
+        goto(`${base}/registry/${registry.id}`);
+    }
+
     function pick(key: ResourceTypeKey) {
         const openers: Record<ResourceTypeKey, () => void> = {
             "docker-container": () => deployDialog?.open(),
@@ -79,6 +87,7 @@
             bucket: () => bucketDialog?.open(),
             "key-vault": () => vaultDialog?.open(),
             "web-app": () => goto(`${base}/add/web-app`),
+            "container-registry": () => registryDialog?.open(),
         };
         openers[key]();
     }
@@ -90,6 +99,7 @@
 <CreateBucketDialog bind:this={bucketDialog} rgId={rg.rgId} onCreated={finish} />
 <CreateGatewayDialog bind:this={gatewayDialog} rgId={rg.rgId} onCreated={openGateway} />
 <CreateVaultDialog bind:this={vaultDialog} rgId={rg.rgId} onCreated={openVault} />
+<CreateRegistryDialog bind:this={registryDialog} rgId={rg.rgId} onCreated={openRegistry} />
 
 <div class="db-content">
     <section class="cx-stage" aria-label="Add resource">

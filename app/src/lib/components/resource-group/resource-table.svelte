@@ -15,10 +15,12 @@
         type Volume,
         type Workload,
     } from "$lib/api/resource-groups";
+    import { deleteRegistry, type Registry } from "$lib/api/registries";
     import { deleteSite, redeploySite, type SiteSummary } from "$lib/api/sites";
     import { deleteVault, type Vault } from "$lib/api/vaults";
     import { buildResourceItems, filterResources, workloadHref, type ResourceTab } from "$lib/utils/resource-items";
     import BucketRow from "./bucket-row.svelte";
+    import RegistryRow from "./registry-row.svelte";
     import SiteRow from "./site-row.svelte";
     import StackRow from "./stack-row.svelte";
     import VaultRow from "./vault-row.svelte";
@@ -42,18 +44,19 @@
         buckets: Bucket[];
         vaults: Vault[];
         sites: SiteSummary[];
+        registries: Registry[];
         gateways: Gateway[];
         nodeNames: Map<string, string>;
         onChanged: () => Promise<void>;
         onError: (message: string) => void;
     };
 
-    let { groupName, base, workloads, volumes, buckets, vaults, sites, gateways, nodeNames, onChanged, onError }: Props = $props();
+    let { groupName, base, workloads, volumes, buckets, vaults, sites, registries, gateways, nodeNames, onChanged, onError }: Props = $props();
 
     let activeTab = $state<ResourceTab>("all");
     let expandedStacks = $state<Set<string>>(new Set());
 
-    const allResources = $derived(buildResourceItems(workloads, volumes, buckets, vaults, sites));
+    const allResources = $derived(buildResourceItems(workloads, volumes, buckets, vaults, sites, registries));
     const visible = $derived(filterResources(allResources, activeTab));
 
     function token(): string {
@@ -160,6 +163,12 @@
                                 v={item.data}
                                 href="{base}/vault/{item.data.id}"
                                 onDelete={() => run(() => deleteVault(token(), item.data.resource_group_id, item.data.id), "Failed to delete vault")}
+                            />
+                        {:else if item.kind === "registry"}
+                            <RegistryRow
+                                r={item.data}
+                                href="{base}/registry/{item.data.id}"
+                                onDelete={() => run(() => deleteRegistry(token(), item.data.resource_group_id, item.data.id), "Failed to delete registry")}
                             />
                         {:else if item.kind === "site"}
                             <SiteRow

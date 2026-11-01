@@ -140,6 +140,11 @@ export const SERVICE_ICONS: ServiceIcon[] = [
         tile: "radial-gradient(circle at 100% 0%, var(--stage-teal) 0%, transparent 65%), radial-gradient(circle at 0% 100%, var(--stage-slate) 0%, transparent 65%), var(--bg-inset)",
         svg: "<circle cx=\"12\" cy=\"12\" r=\"9\"></circle><path d=\"M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z\"></path>",
     },
+    {
+        key: "container-registry",
+        tile: "radial-gradient(circle at 100% 0%, var(--stage-olive) 0%, transparent 65%), radial-gradient(circle at 0% 100%, var(--stage-slate) 0%, transparent 65%), var(--bg-inset)",
+        svg: "<path d=\"M12 3l8 4.2v9.6L12 21l-8-4.2V7.2z\"></path><path d=\"M4 7.2l8 4.3 8-4.3M12 11.5V21\"></path>",
+    },
 ];
 
 const BY_KEY = new Map(SERVICE_ICONS.map((icon) => [icon.key, icon]));
