@@ -4,6 +4,7 @@ set -uo pipefail
 WORKDIR=/workspace/source
 LOG_FILE=/tmp/csfx-build.log
 OFFSET_FILE=/tmp/csfx-build.offset
+LOCK_FILE=/tmp/csfx-build.lock
 ARTIFACT=/tmp/csfx-artifact.tar.gz
 EMPTY_JSON='{}'
 FLUSH_SECONDS=2
@@ -22,14 +23,21 @@ log() {
     printf '[%s] %s\n' "$1" "$2" >>"$LOG_FILE"
 }
 
-flush_logs() {
+send_unflushed() {
     local size flushed
     size=$(stat -c %s "$LOG_FILE")
     flushed=$(cat "$OFFSET_FILE")
     [ "$size" -gt "$flushed" ] || return 0
     tail -c +"$((flushed + 1))" "$LOG_FILE" | head -c "$((size - flushed))" \
-        | callback POST log -H 'Content-Type: text/plain' --data-binary @- >/dev/null \
-        && echo "$size" >"$OFFSET_FILE"
+        | callback POST log -H 'Content-Type: text/plain' --data-binary @- > /dev/null \
+        && echo "$size" > "$OFFSET_FILE"
+}
+
+flush_logs() {
+    (
+        flock 9
+        send_unflushed
+    ) 9> "$LOCK_FILE"
 }
 
 stream_logs() {
@@ -85,7 +93,7 @@ commit_details() {
 build_static() {
     local output="$PROJECT_DIR/${CSFX_OUTPUT_DIR:-.}"
     [ -d "$output" ] || fail "output directory ${CSFX_OUTPUT_DIR:-.} does not exist"
-    tar -czf "$ARTIFACT" -C "$output" . || fail "could not package output"
+    tar -czf "$ARTIFACT" --exclude=.git -C "$output" . || fail "could not package output"
     log INFO "uploading artifact bytes=$(stat -c %s "$ARTIFACT")"
     flush_logs
     callback PUT artifact -H 'Content-Type: application/gzip' --data-binary @"$ARTIFACT" >>"$LOG_FILE" 2>&1 \

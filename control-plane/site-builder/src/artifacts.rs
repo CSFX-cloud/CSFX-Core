@@ -70,6 +70,10 @@ fn clean_path(raw: &std::path::Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
+fn is_repository_metadata(name: &str) -> bool {
+    name.split('/').any(|part| part == ".git")
+}
+
 pub fn unpack(content: &[u8]) -> Result<Archive, ServiceError> {
     let invalid = |error: std::io::Error| ServiceError::Archive(error.to_string());
     let mut archive = tar::Archive::new(GzDecoder::new(content));
@@ -84,6 +88,9 @@ pub fn unpack(content: &[u8]) -> Result<Archive, ServiceError> {
         let Some(name) = clean_path(&path) else {
             return Err(ServiceError::Archive("unsafe path in archive".to_string()));
         };
+        if is_repository_metadata(&name) {
+            continue;
+        }
         let mut data = Vec::new();
         entry
             .take(MAX_UNPACKED_BYTES.saturating_sub(total) + 1)
@@ -124,6 +131,24 @@ mod tests {
         let archive = unpack(&bytes).unwrap();
         assert_eq!(archive.files["index.html"], b"hi");
         assert_eq!(archive.files["assets/app.js"], b"js");
+    }
+
+    #[test]
+    fn unpack_drops_repository_metadata() {
+        let bytes = archive_with(&[
+            ("index.html", b"hi"),
+            (".git/config", b"[core]"),
+            ("docs/.git/HEAD", b"ref"),
+            (".github/workflow.yml", b"ci"),
+            (".gitignore", b"x"),
+        ]);
+        let archive = unpack(&bytes).unwrap();
+        let mut names: Vec<&str> = archive.files.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec![".github/workflow.yml", ".gitignore", "index.html"]
+        );
     }
 
     #[test]
