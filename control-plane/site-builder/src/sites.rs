@@ -178,8 +178,10 @@ pub async fn promote(
     active_site.current_deployment_id = Set(Some(id));
     active_site.update(&builds.db).await?;
     if mode == Mode::Container {
-        routes::reconcile(&builds.db, &site, workload).await?;
-        retire(builds, previous_workload, workload);
+        match (previous_workload, workload) {
+            (Some(old), Some(new)) => switch_over(builds, site.clone(), old, new),
+            _ => routes::reconcile(&builds.db, &site, workload).await?,
+        }
     }
     Ok(())
 }
@@ -196,26 +198,28 @@ async fn release_workload(db: &DatabaseConnection, workload_id: Uuid) -> Result<
     Ok(())
 }
 
-fn retire(builds: &Builds, old: Option<Uuid>, new: Option<Uuid>) {
-    let (Some(old), Some(new)) = (old, new) else {
-        return;
-    };
+fn switch_over(builds: &Builds, site: sites::Model, old: Uuid, new: Uuid) {
     let scheduler = builds.scheduler.clone();
     let db = builds.db.clone();
     tokio::spawn(async move {
         for _ in 0..RETIRE_ATTEMPTS {
             tokio::time::sleep(RETIRE_POLL).await;
-            if matches!(scheduler.status(new).await, Ok(Some(status)) if status == "running") {
-                match scheduler.delete(old).await {
-                    Ok(()) => {
-                        if let Err(error) = release_workload(&db, old).await {
-                            tracing::warn!(workload = %old, error = %error, "workload release failed");
-                        }
-                    }
-                    Err(error) => tracing::warn!(workload = %old, error = %error, "retire failed"),
-                }
+            if !matches!(scheduler.status(new).await, Ok(Some(status)) if status == "running") {
+                continue;
+            }
+            if let Err(error) = routes::reconcile(&db, &site, Some(new)).await {
+                tracing::warn!(site = %site.id, error = %error, "route switch failed");
                 return;
             }
+            match scheduler.delete(old).await {
+                Ok(()) => {
+                    if let Err(error) = release_workload(&db, old).await {
+                        tracing::warn!(workload = %old, error = %error, "workload release failed");
+                    }
+                }
+                Err(error) => tracing::warn!(workload = %old, error = %error, "retire failed"),
+            }
+            return;
         }
         tracing::warn!(workload = %old, replacement = %new, "replacement never became running, keeping previous workload");
     });
