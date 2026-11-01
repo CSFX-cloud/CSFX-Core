@@ -78,6 +78,7 @@
             volume: () => volumeDialog?.open(),
             bucket: () => bucketDialog?.open(),
             "key-vault": () => vaultDialog?.open(),
+            "web-app": () => goto(`${base}/add/web-app`),
         };
         openers[key]();
     }
