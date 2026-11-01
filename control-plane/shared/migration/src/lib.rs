@@ -49,6 +49,7 @@ mod m20261025_010000_add_dns_records;
 mod m20261026_000000_add_resource_scheduling;
 mod m20261027_000000_add_workload_guest_ip;
 mod m20261028_000000_add_vaults;
+mod m20261101_000000_add_sites;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -104,6 +105,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261026_000000_add_resource_scheduling::Migration),
             Box::new(m20261027_000000_add_workload_guest_ip::Migration),
             Box::new(m20261028_000000_add_vaults::Migration),
+            Box::new(m20261101_000000_add_sites::Migration),
         ]
     }
 }
