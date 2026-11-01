@@ -115,6 +115,20 @@ export type UpdateSiteInput = Partial<
     >
 >;
 
+export interface DailyUsage {
+    date: string;
+    requests: number;
+    bytes_out: number;
+}
+
+export interface SiteUsage {
+    days: number;
+    requests: number;
+    bytes_out: number;
+    build_minutes: number;
+    series: DailyUsage[];
+}
+
 export interface EnvInput {
     name: string;
     value?: string;
@@ -175,3 +189,6 @@ export const addSiteDomain = (token: string, rgId: string, siteId: string, hostn
 
 export const deleteSiteDomain = (token: string, rgId: string, siteId: string, domainId: string) =>
     send<void>(token, `${sitesPath(rgId, siteId)}/domains/${domainId}`, 'DELETE', 'Failed to remove domain');
+
+export const getSiteUsage = (token: string, rgId: string, siteId: string, days: number) =>
+    send<SiteUsage>(token, `${sitesPath(rgId, siteId)}/usage?days=${days}`, 'GET', 'Failed to load usage');

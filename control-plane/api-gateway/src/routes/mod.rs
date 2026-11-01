@@ -41,6 +41,7 @@ pub mod roles;
 pub mod s3_proxy;
 pub mod settings;
 pub mod setup;
+pub mod site_usage;
 pub mod sites;
 pub mod ssh_access;
 pub mod ssh_keys;
@@ -146,6 +147,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(buckets::buckets_routes())
         .merge(vaults::vaults_routes())
         .merge(sites::sites_routes())
+        .merge(site_usage::usage_routes())
         .merge(cluster::cluster_routes())
         .merge(masters::masters_routes())
         .merge(cluster_vip::cluster_vip_routes())

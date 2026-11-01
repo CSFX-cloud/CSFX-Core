@@ -4,6 +4,7 @@
     import { relativeTime } from "$lib/utils/dashboard";
     import { badgeClass, buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
     import BuildLog from "./build-log.svelte";
+    import UsageStats from "./usage-stats.svelte";
 
     const PREVIEW_LIMIT = 8;
 
@@ -20,6 +21,8 @@
         return previewHosts.find((domain) => domain.branch === deployment.branch)?.hostname ?? null;
     }
 </script>
+
+<UsageStats {rgId} siteId={site.id} mode={site.mode} />
 
 <section class="cx-panel" aria-labelledby="ov-prod">
     <div class="cx-panel__head">

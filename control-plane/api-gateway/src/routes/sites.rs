@@ -41,7 +41,7 @@ fn rejected(reason: Result<(), &'static str>) -> Result<(), SiteError> {
     reason.map_err(invalid)
 }
 
-async fn load_site(
+pub(super) async fn load_site(
     state: &AppState,
     group_id: Uuid,
     site_id: Uuid,
