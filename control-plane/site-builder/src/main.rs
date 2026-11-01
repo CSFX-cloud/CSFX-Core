@@ -5,6 +5,7 @@ mod edge;
 mod error;
 mod git;
 mod job;
+mod registry;
 mod routes;
 mod scheduler;
 mod server;
@@ -57,7 +58,14 @@ async fn main() -> anyhow::Result<()> {
     let builds = Arc::new(builds::Builds::new(db.clone(), config.clone(), scheduler));
     spawn_reaper(builds.clone());
 
-    let control = listen(server::control_router(builds), config.port, "control");
+    let registry_keys = registry::keys::load_or_create(&db).await?;
+    let registry_state = registry::RegistryState {
+        db: db.clone(),
+        config: config.clone(),
+        keys: Arc::new(registry_keys),
+    };
+    let control_app = server::control_router(builds).merge(registry::router(registry_state));
+    let control = listen(control_app, config.port, "control");
     let edge = listen(
         server::edge_router(Arc::new(edge::Edge::new(db))),
         config.edge_port,

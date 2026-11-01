@@ -23,6 +23,8 @@ pub enum ServiceError {
     Git(String),
     #[error("archive error: {0}")]
     Archive(String),
+    #[error("crypto error: {0}")]
+    Crypto(String),
     #[error("database error: {0}")]
     Database(#[from] DbErr),
 }
@@ -35,7 +37,7 @@ impl IntoResponse for ServiceError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Scheduler(_) => StatusCode::BAD_GATEWAY,
-            Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Database(_) | Self::Crypto(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         (status, Json(json!({ "error": self.to_string() }))).into_response()
     }
