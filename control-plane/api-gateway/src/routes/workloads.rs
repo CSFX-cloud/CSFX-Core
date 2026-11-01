@@ -6,12 +6,33 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
-use serde_json::json;
+use serde_json::{json, Value};
+use site_builder::images::{uses_site_registry, SITE_IMAGE_HOST};
 
 use crate::{
     auth::rbac::{CanManageWorkloads, CanViewWorkloads},
     AppState,
 };
+
+const RESERVED_IMAGE_HOST_MESSAGE: &str = "this image host is reserved for web apps";
+
+fn references_site_images(body: &Value) -> bool {
+    let image = body["image"].as_str().is_some_and(uses_site_registry);
+    let compose = body["compose_yaml"]
+        .as_str()
+        .is_some_and(|yaml| yaml.to_ascii_lowercase().contains(SITE_IMAGE_HOST));
+    image || compose
+}
+
+fn reject_site_images(body: &Option<Value>) -> Result<(), (StatusCode, Json<Value>)> {
+    if body.as_ref().is_some_and(references_site_images) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": RESERVED_IMAGE_HOST_MESSAGE })),
+        ));
+    }
+    Ok(())
+}
 
 async fn proxy_to_scheduler(
     state: &AppState,
@@ -52,6 +73,7 @@ pub async fn create_workload(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    reject_site_images(&body_json)?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -104,6 +126,7 @@ pub async fn update_workload(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    reject_site_images(&body_json)?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -156,6 +179,7 @@ pub async fn create_stack(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    reject_site_images(&body_json)?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -243,6 +267,7 @@ pub async fn redeploy_stack(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    reject_site_images(&body_json)?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -275,4 +300,27 @@ pub fn workloads_routes() -> Router<AppState> {
         .route("/workload-stacks/{id}/stop", post(stop_stack))
         .route("/workload-stacks/{id}/restart", post(restart_stack))
         .route("/workload-stacks/{id}", patch(redeploy_stack))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn site_image_hosts_are_rejected_in_images_and_compose_files() {
+        assert!(references_site_images(
+            &json!({ "image": "sites.csfx.invalid/x:1" })
+        ));
+        let compose = "services:\n  a:\n    image: Sites.CSFX.invalid/x:1\n";
+        assert!(references_site_images(&json!({ "compose_yaml": compose })));
+    }
+
+    #[test]
+    fn ordinary_workloads_pass() {
+        assert!(!references_site_images(&json!({ "image": "nginx:1" })));
+        assert!(!references_site_images(
+            &json!({ "compose_yaml": "services: {}" })
+        ));
+        assert!(reject_site_images(&None).is_ok());
+    }
 }
