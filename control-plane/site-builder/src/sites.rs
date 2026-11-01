@@ -4,7 +4,10 @@ use crate::job::{runtime_request, RuntimeSpec};
 use crate::routes;
 use chrono::Utc;
 use entity::{site_deployments, site_domains, sites, SiteDeployments, SiteDomains, Sites};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    sea_query::Expr, ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
+    QueryFilter, Set,
+};
 use site_builder::detect::Mode;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -181,17 +184,35 @@ pub async fn promote(
     Ok(())
 }
 
+async fn release_workload(db: &DatabaseConnection, workload_id: Uuid) -> Result<(), DbErr> {
+    SiteDeployments::update_many()
+        .col_expr(
+            site_deployments::Column::WorkloadId,
+            Expr::value(None::<Uuid>),
+        )
+        .filter(site_deployments::Column::WorkloadId.eq(workload_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 fn retire(builds: &Builds, old: Option<Uuid>, new: Option<Uuid>) {
     let (Some(old), Some(new)) = (old, new) else {
         return;
     };
     let scheduler = builds.scheduler.clone();
+    let db = builds.db.clone();
     tokio::spawn(async move {
         for _ in 0..RETIRE_ATTEMPTS {
             tokio::time::sleep(RETIRE_POLL).await;
             if matches!(scheduler.status(new).await, Ok(Some(status)) if status == "running") {
-                if let Err(error) = scheduler.delete(old).await {
-                    tracing::warn!(workload = %old, error = %error, "retire failed");
+                match scheduler.delete(old).await {
+                    Ok(()) => {
+                        if let Err(error) = release_workload(&db, old).await {
+                            tracing::warn!(workload = %old, error = %error, "workload release failed");
+                        }
+                    }
+                    Err(error) => tracing::warn!(workload = %old, error = %error, "retire failed"),
                 }
                 return;
             }
