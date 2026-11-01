@@ -21,7 +21,7 @@
     const openLog = $derived(selected ?? deployments[0]?.id ?? null);
 
     function actionLabel(deployment: DeploymentSummary): string | null {
-        if (deployment.status !== "ready" || deployment.current) return null;
+        if (deployment.status !== "ready" || deployment.current || deployment.expired) return null;
         const current = deployments.find((candidate) => candidate.current);
         const older = current && new Date(deployment.created_at) < new Date(current.created_at);
         return older ? "Roll back to this" : "Promote";
@@ -59,6 +59,7 @@
                         <td>
                             <span class={badgeClass(status.tone)}>{status.label}</span>
                             {#if deployment.current}<span class="cx-badge">current</span>{/if}
+                            {#if deployment.expired}<span class="cx-badge cx-badge--warning" title="The build output was removed to save space">expired</span>{/if}
                         </td>
                         <td>
                             <div class="rs-text">

@@ -40,9 +40,10 @@ export interface DeploymentSummary {
     created_at: string;
     finished_at: string | null;
     current: boolean;
+    expired: boolean;
 }
 
-export interface Deployment extends Omit<DeploymentSummary, 'current'> {
+export interface Deployment extends Omit<DeploymentSummary, 'current' | 'expired'> {
     site_id: string;
     build_log: string;
     image_ref: string | null;
