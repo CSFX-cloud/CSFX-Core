@@ -23,6 +23,9 @@ const ETCD_JOIN_ENV_PATH: &str = "/etc/csfx/etcd-join.env";
 const PATRONI_SUPERUSER_PATH: &str = "/etc/csfx/patroni-superuser-password";
 const PATRONI_REPLICATION_PATH: &str = "/etc/csfx/patroni-replication-password";
 const PATRONI_GROUP: &str = "patroni";
+const OPENBAO_SEAL_KEY_PATH: &str = "/etc/csfx/openbao-seal-key";
+const OPENBAO_ROLE_ID_PATH: &str = "/etc/csfx/openbao-role-id";
+const OPENBAO_SECRET_ID_PATH: &str = "/etc/csfx/openbao-secret-id";
 const ETCD_DATA_DIR: &str = "/var/lib/etcd";
 const LOCAL_STATE_DIRS: [&str; 6] = [
     ETCD_DATA_DIR,
@@ -162,6 +165,9 @@ async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
         &[PATRONI_SUPERUSER_PATH, PATRONI_REPLICATION_PATH],
     )
     .await?;
+    write_file(OPENBAO_SEAL_KEY_PATH, &bundle.openbao_seal_key, 0o600)?;
+    write_file(OPENBAO_ROLE_ID_PATH, &bundle.openbao_role_id, 0o600)?;
+    write_file(OPENBAO_SECRET_ID_PATH, &bundle.openbao_secret_id, 0o600)?;
     write_file(SETUP_DONE_FILE, "", 0o600)
 }
 
@@ -283,6 +289,9 @@ mod tests {
             garage_rpc_secret: "rpc".into(),
             patroni_superuser_password: "super".into(),
             patroni_replication_password: "repl".into(),
+            openbao_seal_key: "seal".into(),
+            openbao_role_id: "role".into(),
+            openbao_secret_id: "secret".into(),
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),

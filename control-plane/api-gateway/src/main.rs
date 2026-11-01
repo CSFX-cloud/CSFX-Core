@@ -17,6 +17,7 @@ mod ingress_sync;
 mod init;
 mod metrics;
 mod oidc;
+mod openbao;
 mod prune;
 mod rbac_service;
 mod recovery;
@@ -27,6 +28,8 @@ mod system_collector;
 mod telemetry;
 mod tls;
 mod utils;
+mod vault_service;
+mod vault_store;
 mod zone_cert;
 
 use routes::registry::{
@@ -135,6 +138,20 @@ pub struct AppState {
     pub service_client: service_client::ServiceClient,
     pub default_org_id: Option<uuid::Uuid>,
     pub agent_stream_registry: routes::agent_stream::AgentStreamRegistry,
+    pub openbao: Option<openbao::OpenBao>,
+}
+
+fn connect_openbao() -> Option<openbao::OpenBao> {
+    match openbao::OpenBao::from_environment() {
+        Ok(client) => {
+            tracing::info!("openbao client configured");
+            Some(client)
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "openbao client unavailable, vault endpoints disabled");
+            None
+        }
+    }
 }
 
 #[tokio::main]
@@ -179,10 +196,14 @@ async fn main() {
         service_client: service_client::ServiceClient::new(),
         default_org_id: Some(default_org_id),
         agent_stream_registry: routes::agent_stream::AgentStreamRegistry::new(),
+        openbao: connect_openbao(),
     };
 
     tracing::info!("starting log prune job");
     prune::spawn_log_prune_job(state.clone());
+
+    vault_service::spawn_deletion_job(state.clone());
+    vault_service::spawn_purge_job(state.clone());
 
     tracing::info!("starting ingress synchronization");
     ingress_sync::spawn(state.db_conn.clone());

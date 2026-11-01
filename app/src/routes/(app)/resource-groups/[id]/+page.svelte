@@ -70,6 +70,7 @@
             workloads={rg.workloads}
             volumes={rg.volumes}
             buckets={rg.buckets}
+            vaults={rg.vaults}
             gateways={rg.gateways}
             {nodeNames}
             onChanged={rg.load}

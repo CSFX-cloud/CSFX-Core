@@ -48,6 +48,7 @@ pub mod system;
 pub mod topology;
 pub mod update;
 pub mod users;
+pub mod vaults;
 pub mod volumes;
 pub mod workloads;
 
@@ -142,6 +143,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(agent_proxy::agent_proxy_routes())
         .merge(agents::agents_routes())
         .merge(buckets::buckets_routes())
+        .merge(vaults::vaults_routes())
         .merge(cluster::cluster_routes())
         .merge(masters::masters_routes())
         .merge(cluster_vip::cluster_vip_routes())

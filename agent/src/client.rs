@@ -165,6 +165,9 @@ pub struct MasterBundle {
     pub garage_rpc_secret: String,
     pub patroni_superuser_password: String,
     pub patroni_replication_password: String,
+    pub openbao_seal_key: String,
+    pub openbao_role_id: String,
+    pub openbao_secret_id: String,
     pub etcd_name: String,
     pub etcd_initial_cluster: String,
     #[serde(default)]
