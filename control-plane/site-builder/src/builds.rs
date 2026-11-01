@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
-const LOG_LIMIT_CHARS: i64 = 2_000_000;
+const LOG_LIMIT_CHARS: i32 = 2_000_000;
 const STALE_STATUSES: [&str; 2] = ["queued", "building"];
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -134,7 +134,7 @@ impl Builds {
     pub async fn append_log(&self, id: Uuid, text: &str) -> Result<(), ServiceError> {
         let statement = Statement::from_sql_and_values(
             self.db.get_database_backend(),
-            "UPDATE site_deployments SET build_log = LEFT(build_log || $1, $2) WHERE id = $3",
+            "UPDATE site_deployments SET build_log = LEFT(build_log || $1, $2::integer) WHERE id = $3",
             [text.into(), LOG_LIMIT_CHARS.into(), id.into()],
         );
         self.db.execute(statement).await?;
