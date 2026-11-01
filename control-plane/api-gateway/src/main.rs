@@ -24,6 +24,8 @@ mod recovery;
 mod routes;
 mod service_client;
 mod setup;
+mod site_client;
+mod site_service;
 mod system_collector;
 mod telemetry;
 mod tls;
@@ -139,6 +141,7 @@ pub struct AppState {
     pub default_org_id: Option<uuid::Uuid>,
     pub agent_stream_registry: routes::agent_stream::AgentStreamRegistry,
     pub openbao: Option<openbao::OpenBao>,
+    pub site_builder: Option<site_client::SiteBuilder>,
 }
 
 fn connect_openbao() -> Option<openbao::OpenBao> {
@@ -197,6 +200,7 @@ async fn main() {
         default_org_id: Some(default_org_id),
         agent_stream_registry: routes::agent_stream::AgentStreamRegistry::new(),
         openbao: connect_openbao(),
+        site_builder: site_client::SiteBuilder::from_environment(),
     };
 
     tracing::info!("starting log prune job");
