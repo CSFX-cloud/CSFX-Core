@@ -5,9 +5,11 @@ use crate::master_join::{
     authenticated_client, render_cluster_env, systemctl, write_file, CLUSTER_ENV_PATH,
 };
 
-const RESTARTED_UNITS: [&str; 3] = [
+const RESTARTED_UNITS: [&str; 5] = [
     "csfx-keepalived.service",
     "csfx-registry.service",
+    "csfx-site-env.service",
+    "csfx-site-builder.service",
     "csfx-api-gateway.service",
 ];
 

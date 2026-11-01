@@ -30,6 +30,7 @@ pub enum BundleError {
     EmptyCredential(&'static str),
 }
 
+const SITE_SECRET_VAR: &str = "CSFX_SITE_SECRET";
 const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
 const VIP_PREFIX_VAR: &str = "CSFX_VIP_PREFIX";
 const VIP_ROUTER_ID_VAR: &str = "CSFX_VIP_ROUTER_ID";
@@ -99,6 +100,8 @@ pub struct ClusterSecrets {
     pub openbao_seal_key: String,
     pub openbao_role_id: String,
     pub openbao_secret_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_secret: Option<String>,
 }
 
 impl ClusterSecrets {
@@ -125,6 +128,9 @@ impl ClusterSecrets {
             openbao_seal_key: filled_credential(credentials, CREDENTIAL_OPENBAO_SEAL_KEY)?,
             openbao_role_id: filled_credential(credentials, CREDENTIAL_OPENBAO_ROLE_ID)?,
             openbao_secret_id: filled_credential(credentials, CREDENTIAL_OPENBAO_SECRET_ID)?,
+            site_secret: std::env::var(SITE_SECRET_VAR)
+                .ok()
+                .filter(|value| !value.is_empty()),
         })
     }
 }

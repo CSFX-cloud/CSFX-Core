@@ -168,6 +168,8 @@ pub struct MasterBundle {
     pub openbao_seal_key: String,
     pub openbao_role_id: String,
     pub openbao_secret_id: String,
+    #[serde(default)]
+    pub site_secret: Option<String>,
     pub etcd_name: String,
     pub etcd_initial_cluster: String,
     #[serde(default)]

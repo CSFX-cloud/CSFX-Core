@@ -241,8 +241,12 @@ pub(crate) fn write_file(path: &str, contents: &str, mode: u32) -> Result<()> {
 }
 
 fn render_cp_env(bundle: &MasterBundle) -> String {
+    let site_secret = bundle
+        .site_secret
+        .as_ref()
+        .map_or_else(String::new, |secret| format!("CSFX_SITE_SECRET={secret}\n"));
     format!(
-        "DATABASE_URL=postgres://csfx:{}@localhost:5432/csfx\nJWT_SECRET={}\nETCD_ENDPOINTS=http://localhost:2379\nGARAGE_ADMIN_TOKEN={}\nOBJECT_STORAGE_ENCRYPTION_KEY={}\n",
+        "DATABASE_URL=postgres://csfx:{}@localhost:5432/csfx\nJWT_SECRET={}\nETCD_ENDPOINTS=http://localhost:2379\nGARAGE_ADMIN_TOKEN={}\nOBJECT_STORAGE_ENCRYPTION_KEY={}\n{site_secret}",
         bundle.db_password,
         bundle.jwt_secret,
         bundle.garage_admin_token,
@@ -292,6 +296,7 @@ mod tests {
             openbao_seal_key: "seal".into(),
             openbao_role_id: "role".into(),
             openbao_secret_id: "secret".into(),
+            site_secret: Some("site".into()),
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),
@@ -306,6 +311,14 @@ mod tests {
         assert!(env.contains("JWT_SECRET=jwt\n"));
         assert!(env.contains("ETCD_ENDPOINTS=http://localhost:2379\n"));
         assert!(env.contains("OBJECT_STORAGE_ENCRYPTION_KEY=enc\n"));
+        assert!(env.ends_with("CSFX_SITE_SECRET=site\n"));
+    }
+
+    #[test]
+    fn cp_env_omits_the_site_secret_when_the_cluster_has_none() {
+        let mut older = bundle();
+        older.site_secret = None;
+        assert!(!render_cp_env(&older).contains("CSFX_SITE_SECRET"));
     }
 
     #[test]
