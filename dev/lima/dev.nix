@@ -53,6 +53,7 @@ in
       };
     };
     csfx-garage.enable = true;
+    csfx-openbao.enable = true;
   };
 
   systemd.services = lib.mkMerge [
