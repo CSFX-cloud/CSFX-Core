@@ -167,14 +167,17 @@ pub fn domain_target(domain: site_domains::Model, backend: &str) -> RouteTarget 
     }
 }
 
+pub fn site_edge_backend() -> Option<String> {
+    std::env::var(SITE_EDGE_VARIABLE)
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
 async fn site_targets(
     db: &DatabaseConnection,
     gateway_id: Uuid,
 ) -> Result<Vec<RouteTarget>, DbErr> {
-    let Some(backend) = std::env::var(SITE_EDGE_VARIABLE)
-        .ok()
-        .filter(|value| !value.is_empty())
-    else {
+    let Some(backend) = site_edge_backend() else {
         return Ok(Vec::new());
     };
     let site_ids: Vec<Uuid> = sites::Entity::find()

@@ -1,5 +1,6 @@
 use entity::entities::{
-    agents, dns_records, ingress_gateways, ingress_routes, resource_groups, workloads,
+    agents, dns_records, ingress_gateways, ingress_routes, resource_groups, site_domains, sites,
+    workloads,
 };
 use etcd_client::{Client, GetOptions};
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
@@ -23,6 +24,12 @@ pub struct GatewayAddress {
 pub struct PlatformRecord {
     pub hostname: String,
     pub addresses: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteHost {
+    pub hostname: String,
+    pub gateway_id: Uuid,
 }
 
 pub fn platform_hostname(zone: &str) -> String {
@@ -86,6 +93,7 @@ pub fn desired_records(
     zone: &str,
     gateways: &[GatewayAddress],
     routes: &[ingress_routes::Model],
+    site_hosts: &[SiteHost],
     manual: &[dns_records::Model],
     platform: &PlatformRecord,
 ) -> BTreeMap<String, String> {
@@ -118,6 +126,18 @@ pub fn desired_records(
         };
         records.insert(
             record_key(&route.hostname),
+            record_value(&gateway.address, RECORD_TTL),
+        );
+    }
+    for host in site_hosts
+        .iter()
+        .filter(|host| in_zone(&host.hostname, zone))
+    {
+        let Some(gateway) = by_id.get(&host.gateway_id) else {
+            continue;
+        };
+        records.insert(
+            record_key(&host.hostname),
             record_value(&gateway.address, RECORD_TTL),
         );
     }
@@ -277,6 +297,32 @@ async fn existing_records(
         .collect())
 }
 
+async fn load_site_hosts(db: &DatabaseConnection) -> Result<Vec<SiteHost>, DbErr> {
+    if crate::ingress_sync::site_edge_backend().is_none() {
+        return Ok(Vec::new());
+    }
+    let gateways: HashMap<Uuid, Uuid> = sites::Entity::find()
+        .filter(sites::Column::Mode.eq("static"))
+        .filter(sites::Column::GatewayId.is_not_null())
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|site| Some((site.id, site.gateway_id?)))
+        .collect();
+    Ok(site_domains::Entity::find()
+        .filter(site_domains::Column::SiteId.is_in(gateways.keys().copied().collect::<Vec<_>>()))
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|domain| {
+            Some(SiteHost {
+                gateway_id: *gateways.get(&domain.site_id)?,
+                hostname: domain.hostname,
+            })
+        })
+        .collect())
+}
+
 pub async fn reconcile_once(
     db: &DatabaseConnection,
     client: &mut Client,
@@ -284,12 +330,13 @@ pub async fn reconcile_once(
 ) -> anyhow::Result<EntryDiff> {
     let gateways = load_gateway_addresses(db, zone).await?;
     let routes = ingress_routes::Entity::find().all(db).await?;
+    let site_hosts = load_site_hosts(db).await?;
     let manual = dns_records::Entity::find().all(db).await?;
     let platform = PlatformRecord {
         hostname: platform_hostname(zone),
         addresses: load_platform_addresses(db).await?,
     };
-    let desired = desired_records(zone, &gateways, &routes, &manual, &platform);
+    let desired = desired_records(zone, &gateways, &routes, &site_hosts, &manual, &platform);
     let diff = diff_records(&existing_records(client, zone).await?, &desired);
     apply_diff(client, &diff).await?;
     Ok(diff)
@@ -329,6 +376,38 @@ mod tests {
     }
 
     #[test]
+    fn static_site_domains_resolve_to_their_gateway() {
+        let hosts = [
+            SiteHost {
+                hostname: "shop.csfx.internal".to_string(),
+                gateway_id: Uuid::from_u128(1),
+            },
+            SiteHost {
+                hostname: "shop.example.com".to_string(),
+                gateway_id: Uuid::from_u128(1),
+            },
+            SiteHost {
+                hostname: "orphan.csfx.internal".to_string(),
+                gateway_id: Uuid::from_u128(9),
+            },
+        ];
+        let records = desired_records(
+            "csfx.internal",
+            &[gateway()],
+            &[],
+            &hosts,
+            &[],
+            &no_platform(),
+        );
+        assert_eq!(
+            records["/skydns/internal/csfx/shop/x1"],
+            r#"{"host":"10.0.0.5","ttl":30}"#
+        );
+        assert!(!records.contains_key("/skydns/internal/csfx/orphan/x1"));
+        assert!(!records.keys().any(|key| key.contains("example")));
+    }
+
+    #[test]
     fn keys_reverse_labels_under_skydns_root() {
         assert_eq!(
             record_key("web.csfx.internal"),
@@ -353,7 +432,14 @@ mod tests {
             route("orphan.csfx.internal", None),
             route("lost.csfx.internal", Some(Uuid::from_u128(9))),
         ];
-        let records = desired_records("csfx.internal", &[gateway()], &routes, &[], &no_platform());
+        let records = desired_records(
+            "csfx.internal",
+            &[gateway()],
+            &routes,
+            &[],
+            &[],
+            &no_platform(),
+        );
         let keys: Vec<&str> = records.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
@@ -383,6 +469,7 @@ mod tests {
             "csfx.internal",
             &[gateway()],
             &[],
+            &[],
             &[
                 manual("db.csfx.internal", "10.0.0.9"),
                 manual("gw.prod.csfx.internal", "10.9.9.9"),
@@ -411,7 +498,7 @@ mod tests {
                 "10.0.0.1".to_string(),
             ],
         };
-        let records = desired_records("csfx.internal", &[], &[], &[], &platform);
+        let records = desired_records("csfx.internal", &[], &[], &[], &[], &platform);
         assert_eq!(
             records["/skydns/internal/csfx/console/x1"],
             r#"{"host":"10.0.0.1","ttl":30}"#
@@ -429,7 +516,7 @@ mod tests {
             hostname: "console.example.com".to_string(),
             addresses: vec!["10.0.0.1".to_string()],
         };
-        assert!(desired_records("csfx.internal", &[], &[], &[], &platform).is_empty());
+        assert!(desired_records("csfx.internal", &[], &[], &[], &[], &platform).is_empty());
     }
 
     #[test]
