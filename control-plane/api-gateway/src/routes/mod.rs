@@ -34,6 +34,7 @@ pub mod logs;
 pub mod masters;
 pub mod networks;
 pub mod organizations;
+pub mod registries;
 pub mod registry;
 pub mod releases;
 pub mod resource_groups;
@@ -147,6 +148,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(buckets::buckets_routes())
         .merge(vaults::vaults_routes())
         .merge(sites::sites_routes())
+        .merge(registries::registries_routes())
         .merge(site_usage::usage_routes())
         .merge(cluster::cluster_routes())
         .merge(masters::masters_routes())
