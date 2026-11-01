@@ -85,6 +85,17 @@ fn optional_env(env: &mut BTreeMap<String, String>, name: &str, value: Option<&s
     }
 }
 
+fn registry_settings(env: &mut BTreeMap<String, String>, config: &Config) {
+    if config.registry_insecure {
+        env.insert("CSFX_REGISTRY_INSECURE".to_string(), "1".to_string());
+    }
+    optional_env(
+        env,
+        "CSFX_REGISTRY_MIRROR",
+        config.registry_mirror.as_deref(),
+    );
+}
+
 fn builder_environment(config: &Config, job: &BuildJob) -> BTreeMap<String, String> {
     let mode = if job.mode == Mode::Static {
         "static"
@@ -122,6 +133,7 @@ fn builder_environment(config: &Config, job: &BuildJob) -> BTreeMap<String, Stri
     optional_env(&mut env, "CSFX_GIT_TOKEN", job.git_token.as_deref());
     if let (Some(registry), Mode::Container) = (&config.registry, job.mode) {
         env.insert("CSFX_IMAGE_REF".to_string(), image_reference(registry, job));
+        registry_settings(&mut env, config);
     }
     if let Some(port) = job.container_port {
         env.insert("CSFX_CONTAINER_PORT".to_string(), port.to_string());
@@ -182,6 +194,8 @@ mod tests {
             secret: "s".to_string(),
             builder_image: "builder:1".to_string(),
             registry: registry.map(str::to_string),
+            registry_insecure: true,
+            registry_mirror: Some("10.0.0.1:5050".to_string()),
             scheduler_url: String::new(),
             preview_domain: None,
             build_timeout: Duration::from_secs(1),
@@ -240,6 +254,8 @@ mod tests {
             env["CSFX_IMAGE_REF"],
             format!("r:5000/{}:{}", Uuid::nil(), "00000000")
         );
+        assert_eq!(env["CSFX_REGISTRY_INSECURE"], "1");
+        assert_eq!(env["CSFX_REGISTRY_MIRROR"], "10.0.0.1:5050");
         assert_eq!(request["restart_policy"], "never");
     }
 

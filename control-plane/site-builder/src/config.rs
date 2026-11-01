@@ -14,6 +14,8 @@ pub struct Config {
     pub secret: String,
     pub builder_image: String,
     pub registry: Option<String>,
+    pub registry_insecure: bool,
+    pub registry_mirror: Option<String>,
     pub scheduler_url: String,
     pub preview_domain: Option<String>,
     pub build_timeout: Duration,
@@ -21,6 +23,10 @@ pub struct Config {
 
 fn optional(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn flag(name: &str) -> bool {
+    matches!(optional(name).as_deref(), Some("1" | "true"))
 }
 
 fn parsed<T: std::str::FromStr>(name: &str, default: T) -> Result<T> {
@@ -45,6 +51,8 @@ impl Config {
             builder_image: optional("CSFX_SITE_BUILDER_IMAGE")
                 .unwrap_or_else(|| DEFAULT_BUILDER_IMAGE.to_string()),
             registry: optional("CSFX_SITE_REGISTRY"),
+            registry_insecure: flag("CSFX_SITE_REGISTRY_INSECURE"),
+            registry_mirror: optional("CSFX_REGISTRY_MIRROR"),
             scheduler_url: optional("SCHEDULER_SERVICE_URL")
                 .unwrap_or_else(|| DEFAULT_SCHEDULER_URL.to_string()),
             preview_domain: optional("CSFX_SITE_PREVIEW_DOMAIN"),

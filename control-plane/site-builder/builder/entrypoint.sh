@@ -124,6 +124,7 @@ build_container() {
     mapfile -t arguments < <(build_arguments)
     local insecure=()
     [ "${CSFX_REGISTRY_INSECURE:-}" = "1" ] && insecure=(--insecure --skip-tls-verify)
+    [ -n "${CSFX_REGISTRY_MIRROR:-}" ] && insecure+=(--registry-mirror "$CSFX_REGISTRY_MIRROR" --insecure-registry "$CSFX_REGISTRY_MIRROR")
     log INFO "building image reference=$CSFX_IMAGE_REF"
     kaniko-executor --context "$PROJECT_DIR" --dockerfile "$PROJECT_DIR/$dockerfile" \
         --destination "$CSFX_IMAGE_REF" "${insecure[@]}" "${arguments[@]}" >>"$LOG_FILE" 2>&1 \
