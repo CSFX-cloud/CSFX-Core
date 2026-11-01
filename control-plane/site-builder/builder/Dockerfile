@@ -3,13 +3,14 @@ FROM gcr.io/kaniko-project/executor:v1.23.2 AS kaniko
 FROM node:22-bookworm
 
 ARG HUGO_VERSION=0.139.0
+ARG TARGETARCH=amd64
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git curl jq ca-certificates ruby-full build-essential \
     && gem install bundler --no-document \
     && npm install -g bun \
     && corepack enable \
-    && curl -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz" \
+    && curl -fsSL "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-${TARGETARCH}.tar.gz" \
         | tar -xz -C /usr/local/bin hugo \
     && rm -rf /var/lib/apt/lists/*
 
