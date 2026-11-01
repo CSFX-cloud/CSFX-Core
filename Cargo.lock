@@ -5256,6 +5256,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "site-builder"
+version = "0.2.2"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
