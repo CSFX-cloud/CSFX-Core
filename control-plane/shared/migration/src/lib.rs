@@ -52,6 +52,7 @@ mod m20261028_000000_add_vaults;
 mod m20261101_000000_add_sites;
 mod m20261101_010000_add_site_artifacts;
 mod m20261102_000000_add_site_registry_keys;
+mod m20261102_010000_add_site_usage;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -110,6 +111,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261101_000000_add_sites::Migration),
             Box::new(m20261101_010000_add_site_artifacts::Migration),
             Box::new(m20261102_000000_add_site_registry_keys::Migration),
+            Box::new(m20261102_010000_add_site_usage::Migration),
         ]
     }
 }
