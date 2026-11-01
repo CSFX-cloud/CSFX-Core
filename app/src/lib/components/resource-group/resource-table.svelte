@@ -15,9 +15,11 @@
         type Volume,
         type Workload,
     } from "$lib/api/resource-groups";
+    import { deleteVault, type Vault } from "$lib/api/vaults";
     import { buildResourceItems, filterResources, workloadHref, type ResourceTab } from "$lib/utils/resource-items";
     import BucketRow from "./bucket-row.svelte";
     import StackRow from "./stack-row.svelte";
+    import VaultRow from "./vault-row.svelte";
     import VolumeRow from "./volume-row.svelte";
     import WorkloadRow from "./workload-row.svelte";
 
@@ -26,6 +28,7 @@
         { value: "compute", label: "Compute" },
         { value: "containers", label: "Containers" },
         { value: "storage", label: "Storage" },
+        { value: "security", label: "Security" },
     ];
     const NODE_ID_LENGTH = 8;
 
@@ -35,18 +38,19 @@
         workloads: Workload[];
         volumes: Volume[];
         buckets: Bucket[];
+        vaults: Vault[];
         gateways: Gateway[];
         nodeNames: Map<string, string>;
         onChanged: () => Promise<void>;
         onError: (message: string) => void;
     };
 
-    let { groupName, base, workloads, volumes, buckets, gateways, nodeNames, onChanged, onError }: Props = $props();
+    let { groupName, base, workloads, volumes, buckets, vaults, gateways, nodeNames, onChanged, onError }: Props = $props();
 
     let activeTab = $state<ResourceTab>("all");
     let expandedStacks = $state<Set<string>>(new Set());
 
-    const allResources = $derived(buildResourceItems(workloads, volumes, buckets));
+    const allResources = $derived(buildResourceItems(workloads, volumes, buckets, vaults));
     const visible = $derived(filterResources(allResources, activeTab));
 
     function token(): string {
@@ -148,6 +152,12 @@
                             {/if}
                         {:else if item.kind === "volume"}
                             <VolumeRow v={item.data} onDelete={() => run(() => deleteVolume(token(), item.data.id), "Failed to delete volume")} />
+                        {:else if item.kind === "vault"}
+                            <VaultRow
+                                v={item.data}
+                                href="{base}/vault/{item.data.id}"
+                                onDelete={() => run(() => deleteVault(token(), item.data.resource_group_id, item.data.id), "Failed to delete vault")}
+                            />
                         {:else}
                             <BucketRow
                                 b={item.data}

@@ -3,6 +3,7 @@ export const RESOURCE_CATEGORIES = [
     { id: "containers", label: "Containers" },
     { id: "storage", label: "Storage" },
     { id: "networking", label: "Networking" },
+    { id: "security", label: "Security" },
 ] as const;
 
 export type ResourceCategory = (typeof RESOURCE_CATEGORIES)[number]["id"];
@@ -13,6 +14,7 @@ export const RESOURCE_TYPES = [
     { key: "docker-compose", service: "docker-compose", category: "containers", label: "Docker Compose", description: "Deploy related containers as one stack.", equivalent: "COMPOSE.YML · MULTI-CONTAINER STACKS" },
     { key: "bucket", service: "object-storage", category: "storage", label: "Object Storage", description: "S3-compatible buckets for files and backups.", equivalent: "S3 · BLOB STORAGE · CLOUD STORAGE" },
     { key: "volume", service: "block-storage", category: "storage", label: "Block Storage", description: "Attach a volume to a VM or container.", equivalent: "EBS · MANAGED DISK · PERSISTENT DISK" },
+    { key: "key-vault", service: "key-vault", category: "security", label: "Key Vault", description: "Store secrets that resources read at start.", equivalent: "KEY VAULT · SECRETS MANAGER · SECRET MANAGER" },
     { key: "api-gateway", service: "load-balancer", category: "networking", label: "API Gateway", description: "Publish services under local or public domains.", equivalent: "API GATEWAY · APIM · REVERSE PROXY" },
 ] as const;
 

@@ -11,6 +11,7 @@ import {
     type Volume,
     type Workload,
 } from "$lib/api/resource-groups";
+import { listVaults, type Vault } from "$lib/api/vaults";
 import { groupHealth } from "$lib/utils/group-health";
 import { isTransientStatus } from "$lib/utils/status.js";
 
@@ -22,6 +23,7 @@ export class ResourceGroupState {
     volumes = $state<Volume[]>([]);
     buckets = $state<Bucket[]>([]);
     gateways = $state<Gateway[]>([]);
+    vaults = $state<Vault[]>([]);
     loading = $state(true);
     error = $state<string | null>(null);
 
@@ -44,12 +46,13 @@ export class ResourceGroupState {
     load = async () => {
         if (!auth.token) return;
         try {
-            [this.group, this.workloads, this.volumes, this.buckets, this.gateways] = await Promise.all([
+            [this.group, this.workloads, this.volumes, this.buckets, this.gateways, this.vaults] = await Promise.all([
                 getResourceGroup(auth.token, this.rgId),
                 listResourceGroupWorkloads(auth.token, this.rgId),
                 listResourceGroupVolumes(auth.token, this.rgId),
                 listResourceGroupBuckets(auth.token, this.rgId),
                 listGateways(auth.token, this.rgId),
+                listVaults(auth.token, this.rgId).catch((): Vault[] => []),
             ]);
         } catch (e) {
             this.error = e instanceof Error ? e.message : "Failed to load";
