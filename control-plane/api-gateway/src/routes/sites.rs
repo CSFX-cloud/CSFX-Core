@@ -67,11 +67,15 @@ pub struct DeploymentSummary {
     created_at: chrono::NaiveDateTime,
     finished_at: Option<chrono::NaiveDateTime>,
     current: bool,
+    expired: bool,
 }
 
 fn summarize(model: site_deployments::Model, current: Option<Uuid>) -> DeploymentSummary {
     DeploymentSummary {
         current: current == Some(model.id),
+        expired: model.status == "ready"
+            && model.image_ref.is_none()
+            && model.artifact_key.is_none(),
         id: model.id,
         commit_sha: model.commit_sha,
         commit_message: model.commit_message,
@@ -533,8 +537,19 @@ pub async fn delete_site(
             tracing::warn!(workload = %workload, error = %error, "site workload removal failed");
         }
     }
+    purge_images(&state, &site).await;
     Sites::delete_by_id(site.id).exec(&state.db_conn).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn purge_images(state: &AppState, site: &sites::Model) {
+    let Some(builder) = state.site_builder.as_ref() else {
+        return;
+    };
+    let path = format!("/internal/sites/{}/purge", site.id);
+    if let Err(error) = builder.post(&path, &Value::Null).await {
+        tracing::warn!(site = %site.id, error = %error, "registry cleanup failed");
+    }
 }
 
 #[derive(Deserialize, Default)]
