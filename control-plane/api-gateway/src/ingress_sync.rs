@@ -1,4 +1,4 @@
-use entity::entities::{agents, ingress_routes, workloads};
+use entity::entities::{agents, ingress_routes, site_domains, sites, workloads};
 use etcd_client::{Client, GetOptions};
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 use serde_json::{json, Map, Value};
@@ -11,6 +11,7 @@ use uuid::Uuid;
 const LEADER_KEY: &str = "/csfx/leaders/ingress-sync";
 const KEY_PREFIX: &str = "traefik/http/";
 const OWNED_MARKER: &str = "/csfx-";
+const SITE_EDGE_VARIABLE: &str = "CSFX_SITE_EDGE_URL";
 const REDIRECT_MIDDLEWARE: &str = "csfx-redirect-https";
 const ENTRYPOINT_WEB: &str = "web";
 const ENTRYPOINT_WEBSECURE: &str = "websecure";
@@ -149,6 +150,54 @@ pub fn diff_entries(
 }
 
 pub async fn load_targets(
+    db: &DatabaseConnection,
+    gateway_id: Uuid,
+) -> Result<Vec<RouteTarget>, DbErr> {
+    let mut targets = workload_targets(db, gateway_id).await?;
+    targets.extend(site_targets(db, gateway_id).await?);
+    Ok(targets)
+}
+
+pub fn domain_target(domain: site_domains::Model, backend: &str) -> RouteTarget {
+    RouteTarget {
+        id: domain.id,
+        hostname: domain.hostname,
+        tls: true,
+        backend: backend.to_string(),
+    }
+}
+
+async fn site_targets(
+    db: &DatabaseConnection,
+    gateway_id: Uuid,
+) -> Result<Vec<RouteTarget>, DbErr> {
+    let Some(backend) = std::env::var(SITE_EDGE_VARIABLE)
+        .ok()
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(Vec::new());
+    };
+    let site_ids: Vec<Uuid> = sites::Entity::find()
+        .filter(sites::Column::GatewayId.eq(gateway_id))
+        .filter(sites::Column::Mode.eq("static"))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|site| site.id)
+        .collect();
+    if site_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(site_domains::Entity::find()
+        .filter(site_domains::Column::SiteId.is_in(site_ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|domain| domain_target(domain, &backend))
+        .collect())
+}
+
+async fn workload_targets(
     db: &DatabaseConnection,
     gateway_id: Uuid,
 ) -> Result<Vec<RouteTarget>, DbErr> {
@@ -323,6 +372,22 @@ mod tests {
 
     fn router_name() -> String {
         format!("csfx-{}", Uuid::nil())
+    }
+
+    #[test]
+    fn site_domains_route_to_the_edge_backend() {
+        let domain = site_domains::Model {
+            id: Uuid::from_u128(7),
+            site_id: Uuid::nil(),
+            hostname: "shop.csfx.dev".to_string(),
+            kind: "production".to_string(),
+            branch: None,
+            created_at: chrono::NaiveDateTime::default(),
+        };
+        let target = domain_target(domain, "http://edge:8008");
+        assert_eq!(target.hostname, "shop.csfx.dev");
+        assert_eq!(target.backend, "http://edge:8008");
+        assert!(target.tls);
     }
 
     #[test]
