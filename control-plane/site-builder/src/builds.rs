@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::ServiceError;
-use crate::job::{builder_request, BuildJob};
+use crate::job::{builder_request, image_reference, BuildJob};
 use crate::scheduler::SchedulerClient;
 use chrono::Utc;
 use entity::{site_deployments, SiteDeployments};
@@ -23,6 +23,24 @@ pub struct Completion {
     pub commit_message: Option<String>,
     pub image_ref: Option<String>,
     pub error: Option<String>,
+}
+
+fn trusted_image(
+    registry: Option<&str>,
+    mode: Mode,
+    completion: &Completion,
+    job: Option<&BuildJob>,
+) -> Result<Option<String>, ServiceError> {
+    if mode == Mode::Static {
+        return Ok(None);
+    }
+    let invalid = |message: &str| ServiceError::Invalid(message.to_string());
+    if completion.image_ref.is_none() {
+        return Err(invalid("build produced no image"));
+    }
+    let job = job.ok_or_else(|| invalid("build job state was lost"))?;
+    let registry = registry.ok_or_else(|| invalid("no site registry is configured"))?;
+    Ok(Some(image_reference(registry, job)))
 }
 
 pub struct Builds {
@@ -161,20 +179,24 @@ impl Builds {
         let id = deployment.id;
         let site = crate::sites::load(&self.db, deployment.site_id).await?;
         let mode = crate::sites::mode_of(&site)?;
+        let job = self.recall(id);
         if mode == Mode::Static && !crate::artifacts::exists(&self.db, id).await? {
             return Err(ServiceError::Invalid(
                 "build produced no artifact".to_string(),
             ));
         }
-        if mode == Mode::Container && completion.image_ref.is_none() {
-            return Err(ServiceError::Invalid("build produced no image".to_string()));
-        }
+        let image = trusted_image(
+            self.config.registry.as_deref(),
+            mode,
+            &completion,
+            job.as_ref(),
+        )?;
         let builder = deployment.workload_id;
         let production = deployment.environment == "production";
-        self.mark_ready(deployment, completion, mode).await?;
+        self.mark_ready(deployment, completion, mode, image).await?;
         self.release_builder(builder).await;
-        let env = self.recall(id).map(|job| job.env).unwrap_or_default();
         if production {
+            let env = job.map(|job| job.env).unwrap_or_default();
             self.promote(id, env).await?;
         } else {
             crate::sites::ensure_preview_domain(self, id).await?;
@@ -188,6 +210,7 @@ impl Builds {
         deployment: site_deployments::Model,
         completion: Completion,
         mode: Mode,
+        image: Option<String>,
     ) -> Result<(), ServiceError> {
         let started = deployment.created_at;
         let key = (mode == Mode::Static).then(|| deployment.id.to_string());
@@ -196,7 +219,7 @@ impl Builds {
         active.status = Set("ready".to_string());
         active.workload_id = Set(None);
         active.artifact_key = Set(key);
-        active.image_ref = Set(completion.image_ref);
+        active.image_ref = Set(image);
         active.finished_at = Set(Some(now));
         active.duration_ms = Set(Some((now - started).num_milliseconds()));
         if let Some(sha) = completion.commit_sha {
@@ -230,5 +253,69 @@ impl Builds {
             self.fail(deployment.id, "build timed out").await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn job() -> BuildJob {
+        BuildJob {
+            deployment_id: Uuid::from_u128(1),
+            site_id: Uuid::nil(),
+            resource_group_id: Uuid::nil(),
+            site_name: "shop".to_string(),
+            mode: Mode::Container,
+            repo_url: "https://example.com/a".to_string(),
+            branch: "main".to_string(),
+            root_dir: String::new(),
+            framework: None,
+            install_command: None,
+            build_command: None,
+            output_dir: None,
+            start_command: None,
+            container_port: Some(3000),
+            git_token: None,
+            env: BTreeMap::new(),
+        }
+    }
+
+    fn reported(image: Option<&str>) -> Completion {
+        Completion {
+            success: true,
+            image_ref: image.map(str::to_string),
+            ..Completion::default()
+        }
+    }
+
+    #[test]
+    fn container_images_ignore_the_value_reported_by_the_vm() {
+        let image = trusted_image(
+            Some("reg:5060"),
+            Mode::Container,
+            &reported(Some("evil/other:1")),
+            Some(&job()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(image, format!("reg:5060/{}:00000000", Uuid::nil()));
+    }
+
+    #[test]
+    fn container_images_need_a_report_a_job_and_a_registry() {
+        let job = job();
+        assert!(trusted_image(Some("r"), Mode::Container, &reported(None), Some(&job)).is_err());
+        assert!(trusted_image(Some("r"), Mode::Container, &reported(Some("x")), None).is_err());
+        assert!(trusted_image(None, Mode::Container, &reported(Some("x")), Some(&job)).is_err());
+    }
+
+    #[test]
+    fn static_builds_have_no_image() {
+        assert_eq!(
+            trusted_image(None, Mode::Static, &reported(None), None).unwrap(),
+            None
+        );
     }
 }
