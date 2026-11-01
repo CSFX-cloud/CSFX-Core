@@ -27,6 +27,7 @@ use crate::{
 const MAX_REASON_LENGTH: usize = 500;
 const APPROVAL_VALIDITY_MINUTES: i64 = 10;
 const CAPABILITIES: [&str; 4] = ["read_secrets", "sign_with_key", "reveal_secrets", "manage"];
+const ROLE_CAPABILITIES: [&str; 2] = ["read_secrets", "sign_with_key"];
 
 pub struct ApiError(VaultError);
 
@@ -113,8 +114,6 @@ pub struct SecretRequest {
     name: Option<String>,
     value: String,
     expires_at: Option<String>,
-    #[serde(default)]
-    used_by: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -352,7 +351,6 @@ async fn store_secret(
     let secret = SecretWrite {
         value: request.value,
         expires_at: request.expires_at,
-        used_by: request.used_by,
     };
     let version = vault_store::write_secret(
         service::openbao(state)?,
@@ -525,13 +523,19 @@ pub async fn list_grants(
     Ok(Json(grants))
 }
 
+fn needs_role(capability: &str) -> bool {
+    ROLE_CAPABILITIES.contains(&capability)
+}
+
 fn validate_grant(request: &GrantRequest) -> Result<(), VaultError> {
-    vault_store::validate_principal(&request.principal).map_err(invalid)?;
     vault_store::validate_scope(&request.scope).map_err(invalid)?;
     if !CAPABILITIES.contains(&request.capability.as_str()) {
         return Err(invalid("unknown capability"));
     }
-    Ok(())
+    if needs_role(&request.capability) {
+        return vault_store::validate_principal(&request.principal).map_err(invalid);
+    }
+    vault_store::validate_user_principal(&request.principal).map_err(invalid)
 }
 
 pub async fn create_grant(
@@ -553,7 +557,14 @@ pub async fn create_grant(
     }
     .insert(&state.db_conn)
     .await?;
-    service::sync_principal(&state, &vault, &grant.principal).await?;
+    if needs_role(&grant.capability) {
+        if let Err(error) = service::sync_principal(&state, &vault, &grant.principal).await {
+            VaultGrants::delete_by_id(grant.id)
+                .exec(&state.db_conn)
+                .await?;
+            return Err(error.into());
+        }
+    }
     let target = format!(
         "{} {} on {}",
         grant.principal, grant.capability, grant.scope
@@ -584,7 +595,9 @@ pub async fn delete_grant(
     VaultGrants::delete_by_id(grant.id)
         .exec(&state.db_conn)
         .await?;
-    service::sync_principal(&state, &vault, &grant.principal).await?;
+    if needs_role(&grant.capability) {
+        service::sync_principal(&state, &vault, &grant.principal).await?;
+    }
     let target = format!(
         "{} {} on {}",
         grant.principal, grant.capability, grant.scope

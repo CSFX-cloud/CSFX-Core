@@ -9,6 +9,7 @@ use crate::openbao::{OpenBao, OpenBaoError};
 const KV_MOUNT: &str = "csfx-kv";
 const MAX_SECRET_NAME_LENGTH: usize = 127;
 const MAX_PRINCIPAL_LENGTH: usize = 63;
+const MAX_USER_PRINCIPAL_LENGTH: usize = 254;
 const SECRET_ID_WRAP_TTL: &str = "60s";
 
 #[derive(Clone, Copy)]
@@ -23,7 +24,6 @@ pub struct SecretSummary {
     pub version: u64,
     pub updated_at: String,
     pub expires_at: Option<String>,
-    pub used_by: Vec<String>,
     pub deleted: bool,
 }
 
@@ -35,7 +35,6 @@ pub struct SecretValue {
 pub struct SecretWrite {
     pub value: String,
     pub expires_at: Option<String>,
-    pub used_by: Vec<String>,
 }
 
 pub fn validate_secret_name(name: &str) -> Result<(), &'static str> {
@@ -102,6 +101,17 @@ pub fn validate_principal(principal: &str) -> Result<(), &'static str> {
     }
 }
 
+pub fn validate_user_principal(principal: &str) -> Result<(), &'static str> {
+    let valid = !principal.is_empty()
+        && principal.len() <= MAX_USER_PRINCIPAL_LENGTH
+        && !principal.chars().any(char::is_control);
+    if valid {
+        Ok(())
+    } else {
+        Err("user must be 1 to 254 characters without control characters")
+    }
+}
+
 pub fn validate_scope(scope: &str) -> Result<(), &'static str> {
     let valid = !scope.is_empty()
         && scope.len() <= MAX_SECRET_NAME_LENGTH
@@ -143,15 +153,6 @@ pub fn summarize(name: &str, metadata: &Value) -> Result<SecretSummary, OpenBaoE
         version,
         updated_at: text(data.get("updated_time")).unwrap_or_default(),
         expires_at: text(custom.and_then(|c| c.get("expires_at"))).filter(|v| !v.is_empty()),
-        used_by: text(custom.and_then(|c| c.get("used_by")))
-            .map(|joined| {
-                joined
-                    .split(',')
-                    .filter(|part| !part.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
         deleted: current
             .and_then(|v| v.get("deletion_time"))
             .and_then(Value::as_str)
@@ -206,6 +207,18 @@ pub fn deletion_overdue(metadata: &Value, retention_days: i32, now: DateTime<Utc
     Some(now - deleted_at >= Duration::days(i64::from(retention_days)))
 }
 
+pub fn custom_metadata(secret: &SecretWrite) -> Value {
+    let mut entries = serde_json::Map::new();
+    if let Some(expires_at) = secret
+        .expires_at
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        entries.insert("expires_at".to_string(), json!(expires_at));
+    }
+    json!({ "custom_metadata": entries })
+}
+
 pub async fn write_secret(
     bao: &OpenBao,
     scope: VaultScope,
@@ -217,12 +230,7 @@ pub async fn write_secret(
         .request(Method::POST, &scope.data(name), Some(&body))
         .await?
         .ok_or(OpenBaoError::Decode)?;
-    let custom = json!({
-        "custom_metadata": {
-            "expires_at": secret.expires_at.clone().unwrap_or_default(),
-            "used_by": secret.used_by.join(","),
-        }
-    });
+    let custom = custom_metadata(secret);
     bao.request(Method::POST, &scope.metadata(name), Some(&custom))
         .await?;
     parse_version(&written)
@@ -474,6 +482,8 @@ mod tests {
         assert!(validate_principal("app-stack.web").is_ok());
         assert!(validate_principal("a/b").is_err());
         assert!(validate_principal("").is_err());
+        assert!(validate_user_principal("admin@csfx.dev").is_ok());
+        assert!(validate_user_principal("a\nb").is_err());
     }
 
     #[test]
@@ -496,7 +506,7 @@ mod tests {
         json!({ "data": {
             "current_version": 2,
             "updated_time": "2026-10-01T10:00:00Z",
-            "custom_metadata": { "expires_at": "2027-01-01", "used_by": "api-gw,web" },
+            "custom_metadata": { "expires_at": "2027-01-01" },
             "versions": { "2": { "deletion_time": deletion_time } },
         }})
     }
@@ -505,7 +515,6 @@ mod tests {
     fn summary_reads_custom_metadata_and_deletion_state() {
         let summary = summarize("TOKEN", &metadata("")).unwrap();
         assert_eq!(summary.version, 2);
-        assert_eq!(summary.used_by, vec!["api-gw", "web"]);
         assert_eq!(summary.expires_at.as_deref(), Some("2027-01-01"));
         assert!(!summary.deleted);
         assert!(
@@ -513,6 +522,23 @@ mod tests {
                 .unwrap()
                 .deleted
         );
+    }
+
+    #[test]
+    fn custom_metadata_omits_empty_values() {
+        let with = SecretWrite {
+            value: "v".into(),
+            expires_at: Some("2027-01-01".into()),
+        };
+        let without = SecretWrite {
+            value: "v".into(),
+            expires_at: Some(String::new()),
+        };
+        assert_eq!(
+            custom_metadata(&with),
+            json!({ "custom_metadata": { "expires_at": "2027-01-01" } })
+        );
+        assert_eq!(custom_metadata(&without), json!({ "custom_metadata": {} }));
     }
 
     #[test]
