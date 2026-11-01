@@ -19,6 +19,7 @@ pub struct Model {
     pub start_command: Option<String>,
     pub container_port: Option<i32>,
     pub vault_id: Option<Uuid>,
+    pub gateway_id: Option<Uuid>,
     pub git_token_secret: Option<String>,
     #[serde(skip_serializing)]
     pub webhook_secret: String,
