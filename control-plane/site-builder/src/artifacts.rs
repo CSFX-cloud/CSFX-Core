@@ -14,6 +14,12 @@ pub struct Archive {
     pub files: HashMap<String, Vec<u8>>,
 }
 
+impl Archive {
+    pub fn size(&self) -> usize {
+        self.files.values().map(Vec::len).sum()
+    }
+}
+
 pub async fn exists(db: &DatabaseConnection, id: Uuid) -> Result<bool, ServiceError> {
     Ok(SiteArtifacts::find_by_id(id).count(db).await? > 0)
 }

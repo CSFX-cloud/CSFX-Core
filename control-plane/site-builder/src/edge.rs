@@ -12,15 +12,54 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const HOST_TTL: Duration = Duration::from_secs(5);
-const MAX_CACHED_ARCHIVES: usize = 16;
+const MAX_CACHED_BYTES: usize = 512 * 1024 * 1024;
 const INDEX_FILE: &str = "index.html";
 const NOT_FOUND_FILE: &str = "404.html";
 const REVALIDATE: &str = "public, max-age=0, must-revalidate";
 const IMMUTABLE_ASSET: &str = "public, max-age=3600";
 
+pub struct ArchiveCache {
+    entries: HashMap<Uuid, Arc<Archive>>,
+    bytes: usize,
+    budget: usize,
+}
+
+impl ArchiveCache {
+    pub fn new(budget: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            bytes: 0,
+            budget,
+        }
+    }
+
+    pub fn get(&self, id: &Uuid) -> Option<Arc<Archive>> {
+        self.entries.get(id).cloned()
+    }
+
+    pub fn insert(&mut self, id: Uuid, archive: Arc<Archive>) {
+        let size = archive.size();
+        if size > self.budget {
+            return;
+        }
+        while self.bytes + size > self.budget {
+            let Some(evicted) = self.entries.keys().next().copied() else {
+                break;
+            };
+            if let Some(removed) = self.entries.remove(&evicted) {
+                self.bytes -= removed.size();
+            }
+        }
+        if let Some(replaced) = self.entries.insert(id, archive) {
+            self.bytes -= replaced.size();
+        }
+        self.bytes += size;
+    }
+}
+
 pub struct Edge {
     db: DatabaseConnection,
-    archives: Mutex<HashMap<Uuid, Arc<Archive>>>,
+    archives: Mutex<ArchiveCache>,
     hosts: Mutex<HashMap<String, (Option<Uuid>, Instant)>>,
 }
 
@@ -84,7 +123,7 @@ impl Edge {
     pub fn new(db: DatabaseConnection) -> Self {
         Self {
             db,
-            archives: Mutex::new(HashMap::new()),
+            archives: Mutex::new(ArchiveCache::new(MAX_CACHED_BYTES)),
             hosts: Mutex::new(HashMap::new()),
         }
     }
@@ -142,23 +181,19 @@ impl Edge {
         if let Some(found) = self
             .archives
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(&id)
         {
-            return Ok(Some(found.clone()));
+            return Ok(Some(found));
         }
         let Some(loaded) = artifacts::load(&self.db, id).await? else {
             return Ok(None);
         };
         let shared = Arc::new(loaded);
-        let mut cache = self.archives.lock().unwrap_or_else(|p| p.into_inner());
-        if cache.len() >= MAX_CACHED_ARCHIVES {
-            let evicted = cache.keys().next().copied();
-            if let Some(evicted) = evicted {
-                cache.remove(&evicted);
-            }
-        }
-        cache.insert(id, shared.clone());
+        self.archives
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id, shared.clone());
         Ok(Some(shared))
     }
 }
@@ -230,6 +265,38 @@ mod tests {
                 .map(|n| (n.to_string(), n.as_bytes().to_vec()))
                 .collect(),
         }
+    }
+
+    fn sized(bytes: usize) -> Arc<Archive> {
+        Arc::new(Archive {
+            files: HashMap::from([("index.html".to_string(), vec![0; bytes])]),
+        })
+    }
+
+    #[test]
+    fn cache_evicts_until_a_new_archive_fits_the_byte_budget() {
+        let mut cache = ArchiveCache::new(100);
+        cache.insert(Uuid::from_u128(1), sized(60));
+        cache.insert(Uuid::from_u128(2), sized(60));
+        assert!(cache.get(&Uuid::from_u128(1)).is_none());
+        assert!(cache.get(&Uuid::from_u128(2)).is_some());
+        assert_eq!(cache.bytes, 60);
+    }
+
+    #[test]
+    fn archives_larger_than_the_budget_are_not_cached() {
+        let mut cache = ArchiveCache::new(10);
+        cache.insert(Uuid::from_u128(1), sized(50));
+        assert!(cache.get(&Uuid::from_u128(1)).is_none());
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
+    fn replacing_an_entry_keeps_the_byte_count_exact() {
+        let mut cache = ArchiveCache::new(100);
+        cache.insert(Uuid::from_u128(1), sized(30));
+        cache.insert(Uuid::from_u128(1), sized(40));
+        assert_eq!(cache.bytes, 40);
     }
 
     #[test]
