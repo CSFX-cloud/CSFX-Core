@@ -71,6 +71,7 @@
             volumes={rg.volumes}
             buckets={rg.buckets}
             vaults={rg.vaults}
+            sites={rg.sites}
             gateways={rg.gateways}
             {nodeNames}
             onChanged={rg.load}

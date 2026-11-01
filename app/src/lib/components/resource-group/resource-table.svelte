@@ -15,9 +15,11 @@
         type Volume,
         type Workload,
     } from "$lib/api/resource-groups";
+    import { deleteSite, redeploySite, type SiteSummary } from "$lib/api/sites";
     import { deleteVault, type Vault } from "$lib/api/vaults";
     import { buildResourceItems, filterResources, workloadHref, type ResourceTab } from "$lib/utils/resource-items";
     import BucketRow from "./bucket-row.svelte";
+    import SiteRow from "./site-row.svelte";
     import StackRow from "./stack-row.svelte";
     import VaultRow from "./vault-row.svelte";
     import VolumeRow from "./volume-row.svelte";
@@ -39,18 +41,19 @@
         volumes: Volume[];
         buckets: Bucket[];
         vaults: Vault[];
+        sites: SiteSummary[];
         gateways: Gateway[];
         nodeNames: Map<string, string>;
         onChanged: () => Promise<void>;
         onError: (message: string) => void;
     };
 
-    let { groupName, base, workloads, volumes, buckets, vaults, gateways, nodeNames, onChanged, onError }: Props = $props();
+    let { groupName, base, workloads, volumes, buckets, vaults, sites, gateways, nodeNames, onChanged, onError }: Props = $props();
 
     let activeTab = $state<ResourceTab>("all");
     let expandedStacks = $state<Set<string>>(new Set());
 
-    const allResources = $derived(buildResourceItems(workloads, volumes, buckets, vaults));
+    const allResources = $derived(buildResourceItems(workloads, volumes, buckets, vaults, sites));
     const visible = $derived(filterResources(allResources, activeTab));
 
     function token(): string {
@@ -157,6 +160,13 @@
                                 v={item.data}
                                 href="{base}/vault/{item.data.id}"
                                 onDelete={() => run(() => deleteVault(token(), item.data.resource_group_id, item.data.id), "Failed to delete vault")}
+                            />
+                        {:else if item.kind === "site"}
+                            <SiteRow
+                                s={item.data}
+                                href="{base}/site/{item.data.id}"
+                                onRedeploy={() => run(() => redeploySite(token(), item.data.resource_group_id, item.data.id), "Failed to start deployment")}
+                                onDelete={() => run(() => deleteSite(token(), item.data.resource_group_id, item.data.id), "Failed to delete web app")}
                             />
                         {:else}
                             <BucketRow

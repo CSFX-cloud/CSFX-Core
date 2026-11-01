@@ -100,6 +100,7 @@ pub struct SiteSummary {
     site: sites::Model,
     domains: Vec<String>,
     current: Option<DeploymentSummary>,
+    latest: Option<DeploymentSummary>,
 }
 
 #[derive(Serialize)]
@@ -128,9 +129,15 @@ async fn summarize_site(state: &AppState, site: sites::Model) -> Result<SiteSumm
         Some(id) => SiteDeployments::find_by_id(id).one(&state.db_conn).await?,
         None => None,
     };
+    let latest = SiteDeployments::find()
+        .filter(site_deployments::Column::SiteId.eq(site.id))
+        .order_by_desc(site_deployments::Column::CreatedAt)
+        .one(&state.db_conn)
+        .await?;
     let domains = domains_of(state, site.id).await?;
     Ok(SiteSummary {
         current: current.map(|model| summarize(model, site.current_deployment_id)),
+        latest: latest.map(|model| summarize(model, site.current_deployment_id)),
         domains: domains.into_iter().map(|domain| domain.hostname).collect(),
         site,
     })
