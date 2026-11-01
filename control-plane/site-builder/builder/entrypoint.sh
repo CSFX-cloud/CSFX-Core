@@ -6,6 +6,7 @@ LOG_FILE=/tmp/csfx-build.log
 OFFSET_FILE=/tmp/csfx-build.offset
 LOCK_FILE=/tmp/csfx-build.lock
 ARTIFACT=/tmp/csfx-artifact.tar.gz
+KANIKO_ROOT=/kaniko-root
 EMPTY_JSON='{}'
 FLUSH_SECONDS=2
 
@@ -54,7 +55,6 @@ report() {
 }
 
 fail() {
-    log ERROR "$1"
     report "$(jq -n --arg error "$1" '{success: false, error: $error}')"
     exit 1
 }
@@ -122,21 +122,62 @@ build_arguments() {
     printf '%s' "${CSFX_BUILD_ENV:-$EMPTY_JSON}" | jq -r 'to_entries[] | "--build-arg\n\(.key)=\(.value)"'
 }
 
+write_registry_credentials() {
+    local registry="${CSFX_IMAGE_REF%%/*}" auth
+    auth=$(printf 'd-%s:%s' "$CSFX_DEPLOYMENT_ID" "$CSFX_CALLBACK_TOKEN" | base64 -w0)
+    mkdir -p "$KANIKO_ROOT/kaniko/.docker"
+    jq -n --arg registry "$registry" --arg auth "$auth" '{auths: {($registry): {auth: $auth}}}' \
+        > "$KANIKO_ROOT/kaniko/.docker/config.json"
+    chmod 0600 "$KANIKO_ROOT/kaniko/.docker/config.json"
+}
+
+prepare_kaniko_root() {
+    local dockerfile=$1
+    mkdir -p "$KANIKO_ROOT"/{kaniko,workspace,etc/ssl/certs,tmp,proc,dev,var/run}
+    write_registry_credentials
+    cp /usr/local/bin/kaniko-executor "$KANIKO_ROOT/kaniko/executor"
+    cp /etc/ssl/certs/ca-certificates.crt "$KANIKO_ROOT/etc/ssl/certs/ca-certificates.crt"
+    cp /etc/resolv.conf "$KANIKO_ROOT/etc/resolv.conf"
+    rm -rf "$PROJECT_DIR/.git"
+    mv "$PROJECT_DIR" "$KANIKO_ROOT/workspace/context"
+    mount --bind /proc "$KANIKO_ROOT/proc"
+    mount --bind /dev "$KANIKO_ROOT/dev"
+    echo "/workspace/context/$dockerfile"
+}
+
+run_kaniko() {
+    local dockerfile_path=$1
+    chroot "$KANIKO_ROOT" /kaniko/executor --force --context /workspace/context \
+        --dockerfile "$dockerfile_path" --destination "$CSFX_IMAGE_REF" "${KANIKO_ARGS[@]}" >> "$LOG_FILE" 2>&1
+    local status=$?
+    umount "$KANIKO_ROOT/proc" "$KANIKO_ROOT/dev" 2> /dev/null
+    return $status
+}
+
+collect_kaniko_arguments() {
+    local line
+    KANIKO_ARGS=()
+    if [ "${CSFX_REGISTRY_INSECURE:-}" = "1" ]; then
+        KANIKO_ARGS+=(--insecure --skip-tls-verify)
+    fi
+    if [ -n "${CSFX_REGISTRY_MIRROR:-}" ]; then
+        KANIKO_ARGS+=(--registry-mirror "$CSFX_REGISTRY_MIRROR" --insecure-registry "$CSFX_REGISTRY_MIRROR")
+    fi
+    while IFS= read -r line; do
+        KANIKO_ARGS+=("$line")
+    done < <(build_arguments)
+}
+
 build_container() {
-    local dockerfile=Dockerfile
+    local dockerfile=Dockerfile dockerfile_path
     if [ ! -f "$PROJECT_DIR/Dockerfile" ]; then
         node_dockerfile || fail "no Dockerfile found and the project cannot be built automatically"
         dockerfile=Dockerfile.csfx
     fi
-    local arguments=()
-    mapfile -t arguments < <(build_arguments)
-    local insecure=()
-    [ "${CSFX_REGISTRY_INSECURE:-}" = "1" ] && insecure=(--insecure --skip-tls-verify)
-    [ -n "${CSFX_REGISTRY_MIRROR:-}" ] && insecure+=(--registry-mirror "$CSFX_REGISTRY_MIRROR" --insecure-registry "$CSFX_REGISTRY_MIRROR")
+    collect_kaniko_arguments
     log INFO "building image reference=$CSFX_IMAGE_REF"
-    kaniko-executor --context "$PROJECT_DIR" --dockerfile "$PROJECT_DIR/$dockerfile" \
-        --destination "$CSFX_IMAGE_REF" "${insecure[@]}" "${arguments[@]}" >>"$LOG_FILE" 2>&1 \
-        || fail "image build failed"
+    dockerfile_path=$(prepare_kaniko_root "$dockerfile")
+    run_kaniko "$dockerfile_path" || fail "image build failed"
     report "$(jq -n --arg sha "$COMMIT_SHA" --arg message "$COMMIT_MESSAGE" --arg image "$CSFX_IMAGE_REF" \
         '{success: true, commit_sha: $sha, commit_message: $message, image_ref: $image}')"
 }
