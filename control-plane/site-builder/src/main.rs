@@ -44,7 +44,7 @@ fn spawn_usage_flusher(edge: Arc<edge::Edge>, db: sea_orm::DatabaseConnection) {
             tick.tick().await;
             edge.flush_usage().await;
             flushes = flushes.wrapping_add(1);
-            if flushes % USAGE_PRUNE_EVERY == 0 {
+            if flushes.is_multiple_of(USAGE_PRUNE_EVERY) {
                 if let Err(error) = usage::prune_old(&db).await {
                     tracing::warn!(error = %error, "usage pruning failed");
                 }
