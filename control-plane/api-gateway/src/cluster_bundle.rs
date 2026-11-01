@@ -5,6 +5,9 @@ const CREDENTIAL_GARAGE_ENV: &str = "garage-env";
 const GARAGE_RPC_SECRET_KEY: &str = "GARAGE_RPC_SECRET";
 const CREDENTIAL_PATRONI_SUPERUSER: &str = "patroni-superuser-password";
 const CREDENTIAL_PATRONI_REPLICATION: &str = "patroni-replication-password";
+const CREDENTIAL_OPENBAO_SEAL_KEY: &str = "openbao-seal-key";
+const CREDENTIAL_OPENBAO_ROLE_ID: &str = "openbao-role-id";
+const CREDENTIAL_OPENBAO_SECRET_ID: &str = "openbao-secret-id";
 
 #[derive(Debug, thiserror::Error)]
 pub enum BundleError {
@@ -23,6 +26,8 @@ pub enum BundleError {
     MissingCa,
     #[error("garage rpc secret is missing from the garage environment file")]
     MissingGarageSecret,
+    #[error("credential {0} is empty because openbao is not bootstrapped yet")]
+    EmptyCredential(&'static str),
 }
 
 const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
@@ -91,6 +96,9 @@ pub struct ClusterSecrets {
     pub garage_rpc_secret: String,
     pub patroni_superuser_password: String,
     pub patroni_replication_password: String,
+    pub openbao_seal_key: String,
+    pub openbao_role_id: String,
+    pub openbao_secret_id: String,
 }
 
 impl ClusterSecrets {
@@ -114,6 +122,9 @@ impl ClusterSecrets {
             .ok_or(BundleError::MissingGarageSecret)?,
             patroni_superuser_password: credential(credentials, CREDENTIAL_PATRONI_SUPERUSER)?,
             patroni_replication_password: credential(credentials, CREDENTIAL_PATRONI_REPLICATION)?,
+            openbao_seal_key: filled_credential(credentials, CREDENTIAL_OPENBAO_SEAL_KEY)?,
+            openbao_role_id: filled_credential(credentials, CREDENTIAL_OPENBAO_ROLE_ID)?,
+            openbao_secret_id: filled_credential(credentials, CREDENTIAL_OPENBAO_SECRET_ID)?,
         })
     }
 }
@@ -126,6 +137,14 @@ fn credential(directory: &Path, name: &'static str) -> Result<String, BundleErro
     std::fs::read_to_string(directory.join(name))
         .map(|value| value.trim().to_string())
         .map_err(|source| BundleError::Credential { name, source })
+}
+
+fn filled_credential(directory: &Path, name: &'static str) -> Result<String, BundleError> {
+    let value = credential(directory, name)?;
+    if value.is_empty() {
+        return Err(BundleError::EmptyCredential(name));
+    }
+    Ok(value)
 }
 
 pub fn env_file_value(contents: &str, key: &str) -> Option<String> {
