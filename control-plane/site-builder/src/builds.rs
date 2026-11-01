@@ -254,6 +254,10 @@ impl Builds {
         crate::sites::promote(self, id, env).await
     }
 
+    pub fn registry(&self) -> Option<&RegistryClient> {
+        self.registry.as_ref()
+    }
+
     pub async fn prune_site(&self, site_id: Uuid) {
         if let Err(error) = self.prune(site_id).await {
             tracing::warn!(site = %site_id, error = %error, "pruning old deployments failed");

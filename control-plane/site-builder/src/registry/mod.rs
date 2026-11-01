@@ -13,12 +13,15 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::Utc;
-use entity::{agent_api_keys, site_deployments, AgentApiKeys, SiteDeployments};
+use entity::{
+    agent_api_keys, image_registry_tokens, site_deployments, AgentApiKeys, ImageRegistries,
+    ImageRegistryTokens, SiteDeployments,
+};
 use jsonwebtoken::{Algorithm, Header};
 use keys::RegistryKeys;
 use ring::digest;
 use scope::{Access, Scope};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde::Serialize;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -27,6 +30,7 @@ pub const SERVICE_NAME: &str = "csfx-site-registry";
 const TOKEN_TTL_SECONDS: i64 = 900;
 const DEPLOYMENT_PREFIX: &str = "d-";
 const AGENT_USER: &str = "agent";
+const REGISTRY_TOKEN_PREFIX: &str = "rt-";
 
 #[derive(Clone)]
 pub struct RegistryState {
@@ -39,6 +43,7 @@ pub struct RegistryState {
 pub enum Principal {
     Deployment { site_id: Uuid },
     Agent,
+    Registry { prefix: String, write: bool },
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -79,6 +84,14 @@ pub fn allowed_access(principal: &Principal, requested: &Scope) -> Option<Access
         }
         Principal::Deployment { .. } => None,
         Principal::Agent => Some(Access::Pull),
+        Principal::Registry { prefix, write } if requested.name.starts_with(prefix.as_str()) => {
+            Some(if *write {
+                Access::PullPush
+            } else {
+                Access::Pull
+            })
+        }
+        Principal::Registry { .. } => None,
     }
 }
 
@@ -141,6 +154,38 @@ async fn agent_principal(state: &RegistryState, password: &str) -> Result<Princi
         .ok_or(ServiceError::Unauthorized)
 }
 
+async fn registry_principal(
+    state: &RegistryState,
+    token_id: Uuid,
+    password: &str,
+) -> Result<Principal, ServiceError> {
+    let token = ImageRegistryTokens::find_by_id(token_id)
+        .one(&state.db)
+        .await?
+        .ok_or(ServiceError::Unauthorized)?;
+    if !crate::token::secret_valid(&token.token_hash, &hash_key(password)) {
+        return Err(ServiceError::Unauthorized);
+    }
+    let registry = ImageRegistries::find_by_id(token.registry_id)
+        .one(&state.db)
+        .await?
+        .ok_or(ServiceError::Unauthorized)?;
+    let principal = Principal::Registry {
+        prefix: site_builder::images::registry_prefix(registry.resource_group_id, &registry.name),
+        write: token.scope == "push",
+    };
+    touch_token(state, token).await;
+    Ok(principal)
+}
+
+async fn touch_token(state: &RegistryState, token: image_registry_tokens::Model) {
+    let mut active: image_registry_tokens::ActiveModel = token.into();
+    active.last_used_at = Set(Some(Utc::now().naive_utc()));
+    if let Err(error) = active.update(&state.db).await {
+        tracing::warn!(error = %error, "registry token usage was not recorded");
+    }
+}
+
 async fn authenticate(
     state: &RegistryState,
     headers: &HeaderMap,
@@ -148,6 +193,12 @@ async fn authenticate(
     let (user, password) = basic_credentials(headers).ok_or(ServiceError::Unauthorized)?;
     if user == AGENT_USER {
         return agent_principal(state, &password).await;
+    }
+    if let Some(token_id) = user
+        .strip_prefix(REGISTRY_TOKEN_PREFIX)
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+    {
+        return registry_principal(state, token_id, &password).await;
     }
     let id = user
         .strip_prefix(DEPLOYMENT_PREFIX)
@@ -229,6 +280,26 @@ mod tests {
         assert_eq!(own[0].actions, vec!["pull", "push"]);
         let other = access_entries(&principal, &requested("repository:someone-else:pull,push"));
         assert!(other.is_empty());
+    }
+
+    #[test]
+    fn registry_tokens_are_confined_to_their_namespace() {
+        let reader = Principal::Registry {
+            prefix: "rg-1/main/".to_string(),
+            write: false,
+        };
+        let writer = Principal::Registry {
+            prefix: "rg-1/main/".to_string(),
+            write: true,
+        };
+        let inside = requested("repository:rg-1/main/app:pull,push");
+        assert_eq!(access_entries(&reader, &inside)[0].actions, vec!["pull"]);
+        assert_eq!(
+            access_entries(&writer, &inside)[0].actions,
+            vec!["pull", "push"]
+        );
+        assert!(access_entries(&writer, &requested("repository:rg-1/other/app:pull")).is_empty());
+        assert!(access_entries(&writer, &requested("repository:rg-12/main/app:pull")).is_empty());
     }
 
     #[test]

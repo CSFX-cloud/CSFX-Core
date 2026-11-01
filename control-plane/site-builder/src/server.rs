@@ -3,6 +3,7 @@ use crate::edge::{self, Edge};
 use crate::error::ServiceError;
 use crate::git::{self, SnapshotRequest};
 use crate::job::BuildJob;
+use crate::registry::client::RegistryClient;
 use crate::{artifacts, sites, token};
 use axum::{
     extract::{DefaultBodyLimit, Path, State},
@@ -97,6 +98,60 @@ async fn purge_handler(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+struct PrefixRequest {
+    prefix: String,
+}
+
+#[derive(Deserialize)]
+struct DeleteTagRequest {
+    prefix: String,
+    repository: String,
+    tag: String,
+}
+
+fn registry_client(builds: &Builds) -> Result<&RegistryClient, ServiceError> {
+    builds
+        .registry()
+        .ok_or_else(|| ServiceError::Invalid("no site registry is configured".to_string()))
+}
+
+async fn registry_images_handler(
+    State(builds): State<Arc<Builds>>,
+    headers: HeaderMap,
+    Json(request): Json<PrefixRequest>,
+) -> Result<Json<Value>, ServiceError> {
+    require_admin(&builds, &headers)?;
+    let images = registry_client(&builds)?.images(&request.prefix).await?;
+    Ok(Json(json!({ "repositories": images })))
+}
+
+async fn registry_delete_tag_handler(
+    State(builds): State<Arc<Builds>>,
+    headers: HeaderMap,
+    Json(request): Json<DeleteTagRequest>,
+) -> Result<StatusCode, ServiceError> {
+    require_admin(&builds, &headers)?;
+    let repository = site_builder::images::repository_path(&request.prefix, &request.repository)
+        .ok_or_else(|| ServiceError::Invalid("repository name is invalid".to_string()))?;
+    registry_client(&builds)?
+        .delete_tag(&repository, &request.tag)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn registry_purge_handler(
+    State(builds): State<Arc<Builds>>,
+    headers: HeaderMap,
+    Json(request): Json<PrefixRequest>,
+) -> Result<StatusCode, ServiceError> {
+    require_admin(&builds, &headers)?;
+    registry_client(&builds)?
+        .purge_prefix(&request.prefix)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn log_handler(
     State(builds): State<Arc<Builds>>,
     headers: HeaderMap,
@@ -145,6 +200,12 @@ pub fn control_router(builds: Arc<Builds>) -> Router {
         .route("/internal/deployments/{id}/promote", post(promote_handler))
         .route("/internal/sites/{id}/reconcile", post(reconcile_handler))
         .route("/internal/sites/{id}/purge", post(purge_handler))
+        .route("/internal/registries/images", post(registry_images_handler))
+        .route(
+            "/internal/registries/delete-tag",
+            post(registry_delete_tag_handler),
+        )
+        .route("/internal/registries/purge", post(registry_purge_handler))
         .route(
             "/callbacks/{id}/log",
             post(log_handler).layer(DefaultBodyLimit::max(MAX_LOG_CHUNK_BYTES)),
