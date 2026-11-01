@@ -1,9 +1,11 @@
 use crate::artifacts::{self, Archive};
+use crate::usage::UsageCounter;
 use axum::{
     extract::State,
     http::{header, HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
+use chrono::Utc;
 use entity::{site_deployments, site_domains, SiteDeployments, SiteDomains};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use std::collections::HashMap;
@@ -60,7 +62,14 @@ impl ArchiveCache {
 pub struct Edge {
     db: DatabaseConnection,
     archives: Mutex<ArchiveCache>,
-    hosts: Mutex<HashMap<String, (Option<Uuid>, Instant)>>,
+    hosts: Mutex<HashMap<String, (Option<Resolved>, Instant)>>,
+    usage: UsageCounter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Resolved {
+    site_id: Uuid,
+    deployment_id: Uuid,
 }
 
 pub struct Located<'a> {
@@ -120,18 +129,25 @@ fn fallback<'a>(archive: &'a Archive, trimmed: &str) -> Option<Located<'a>> {
 }
 
 impl Edge {
+    pub async fn flush_usage(&self) {
+        if let Err(error) = self.usage.flush(&self.db).await {
+            tracing::warn!(error = %error, "usage flush failed");
+        }
+    }
+
     pub fn new(db: DatabaseConnection) -> Self {
         Self {
             db,
             archives: Mutex::new(ArchiveCache::new(MAX_CACHED_BYTES)),
             hosts: Mutex::new(HashMap::new()),
+            usage: UsageCounter::default(),
         }
     }
 
-    async fn deployment_for_host(
+    async fn resolved_host(
         &self,
         host: &str,
-    ) -> Result<Option<Uuid>, crate::error::ServiceError> {
+    ) -> Result<Option<Resolved>, crate::error::ServiceError> {
         if let Some(cached) = self.cached_host(host) {
             return Ok(cached);
         }
@@ -143,7 +159,7 @@ impl Edge {
         Ok(resolved)
     }
 
-    fn cached_host(&self, host: &str) -> Option<Option<Uuid>> {
+    fn cached_host(&self, host: &str) -> Option<Option<Resolved>> {
         let hosts = self
             .hosts
             .lock()
@@ -152,7 +168,10 @@ impl Edge {
         (stored.elapsed() < HOST_TTL).then_some(*resolved)
     }
 
-    async fn resolve_host(&self, host: &str) -> Result<Option<Uuid>, crate::error::ServiceError> {
+    async fn resolve_host(
+        &self,
+        host: &str,
+    ) -> Result<Option<Resolved>, crate::error::ServiceError> {
         let Some(domain) = SiteDomains::find()
             .filter(site_domains::Column::Hostname.eq(host))
             .one(&self.db)
@@ -164,8 +183,13 @@ impl Edge {
         if site.mode != "static" {
             return Ok(None);
         }
+        let site_id = site.id;
+        let resolved = |deployment_id| Resolved {
+            site_id,
+            deployment_id,
+        };
         if domain.kind != "branch" {
-            return Ok(site.current_deployment_id);
+            return Ok(site.current_deployment_id.map(resolved));
         }
         Ok(SiteDeployments::find()
             .filter(site_deployments::Column::SiteId.eq(site.id))
@@ -174,7 +198,7 @@ impl Edge {
             .order_by_desc(site_deployments::Column::CreatedAt)
             .one(&self.db)
             .await?
-            .map(|deployment| deployment.id))
+            .map(|deployment| resolved(deployment.id)))
     }
 
     async fn archive(&self, id: Uuid) -> Result<Option<Arc<Archive>>, crate::error::ServiceError> {
@@ -236,14 +260,18 @@ pub async fn serve(State(edge): State<Arc<Edge>>, headers: HeaderMap, uri: Uri) 
         return StatusCode::BAD_REQUEST.into_response();
     };
     let outcome = async {
-        let Some(id) = edge.deployment_for_host(&host).await? else {
+        let Some(resolved) = edge.resolved_host(&host).await? else {
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
-        let Some(archive) = edge.archive(id).await? else {
+        let Some(archive) = edge.archive(resolved.deployment_id).await? else {
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
         Ok::<Response, crate::error::ServiceError>(match locate(&archive, uri.path()) {
-            Some(located) => respond(located, id),
+            Some(located) => {
+                edge.usage
+                    .record(resolved.site_id, located.data.len(), Utc::now());
+                respond(located, resolved.deployment_id)
+            }
             None => StatusCode::NOT_FOUND.into_response(),
         })
     }
