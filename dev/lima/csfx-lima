@@ -134,11 +134,46 @@ start_node() {
   limactl start --tty=false "$(instance "$node")" > /dev/null
 }
 
+progress_percent() {
+  local rebuild_log="$1" total started percent
+  total="$(grep -oE '(these [0-9]+|this) (derivations?|paths?) will be (built|fetched)' "$rebuild_log" 2> /dev/null | awk '{sum += ($1 == "this") ? 1 : $2} END {print sum + 0}')"
+  [ "$total" -gt 0 ] || return 1
+  started="$(grep -cE "^(building|copying path) '" "$rebuild_log" 2> /dev/null || true)"
+  percent=$((started * 100 / total))
+  echo $((percent > 99 ? 99 : percent))
+}
+
+render_bar() {
+  local filled=$(($1 / 5)) bar
+  bar="$(printf '%*s' "$filled" '' | tr ' ' '#')$(printf '%*s' $((20 - filled)) '' | tr ' ' '-')"
+  echo "[$bar]"
+}
+
+report_progress() {
+  local node="$1" rebuild_log="$2" started="$3" last percent
+  while sleep 15; do
+    last="$(tail -n 1 "$rebuild_log" 2> /dev/null | tr -d '\r' | cut -c1-100)"
+    if percent="$(progress_percent "$rebuild_log")"; then
+      log INFO "rebuild running node=$node progress=$(render_bar "$percent") percent=$percent elapsed=$((SECONDS - started))s last=\"$last\""
+    else
+      log INFO "rebuild running node=$node progress=evaluating elapsed=$((SECONDS - started))s last=\"$last\""
+    fi
+  done
+}
+
 rebuild_node() {
-  local rebuild_log="$STATE_DIR/rebuild-$1.log"
+  local rebuild_log="$STATE_DIR/rebuild-$1.log" started="$SECONDS" status=0 heartbeat_pid
   log INFO "rebuilding node=$1 action=$2 log=$rebuild_log"
   mkdir -p "$STATE_DIR"
-  on_node "$1" sudo nixos-rebuild "$2" --flake "path:/csfx-dev#$1" $(flake_overrides) > "$rebuild_log" 2>&1 && return 0
+  report_progress "$1" "$rebuild_log" "$started" &
+  heartbeat_pid=$!
+  on_node "$1" sudo nixos-rebuild "$2" --flake "path:/csfx-dev#$1" $(flake_overrides) > "$rebuild_log" 2>&1 || status=$?
+  kill "$heartbeat_pid" 2> /dev/null || true
+  wait "$heartbeat_pid" 2> /dev/null || true
+  if [ "$status" -eq 0 ]; then
+    log INFO "rebuild done node=$1 progress=$(render_bar 100) percent=100 elapsed=$((SECONDS - started))s"
+    return 0
+  fi
   tail -n 40 "$rebuild_log" >&2
   log ERROR "rebuild failed node=$1"
   return 1
