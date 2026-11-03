@@ -15,6 +15,7 @@
     const production = $derived(site.deployments.find((deployment) => deployment.current) ?? null);
     const latest = $derived(site.deployments[0] ?? null);
     const previews = $derived(site.deployments.filter((deployment) => deployment.environment === "preview").slice(0, PREVIEW_LIMIT));
+    const productionHost = $derived(site.domains.find((domain) => domain.kind !== "branch")?.hostname ?? null);
     const previewHosts = $derived(site.domains.filter((domain) => domain.kind === "branch"));
 
     function previewHost(deployment: DeploymentSummary): string | null {
@@ -49,6 +50,9 @@
                 </dd>
             </div>
         </dl>
+        {#if productionHost && production.status === "ready"}
+            <iframe class="ov-frame" title="Live preview of {site.name}" src="https://{productionHost}" sandbox="allow-scripts allow-same-origin allow-forms" loading="lazy"></iframe>
+        {/if}
     {:else}
         <p class="cx-hint" style="padding: 0 24px 24px">
             {latest ? "The first deployment has not finished. Production appears once it is ready." : "Nothing is deployed yet."}
@@ -104,6 +108,15 @@
         gap: var(--space-4);
         margin: 0;
         padding: 0 var(--space-5) var(--space-5);
+    }
+    .ov-frame {
+        display: block;
+        width: calc(100% - 2 * var(--space-5));
+        height: 420px;
+        margin: 0 var(--space-5) var(--space-5);
+        border: 1px solid var(--border, currentColor);
+        border-radius: 8px;
+        background: #fff;
     }
     .ov-grid dt {
         font-size: 12px;
