@@ -87,6 +87,57 @@ export interface Detection {
     port: number | null;
 }
 
+export interface FrameworkPreset extends Detection {
+    framework: string;
+    label: string;
+}
+
+export const FRAMEWORK_PRESETS: FrameworkPreset[] = [
+    { framework: 'sveltekit', label: 'SvelteKit (Node adapter)', mode: 'container', install_command: 'npm ci', build_command: 'npm run build', output_dir: null, start_command: 'node build', port: 3000 },
+    { framework: 'sveltekit-static', label: 'SvelteKit (static adapter)', mode: 'static', install_command: 'npm ci', build_command: 'npm run build', output_dir: 'build', start_command: null, port: null },
+    { framework: 'next', label: 'Next.js', mode: 'container', install_command: 'npm ci', build_command: 'npm run build', output_dir: null, start_command: 'npm run start', port: 3000 },
+    { framework: 'nuxt', label: 'Nuxt', mode: 'container', install_command: 'npm ci', build_command: 'npm run build', output_dir: null, start_command: 'node .output/server/index.mjs', port: 3000 },
+    { framework: 'astro', label: 'Astro (static)', mode: 'static', install_command: 'npm ci', build_command: 'npm run build', output_dir: 'dist', start_command: null, port: null },
+    { framework: 'astro-server', label: 'Astro (Node adapter)', mode: 'container', install_command: 'npm ci', build_command: 'npm run build', output_dir: null, start_command: 'node ./dist/server/entry.mjs', port: 4321 },
+    { framework: 'vite', label: 'Vite', mode: 'static', install_command: 'npm ci', build_command: 'npm run build', output_dir: 'dist', start_command: null, port: null },
+    { framework: 'create-react-app', label: 'Create React App', mode: 'static', install_command: 'npm ci', build_command: 'npm run build', output_dir: 'build', start_command: null, port: null },
+    { framework: 'docusaurus', label: 'Docusaurus', mode: 'static', install_command: 'npm ci', build_command: 'npm run build', output_dir: 'build', start_command: null, port: null },
+    { framework: 'hugo', label: 'Hugo', mode: 'static', install_command: null, build_command: 'hugo --minify', output_dir: 'public', start_command: null, port: null },
+    { framework: 'static', label: 'Plain HTML', mode: 'static', install_command: null, build_command: null, output_dir: '.', start_command: null, port: null },
+    { framework: 'dockerfile', label: 'Dockerfile', mode: 'container', install_command: null, build_command: null, output_dir: null, start_command: null, port: null },
+];
+
+export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
+
+export const PACKAGE_MANAGERS: PackageManager[] = ['npm', 'pnpm', 'yarn', 'bun'];
+
+const MANAGER_COMMANDS: Record<PackageManager, { install: string; run: string }> = {
+    npm: { install: 'npm ci', run: 'npm run' },
+    pnpm: { install: 'pnpm install --frozen-lockfile', run: 'pnpm run' },
+    yarn: { install: 'yarn install --frozen-lockfile', run: 'yarn' },
+    bun: { install: 'bun install --frozen-lockfile', run: 'bun run' },
+};
+
+export function detectPackageManager(installCommand: string | null): PackageManager {
+    return PACKAGE_MANAGERS.find((manager) => installCommand?.startsWith(manager)) ?? 'npm';
+}
+
+function retarget(command: string | null, manager: PackageManager): string | null {
+    if (!command) return command;
+    const target = MANAGER_COMMANDS[manager];
+    if (command.startsWith('npm ci')) return target.install;
+    return command.startsWith('npm run ') ? `${target.run} ${command.slice('npm run '.length)}` : command;
+}
+
+export function withPackageManager(preset: Detection, manager: PackageManager): Detection {
+    return {
+        ...preset,
+        install_command: retarget(preset.install_command, manager),
+        build_command: retarget(preset.build_command, manager),
+        start_command: retarget(preset.start_command, manager),
+    };
+}
+
 export interface SourceInput {
     repo_url: string;
     branch?: string;
