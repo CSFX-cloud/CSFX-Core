@@ -209,6 +209,10 @@ async fn main() {
     vault_service::spawn_deletion_job(state.clone());
     vault_service::spawn_purge_job(state.clone());
 
+    if let Err(error) = routes::sites::backfill_auto_domains(&state).await {
+        tracing::warn!(error = %error, "auto domain backfill failed");
+    }
+
     tracing::info!("starting ingress synchronization");
     ingress_sync::spawn(state.db_conn.clone());
 

@@ -29,7 +29,8 @@ pub struct PlatformRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteHost {
     pub hostname: String,
-    pub gateway_id: Uuid,
+    pub gateway_id: Option<Uuid>,
+    pub edge_address: Option<String>,
 }
 
 pub fn platform_hostname(zone: &str) -> String {
@@ -133,18 +134,25 @@ pub fn desired_records(
         .iter()
         .filter(|host| in_zone(&host.hostname, zone))
     {
-        let Some(gateway) = by_id.get(&host.gateway_id) else {
+        let Some(address) = site_host_address(host, &by_id) else {
             continue;
         };
-        records.insert(
-            record_key(&host.hostname),
-            record_value(&gateway.address, RECORD_TTL),
-        );
+        records.insert(record_key(&host.hostname), record_value(address, RECORD_TTL));
     }
     if in_zone(&platform.hostname, zone) {
         records.extend(platform_records(platform));
     }
     records
+}
+
+fn site_host_address<'a>(
+    host: &'a SiteHost,
+    gateways: &HashMap<Uuid, &'a GatewayAddress>,
+) -> Option<&'a str> {
+    match host.gateway_id {
+        Some(id) => gateways.get(&id).map(|gateway| gateway.address.as_str()),
+        None => host.edge_address.as_deref(),
+    }
 }
 
 fn platform_records(platform: &PlatformRecord) -> Vec<(String, String)> {
@@ -301,22 +309,24 @@ async fn load_site_hosts(db: &DatabaseConnection) -> Result<Vec<SiteHost>, DbErr
     if crate::ingress_sync::site_edge_backend().is_none() {
         return Ok(Vec::new());
     }
-    let gateways: HashMap<Uuid, Uuid> = sites::Entity::find()
+    let gateways: HashMap<Uuid, Option<Uuid>> = sites::Entity::find()
         .filter(sites::Column::Mode.eq("static"))
-        .filter(sites::Column::GatewayId.is_not_null())
         .all(db)
         .await?
         .into_iter()
-        .filter_map(|site| Some((site.id, site.gateway_id?)))
+        .map(|site| (site.id, site.gateway_id))
         .collect();
+    let edge_address = crate::ingress_sync::site_edge_address();
     Ok(site_domains::Entity::find()
         .filter(site_domains::Column::SiteId.is_in(gateways.keys().copied().collect::<Vec<_>>()))
         .all(db)
         .await?
         .into_iter()
+        .filter(|domain| domain.kind != "internal")
         .filter_map(|domain| {
             Some(SiteHost {
                 gateway_id: *gateways.get(&domain.site_id)?,
+                edge_address: edge_address.clone(),
                 hostname: domain.hostname,
             })
         })
@@ -380,15 +390,23 @@ mod tests {
         let hosts = [
             SiteHost {
                 hostname: "shop.csfx.internal".to_string(),
-                gateway_id: Uuid::from_u128(1),
+                gateway_id: Some(Uuid::from_u128(1)),
+                edge_address: None,
             },
             SiteHost {
                 hostname: "shop.example.com".to_string(),
-                gateway_id: Uuid::from_u128(1),
+                gateway_id: Some(Uuid::from_u128(1)),
+                edge_address: None,
             },
             SiteHost {
                 hostname: "orphan.csfx.internal".to_string(),
-                gateway_id: Uuid::from_u128(9),
+                gateway_id: Some(Uuid::from_u128(9)),
+                edge_address: None,
+            },
+            SiteHost {
+                hostname: "direct.csfx.internal".to_string(),
+                gateway_id: None,
+                edge_address: Some("10.0.0.9".to_string()),
             },
         ];
         let records = desired_records(
@@ -405,6 +423,10 @@ mod tests {
         );
         assert!(!records.contains_key("/skydns/internal/csfx/orphan/x1"));
         assert!(!records.keys().any(|key| key.contains("example")));
+        assert_eq!(
+            records["/skydns/internal/csfx/direct/x1"],
+            r#"{"host":"10.0.0.9","ttl":30}"#
+        );
     }
 
     #[test]

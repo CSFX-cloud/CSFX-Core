@@ -173,6 +173,18 @@ pub fn site_edge_backend() -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+pub fn site_edge_address() -> Option<String> {
+    let backend = site_edge_backend()?;
+    let host = backend.split("://").last()?.split(['/', ':']).next()?;
+    host.parse::<std::net::Ipv4Addr>().ok().map(|address| address.to_string())
+}
+
+pub fn site_edge_port() -> Option<u16> {
+    let backend = site_edge_backend()?;
+    let authority = backend.split("://").last()?.split('/').next()?;
+    authority.rsplit_once(':')?.1.parse().ok()
+}
+
 async fn site_targets(
     db: &DatabaseConnection,
     gateway_id: Uuid,
@@ -193,6 +205,7 @@ async fn site_targets(
     }
     Ok(site_domains::Entity::find()
         .filter(site_domains::Column::SiteId.is_in(site_ids))
+        .filter(site_domains::Column::Kind.ne("internal"))
         .all(db)
         .await?
         .into_iter()
@@ -360,6 +373,16 @@ async fn connect() -> anyhow::Result<(LeaderLease, Client)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn edge_address_is_the_ipv4_host_of_the_edge_url() {
+        std::env::set_var("CSFX_SITE_EDGE_URL", "http://192.168.105.200:8010");
+        assert_eq!(super::site_edge_address().as_deref(), Some("192.168.105.200"));
+        assert_eq!(super::site_edge_port(), Some(8010));
+        std::env::set_var("CSFX_SITE_EDGE_URL", "http://edge.internal:8010");
+        assert_eq!(super::site_edge_address(), None);
+        std::env::remove_var("CSFX_SITE_EDGE_URL");
+    }
+
     use super::*;
 
     const ZONE: &str = "csfx.internal";

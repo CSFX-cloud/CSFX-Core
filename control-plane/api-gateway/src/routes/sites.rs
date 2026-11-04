@@ -28,6 +28,7 @@ use crate::{
 const DEFAULT_BRANCH: &str = "main";
 const DEPLOYMENT_PAGE_SIZE: u64 = 50;
 const AUTO_DOMAIN_VARIABLE: &str = "CSFX_SITE_DOMAIN";
+const INTERNAL_KIND: &str = "internal";
 const MAX_DOMAINS_PER_SITE: u64 = 20;
 const MAX_ENV_VARS_PER_SITE: u64 = 200;
 
@@ -115,6 +116,7 @@ pub struct SiteDetail {
     domains: Vec<site_domains::Model>,
     env: Vec<EnvView>,
     deployments: Vec<DeploymentSummary>,
+    internal_port: Option<u16>,
 }
 
 async fn domains_of(
@@ -142,7 +144,11 @@ async fn summarize_site(state: &AppState, site: sites::Model) -> Result<SiteSumm
     Ok(SiteSummary {
         current: current.map(|model| summarize(model, site.current_deployment_id)),
         latest: latest.map(|model| summarize(model, site.current_deployment_id)),
-        domains: domains.into_iter().map(|domain| domain.hostname).collect(),
+        domains: domains
+            .into_iter()
+            .filter(|domain| domain.kind != INTERNAL_KIND)
+            .map(|domain| domain.hostname)
+            .collect(),
         site,
     })
 }
@@ -199,6 +205,7 @@ pub async fn get_site(
         domains: domains_of(&state, site.id).await?,
         env,
         deployments,
+        internal_port: crate::ingress_sync::site_edge_port(),
         site,
     }))
 }
@@ -266,7 +273,7 @@ pub struct CreateSiteRequest {
     name: String,
     #[serde(flatten)]
     source: DetectRequest,
-    gateway_id: Uuid,
+    gateway_id: Option<Uuid>,
     preview_enabled: Option<bool>,
     #[serde(flatten)]
     overrides: Overrides,
@@ -364,7 +371,7 @@ async fn insert_site(
         start_command: Set(resolved.start_command),
         container_port: Set(resolved.container_port),
         vault_id: Set(request.source.vault_id),
-        gateway_id: Set(Some(request.gateway_id)),
+        gateway_id: Set(request.gateway_id),
         git_token_secret: Set(request.source.git_token_secret.clone()),
         webhook_secret: Set(webhook_secret()),
         preview_enabled: Set(request.preview_enabled.unwrap_or(true)),
@@ -375,6 +382,25 @@ async fn insert_site(
     .await?)
 }
 
+fn internal_hostname(site_name: &str, group_id: Uuid) -> String {
+    format!("{site_name}.svc.{group_id}.internal")
+}
+
+async fn claim_hostname(
+    state: &AppState,
+    site_id: Uuid,
+    hostname: String,
+    kind: &str,
+) -> Result<(), SiteError> {
+    if hostname_taken(state, &hostname).await? {
+        return Err(SiteError::Conflict(
+            "the generated domain is already in use",
+        ));
+    }
+    insert_domain(state, site_id, hostname, kind).await?;
+    Ok(())
+}
+
 async fn add_auto_domain(state: &AppState, site: &sites::Model) -> Result<(), SiteError> {
     let Some(domain) = std::env::var(AUTO_DOMAIN_VARIABLE)
         .ok()
@@ -382,13 +408,47 @@ async fn add_auto_domain(state: &AppState, site: &sites::Model) -> Result<(), Si
     else {
         return Ok(());
     };
-    let hostname = format!("{}.{domain}", site.name);
-    if hostname_taken(state, &hostname).await? {
-        return Err(SiteError::Conflict(
-            "the generated domain is already in use",
-        ));
+    claim_hostname(state, site.id, format!("{}.{domain}", site.name), "auto").await
+}
+
+async fn add_internal_domain(state: &AppState, site: &sites::Model) -> Result<(), SiteError> {
+    if site.mode != "static" {
+        return Ok(());
     }
-    insert_domain(state, site.id, hostname, "auto").await?;
+    let hostname = internal_hostname(&site.name, site.resource_group_id);
+    claim_hostname(state, site.id, hostname, INTERNAL_KIND).await
+}
+
+pub async fn backfill_auto_domains(state: &AppState) -> Result<(), SiteError> {
+    for site in Sites::find().all(&state.db_conn).await? {
+        if let Err(error) = backfill_site(state, &site).await {
+            tracing::warn!(site = %site.id, error = %error, "internal domain backfill skipped");
+        }
+    }
+    Ok(())
+}
+
+async fn backfill_site(state: &AppState, site: &sites::Model) -> Result<(), SiteError> {
+    if site.mode != "static" {
+        return Ok(());
+    }
+    let hostname = internal_hostname(&site.name, site.resource_group_id);
+    let existing = SiteDomains::find()
+        .filter(site_domains::Column::SiteId.eq(site.id))
+        .filter(site_domains::Column::Kind.eq(INTERNAL_KIND))
+        .one(&state.db_conn)
+        .await?;
+    match existing {
+        Some(domain) if domain.hostname == hostname => return Ok(()),
+        Some(domain) => {
+            let mut active: site_domains::ActiveModel = domain.into();
+            active.hostname = Set(hostname);
+            active.update(&state.db_conn).await?;
+        }
+        None => claim_hostname(state, site.id, hostname, INTERNAL_KIND).await?,
+    }
+    reconcile_routes(state, site).await;
+    tracing::info!(site = %site.id, "internal domain updated");
     Ok(())
 }
 
@@ -413,7 +473,9 @@ pub async fn create_site(
 ) -> Result<(StatusCode, Json<sites::Model>), SiteError> {
     validate_new(&request)?;
     vault_service::load_group(&state, group_id).await?;
-    ensure_gateway(&state, group_id, request.gateway_id).await?;
+    if let Some(gateway_id) = request.gateway_id {
+        ensure_gateway(&state, group_id, gateway_id).await?;
+    }
     let taken = Sites::find()
         .filter(sites::Column::ResourceGroupId.eq(group_id))
         .filter(sites::Column::Name.eq(request.name.as_str()))
@@ -425,6 +487,7 @@ pub async fn create_site(
     let detected = detect_remote(&state, group_id, &request.source).await?;
     let resolved = service::resolve(&request.overrides, detected.as_ref())?;
     let site = insert_site(&state, group_id, &request, resolved).await?;
+    add_internal_domain(&state, &site).await?;
     add_auto_domain(&state, &site).await?;
     deploy_production(&state, &site).await;
     Ok((StatusCode::CREATED, Json(site)))
@@ -760,6 +823,7 @@ pub async fn delete_domain(
     let removed = SiteDomains::delete_many()
         .filter(site_domains::Column::Id.eq(domain_id))
         .filter(site_domains::Column::SiteId.eq(site.id))
+        .filter(site_domains::Column::Kind.ne(INTERNAL_KIND))
         .exec(&state.db_conn)
         .await?;
     if removed.rows_affected == 0 {
@@ -841,4 +905,19 @@ pub fn sites_routes() -> Router<AppState> {
 
 pub fn sites_hook_routes() -> Router<AppState> {
     Router::new().route("/hooks/sites/{site_id}/{secret}", post(webhook))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::internal_hostname;
+    use uuid::Uuid;
+
+    #[test]
+    fn internal_hostname_uses_the_service_zone_of_the_group() {
+        let group = Uuid::from_u128(0x99aec6da_b859_419d_9dea_648b8a87895e);
+        assert_eq!(
+            internal_hostname("docs", group),
+            "docs.svc.99aec6da-b859-419d-9dea-648b8a87895e.internal"
+        );
+    }
 }
