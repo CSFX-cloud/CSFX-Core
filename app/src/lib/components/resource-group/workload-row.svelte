@@ -40,7 +40,7 @@
 <tr>
     <td>
         <div class="rs-name {indented ? 'rs-name--child' : ''}">
-            <ServiceIcon name={icon} brand={knownWorkloadIcon(w.image, w.runtime_class)} />
+            <ServiceIcon name={icon} brand={icon === "api-gateway" ? null : knownWorkloadIcon(w.image, w.runtime_class)} />
             <a class="rs-link" {href}>{w.service_name ?? w.name}</a>
         </div>
     </td>

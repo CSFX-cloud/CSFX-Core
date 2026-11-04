@@ -12,6 +12,7 @@ members = [
     "control-plane/volume-manager",
     "control-plane/object-storage",
     "control-plane/registry",
+    "control-plane/site-builder",
     "control-plane/shared/entity",
     "control-plane/shared/migration",
     "control-plane/shared/shared",

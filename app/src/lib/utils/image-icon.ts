@@ -10,7 +10,7 @@ const KNOWN_IMAGE_ICONS: Record<string, string> = {
     mongodb: 'logos:mongodb',
     rabbitmq: 'logos:rabbitmq-icon',
     memcached: 'logos:memcached',
-    traefik: 'logos:traefikproxy-icon',
+    traefik: 'logos:traefik-proxy-icon',
     caddy: 'logos:caddy-icon',
     elasticsearch: 'logos:elasticsearch',
     grafana: 'logos:grafana',

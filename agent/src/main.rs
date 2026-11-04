@@ -205,6 +205,7 @@ async fn main() -> Result<()> {
     let firecracker_runtime = Arc::new(firecracker::runtime::FirecrackerRuntime::new(
         wg_identity.private_key_b64.clone(),
         Arc::clone(&rg_dns_registry),
+        firecracker::site_registry::SiteRegistry::from_gateway(&gateway_url, &api_key),
     ));
 
     let qemu_runtime = Arc::new(qemu::runtime::QemuRuntime::new(
@@ -735,6 +736,26 @@ async fn should_restart_after_crash(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn ensure_group_dns(
+    firecracker: &firecracker::runtime::FirecrackerRuntime,
+    workloads: &[client::AssignedWorkload],
+) {
+    let groups: HashMap<&str, &str> = workloads
+        .iter()
+        .filter_map(|workload| {
+            Some((
+                workload.resource_group_id.as_deref()?,
+                workload.resource_group_cidr.as_deref()?,
+            ))
+        })
+        .collect();
+    for (resource_group_id, cidr) in groups {
+        if let Err(e) = firecracker.ensure_group_dns(resource_group_id, cidr).await {
+            warn!(resource_group_id = %resource_group_id, error = %e, "Failed to ensure resource group dns process");
+        }
+    }
+}
+
 async fn process_workloads(
     client: &Arc<client::ApiClient>,
     starts: &StartTracker,
@@ -766,6 +787,8 @@ async fn process_workloads(
         ids.dedup();
         ids
     };
+
+    ensure_group_dns(firecracker, &workloads).await;
 
     let recovered_microvms = firecracker.reconcile_once().await;
     let recovered_vms = qemu.reconcile_once().await;

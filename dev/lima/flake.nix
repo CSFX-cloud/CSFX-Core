@@ -13,7 +13,20 @@
 
   outputs = { nixpkgs, nixos-lima, csfx-infra, ... }:
     let
-      versions = import "${csfx-infra}/versions.nix";
+      siteBuilderPlaceholder = {
+        amd64 = {
+          url = "https://invalid.example/site-builder-amd64";
+          sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+        };
+        arm64 = {
+          url = "https://invalid.example/site-builder-arm64";
+          sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+        };
+      };
+
+      versions = nixpkgs.lib.recursiveUpdate
+        { csfx.controlPlane.site-builder = siteBuilderPlaceholder; }
+        (import "${csfx-infra}/versions.nix");
 
       infraModules = map (name: "${csfx-infra}/modules/${name}.nix") [
         "csfx-agent"
@@ -23,6 +36,7 @@
         "csfx-cluster"
         "csfx-openbao"
         "csfx-ingress"
+        "csfx-site-registry"
       ];
 
       mkNode = hostName: nixpkgs.lib.nixosSystem {

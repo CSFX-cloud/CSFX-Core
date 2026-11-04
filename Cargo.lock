@@ -189,6 +189,7 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.1",
  "shared",
+ "site-builder",
  "sysinfo",
  "thiserror 2.0.21",
  "tokio",
@@ -5253,6 +5254,37 @@ dependencies = [
  "num-traits",
  "thiserror 2.0.21",
  "time",
+]
+
+[[package]]
+name = "site-builder"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "dotenvy",
+ "entity",
+ "flate2",
+ "jsonwebtoken",
+ "mime_guess",
+ "rcgen",
+ "reqwest",
+ "ring",
+ "rsa",
+ "rustls",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "shared",
+ "tar",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

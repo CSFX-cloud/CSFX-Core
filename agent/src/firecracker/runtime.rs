@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 
 use crate::firecracker::api::FirecrackerApiClient;
 use crate::firecracker::rootfs::RootfsBuilder;
+use crate::firecracker::site_registry::SiteRegistry;
 use crate::rg_dns_process::RgDnsProcessSupervisor;
 use crate::runtime::{ExecSession, LogStream};
 use crate::spec::{rg_wireguard_port, WorkloadSpec};
@@ -161,12 +162,14 @@ pub struct FirecrackerRuntime {
     handles: Mutex<HashMap<String, VmHandle>>,
     next_cid: Mutex<u32>,
     reconciled: AtomicBool,
+    site_registry: Option<SiteRegistry>,
 }
 
 impl FirecrackerRuntime {
     pub fn new(
         wg_private_key_b64: String,
         rg_dns_registry: Arc<crate::rg_dns::RgDnsRegistry>,
+        site_registry: Option<SiteRegistry>,
     ) -> Self {
         Self {
             wg_private_key_b64,
@@ -175,6 +178,7 @@ impl FirecrackerRuntime {
             handles: Mutex::new(HashMap::new()),
             next_cid: Mutex::new(next_free_cid_on_host()),
             reconciled: AtomicBool::new(false),
+            site_registry,
         }
     }
 
@@ -247,6 +251,12 @@ impl FirecrackerRuntime {
         cid
     }
 
+    pub async fn ensure_group_dns(&self, resource_group_id: &str, cidr: &str) -> Result<()> {
+        self.dns_supervisor
+            .ensure_running(resource_group_id, cidr)
+            .await
+    }
+
     pub async fn check_dns_liveness(&self) {
         self.dns_supervisor.check_liveness().await;
     }
@@ -280,7 +290,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
         debug!(workload_id = %spec.workload_id, image = %spec.image, stage = "start_workload", "Starting workload deploy");
 
-        let rootfs_builder = RootfsBuilder::new();
+        let rootfs_builder = RootfsBuilder::new(self.site_registry.clone());
         let rootfs_path = rootfs_builder.ensure_rootfs(&spec.image).await?;
         debug!(workload_id = %spec.workload_id, path = ?rootfs_path, stage = "rootfs_ready", "Rootfs image ready for boot");
 

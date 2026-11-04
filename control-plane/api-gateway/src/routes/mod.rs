@@ -34,6 +34,7 @@ pub mod logs;
 pub mod masters;
 pub mod networks;
 pub mod organizations;
+pub mod registries;
 pub mod registry;
 pub mod releases;
 pub mod resource_groups;
@@ -41,6 +42,8 @@ pub mod roles;
 pub mod s3_proxy;
 pub mod settings;
 pub mod setup;
+pub mod site_usage;
+pub mod sites;
 pub mod ssh_access;
 pub mod ssh_keys;
 pub mod sso;
@@ -144,6 +147,9 @@ pub fn create_router() -> Router<AppState> {
         .merge(agents::agents_routes())
         .merge(buckets::buckets_routes())
         .merge(vaults::vaults_routes())
+        .merge(sites::sites_routes())
+        .merge(registries::registries_routes())
+        .merge(site_usage::usage_routes())
         .merge(cluster::cluster_routes())
         .merge(masters::masters_routes())
         .merge(cluster_vip::cluster_vip_routes())
@@ -173,6 +179,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(users::public_users_routes())
         .merge(setup::routes())
         .merge(sso::sso_routes())
+        .merge(sites::sites_hook_routes())
         .layer(GovernorLayer::new(login_governor_config));
 
     let api_router = Router::new()

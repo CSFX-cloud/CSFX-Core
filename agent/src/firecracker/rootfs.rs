@@ -15,6 +15,9 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::{debug, info};
 
+use super::site_registry::{SiteRegistry, SITE_IMAGE_HOST};
+
+const DOCKER_HUB_REGISTRY: &str = "docker.io";
 const CONTAINER_BUNDLE_DIR: &str = "csfx-bundle";
 const CONTAINER_ROOTFS_DIR: &str = "rootfs";
 
@@ -59,26 +62,61 @@ fn store_digest(reference: &str, digest: &str) {
         .insert(reference.to_string(), (digest.to_string(), Instant::now()));
 }
 
-pub struct RootfsBuilder {
-    client: Client,
-    registry_mirror: Option<String>,
+fn resolve_reference(
+    image: &str,
+    mirror: Option<&str>,
+    site_registry: Option<&SiteRegistry>,
+) -> Result<Reference> {
+    let reference: Reference = image.parse().context("Invalid image reference")?;
+    if reference.registry() == SITE_IMAGE_HOST {
+        let site_registry =
+            site_registry.context("Site registry endpoint is not configured on this node")?;
+        return site_registry.resolve(&reference);
+    }
+    let Some(mirror) = mirror else {
+        return Ok(reference);
+    };
+    if reference.registry() != DOCKER_HUB_REGISTRY {
+        return Ok(reference);
+    }
+
+    let tag_or_digest = match (reference.tag(), reference.digest()) {
+        (_, Some(digest)) => format!("@{digest}"),
+        (Some(tag), None) => format!(":{tag}"),
+        (None, None) => String::new(),
+    };
+    let mirrored = format!("{mirror}/{}{tag_or_digest}", reference.repository());
+    mirrored.parse().context("Invalid mirrored image reference")
 }
 
-impl Default for RootfsBuilder {
-    fn default() -> Self {
-        Self::new()
+fn auth_for(reference: &Reference, site_registry: Option<&SiteRegistry>) -> RegistryAuth {
+    match site_registry {
+        Some(site) if reference.registry() == site.endpoint() => site.auth(),
+        _ => RegistryAuth::Anonymous,
     }
 }
 
+pub struct RootfsBuilder {
+    client: Client,
+    registry_mirror: Option<String>,
+    site_registry: Option<SiteRegistry>,
+}
+
 impl RootfsBuilder {
-    pub fn new() -> Self {
+    pub fn new(site_registry: Option<SiteRegistry>) -> Self {
         let registry_mirror = std::env::var("CSFX_REGISTRY_MIRROR")
             .ok()
             .filter(|value| !value.is_empty());
 
-        let protocol = match &registry_mirror {
-            Some(mirror) => ClientProtocol::HttpsExcept(vec![mirror.clone()]),
-            None => ClientProtocol::Https,
+        let insecure_hosts: Vec<String> = registry_mirror
+            .iter()
+            .cloned()
+            .chain(site_registry.iter().map(|site| site.endpoint().to_string()))
+            .collect();
+        let protocol = if insecure_hosts.is_empty() {
+            ClientProtocol::Https
+        } else {
+            ClientProtocol::HttpsExcept(insecure_hosts)
         };
 
         Self {
@@ -88,22 +126,8 @@ impl RootfsBuilder {
                 ..Default::default()
             }),
             registry_mirror,
+            site_registry,
         }
-    }
-
-    fn resolve_reference(&self, image: &str) -> Result<Reference> {
-        let reference: Reference = image.parse().context("Invalid image reference")?;
-        let Some(mirror) = &self.registry_mirror else {
-            return Ok(reference);
-        };
-
-        let tag_or_digest = match (reference.tag(), reference.digest()) {
-            (_, Some(digest)) => format!("@{digest}"),
-            (Some(tag), None) => format!(":{tag}"),
-            (None, None) => String::new(),
-        };
-        let mirrored = format!("{mirror}/{}{tag_or_digest}", reference.repository());
-        mirrored.parse().context("Invalid mirrored image reference")
     }
 
     async fn resolve_digest(&self, reference: &Reference, auth: &RegistryAuth) -> Result<String> {
@@ -124,8 +148,12 @@ impl RootfsBuilder {
     }
 
     pub async fn ensure_rootfs(&self, image: &str) -> Result<PathBuf> {
-        let reference = self.resolve_reference(image)?;
-        let auth = RegistryAuth::Anonymous;
+        let reference = resolve_reference(
+            image,
+            self.registry_mirror.as_deref(),
+            self.site_registry.as_ref(),
+        )?;
+        let auth = auth_for(&reference, self.site_registry.as_ref());
         let digest = self.resolve_digest(&reference, &auth).await?;
 
         let guest_init_version = guest_init_binary_version().await?;
@@ -537,6 +565,45 @@ async fn build_ext4_image(source_dir: &Path, image_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn docker_hub_images_are_routed_through_the_mirror() {
+        let reference = resolve_reference("nginx:1.27", Some("localhost:5050"), None).unwrap();
+        assert_eq!(reference.registry(), "localhost:5050");
+        assert_eq!(reference.repository(), "library/nginx");
+        assert_eq!(reference.tag(), Some("1.27"));
+    }
+
+    #[test]
+    fn site_images_resolve_to_the_site_registry_even_with_a_mirror() {
+        let site = SiteRegistry::from_gateway("https://10.0.0.5:8000", "key").unwrap();
+        let image = "sites.csfx.invalid/abc:12345678";
+        let reference = resolve_reference(image, Some("localhost:5050"), Some(&site)).unwrap();
+        assert_eq!(reference.whole(), "10.0.0.5:5060/abc:12345678");
+        assert!(matches!(
+            auth_for(&reference, Some(&site)),
+            RegistryAuth::Basic(user, _) if user == "agent"
+        ));
+        assert!(resolve_reference(image, None, None).is_err());
+    }
+
+    #[test]
+    fn credentials_are_never_sent_to_other_registries() {
+        let site = SiteRegistry::from_gateway("https://10.0.0.5:8000", "key").unwrap();
+        let other: Reference = "ghcr.io/org/app:1".parse().unwrap();
+        assert!(matches!(
+            auth_for(&other, Some(&site)),
+            RegistryAuth::Anonymous
+        ));
+    }
+
+    #[test]
+    fn other_registries_bypass_the_mirror() {
+        let image = "ghcr.io/csfx-cloud/csfx-site-builder:1";
+        let reference = resolve_reference(image, Some("localhost:5050"), None).unwrap();
+        assert_eq!(reference.registry(), "ghcr.io");
+        assert_eq!(reference.whole(), image);
+    }
 
     fn layer_header(path: &str, entry_type: tar::EntryType, size: u64, mode: u32) -> tar::Header {
         let mut header = tar::Header::new_gnu();

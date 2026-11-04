@@ -13,6 +13,7 @@ percent-encoding = "2.3"
 
 # Internal dependencies
 entity = { path = "../shared/entity" }
+site-builder = { path = "../site-builder" }
 migration = { path = "../shared/migration" }
 shared = { path = "../shared/shared" }
 

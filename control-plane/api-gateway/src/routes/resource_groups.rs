@@ -10,9 +10,10 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chrono::Utc;
 use entity::{
     entities::{
-        agents, buckets, networks, resource_group_vpn_peers, resource_groups, volumes, workloads,
+        agents, buckets, networks, resource_group_vpn_peers, resource_groups, sites, volumes,
+        workloads,
     },
-    Agents, Buckets, Networks, ResourceGroupVpnPeers, ResourceGroups, Volumes, Workloads,
+    Agents, Buckets, Networks, ResourceGroupVpnPeers, ResourceGroups, Sites, Volumes, Workloads,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use sea_orm::{
@@ -22,6 +23,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shared::workload_status::ACTIVE_STATUSES;
+use std::net::Ipv4Addr;
 use uuid::Uuid;
 
 use crate::{
@@ -218,6 +220,8 @@ pub async fn create_resource_group(
     ))
 }
 
+const DNS_HOST_OFFSET: u32 = 2;
+const VPN_PEER_LOWEST_OFFSET: u32 = 3;
 const SUGGESTED_CIDR_BASE: u32 = 0x0A650000;
 const SUGGESTED_CIDR_PREFIX: u8 = 24;
 const SUGGESTED_CIDR_MAX_SUBNETS: u32 = 256;
@@ -903,6 +907,42 @@ pub async fn list_resource_group_members(
     Ok((StatusCode::OK, Json(json!(members))))
 }
 
+#[derive(Debug, Serialize)]
+pub struct SiteService {
+    pub service_name: String,
+    pub address: String,
+}
+
+pub async fn list_resource_group_site_services(
+    _agent: crate::auth::agent::AgentApiKey,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let Some(address) = crate::ingress_sync::site_edge_address() else {
+        return Ok((StatusCode::OK, Json(json!(Vec::<SiteService>::new()))));
+    };
+    let services: Vec<SiteService> = Sites::find()
+        .filter(sites::Column::ResourceGroupId.eq(id))
+        .filter(sites::Column::Mode.eq("static"))
+        .all(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to list resource group sites");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?
+        .into_iter()
+        .map(|site| SiteService {
+            service_name: site.name,
+            address: address.clone(),
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(json!(services))))
+}
+
 pub async fn list_mesh_peers(
     _agent: crate::auth::agent::AgentApiKey,
     State(state): State<AppState>,
@@ -1098,7 +1138,7 @@ pub async fn get_vpn_config(
         )
     })?;
 
-    let dns = first_host_ip(&group.internal_cidr).unwrap_or_else(|| "1.1.1.1".to_string());
+    let dns = dns_host_ip(&group.internal_cidr).unwrap_or_else(|| "1.1.1.1".to_string());
     let search_domain = format!("svc.{}.internal", id);
 
     let config = format!(
@@ -1148,21 +1188,10 @@ fn derive_wg_public_key(private_key_b64: &str) -> Option<String> {
 fn allocate_vpn_peer_ip(cidr: &str, taken: &[String]) -> Option<String> {
     let parsed = parse_cidr(cidr)?;
     let host_count = 1u32 << (32 - parsed.prefix_len);
-    let dns_host = parsed.network + 1;
-
-    for offset in 2..host_count.saturating_sub(1) {
-        let candidate_bits = parsed.network + offset;
-        if candidate_bits == dns_host {
-            continue;
-        }
-        let [a, b, c, d] = candidate_bits.to_be_bytes();
-        let candidate = format!("{}.{}.{}.{}", a, b, c, d);
-        if !taken.iter().any(|ip| ip == &candidate) {
-            return Some(candidate);
-        }
-    }
-
-    None
+    (VPN_PEER_LOWEST_OFFSET..host_count.saturating_sub(1))
+        .rev()
+        .map(|offset| Ipv4Addr::from(parsed.network + offset).to_string())
+        .find(|candidate| !taken.contains(candidate))
 }
 
 struct Cidr {
@@ -1212,19 +1241,9 @@ fn parse_cidr(cidr: &str) -> Option<Cidr> {
     Some(cidr)
 }
 
-fn first_host_ip(cidr: &str) -> Option<String> {
-    let parts: Vec<&str> = cidr.split('/').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let octets: Vec<u8> = parts[0].split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() != 4 {
-        return None;
-    }
-    let n = u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]);
-    let host = n + 1;
-    let [a, b, c, d] = host.to_be_bytes();
-    Some(format!("{}.{}.{}.{}", a, b, c, d))
+fn dns_host_ip(cidr: &str) -> Option<String> {
+    let parsed = parse_cidr(cidr)?;
+    Some(Ipv4Addr::from(parsed.network + DNS_HOST_OFFSET).to_string())
 }
 
 pub fn resource_groups_routes() -> Router<AppState> {
@@ -1281,7 +1300,40 @@ pub fn resource_groups_agent_routes() -> Router<AppState> {
             get(list_resource_group_members),
         )
         .route(
+            "/resource-groups/{id}/site-services",
+            get(list_resource_group_site_services),
+        )
+        .route(
             "/resource-groups/{id}/vpn-peers",
             get(list_resource_group_vpn_peers),
         )
+}
+
+#[cfg(test)]
+mod vpn_tests {
+    use super::{allocate_vpn_peer_ip, dns_host_ip};
+
+    #[test]
+    fn dns_is_the_second_host_of_the_group() {
+        assert_eq!(dns_host_ip("10.20.0.0/24").as_deref(), Some("10.20.0.2"));
+    }
+
+    #[test]
+    fn peers_are_allocated_from_the_top_and_skip_taken_addresses() {
+        let taken = vec!["10.20.0.254".to_string()];
+        assert_eq!(
+            allocate_vpn_peer_ip("10.20.0.0/24", &[]).as_deref(),
+            Some("10.20.0.254")
+        );
+        assert_eq!(
+            allocate_vpn_peer_ip("10.20.0.0/24", &taken).as_deref(),
+            Some("10.20.0.253")
+        );
+    }
+
+    #[test]
+    fn peers_never_take_the_infrastructure_addresses() {
+        let taken: Vec<String> = (3..=254).map(|host| format!("10.20.0.{host}")).collect();
+        assert_eq!(allocate_vpn_peer_ip("10.20.0.0/24", &taken), None);
+    }
 }

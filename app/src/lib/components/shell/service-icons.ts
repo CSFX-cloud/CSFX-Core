@@ -56,9 +56,9 @@ export const SERVICE_ICONS: ServiceIcon[] = [
         svg: "<path d=\"M12 3v18M9 21h6\"></path><path d=\"M12 5h6.5l2 2.5-2 2.5H12\"></path><path d=\"M12 12H5.5l-2 2.5 2 2.5H12\"></path>",
     },
     {
-        key: "load-balancer",
-        tile: "radial-gradient(circle at 0% 0%, var(--stage-slate) 0%, transparent 72%), var(--bg-inset)",
-        svg: "<circle cx=\"12\" cy=\"5\" r=\"2\"></circle><path d=\"M12 7v4M12 11l-7 6M12 11v6M12 11l7 6\"></path><rect x=\"3\" y=\"17\" width=\"4\" height=\"4\" rx=\"1\"></rect><rect x=\"10\" y=\"17\" width=\"4\" height=\"4\" rx=\"1\"></rect><rect x=\"17\" y=\"17\" width=\"4\" height=\"4\" rx=\"1\"></rect>",
+        key: "api-gateway",
+        tile: "radial-gradient(circle at 0% 100%, var(--stage-teal) 0%, transparent 65%), radial-gradient(circle at 100% 0%, var(--stage-slate) 0%, transparent 65%), var(--bg-inset)",
+        svg: "<circle cx=\"4.5\" cy=\"6\" r=\"1.5\"></circle><circle cx=\"4.5\" cy=\"18\" r=\"1.5\"></circle><path d=\"M6 6h3c3 0 3 6 6 6h5M6 18h3c3 0 3-6 6-6\"></path><path d=\"M17.5 9.5L20 12l-2.5 2.5\"></path>",
     },
     {
         key: "web-app-firewall",
@@ -134,6 +134,16 @@ export const SERVICE_ICONS: ServiceIcon[] = [
         key: "key-vault",
         tile: "radial-gradient(circle at 0% 100%, var(--stage-ember) 0%, transparent 65%), radial-gradient(circle at 100% 0%, var(--stage-slate) 0%, transparent 65%), var(--bg-inset)",
         svg: "<rect x=\"3\" y=\"4\" width=\"18\" height=\"15\" rx=\"2\"></rect><circle cx=\"13\" cy=\"11.5\" r=\"3.5\"></circle><path d=\"M13 9.5v4M11 11.5h4M6.5 8v7M6 19v2M18 19v2\"></path>",
+    },
+    {
+        key: "web-apps",
+        tile: "radial-gradient(circle at 100% 0%, var(--stage-teal) 0%, transparent 65%), radial-gradient(circle at 0% 100%, var(--stage-slate) 0%, transparent 65%), var(--bg-inset)",
+        svg: "<circle cx=\"12\" cy=\"12\" r=\"9\"></circle><path d=\"M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z\"></path>",
+    },
+    {
+        key: "container-registry",
+        tile: "radial-gradient(circle at 100% 0%, var(--stage-olive) 0%, transparent 65%), radial-gradient(circle at 0% 100%, var(--stage-slate) 0%, transparent 65%), var(--bg-inset)",
+        svg: "<path d=\"M12 3l8 4.2v9.6L12 21l-8-4.2V7.2z\"></path><path d=\"M4 7.2l8 4.3 8-4.3M12 11.5V21\"></path>",
     },
 ];
 

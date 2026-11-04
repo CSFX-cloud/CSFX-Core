@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libpq-dev \
     curl \
+    git \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
@@ -29,6 +30,7 @@ COPY control-plane/sdn-controller/Cargo.toml ./control-plane/sdn-controller/
 COPY control-plane/volume-manager/Cargo.toml ./control-plane/volume-manager/
 COPY control-plane/object-storage/Cargo.toml ./control-plane/object-storage/
 COPY control-plane/registry/Cargo.toml ./control-plane/registry/
+COPY control-plane/site-builder/Cargo.toml ./control-plane/site-builder/
 COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
 COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
 COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
@@ -44,6 +46,7 @@ RUN mkdir -p agent/src \
     control-plane/volume-manager/src \
     control-plane/object-storage/src \
     control-plane/registry/src \
+    control-plane/site-builder/src \
     control-plane/shared/entity/src \
     control-plane/shared/migration/src \
     control-plane/shared/shared/src \
@@ -58,6 +61,8 @@ RUN mkdir -p agent/src \
     && echo "fn main() {}" > control-plane/volume-manager/src/main.rs \
     && echo "fn main() {}" > control-plane/object-storage/src/main.rs \
     && echo "fn main() {}" > control-plane/registry/src/main.rs \
+    && echo "fn main() {}" > control-plane/site-builder/src/main.rs \
+    && echo "pub fn lib() {}" > control-plane/site-builder/src/lib.rs \
     && echo "fn main() {}" > control-plane/csfx-migrate/src/main.rs \
     && echo "fn main() {}" > control-plane/csfx-updater/src/main.rs \
     && echo "pub fn lib() {}" > control-plane/shared/entity/src/lib.rs \
