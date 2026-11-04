@@ -137,6 +137,12 @@ pub struct ResourceGroupMember {
     pub guest_ip: String,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct SiteService {
+    pub service_name: String,
+    pub address: String,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VpnPeer {
     pub client_public_key: String,
@@ -486,6 +492,38 @@ impl ApiClient {
         resp.json::<Vec<ResourceGroupMember>>()
             .await
             .context("Failed to parse resource group members response")
+    }
+
+    pub async fn fetch_resource_group_site_services(
+        &self,
+        api_key: &str,
+        resource_group_id: &str,
+    ) -> Result<Vec<SiteService>> {
+        let url = format!(
+            "{}/api/resource-groups/{}/site-services",
+            self.gateway_url, resource_group_id
+        );
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("X-API-Key", api_key)
+            .send()
+            .await
+            .context("Failed to fetch resource group site services")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!(
+                "Failed to fetch resource group site services status={} {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            );
+        }
+
+        resp.json::<Vec<SiteService>>()
+            .await
+            .context("Failed to parse resource group site services response")
     }
 
     pub async fn fetch_resource_group_peers(

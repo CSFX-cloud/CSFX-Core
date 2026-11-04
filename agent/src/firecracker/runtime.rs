@@ -251,6 +251,12 @@ impl FirecrackerRuntime {
         cid
     }
 
+    pub async fn ensure_group_dns(&self, resource_group_id: &str, cidr: &str) -> Result<()> {
+        self.dns_supervisor
+            .ensure_running(resource_group_id, cidr)
+            .await
+    }
+
     pub async fn check_dns_liveness(&self) {
         self.dns_supervisor.check_liveness().await;
     }
