@@ -47,7 +47,7 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
@@ -96,7 +96,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.should_build == 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -156,7 +156,7 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
@@ -204,7 +204,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, build-binaries, build-cp-binaries, build-frontend]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
         with:
@@ -248,7 +248,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare, build-binaries, build-cp-binaries, build-frontend, attach-binaries-release]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           repository: ${{ github.repository_owner }}/CSFX-Infra
           token: ${{ secrets.INFRA_REPO_TOKEN }}
