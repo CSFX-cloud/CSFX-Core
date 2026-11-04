@@ -3,19 +3,21 @@
     import type { DeploymentSummary, SiteDetail } from "$lib/api/sites";
     import { relativeTime } from "$lib/utils/dashboard";
     import { badgeClass, buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
-    import BuildLog from "./build-log.svelte";
     import UsageStats from "./usage-stats.svelte";
 
     const PREVIEW_LIMIT = 8;
 
-    type Props = { rgId: string; site: SiteDetail; onChanged: () => Promise<void> };
+    type Props = { rgId: string; site: SiteDetail };
 
-    let { rgId, site, onChanged }: Props = $props();
+    let { rgId, site }: Props = $props();
 
     const production = $derived(site.deployments.find((deployment) => deployment.current) ?? null);
     const latest = $derived(site.deployments[0] ?? null);
     const previews = $derived(site.deployments.filter((deployment) => deployment.environment === "preview").slice(0, PREVIEW_LIMIT));
-    const productionHost = $derived(site.domains.find((domain) => domain.kind !== "branch")?.hostname ?? null);
+    const externalDomains = $derived(site.domains.filter((domain) => domain.kind === "production" || domain.kind === "auto"));
+    const internalDomain = $derived(site.domains.find((domain) => domain.kind === "internal") ?? null);
+    const internalAddress = $derived(internalDomain ? `${internalDomain.hostname}${site.internal_port ? `:${site.internal_port}` : ""}` : null);
+    const productionHost = $derived(site.gateway_id ? (externalDomains[0]?.hostname ?? null) : null);
     const previewHosts = $derived(site.domains.filter((domain) => domain.kind === "branch"));
 
     function previewHost(deployment: DeploymentSummary): string | null {
@@ -39,13 +41,18 @@
             <div><dt>Deployed</dt><dd>{relativeTime(production.created_at, Date.now())}</dd></div>
             <div><dt>Commit</dt><dd>{production.commit_message || "No message"}<br /><span class="cx-soft">{shortSha(production.commit_sha)} &middot; {production.branch}</span></dd></div>
             <div><dt>Build time</dt><dd>{buildDuration(production.duration_ms)}</dd></div>
+            <div><dt>Internal address</dt><dd>{#if internalAddress}<span class="ov-mono">{internalAddress}</span><br /><span class="cx-soft">inside the resource group</span>{:else}<span class="cx-soft">None</span>{/if}</dd></div>
             <div>
                 <dt>Domains</dt>
                 <dd>
-                    {#each site.domains.filter((domain) => domain.kind !== "branch") as domain (domain.id)}
-                        <a class="cx-link" href="https://{domain.hostname}" target="_blank" rel="noreferrer">{domain.hostname}<ExternalLink class="cx-i" aria-hidden="true" /></a><br />
+                    {#each externalDomains as domain (domain.id)}
+                        {#if site.gateway_id}
+                            <a class="cx-link" href="https://{domain.hostname}" target="_blank" rel="noreferrer">{domain.hostname}<ExternalLink class="cx-i" aria-hidden="true" /></a><br />
+                        {:else}
+                            <span>{domain.hostname}</span><br />
+                        {/if}
                     {:else}
-                        <span class="cx-soft">No domain yet</span>
+                        <span class="cx-soft">No external domain</span>
                     {/each}
                 </dd>
             </div>
@@ -95,13 +102,12 @@
     </section>
 {/if}
 
-{#if latest}
-    {#key latest.id}
-        <BuildLog {rgId} siteId={site.id} deploymentId={latest.id} onSettled={onChanged} />
-    {/key}
-{/if}
-
 <style>
+    .ov-mono {
+        font-family: ui-monospace, monospace;
+        overflow-wrap: anywhere;
+    }
+
     .ov-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

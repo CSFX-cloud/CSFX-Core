@@ -8,6 +8,7 @@
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
+    import BuildLog from "$lib/components/site/build-log.svelte";
     import BuildPanel from "$lib/components/site/build-panel.svelte";
     import DeploymentsTab from "$lib/components/site/deployments-tab.svelte";
     import DomainsPanel from "$lib/components/site/domains-panel.svelte";
@@ -17,10 +18,11 @@
     import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
     import { buildDuration, badgeClass, deploymentStatus, repoLabel } from "$lib/utils/site-status";
 
-    type Tab = "overview" | "deployments" | "settings";
+    type Tab = "overview" | "build" | "deployments" | "settings";
 
     const TABS: { id: Tab; label: string }[] = [
         { id: "overview", label: "Overview" },
+        { id: "build", label: "Build log" },
         { id: "deployments", label: "Deployments" },
         { id: "settings", label: "Settings" },
     ];
@@ -39,7 +41,7 @@
     const latest = $derived(site?.deployments[0]);
     const status = $derived(deploymentStatus(latest?.status));
     const building = $derived(latest?.status === "queued" || latest?.status === "building");
-    const liveDomain = $derived(site?.domains.find((domain) => domain.kind !== "branch"));
+    const liveDomain = $derived(site?.gateway_id ? site.domains.find((domain) => domain.kind === "production" || domain.kind === "auto") : undefined);
     const lastBuild = $derived(site?.deployments.find((deployment) => deployment.duration_ms !== null));
 
     async function load() {
@@ -157,7 +159,15 @@
         <WorkloadTabs tabs={TABS} active={tab} label="Web app sections" onselect={(id) => (tab = id)} />
 
         {#if tab === "overview"}
-            <OverviewTab rgId={rg.rgId} {site} onChanged={load} />
+            <OverviewTab rgId={rg.rgId} {site} />
+        {:else if tab === "build"}
+            {#if latest}
+                {#key latest.id}
+                    <BuildLog rgId={rg.rgId} siteId={site.id} deploymentId={latest.id} onSettled={load} />
+                {/key}
+            {:else}
+                <p class="cx-hint">Nothing has been built yet.</p>
+            {/if}
         {:else if tab === "deployments"}
             <DeploymentsTab rgId={rg.rgId} siteId={site.id} deployments={site.deployments} onChanged={load} onError={(message) => (error = message)} />
         {:else}

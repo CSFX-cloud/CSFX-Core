@@ -17,7 +17,7 @@ export const RESOURCE_TYPES = [
     { key: "bucket", service: "object-storage", category: "storage", label: "Object Storage", description: "S3-compatible buckets for files and backups.", equivalent: "S3 · BLOB STORAGE · CLOUD STORAGE" },
     { key: "volume", service: "block-storage", category: "storage", label: "Block Storage", description: "Attach a volume to a VM or container.", equivalent: "EBS · MANAGED DISK · PERSISTENT DISK" },
     { key: "key-vault", service: "key-vault", category: "security", label: "Key Vault", description: "Store secrets that resources read at start.", equivalent: "KEY VAULT · SECRETS MANAGER · SECRET MANAGER" },
-    { key: "api-gateway", service: "load-balancer", category: "networking", label: "API Gateway", description: "Publish services under local or public domains.", equivalent: "API GATEWAY · APIM · REVERSE PROXY" },
+    { key: "api-gateway", service: "api-gateway", category: "networking", label: "API Gateway", description: "Publish services under local or public domains.", equivalent: "API GATEWAY · APIM · REVERSE PROXY" },
 ] as const;
 
 export type ResourceTypeKey = (typeof RESOURCE_TYPES)[number]["key"];

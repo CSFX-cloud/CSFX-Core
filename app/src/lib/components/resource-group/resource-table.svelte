@@ -80,7 +80,7 @@
     }
 
     function workloadIcon(workload: Workload): string {
-        if (gateways.some((gateway) => gateway.workload_id === workload.id)) return "load-balancer";
+        if (gateways.some((gateway) => gateway.workload_id === workload.id)) return "api-gateway";
         return workload.runtime_class === "vm" ? "virtual-machines" : "docker-containers";
     }
 

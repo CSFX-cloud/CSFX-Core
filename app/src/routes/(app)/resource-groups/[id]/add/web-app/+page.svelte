@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { untrack } from "svelte";
     import { ChevronLeft } from "@lucide/svelte";
     import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
@@ -22,7 +21,6 @@
 
     const DEFAULT_BRANCH = "main";
     const DEFAULT_PORT = 3000;
-    const INSPECT_DELAY_MS = 600;
 
     const rg = useResourceGroupState();
     const base = `/resource-groups/${rg.rgId}`;
@@ -55,15 +53,12 @@
     const usableVaults = $derived(rg.vaults.filter((vault) => !vault.sealed));
     const visiblePresets = $derived(FRAMEWORK_PRESETS.filter((preset) => preset.mode === mode));
     const usesPackageManager = $derived(FRAMEWORK_PRESETS.find((preset) => preset.framework === framework)?.install_command != null);
-    const canCreate = $derived(name.trim() !== "" && gatewayId !== "" && inspected && !creating);
+    const canInspect = $derived(repoUrl.trim().startsWith("http") && !inspecting);
+    const canCreate = $derived(name.trim() !== "" && inspected && !creating);
 
     $effect(() => {
         breadcrumb.set(rg.group ? `${rg.group.name} / Add web app` : null);
         return () => breadcrumb.set(null);
-    });
-
-    $effect(() => {
-        if (!gatewayId && rg.gateways.length > 0) gatewayId = rg.gateways[0].id;
     });
 
     async function loadTokenNames() {
@@ -142,14 +137,10 @@
     }
 
     $effect(() => {
-        const url = repoUrl.trim();
-        void [branch, rootDir, vaultId, tokenSecret];
+        void [repoUrl, branch, rootDir, vaultId, tokenSecret];
         inspectRun++;
         inspected = false;
         inspecting = false;
-        if (!url.startsWith("http")) return;
-        const timer = setTimeout(() => untrack(inspect), INSPECT_DELAY_MS);
-        return () => clearTimeout(timer);
     });
 
     function optional(value: string): string | undefined {
@@ -168,7 +159,7 @@
                 root_dir: rootDir.trim(),
                 vault_id: vaultId || undefined,
                 git_token_secret: tokenSecret || undefined,
-                gateway_id: gatewayId,
+                gateway_id: gatewayId || undefined,
                 preview_enabled: mode === "static" && previews,
                 mode,
                 framework: optional(framework),
@@ -249,6 +240,11 @@
                         </select>
                     </div>
                 </div>
+                <div>
+                    <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" disabled={!canInspect} onclick={inspect}>
+                        {inspected ? "Pull again" : "Pull repository"}
+                    </button>
+                </div>
                 {#if inspecting}
                     <p class="cx-hint" aria-live="polite">Inspecting repository</p>
                 {:else if inspected}
@@ -283,11 +279,12 @@
                             <p class="cx-hint">Lowercase letters, digits and hyphens.</p>
                         </div>
                         <div class="cx-field">
-                            <label class="cx-label" for="wa-gateway">Gateway</label>
-                            <select class="cx-input" id="wa-gateway" bind:value={gatewayId} disabled={rg.gateways.length === 0}>
+                            <label class="cx-label" for="wa-gateway">API gateway (optional)</label>
+                            <select class="cx-input" id="wa-gateway" bind:value={gatewayId}>
+                                <option value="">None, served inside the resource group</option>
                                 {#each rg.gateways as gateway (gateway.id)}<option value={gateway.id}>{gateway.name}</option>{/each}
                             </select>
-                            {#if rg.gateways.length === 0}<p class="cx-hint cx-hint--error">This group has no API gateway yet.</p>{/if}
+                            <p class="cx-hint">The site always gets an internal domain in this group. A gateway adds public hostnames and TLS.</p>
                             <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={() => gatewayDialog?.open()}>Create API gateway</button>
                         </div>
                     </div>

@@ -18,8 +18,6 @@
     let selected = $state<string | null>(null);
     let busy = $state<string | null>(null);
 
-    const openLog = $derived(selected ?? deployments[0]?.id ?? null);
-
     function actionLabel(deployment: DeploymentSummary): string | null {
         if (deployment.status !== "ready" || deployment.current || deployment.expired) return null;
         const current = deployments.find((candidate) => candidate.current);
@@ -87,8 +85,8 @@
     </div>
 </section>
 
-{#if openLog}
-    {#key openLog}
-        <BuildLog {rgId} {siteId} deploymentId={openLog} onSettled={onChanged} />
+{#if selected}
+    {#key selected}
+        <BuildLog {rgId} {siteId} deploymentId={selected} onSettled={onChanged} />
     {/key}
 {/if}

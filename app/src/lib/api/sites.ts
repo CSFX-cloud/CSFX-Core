@@ -58,7 +58,7 @@ export interface SiteSummary extends Site {
 export interface SiteDomain {
     id: string;
     hostname: string;
-    kind: 'production' | 'branch' | 'auto';
+    kind: 'production' | 'branch' | 'auto' | 'internal';
     branch: string | null;
 }
 
@@ -75,6 +75,7 @@ export interface SiteDetail extends Site {
     domains: SiteDomain[];
     env: SiteEnv[];
     deployments: DeploymentSummary[];
+    internal_port: number | null;
 }
 
 export interface Detection {
@@ -148,7 +149,7 @@ export interface SourceInput {
 
 export interface CreateSiteInput extends SourceInput {
     name: string;
-    gateway_id: string;
+    gateway_id?: string;
     preview_enabled?: boolean;
     mode?: SiteMode;
     framework?: string;

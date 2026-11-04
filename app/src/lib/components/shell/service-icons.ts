@@ -56,9 +56,9 @@ export const SERVICE_ICONS: ServiceIcon[] = [
         svg: "<path d=\"M12 3v18M9 21h6\"></path><path d=\"M12 5h6.5l2 2.5-2 2.5H12\"></path><path d=\"M12 12H5.5l-2 2.5 2 2.5H12\"></path>",
     },
     {
-        key: "load-balancer",
-        tile: "radial-gradient(circle at 0% 0%, var(--stage-slate) 0%, transparent 72%), var(--bg-inset)",
-        svg: "<circle cx=\"12\" cy=\"5\" r=\"2\"></circle><path d=\"M12 7v4M12 11l-7 6M12 11v6M12 11l7 6\"></path><rect x=\"3\" y=\"17\" width=\"4\" height=\"4\" rx=\"1\"></rect><rect x=\"10\" y=\"17\" width=\"4\" height=\"4\" rx=\"1\"></rect><rect x=\"17\" y=\"17\" width=\"4\" height=\"4\" rx=\"1\"></rect>",
+        key: "api-gateway",
+        tile: "radial-gradient(circle at 0% 100%, var(--stage-teal) 0%, transparent 65%), radial-gradient(circle at 100% 0%, var(--stage-slate) 0%, transparent 65%), var(--bg-inset)",
+        svg: "<circle cx=\"4.5\" cy=\"6\" r=\"1.5\"></circle><circle cx=\"4.5\" cy=\"18\" r=\"1.5\"></circle><path d=\"M6 6h3c3 0 3 6 6 6h5M6 18h3c3 0 3-6 6-6\"></path><path d=\"M17.5 9.5L20 12l-2.5 2.5\"></path>",
     },
     {
         key: "web-app-firewall",

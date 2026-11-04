@@ -12,6 +12,7 @@
 
     function pointsTo(kind: string, branch: string | null): string {
         if (kind === "branch") return `branch: ${branch ?? "unknown"}`;
+        if (kind === "internal") return "resource group only";
         return "production";
     }
 
@@ -51,15 +52,17 @@
                         <td class="cx-soft">{pointsTo(domain.kind, domain.branch)}</td>
                         <td>
                             <div class="db-actions" style="justify-content: flex-end">
-                                <button
-                                    class="cx-icon-btn cx-icon-btn--sm nd-danger"
-                                    type="button"
-                                    aria-label="Remove {domain.hostname}"
-                                    title="Remove"
-                                    onclick={() => run((token) => deleteSiteDomain(token, rgId, site.id, domain.id), "Failed to remove domain")}
-                                >
-                                    <Trash2 class="cx-i" aria-hidden="true" />
-                                </button>
+                                {#if domain.kind !== "internal"}
+                                    <button
+                                        class="cx-icon-btn cx-icon-btn--sm nd-danger"
+                                        type="button"
+                                        aria-label="Remove {domain.hostname}"
+                                        title="Remove"
+                                        onclick={() => run((token) => deleteSiteDomain(token, rgId, site.id, domain.id), "Failed to remove domain")}
+                                    >
+                                        <Trash2 class="cx-i" aria-hidden="true" />
+                                    </button>
+                                {/if}
                             </div>
                         </td>
                     </tr>
