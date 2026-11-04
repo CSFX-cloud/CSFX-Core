@@ -3,7 +3,8 @@ use sea_orm_migration::prelude::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
-const DROP_CONSTRAINT: &str = "ALTER TABLE site_domains DROP CONSTRAINT IF EXISTS site_domains_kind_check";
+const DROP_CONSTRAINT: &str =
+    "ALTER TABLE site_domains DROP CONSTRAINT IF EXISTS site_domains_kind_check";
 
 const ADD_WITH_INTERNAL: &str = "
 ALTER TABLE site_domains ADD CONSTRAINT site_domains_kind_check

@@ -7,7 +7,6 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use std::net::Ipv4Addr;
 use chrono::Utc;
 use entity::{
     entities::{
@@ -24,6 +23,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shared::workload_status::ACTIVE_STATUSES;
+use std::net::Ipv4Addr;
 use uuid::Uuid;
 
 use crate::{

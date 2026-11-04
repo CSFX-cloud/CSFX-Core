@@ -176,7 +176,9 @@ pub fn site_edge_backend() -> Option<String> {
 pub fn site_edge_address() -> Option<String> {
     let backend = site_edge_backend()?;
     let host = backend.split("://").last()?.split(['/', ':']).next()?;
-    host.parse::<std::net::Ipv4Addr>().ok().map(|address| address.to_string())
+    host.parse::<std::net::Ipv4Addr>()
+        .ok()
+        .map(|address| address.to_string())
 }
 
 pub fn site_edge_port() -> Option<u16> {
@@ -376,7 +378,10 @@ mod tests {
     #[test]
     fn edge_address_is_the_ipv4_host_of_the_edge_url() {
         std::env::set_var("CSFX_SITE_EDGE_URL", "http://192.168.105.200:8010");
-        assert_eq!(super::site_edge_address().as_deref(), Some("192.168.105.200"));
+        assert_eq!(
+            super::site_edge_address().as_deref(),
+            Some("192.168.105.200")
+        );
         assert_eq!(super::site_edge_port(), Some(8010));
         std::env::set_var("CSFX_SITE_EDGE_URL", "http://edge.internal:8010");
         assert_eq!(super::site_edge_address(), None);

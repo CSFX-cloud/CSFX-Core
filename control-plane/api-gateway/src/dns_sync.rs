@@ -137,7 +137,10 @@ pub fn desired_records(
         let Some(address) = site_host_address(host, &by_id) else {
             continue;
         };
-        records.insert(record_key(&host.hostname), record_value(address, RECORD_TTL));
+        records.insert(
+            record_key(&host.hostname),
+            record_value(address, RECORD_TTL),
+        );
     }
     if in_zone(&platform.hostname, zone) {
         records.extend(platform_records(platform));
