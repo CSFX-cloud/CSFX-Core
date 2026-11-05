@@ -303,7 +303,10 @@ export async function deleteResourceGroup(token: string, id: string): Promise<vo
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`Failed to delete resource group: ${res.status}`);
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `Failed to delete resource group: ${res.status}`);
+    }
 }
 
 export async function listResourceGroupWorkloads(token: string, rgId: string): Promise<Workload[]> {
