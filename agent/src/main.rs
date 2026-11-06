@@ -404,7 +404,7 @@ async fn reconcile_tick(
     fence_guard: &mut fence::FenceGuard,
     current_flake_rev: &mut String,
 ) {
-    process_volumes(client, agent_id, api_key, mounted_volumes).await;
+    let assigned_volumes = process_volumes(client, agent_id, api_key, mounted_volumes).await;
     let resource_group_ids = process_workloads(
         client,
         starts,
@@ -420,6 +420,9 @@ async fn reconcile_tick(
         rg_dns_registry,
     )
     .await;
+    if let Some(volumes) = &assigned_volumes {
+        release_unassigned_volumes(mounted_volumes, volumes).await;
+    }
     rg_mesh::sync(
         client,
         api_key,
@@ -604,40 +607,79 @@ async fn process_volumes(
     agent_id: uuid::Uuid,
     api_key: &str,
     mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
-) {
+) -> Option<Vec<client::AssignedVolume>> {
     let volumes = match client.fetch_assigned_volumes(agent_id, api_key).await {
         Ok(v) => v,
         Err(e) => {
             warn!(error = %e, "Failed to fetch assigned volumes");
+            return None;
+        }
+    };
+
+    map_missing_volumes(&volumes, mounted_volumes).await;
+    Some(volumes)
+}
+
+async fn map_missing_volumes(
+    volumes: &[client::AssignedVolume],
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    let missing: Vec<&client::AssignedVolume> = {
+        let mounted = mounted_volumes.lock().await;
+        volumes
+            .iter()
+            .filter(|volume| !mounted.contains_key(&volume.id))
+            .collect()
+    };
+    if missing.is_empty() {
+        return;
+    }
+
+    let existing = match rbd::list_mapped().await {
+        Ok(mapped) => mapped,
+        Err(e) => {
+            warn!(error = %e, "Failed to list mapped RBD devices");
             return;
         }
     };
 
-    release_unassigned_volumes(mounted_volumes, &volumes).await;
+    for volume in missing {
+        attach_volume_device(volume, &existing, mounted_volumes).await;
+    }
+}
 
-    for volume in volumes {
-        let already_mounted = mounted_volumes.lock().await.contains_key(&volume.id);
-        if already_mounted {
-            continue;
-        }
+async fn attach_volume_device(
+    volume: &client::AssignedVolume,
+    existing: &[rbd::MappedImage],
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    let adopted = existing
+        .iter()
+        .find(|mapped| mapped.pool == volume.pool && mapped.image == volume.image_name);
 
-        info!(volume_id = %volume.id, image = %volume.image_name, "Mapping volume");
-
-        let device = match rbd::map_device(&volume.pool, &volume.image_name).await {
-            Ok(d) => d,
+    let device = match adopted {
+        Some(mapped) => mapped.device.clone(),
+        None => match rbd::map_device(&volume.pool, &volume.image_name).await {
+            Ok(device) => device,
             Err(e) => {
                 warn!(volume_id = %volume.id, error = %e, "Failed to map RBD device");
-                continue;
+                return;
             }
-        };
+        },
+    };
 
-        mounted_volumes
-            .lock()
-            .await
-            .insert(volume.id.clone(), device.clone());
-
-        info!(volume_id = %volume.id, device = %device, "Volume mapped");
+    let label = format!("csfx-{}", volume.id.chars().take(11).collect::<String>());
+    if let Err(e) = rbd::ensure_filesystem(&device, &label).await {
+        warn!(volume_id = %volume.id, device = %device, error = %e, "Failed to prepare volume filesystem");
+        return;
     }
+
+    mounted_volumes
+        .lock()
+        .await
+        .insert(volume.id.clone(), device.clone());
+
+    info!(volume_id = %volume.id, device = %device, adopted = adopted.is_some(), "Volume mapped");
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -913,6 +955,19 @@ async fn run_workload_start(context: WorkloadStartContext, workload: client::Ass
     context.starts.finish(&workload_id, state_changed).await;
 }
 
+async fn volumes_ready(
+    workload: &client::AssignedWorkload,
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) -> bool {
+    let Some(mounts) = &workload.volume_mounts else {
+        return true;
+    };
+    let mounted = mounted_volumes.lock().await;
+    mounts
+        .iter()
+        .all(|mount| mounted.contains_key(&mount.volume_id))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_or_restart_workload(
     runtime: &dyn runtime::Runtime,
@@ -942,6 +997,15 @@ async fn start_or_restart_workload(
 
     info!(workload_id = %workload.id, image = %workload.image, "Starting workload");
 
+    if !volumes_ready(&workload, mounted_volumes).await {
+        info!(workload_id = %workload.id, "Waiting for volumes to be mounted, deferring workload");
+        workload_phases
+            .lock()
+            .await
+            .insert(workload.id.clone(), "scheduled".to_string());
+        return false;
+    }
+
     workload_phases
         .lock()
         .await
@@ -951,16 +1015,6 @@ async fn start_or_restart_workload(
         warn!(workload_id = %workload.id, error = %e, "Failed to pull image");
         workload_phases.lock().await.remove(&workload.id);
         return false;
-    }
-
-    if let Some(ref mounts) = workload.volume_mounts {
-        let locked = mounted_volumes.lock().await;
-        let all_ready = mounts.iter().all(|m| locked.contains_key(&m.volume_id));
-        drop(locked);
-        if !all_ready {
-            info!(workload_id = %workload.id, "Waiting for volumes to be mounted, deferring workload");
-            return false;
-        }
     }
 
     if let Some(max) = workload.max_restarts {

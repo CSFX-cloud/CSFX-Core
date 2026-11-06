@@ -3,12 +3,20 @@ use uuid::Uuid;
 
 use crate::models::workload::PortMapping;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComposeVolumeMount {
+    pub source: String,
+    pub external_name: Option<String>,
+    pub mount_path: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ComposeServiceSpec {
     pub service_name: String,
     pub image: String,
     pub env_vars: Option<HashMap<String, String>>,
     pub ports: Option<Vec<PortMapping>>,
+    pub volumes: Vec<ComposeVolumeMount>,
     pub cpu_millicores: i32,
     pub memory_bytes: i64,
     pub disk_bytes: i64,

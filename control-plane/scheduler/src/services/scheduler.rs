@@ -2,7 +2,7 @@ use chrono::Utc;
 use entity::entities::workloads;
 use etcd_client::Client as EtcdClient;
 use sea_orm::DatabaseConnection;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -10,11 +10,12 @@ use uuid::Uuid;
 use crate::models::compose::{ComposeServiceSpec, CreateStackRequest, CreateStackResponse};
 use crate::models::workload::{
     AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, RuntimeClass,
-    UpdateWorkloadRequest, WorkloadStatus,
+    UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
 };
 use crate::services::compose_parser::{self, ComposeParseError};
 use crate::services::etcd::{delete_placement, put_placement, PlacementRecord};
 use crate::services::placement::{self, Demand, Strategy};
+use crate::services::{image_resolver, stack_volumes};
 
 const GUEST_IP_ATTEMPTS: usize = 5;
 
@@ -62,6 +63,7 @@ impl SchedulerService {
     ) -> Result<CreateWorkloadResponse, String> {
         req.validate()?;
         inject_bucket_env(&mut req).await;
+        req.image = image_resolver::resolve(req.resource_group_id, &req.image).await;
 
         let workload = self.create_with_guest_ip(&req).await?;
 
@@ -80,6 +82,10 @@ impl SchedulerService {
             log_unplaceable(&workload, &demand, &agents);
             return Ok(pending_response(workload.id));
         };
+
+        if !self.claim_volumes(&workload, agent_id).await? {
+            return Ok(pending_response(workload.id));
+        }
 
         crate::db::workloads::assign(&self.db, workload.id, agent_id)
             .await
@@ -107,8 +113,11 @@ impl SchedulerService {
         &self,
         req: CreateStackRequest,
     ) -> Result<CreateStackResponse, String> {
-        let services = compose_parser::parse_compose(&req.compose_yaml)
+        let mut services = compose_parser::parse_compose(&req.compose_yaml)
             .map_err(|e| format_compose_error(&e))?;
+        resolve_service_images(req.resource_group_id, &mut services).await;
+        let volume_ids =
+            stack_volumes::ensure(&self.db, req.resource_group_id, &req.name, &services).await?;
 
         let stack = crate::db::workload_stacks::create(
             &self.db,
@@ -120,7 +129,7 @@ impl SchedulerService {
         .map_err(|e| format!("Failed to persist stack: {}", e))?;
 
         let workloads = self
-            .place_stack_workloads(stack.id, req.resource_group_id, &services)
+            .place_stack_workloads(stack.id, req.resource_group_id, &services, &volume_ids)
             .await?;
 
         crate::db::workload_stacks::update_status(
@@ -148,6 +157,9 @@ impl SchedulerService {
 
         for workload in &workloads {
             delete_placement(&self.etcd, workload.id).await?;
+            crate::db::volumes::release_for_workload(&self.db, workload.id)
+                .await
+                .map_err(|e| format!("Failed to release workload volumes: {}", e))?;
         }
 
         crate::db::workloads::delete_by_stack_id(&self.db, stack_id)
@@ -200,8 +212,13 @@ impl SchedulerService {
     }
 
     pub async fn redeploy_stack(&self, stack_id: Uuid, compose_yaml: &str) -> Result<(), String> {
-        let services =
+        let mut services =
             compose_parser::parse_compose(compose_yaml).map_err(|e| format_compose_error(&e))?;
+        let stack = crate::db::workload_stacks::get_by_id(&self.db, stack_id)
+            .await
+            .map_err(|e| format!("Failed to fetch stack: {}", e))?
+            .ok_or_else(|| format!("Stack {} not found", stack_id))?;
+        resolve_service_images(stack.resource_group_id, &mut services).await;
 
         let existing = crate::db::workloads::get_by_stack_id(&self.db, stack_id)
             .await
@@ -243,6 +260,7 @@ impl SchedulerService {
         stack_id: Uuid,
         resource_group_id: Uuid,
         services: &[ComposeServiceSpec],
+        volume_ids: &HashMap<String, Uuid>,
     ) -> Result<Vec<CreateWorkloadResponse>, String> {
         let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
@@ -254,7 +272,7 @@ impl SchedulerService {
 
         let mut responses = Vec::with_capacity(services.len());
         for service in services {
-            let req = stack_service_request(stack_id, resource_group_id, service);
+            let req = stack_service_request(stack_id, resource_group_id, service, volume_ids);
             let workload = self.create_with_guest_ip(&req).await?;
 
             let demand = demand_for(&workload, Some(&preferred));
@@ -263,7 +281,10 @@ impl SchedulerService {
                 continue;
             };
 
-            self.assign_workload(&workload, agent_id).await?;
+            if !self.assign_workload(&workload, agent_id).await? {
+                responses.push(pending_response(workload.id));
+                continue;
+            }
             placement::commit(&mut agents, agent_id, &demand);
             preferred.insert(agent_id);
             responses.push(scheduled_response(
@@ -417,11 +438,42 @@ impl SchedulerService {
         &self,
         workload: &workloads::Model,
         agent_id: Uuid,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
+        if !self.claim_volumes(workload, agent_id).await? {
+            return Ok(false);
+        }
         crate::db::workloads::assign(&self.db, workload.id, agent_id)
             .await
             .map_err(|e| format!("Failed to assign workload: {}", e))?;
-        self.record_placement(workload, agent_id).await
+        self.record_placement(workload, agent_id).await?;
+        Ok(true)
+    }
+
+    async fn claim_volumes(
+        &self,
+        workload: &workloads::Model,
+        agent_id: Uuid,
+    ) -> Result<bool, String> {
+        let volume_ids = volume_ids_of(workload);
+        if volume_ids.is_empty() {
+            return Ok(true);
+        }
+
+        let claimed = crate::db::volumes::claim(&self.db, &volume_ids, agent_id, workload.id)
+            .await
+            .map_err(|e| format!("Failed to claim volumes: {}", e))?;
+
+        if !claimed {
+            crate::log_warn!(
+                "scheduler",
+                &format!(
+                    "Volumes held by another workload or agent workload_id={} agent_id={}",
+                    workload.id, agent_id
+                )
+            );
+        }
+
+        Ok(claimed)
     }
 
     async fn record_placement(
@@ -487,7 +539,10 @@ impl SchedulerService {
                 continue;
             };
 
-            self.assign_workload(&workload, agent_id).await?;
+            if !self.assign_workload(&workload, agent_id).await? {
+                responses.push(pending_response(workload_id));
+                continue;
+            }
             placement::commit(&mut agents, agent_id, &demand);
 
             crate::log_info!(
@@ -542,7 +597,9 @@ impl SchedulerService {
                 continue;
             };
 
-            self.assign_workload(&workload, agent_id).await?;
+            if !self.assign_workload(&workload, agent_id).await? {
+                continue;
+            }
             placement::commit(&mut agents, agent_id, &demand);
 
             crate::log_info!(
@@ -564,6 +621,10 @@ impl SchedulerService {
             .await
             .map_err(|e| format!("Failed to delete workload: {}", e))?;
 
+        crate::db::volumes::release_for_workload(&self.db, workload_id)
+            .await
+            .map_err(|e| format!("Failed to release workload volumes: {}", e))?;
+
         delete_placement(&self.etcd, workload_id).await?;
 
         crate::log_info!(
@@ -573,6 +634,17 @@ impl SchedulerService {
 
         Ok(())
     }
+}
+
+fn volume_ids_of(workload: &workloads::Model) -> Vec<Uuid> {
+    workload
+        .volume_mounts
+        .as_ref()
+        .and_then(|mounts| serde_json::from_value::<Vec<VolumeMount>>(mounts.clone()).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mount| mount.volume_id)
+        .collect()
 }
 
 fn is_unique_violation(error: &sea_orm::DbErr) -> bool {
@@ -611,10 +683,34 @@ fn demand_for<'a>(
     }
 }
 
+async fn resolve_service_images(resource_group_id: Uuid, services: &mut [ComposeServiceSpec]) {
+    for service in services {
+        service.image = image_resolver::resolve(Some(resource_group_id), &service.image).await;
+    }
+}
+
+fn stack_volume_mounts(
+    service: &ComposeServiceSpec,
+    volume_ids: &HashMap<String, Uuid>,
+) -> Option<Vec<VolumeMount>> {
+    let mounts: Vec<VolumeMount> = service
+        .volumes
+        .iter()
+        .filter_map(|mount| {
+            Some(VolumeMount {
+                volume_id: *volume_ids.get(&mount.source)?,
+                mount_path: mount.mount_path.clone(),
+            })
+        })
+        .collect();
+    (!mounts.is_empty()).then_some(mounts)
+}
+
 fn stack_service_request(
     stack_id: Uuid,
     resource_group_id: Uuid,
     service: &ComposeServiceSpec,
+    volume_ids: &HashMap<String, Uuid>,
 ) -> CreateWorkloadRequest {
     CreateWorkloadRequest {
         name: format!("{}-{}", stack_id, service.service_name),
@@ -624,7 +720,7 @@ fn stack_service_request(
         disk_bytes: service.disk_bytes,
         env_vars: service.env_vars.clone(),
         ports: service.ports.clone(),
-        volume_mounts: None,
+        volume_mounts: stack_volume_mounts(service, volume_ids),
         bucket_bindings: None,
         resource_group_id: Some(resource_group_id),
         stack_id: Some(stack_id),
@@ -694,17 +790,5 @@ fn describe_agents(agents: &[AgentResources]) -> String {
 }
 
 fn format_compose_error(error: &ComposeParseError) -> String {
-    match error {
-        ComposeParseError::InvalidYaml(detail) => format!("invalid compose yaml: {}", detail),
-        ComposeParseError::NoServicesDefined => "compose file defines no services".to_string(),
-        ComposeParseError::UnsupportedBuildDirective(service) => {
-            format!("service '{}' uses build, only image is supported", service)
-        }
-        ComposeParseError::MissingImage(service) => {
-            format!("service '{}' has no image", service)
-        }
-        ComposeParseError::InvalidResources(service) => {
-            format!("service '{}' has invalid deploy resources", service)
-        }
-    }
+    error.to_string()
 }

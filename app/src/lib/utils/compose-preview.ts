@@ -20,7 +20,7 @@ function indentOf(line: string): number {
 }
 
 function parseTopLevelBlockKeys(lines: string[], blockName: string): string[] {
-    const blockLineIndex = lines.findIndex((line) => line.trim() === `${blockName}:`);
+    const blockLineIndex = lines.findIndex((line) => line.trimEnd() === `${blockName}:`);
     if (blockLineIndex === -1) return [];
 
     const keys: string[] = [];
