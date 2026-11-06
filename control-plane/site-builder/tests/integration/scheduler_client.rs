@@ -6,9 +6,10 @@ use site_builder::error::ServiceError;
 use site_builder::scheduler::SchedulerClient;
 use uuid::Uuid;
 
-use crate::common::serve;
+use crate::common::{install_crypto_provider, serve};
 
 async fn client_for(router: Router) -> SchedulerClient {
+    install_crypto_provider();
     let address = serve(router).await;
     SchedulerClient::new(&format!("http://{address}/")).unwrap()
 }
@@ -96,6 +97,7 @@ async fn status_finds_the_matching_workload() {
 
 #[tokio::test]
 async fn unreachable_schedulers_are_reported() {
+    install_crypto_provider();
     let client = SchedulerClient::new("http://127.0.0.1:1").unwrap();
     assert!(client.create(&json!({})).await.is_err());
     assert!(client.delete(Uuid::new_v4()).await.is_err());

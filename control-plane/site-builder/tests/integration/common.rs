@@ -42,10 +42,14 @@ fn relaxed_url(url: &str) -> String {
     format!("{url}{separator}options=-c%20session_replication_role%3Dreplica")
 }
 
-pub async fn migrated_database() -> DatabaseConnection {
+pub fn install_crypto_provider() {
     rustls::crypto::ring::default_provider()
         .install_default()
         .ok();
+}
+
+pub async fn migrated_database() -> DatabaseConnection {
+    install_crypto_provider();
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     MIGRATED
         .get_or_init(|| async {
@@ -192,6 +196,7 @@ pub fn registry_keys() -> Arc<RegistryKeys> {
 }
 
 pub fn registry_client(address: &str) -> RegistryClient {
+    install_crypto_provider();
     RegistryClient::new(address, true, registry_keys()).unwrap()
 }
 
@@ -225,6 +230,7 @@ pub async fn harness(registry: Option<&MockRegistry>, preview: Option<&str>) -> 
     let address = registry.map(|mock| mock.address.as_str());
     let client = address.map(registry_client);
     let url = format!("http://{url}");
+    install_crypto_provider();
     let builds = Arc::new(Builds::new(
         db.clone(),
         Arc::new(config(&url, address, preview)),
