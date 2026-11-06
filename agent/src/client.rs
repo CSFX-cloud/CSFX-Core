@@ -968,9 +968,9 @@ mod tests {
 
     fn volumes() -> serde_json::Value {
         json!([
-            {"id": "1", "name": "a", "pool": "p", "image_name": "i", "status": "in_use", "mapped_device": null},
-            {"id": "2", "name": "b", "pool": "p", "image_name": "i", "status": "in_use", "mapped_device": "/dev/rbd0"},
-            {"id": "3", "name": "c", "pool": "p", "image_name": "i", "status": "available", "mapped_device": null}
+            {"id": "1", "pool": "p", "image_name": "i", "status": "in_use"},
+            {"id": "2", "pool": "p", "image_name": "i", "status": "in_use"},
+            {"id": "3", "pool": "p", "image_name": "i", "status": "available"}
         ])
     }
 
@@ -1033,8 +1033,9 @@ mod tests {
             .fetch_assigned_volumes(Uuid::new_v4(), "k")
             .await
             .unwrap();
-        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes.len(), 2);
         assert_eq!(volumes[0].id, "1");
+        assert_eq!(volumes[1].id, "2");
         client.ack_workload_restart("k", "w1").await.unwrap();
         assert_eq!(client.fetch_bootstrap_token().await.unwrap(), "tok");
     }

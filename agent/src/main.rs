@@ -1447,8 +1447,8 @@ mod tests {
                 "/api/agents/self/volumes",
                 get(|| async {
                     axum::Json(serde_json::json!([{
-                        "id": "v1", "name": "n", "pool": "p", "image_name": "i",
-                        "status": "in_use", "mapped_device": null
+                        "id": "v1", "pool": "p", "image_name": "i",
+                        "status": "in_use"
                     }]))
                 }),
             )
