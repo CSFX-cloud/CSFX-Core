@@ -5,9 +5,10 @@ use axum::http::{Method, Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
 use migration::{Migrator, MigratorTrait};
+use scheduler::models::workload::CreateWorkloadRequest;
 use scheduler::server::{create_router, AppState};
 use scheduler::services::scheduler::SchedulerService;
-use sea_orm::{Database, DatabaseConnection};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database, DatabaseConnection};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tower::ServiceExt;
@@ -104,4 +105,124 @@ pub async fn find_workload(app: &Router, id: &str) -> Value {
         .find(|entry| entry["id"] == id)
         .cloned()
         .expect("workload must be listed")
+}
+
+pub struct Placing {
+    pub service: SchedulerService,
+    pub db: DatabaseConnection,
+    pub etcd: Arc<Mutex<etcd_client::Client>>,
+}
+
+pub async fn placing() -> Placing {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+    let db = migrated_database().await;
+    let endpoints =
+        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://127.0.0.1:2379".to_string());
+    let etcd = etcd_client::Client::connect(endpoints.split(',').collect::<Vec<_>>(), None)
+        .await
+        .expect("etcd must be reachable");
+    let etcd = Arc::new(Mutex::new(etcd));
+    let service = SchedulerService::new(db.clone(), etcd.clone());
+    insert_agent(&db).await;
+    Placing { service, db, etcd }
+}
+
+pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
+    let id = Uuid::new_v4();
+    let now = chrono::Utc::now().naive_utc();
+    entity::entities::agents::ActiveModel {
+        id: Set(id),
+        name: Set(unique_name("agent")),
+        hostname: Set(unique_name("host")),
+        ip_address: Set(None),
+        agent_version: Set("test".to_string()),
+        os_type: Set("linux".to_string()),
+        os_version: Set("test".to_string()),
+        architecture: Set("x86_64".to_string()),
+        status: Set("Online".to_string()),
+        last_heartbeat: Set(Some(now)),
+        registered_at: Set(now),
+        updated_at: Set(None),
+        organization_id: Set(None),
+        tags: Set(None),
+        capabilities: Set(None),
+        public_key_pem: Set(None),
+        wg_public_key: Set(None),
+        wg_endpoint: Set(None),
+        wg_tunnel_ip: Set(None),
+        kvm_capable: Set(true),
+        cordoned: Set(false),
+        maintenance_until: Set(None),
+        role: Set("worker".to_string()),
+        machine_id: Set(None),
+        cpu_overcommit_ratio: Set(1.0),
+        memory_overcommit_ratio: Set(1.0),
+        disk_overcommit_ratio: Set(1.0),
+    }
+    .insert(db)
+    .await
+    .expect("agent must be inserted");
+    entity::entities::agent_metrics::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        agent_id: Set(id),
+        timestamp: Set(now),
+        cpu_cores: Set(Some(1000)),
+        memory_total_bytes: Set(Some(1 << 40)),
+        disk_total_bytes: Set(Some(1 << 46)),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .expect("agent metrics must be inserted");
+    id
+}
+
+pub async fn insert_resource_group(db: &DatabaseConnection) -> Uuid {
+    let now = chrono::Utc::now().naive_utc();
+    let organization_id = Uuid::new_v4();
+    entity::entities::organization::ActiveModel {
+        id: Set(organization_id),
+        name: Set(unique_name("org")),
+        description: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(db)
+    .await
+    .expect("organization must be inserted");
+    let bytes = Uuid::new_v4().into_bytes();
+    let id = Uuid::new_v4();
+    entity::entities::resource_groups::ActiveModel {
+        id: Set(id),
+        organization_id: Set(organization_id),
+        name: Set(unique_name("rg")),
+        description: Set(None),
+        internal_cidr: Set(format!("10.{}.{}.0/24", bytes[0], bytes[1])),
+        status: Set("active".to_string()),
+        icon: Set("box".to_string()),
+        color: Set("blue".to_string()),
+        pinned: Set(false),
+        icon_image: Set(None),
+        icon_image_mime: Set(None),
+        preview_url: Set(None),
+        created_at: Set(now),
+        updated_at: Set(None),
+    }
+    .insert(db)
+    .await
+    .expect("resource group must be inserted");
+    id
+}
+
+pub fn small_request(name: &str) -> CreateWorkloadRequest {
+    serde_json::from_value(json!({
+        "name": name,
+        "image": "nginx:latest",
+        "cpu_millicores": 10,
+        "memory_bytes": 1048576,
+        "disk_bytes": 1048576
+    }))
+    .expect("request must deserialize")
 }
