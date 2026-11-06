@@ -1,12 +1,6 @@
 use std::net::SocketAddr;
 
-mod db;
-mod handlers;
-mod logger;
-mod metrics;
-mod models;
-mod server;
-mod services;
+use failover_controller::{log_error, log_info, logger, metrics, server, services};
 
 const LEADER_KEY: &str = "/csfx/leaders/failover-controller";
 
