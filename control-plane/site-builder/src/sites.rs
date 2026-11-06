@@ -1,4 +1,5 @@
 use crate::builds::Builds;
+use crate::detect::Mode;
 use crate::error::ServiceError;
 use crate::job::{runtime_request, RuntimeSpec};
 use crate::routes;
@@ -8,7 +9,6 @@ use sea_orm::{
     sea_query::Expr, ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
     QueryFilter, Set,
 };
-use site_builder::detect::Mode;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use uuid::Uuid;

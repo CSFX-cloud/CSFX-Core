@@ -1,20 +1,5 @@
-mod artifacts;
-mod builds;
-mod config;
-mod edge;
-mod error;
-mod git;
-mod job;
-mod prune;
-mod registry;
-mod routes;
-mod scheduler;
-mod server;
-mod sites;
-mod token;
-mod usage;
-
 use anyhow::Context;
+use site_builder::{builds, config, edge, registry, scheduler, server, usage};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

@@ -1,8 +1,8 @@
+use crate::detect::RepoSnapshot;
 use crate::error::ServiceError;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::Value;
-use site_builder::detect::RepoSnapshot;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -24,9 +24,9 @@ pub struct SnapshotRequest {
 }
 
 fn validate(request: &SnapshotRequest) -> Result<(), ServiceError> {
-    site_builder::validate::repo_url(&request.repo_url)
-        .and_then(|()| site_builder::validate::branch(&request.branch))
-        .and_then(|()| site_builder::validate::root_dir(&request.root_dir))
+    crate::validate::repo_url(&request.repo_url)
+        .and_then(|()| crate::validate::branch(&request.branch))
+        .and_then(|()| crate::validate::root_dir(&request.root_dir))
         .map_err(|message| ServiceError::Invalid(message.to_string()))
 }
 
