@@ -165,8 +165,7 @@ pub async fn ensure_filesystem(device: &str, label: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_showmapped;
-
+    use super::*;
     #[test]
     fn parses_array_output() {
         let raw = br#"[{"id":"0","pool":"csfx","namespace":"","name":"vol-1","snap":"-","device":"/dev/rbd0"}]"#;
@@ -188,5 +187,106 @@ mod tests {
     fn rejects_invalid_output() {
         assert!(parse_showmapped(b"not json").is_err());
         assert!(parse_showmapped(b"42").is_err());
+    }
+
+    use crate::testing::FakeTools;
+
+    #[tokio::test]
+    async fn mapping_returns_the_trimmed_device_and_passes_ceph_arguments() {
+        let tools = FakeTools::install(&[("rbd", "echo '\"/dev/rbd3\"'")]);
+
+        let device = map_device("csfx", "vol-1").await.unwrap();
+
+        assert_eq!(device, "/dev/rbd3");
+        let call = &tools.calls("rbd")[0];
+        assert!(call.starts_with("map csfx/vol-1 -o exclusive,lock_timeout=30 -m "));
+        assert!(call.contains("--name client."));
+    }
+
+    #[tokio::test]
+    async fn failed_mapping_reports_the_error_output() {
+        let _tools = FakeTools::install(&[("rbd", "echo 'no such image' >&2\nexit 1")]);
+
+        let error = map_device("csfx", "vol-1").await.unwrap_err().to_string();
+
+        assert!(error.contains("rbd map failed"));
+        assert!(error.contains("no such image"));
+    }
+
+    #[tokio::test]
+    async fn unmapping_passes_the_device_and_surfaces_failures() {
+        {
+            let tools = FakeTools::install(&[("rbd", "exit 0")]);
+            unmap_device("/dev/rbd3").await.unwrap();
+            assert!(tools.calls("rbd")[0].starts_with("unmap /dev/rbd3 -m "));
+        }
+        let _tools = FakeTools::install(&[("rbd", "echo busy >&2\nexit 16")]);
+        let error = unmap_device("/dev/rbd3").await.unwrap_err().to_string();
+        assert!(error.contains("rbd unmap failed"));
+    }
+
+    #[tokio::test]
+    async fn mapped_images_are_listed_from_showmapped() {
+        {
+            let tools = FakeTools::install(&[(
+                "rbd",
+                r#"echo '[{"pool":"csfx","name":"vol-1","device":"/dev/rbd0"}]'"#,
+            )]);
+            let mapped = list_mapped().await.unwrap();
+            assert_eq!(mapped.len(), 1);
+            assert_eq!(
+                tools.calls("rbd"),
+                vec!["showmapped --format json".to_string()]
+            );
+        }
+        let _tools = FakeTools::install(&[("rbd", "echo down >&2\nexit 1")]);
+        assert!(list_mapped()
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("rbd showmapped failed"));
+    }
+
+    #[tokio::test]
+    async fn formatted_devices_are_left_alone() {
+        let tools = FakeTools::install(&[("blkid", "exit 0"), ("mkfs.ext4", "exit 0")]);
+
+        ensure_filesystem("/dev/rbd0", "data").await.unwrap();
+
+        assert_eq!(tools.calls("blkid"), vec!["-p /dev/rbd0".to_string()]);
+        assert!(tools.calls("mkfs.ext4").is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_devices_are_formatted_with_a_label() {
+        let tools = FakeTools::install(&[("blkid", "exit 2"), ("mkfs.ext4", "exit 0")]);
+
+        ensure_filesystem("/dev/rbd0", "data").await.unwrap();
+
+        assert_eq!(
+            tools.calls("mkfs.ext4"),
+            vec!["-q -L data /dev/rbd0".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_and_format_failures_are_reported() {
+        {
+            let _tools =
+                FakeTools::install(&[("blkid", "echo io >&2\nexit 4"), ("mkfs.ext4", "exit 0")]);
+            let error = ensure_filesystem("/dev/rbd0", "data")
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("blkid probe failed"));
+        }
+        let _tools =
+            FakeTools::install(&[("blkid", "exit 2"), ("mkfs.ext4", "echo full >&2\nexit 1")]);
+        let error = ensure_filesystem("/dev/rbd0", "data")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("mkfs.ext4 failed"));
     }
 }
