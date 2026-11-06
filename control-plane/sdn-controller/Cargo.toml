@@ -35,3 +35,8 @@ opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 tracing-opentelemetry = { workspace = true }
+
+[dev-dependencies]
+migration = { path = "../shared/migration" }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
