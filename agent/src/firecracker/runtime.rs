@@ -1740,4 +1740,218 @@ mod tests {
         assert!(failing.next().await.unwrap().is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    use crate::spec::PortMapping;
+    use crate::testing::FakeTools;
+
+    fn spec_with_ports(ports: Option<Vec<PortMapping>>, cidr: Option<&str>) -> WorkloadSpec {
+        WorkloadSpec {
+            workload_id: "w-1".to_string(),
+            image: "img".to_string(),
+            cpu_millicores: 100,
+            cpu_limit_millicores: 100,
+            memory_bytes: 1,
+            memory_limit_bytes: 1,
+            env_vars: None,
+            ports,
+            volume_mounts: None,
+            service_name: None,
+            resource_group_id: None,
+            resource_group_cidr: cidr.map(str::to_string),
+            guest_ip: None,
+            vm_spec: None,
+        }
+    }
+
+    fn port(
+        container: u16,
+        protocol: Option<&str>,
+        rg: Option<u16>,
+        node: Option<u16>,
+    ) -> PortMapping {
+        PortMapping {
+            container_port: container,
+            protocol: protocol.map(str::to_string),
+            rg_port: rg,
+            node_port: node,
+        }
+    }
+
+    #[tokio::test]
+    async fn workloads_without_ports_add_no_rules() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+
+        apply_port_dnat("w-1", "10.0.0.2", &spec_with_ports(None, None))
+            .await
+            .unwrap();
+
+        assert!(tools.calls("nft").is_empty());
+    }
+
+    #[tokio::test]
+    async fn node_and_group_ports_become_dnat_rules() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+        let spec = spec_with_ports(
+            Some(vec![
+                port(80, None, None, Some(30080)),
+                port(53, Some("udp"), Some(5353), None),
+            ]),
+            Some("10.20.0.0/24"),
+        );
+
+        apply_port_dnat("w-1", "10.20.0.5", &spec).await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].contains("tcp dport 30080 dnat to 10.20.0.5:80"));
+        assert!(calls[1].contains("ip daddr 10.20.0.2 udp dport 5353 dnat to 10.20.0.5:53"));
+    }
+
+    #[tokio::test]
+    async fn group_ports_require_a_group_cidr() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+        let spec = spec_with_ports(Some(vec![port(80, None, Some(8080), None)]), None);
+
+        let error = apply_port_dnat("w-1", "10.0.0.2", &spec)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("rg_port requires a resource group with a cidr"));
+        assert!(tools.calls("nft").is_empty());
+    }
+
+    #[tokio::test]
+    async fn rule_failures_are_attributed_to_the_port_kind() {
+        let _tools = FakeTools::install(&[("nft", "echo denied >&2\nexit 1")]);
+
+        let node = spec_with_ports(Some(vec![port(80, None, None, Some(30080))]), None);
+        let error = format!(
+            "{:#}",
+            apply_port_dnat("w", "10.0.0.2", &node).await.unwrap_err()
+        );
+        assert!(error.contains("Failed to add node port dnat rule"));
+
+        let group = spec_with_ports(
+            Some(vec![port(80, None, Some(80), None)]),
+            Some("10.0.0.0/24"),
+        );
+        let error = format!(
+            "{:#}",
+            apply_port_dnat("w", "10.0.0.2", &group).await.unwrap_err()
+        );
+        assert!(error.contains("Failed to add rg port dnat rule"));
+    }
+
+    #[tokio::test]
+    async fn tap_devices_are_created_attached_and_raised() {
+        let tools = FakeTools::install(&[("ip", "exit 0")]);
+
+        create_tap_device("fctap1", Some("br0"), 60001)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tools.calls("ip"),
+            vec![
+                "tuntap add dev fctap1 mode tap user 60001".to_string(),
+                "link set dev fctap1 master br0".to_string(),
+                "link set dev fctap1 up".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn tap_device_failures_name_the_failing_step() {
+        {
+            let _tools = FakeTools::install(&[("ip", r#"case "$*" in tuntap*) exit 1;; esac"#)]);
+            let error = create_tap_device("fctap1", None, 0)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("failed to create tap device fctap1"));
+        }
+        {
+            let _tools = FakeTools::install(&[("ip", r#"case "$*" in *master*) exit 1;; esac"#)]);
+            let error = create_tap_device("fctap1", Some("br0"), 0)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("failed to attach tap device fctap1 to bridge br0"));
+        }
+        let _tools = FakeTools::install(&[("ip", r#"case "$*" in *" up") exit 1;; esac"#)]);
+        let error = create_tap_device("fctap1", None, 0)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("failed to bring up tap device fctap1"));
+    }
+
+    #[tokio::test]
+    async fn chroot_directories_are_removed_through_a_transient_unit() {
+        {
+            let tools = FakeTools::install(&[("systemd-run", "exit 0")]);
+            remove_chroot_dir_privileged(Path::new("/srv/jail/fc-1/root"))
+                .await
+                .unwrap();
+            let call = &tools.calls("systemd-run")[0];
+            assert!(call.contains("--unit=csfx-jailer-cleanup--srv-jail-fc-1-root"));
+            assert!(call.ends_with("rm -rf -- /srv/jail/fc-1/root"));
+        }
+        let _tools = FakeTools::install(&[("systemd-run", "exit 1")]);
+        let error = remove_chroot_dir_privileged(Path::new("/srv/jail/x"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("privileged cleanup of chroot directory"));
+    }
+
+    #[tokio::test]
+    async fn files_are_staged_with_sparse_reflink_copies() {
+        {
+            let tools = FakeTools::install(&[("cp", "exit 0")]);
+            reflink_copy(Path::new("/a"), Path::new("/b"))
+                .await
+                .unwrap();
+            assert_eq!(
+                tools.calls("cp"),
+                vec!["--reflink=auto --sparse=always /a /b".to_string()]
+            );
+        }
+        let _tools = FakeTools::install(&[("cp", "exit 1")]);
+        assert!(reflink_copy(Path::new("/a"), Path::new("/b"))
+            .await
+            .is_err());
+        assert!(stage_rootfs_into_jail(Path::new("/a"), Path::new("/jail"))
+            .await
+            .is_err());
+    }
+
+    #[test]
+    fn cleanup_unit_slugs_replace_every_special_character() {
+        assert_eq!(unit_slug(Path::new("/a b/c.d")), "-a-b-c-d");
+    }
+
+    #[test]
+    fn metrics_fifos_are_created_idempotently() {
+        let path = std::env::temp_dir().join(format!("csfx-fifo-{}", uuid::Uuid::new_v4()));
+
+        create_metrics_fifo(&path).unwrap();
+        create_metrics_fifo(&path).unwrap();
+
+        use std::os::unix::fs::FileTypeExt;
+        assert!(std::fs::metadata(&path).unwrap().file_type().is_fifo());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn unknown_jailer_ids_have_no_live_process() {
+        assert_eq!(find_live_jailer_pid("csfx-no-such-jailer-id").await, None);
+    }
+
+    #[tokio::test]
+    async fn sidecar_metadata_is_absent_for_unwritten_directories() {
+        let dir = std::env::temp_dir().join(format!("csfx-no-sidecar-{}", uuid::Uuid::new_v4()));
+        assert!(read_sidecar_metadata(&dir).await.is_none());
+    }
 }
