@@ -1,13 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-mod db;
-mod handlers;
-mod logger;
-mod metrics;
-mod models;
-mod server;
-mod services;
+use registry::{log_error, log_info, logger, metrics, server, services};
 
 const LEADER_KEY: &str = "/csfx/leaders/registry-health";
 const DEGRADED_AFTER_SECS: i64 = 50;
