@@ -1,16 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-mod ceph;
-mod db;
-mod etcd;
-mod handlers;
-mod logger;
-mod metrics;
-mod models;
-mod patroni;
-mod server;
-mod services;
+use volume_manager::{ceph, log_error, log_info, logger, metrics, server, services};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

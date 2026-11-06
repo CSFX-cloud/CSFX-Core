@@ -1,19 +1,21 @@
-use crate::etcd::core::EtcdClient;
 use crate::etcd::state::{NodeState, NodeStatus};
 use crate::{log_info, log_warn};
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Health Checker für Cluster Nodes
 pub struct HealthChecker {
-    client: Arc<EtcdClient>,
     timeout: Duration,
 }
 
+impl Default for HealthChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HealthChecker {
-    pub fn new(client: Arc<EtcdClient>) -> Self {
+    pub fn new() -> Self {
         Self {
-            client,
             timeout: Duration::from_secs(30),
         }
     }
