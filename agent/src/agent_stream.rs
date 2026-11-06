@@ -113,3 +113,63 @@ async fn run(gateway_url: String, api_key: String, agent_id: Uuid, tx: mpsc::Unb
         delay = std::cmp::min(delay * 2, MAX_RECONNECT_DELAY);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::ws::{Message as WsMessage, WebSocketUpgrade};
+    use axum::{routing::get, Router};
+
+    #[test]
+    fn http_schemes_map_to_websocket_schemes() {
+        assert_eq!(
+            stream_url("https://gw:8000"),
+            "wss://gw:8000/api/internal/agent-stream"
+        );
+        assert_eq!(
+            stream_url("http://gw:8000"),
+            "ws://gw:8000/api/internal/agent-stream"
+        );
+        assert_eq!(
+            stream_url("gw:8000"),
+            "ws://gw:8000/api/internal/agent-stream"
+        );
+    }
+
+    #[test]
+    fn connector_requires_a_trusted_ca_file() {
+        assert!(build_connector().is_err());
+    }
+
+    #[tokio::test]
+    async fn text_frames_are_forwarded_as_notifications() {
+        let app = Router::new().route(
+            "/api/internal/agent-stream",
+            get(|ws: WebSocketUpgrade| async move {
+                ws.on_upgrade(|mut socket| async move {
+                    let _ = socket.send(WsMessage::Text("changed".into())).await;
+                    let _ = socket.send(WsMessage::Binary(vec![1].into())).await;
+                    let _ = socket.send(WsMessage::Close(None)).await;
+                })
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let mut receiver = spawn(url, "key".to_string(), Uuid::new_v4());
+        let notified = tokio::time::timeout(Duration::from_secs(5), receiver.recv()).await;
+        assert!(matches!(notified, Ok(Some(()))));
+    }
+
+    #[tokio::test]
+    async fn invalid_api_keys_stop_the_loop() {
+        let mut receiver = spawn(
+            "http://127.0.0.1:1".to_string(),
+            "bad\nkey".to_string(),
+            Uuid::new_v4(),
+        );
+        let closed = tokio::time::timeout(Duration::from_secs(5), receiver.recv()).await;
+        assert!(matches!(closed, Ok(None)));
+    }
+}

@@ -126,3 +126,75 @@ async fn connect_with_retry(socket_path: &str) -> Result<UnixStream> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::UnixListener;
+
+    fn socket_path() -> String {
+        std::env::temp_dir()
+            .join(format!("csfx-fc-api-{}.sock", uuid::Uuid::new_v4()))
+            .display()
+            .to_string()
+    }
+
+    async fn serve(path: &str, response: &'static str) -> tokio::task::JoinHandle<String> {
+        let listener = UnixListener::bind(path).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let read = stream.read(&mut buf).await.unwrap();
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&buf[..read]).to_string()
+        })
+    }
+
+    #[tokio::test]
+    async fn successful_put_sends_json_body() {
+        let path = socket_path();
+        let server = serve(&path, "HTTP/1.1 204 No Content\r\n\r\n").await;
+        let client = FirecrackerApiClient::new(path.clone());
+        client
+            .put("/boot-source", &serde_json::json!({"a": 1}))
+            .await
+            .unwrap();
+        let request = server.await.unwrap();
+        assert!(request.starts_with("PUT /boot-source HTTP/1.1"));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn error_status_includes_the_response_body() {
+        let path = socket_path();
+        let _server = serve(
+            &path,
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 4\r\n\r\noops",
+        )
+        .await;
+        let client = FirecrackerApiClient::new(path.clone());
+        let error = client
+            .put("/x", &serde_json::json!({}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("400"));
+        assert!(error.contains("oops"));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn truncated_responses_are_errors() {
+        let path = socket_path();
+        let _server = serve(&path, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nab").await;
+        let client = FirecrackerApiClient::new(path.clone());
+        assert!(client.put("/x", &serde_json::json!({})).await.is_err());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn header_end_is_located() {
+        assert_eq!(find_header_end(b"HTTP/1.1 200\r\n\r\nbody"), Some(12));
+        assert_eq!(find_header_end(b"partial"), None);
+    }
+}

@@ -653,4 +653,121 @@ mod tests {
 
         std::fs::remove_dir_all(&tmp).unwrap();
     }
+
+    #[test]
+    fn oci_users_resolve_numeric_ids() {
+        assert_eq!(parse_oci_user(None).uid(), 0);
+        assert_eq!(parse_oci_user(Some("1000")).uid(), 1000);
+        assert_eq!(parse_oci_user(Some("1000")).gid(), 0);
+        let both = parse_oci_user(Some("1000:2000"));
+        assert_eq!((both.uid(), both.gid()), (1000, 2000));
+        assert_eq!(parse_oci_user(Some("nginx")).uid(), 0);
+    }
+
+    #[test]
+    fn cache_key_components_are_sanitised() {
+        assert_eq!(sanitize_cache_key_component("a/b:c.d"), "a-b-c-d");
+        assert_eq!(sanitize_cache_key_component("abc123"), "abc123");
+    }
+
+    #[test]
+    fn runtime_spec_uses_entrypoint_cmd_and_defaults() {
+        let config = oci_client::config::Config {
+            entrypoint: Some(vec!["/entry".to_string()]),
+            cmd: Some(vec!["--flag".to_string()]),
+            user: Some("5:6".to_string()),
+            working_dir: Some("/srv".to_string()),
+            ..Default::default()
+        };
+        let spec = build_runtime_spec(&config).unwrap();
+        let process = spec.process().as_ref().unwrap();
+        assert_eq!(
+            process.args().as_ref().unwrap(),
+            &vec!["/entry".to_string(), "--flag".to_string()]
+        );
+        assert_eq!(process.cwd().to_str(), Some("/srv"));
+        assert_eq!(process.user().uid(), 5);
+        assert!(process
+            .env()
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.starts_with("PATH=")));
+        assert_eq!(spec.hostname().as_deref(), Some("csfx"));
+    }
+
+    #[test]
+    fn empty_image_config_falls_back_to_a_shell_in_root() {
+        let config = oci_client::config::Config {
+            env: Some(vec!["PATH=/custom".to_string()]),
+            working_dir: Some(String::new()),
+            ..Default::default()
+        };
+        let spec = build_runtime_spec(&config).unwrap();
+        let process = spec.process().as_ref().unwrap();
+        assert_eq!(process.args().as_ref().unwrap(), &vec!["sh".to_string()]);
+        assert_eq!(process.cwd().to_str(), Some("/"));
+        assert_eq!(
+            process.env().as_ref().unwrap(),
+            &vec!["PATH=/custom".to_string()]
+        );
+        assert!(default_container_capabilities().contains(&Capability::NetBindService));
+    }
+
+    #[test]
+    fn opaque_whiteouts_clear_the_directory() {
+        let tmp = std::env::temp_dir().join(format!("csfx-rootfs-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join("a/sub")).unwrap();
+        std::fs::write(tmp.join("a/old.txt"), b"x").unwrap();
+
+        let layer = build_gzip_layer(&[("a/.wh..wh..opq", b"", false), ("a/new.txt", b"y", false)]);
+        extract_layer_blocking(&layer, &tmp).unwrap();
+
+        assert!(!tmp.join("a/old.txt").exists());
+        assert!(!tmp.join("a/sub").exists());
+        assert!(tmp.join("a/new.txt").exists());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn whiteouts_also_remove_directories() {
+        let tmp = std::env::temp_dir().join(format!("csfx-rootfs-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(tmp.join("a/dir")).unwrap();
+        apply_whiteout(&tmp, Path::new("a/.wh.dir"), "dir").unwrap();
+        assert!(!tmp.join("a/dir").exists());
+        clear_opaque_directory(&tmp, Path::new("missing/.wh..wh..opq")).unwrap();
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn unsafe_layer_entries_are_refused() {
+        let tmp = std::env::temp_dir().join(format!("csfx-rootfs-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        assert!(extract_layer_blocking(b"not gzip", &tmp).is_err());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[tokio::test]
+    async fn layers_extract_asynchronously_and_config_is_written() {
+        let tmp = std::env::temp_dir().join(format!("csfx-rootfs-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let layer = build_gzip_layer(&[("d", b"", true), ("d/f", b"z", false)]);
+        extract_layer(&layer, &tmp).await.unwrap();
+        assert_eq!(std::fs::read(tmp.join("d/f")).unwrap(), b"z");
+
+        let config = br#"{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]},"config":{"Cmd":["run"]}}"#;
+        write_runtime_config(config, &tmp).await.unwrap();
+        assert!(tmp.join("config.json").exists());
+        assert!(write_runtime_config(b"{", &tmp).await.is_err());
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn digests_are_cached_per_reference() {
+        assert!(cached_digest("ref-never-stored").is_none());
+        store_digest("ref-stored", "sha256:abc");
+        assert_eq!(cached_digest("ref-stored").as_deref(), Some("sha256:abc"));
+        assert!(Arc::ptr_eq(&build_lock("k"), &build_lock("k")));
+        assert!(!Arc::ptr_eq(&build_lock("k"), &build_lock("other")));
+    }
 }

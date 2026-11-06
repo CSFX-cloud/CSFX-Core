@@ -94,4 +94,31 @@ mod tests {
         let other: Reference = "ghcr.io/org/app:1".parse().unwrap();
         assert!(registry.resolve(&other).is_err());
     }
+
+    #[test]
+    fn rewrite_preserves_digests_and_defaults_tags() {
+        let digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let pinned: Reference = format!("sites.csfx.invalid/abc@{digest}").parse().unwrap();
+        let rewritten = rewrite_host(&pinned, "h:1").unwrap();
+        assert_eq!(rewritten.registry(), "h:1");
+        assert_eq!(rewritten.digest(), Some(digest));
+        let untagged: Reference = "sites.csfx.invalid/abc".parse().unwrap();
+        assert_eq!(
+            rewrite_host(&untagged, "h:1").unwrap().tag(),
+            Some("latest")
+        );
+    }
+
+    #[test]
+    fn registry_exposes_endpoint_and_basic_auth() {
+        let registry = SiteRegistry {
+            endpoint: "h:1".to_string(),
+            api_key: "key".to_string(),
+        };
+        assert_eq!(registry.endpoint(), "h:1");
+        assert!(matches!(
+            registry.auth(),
+            RegistryAuth::Basic(user, secret) if user == "agent" && secret == "key"
+        ));
+    }
 }

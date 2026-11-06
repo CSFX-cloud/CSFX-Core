@@ -1451,6 +1451,7 @@ async fn create_tap_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::Runtime;
 
     #[tokio::test]
     async fn sidecar_metadata_round_trips() {
@@ -1483,5 +1484,226 @@ mod tests {
     async fn missing_sidecar_metadata_returns_none() {
         let dir = std::env::temp_dir().join(format!("csfx-sidecar-test-{}", uuid::Uuid::new_v4()));
         assert!(read_sidecar_metadata(&dir).await.is_none());
+    }
+
+    fn temp_dir() -> PathBuf {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let dir = std::env::temp_dir().join(format!("fc-{}", &id[..8]));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn runtime() -> FirecrackerRuntime {
+        crate::client::install_test_crypto_provider();
+        FirecrackerRuntime::new(
+            "key".to_string(),
+            Arc::new(crate::rg_dns::RgDnsRegistry::new()),
+            None,
+        )
+    }
+
+    fn handle(workload_id: &str, cid: u32, dir: &Path) -> VmHandle {
+        VmHandle {
+            workload_id: workload_id.to_string(),
+            jailer_pid: std::process::id(),
+            chroot_dir: dir.to_path_buf(),
+            tap_device: "fctap1".to_string(),
+            vsock_cid: cid,
+            resource_group_id: None,
+            guest_ip: Some("10.0.0.3".to_string()),
+            cgroup_path: dir.join("cgroup"),
+            metrics_path: dir.join("metrics.fifo"),
+            previous_cpu_sample: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn identifiers_are_derived_from_the_workload_id() {
+        assert_eq!(jailer_short_id("1234-5678-9abc-def0"), "12345678");
+        assert_eq!(jailer_unit_name("12345678"), "csfx-jailer-12345678");
+        assert_eq!(guest_device_letter(0), "/dev/vdb");
+        assert_eq!(guest_device_letter(2), "/dev/vdd");
+        let path = cgroup_path("1234-5678-9abc");
+        assert!(path.ends_with("system.slice/csfx-jailer-12345678.service"));
+    }
+
+    #[test]
+    fn vsock_path_lives_inside_the_jail_root() {
+        let chroot = Path::new("/c");
+        let path = vsock_uds_path(chroot, "1234-5678-9abc");
+        assert!(path.starts_with("/c/jail"));
+        assert!(path.ends_with("12345678/root/firecracker.socket.vsock"));
+        assert_eq!(jailer_chroot_base_dir(chroot), PathBuf::from("/c/jail"));
+    }
+
+    #[tokio::test]
+    async fn cids_are_unique_per_allocation() {
+        let runtime = runtime();
+        let first = runtime.allocate_cid().await;
+        let second = runtime.allocate_cid().await;
+        assert_eq!(second, first + 1);
+        let dir = temp_dir();
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", second + 1, &dir));
+        assert_eq!(runtime.allocate_cid().await, second + 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_and_network_follow_the_tracked_handles() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "running");
+        assert_eq!(
+            runtime
+                .service_network_ip("w", "n")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("10.0.0.3")
+        );
+        assert!(runtime
+            .service_network_ip("x", "n")
+            .await
+            .unwrap()
+            .is_none());
+        runtime
+            .handles
+            .lock()
+            .await
+            .get_mut("w")
+            .unwrap()
+            .jailer_pid = u32::MAX;
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stats_read_cgroup_and_metrics_files() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("cgroup")).unwrap();
+        std::fs::write(dir.join("cgroup/memory.current"), "2048\n").unwrap();
+        std::fs::write(dir.join("cgroup/cpu.stat"), "usage_usec 100\nuser_usec 5\n").unwrap();
+        std::fs::write(
+            dir.join("metrics.fifo"),
+            "{\"net\":{\"rx_bytes_count\":1,\"tx_bytes_count\":2}}\n{\"net\":{\"rx_bytes_count\":10,\"tx_bytes_count\":20}}\n",
+        )
+        .unwrap();
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+
+        let first = runtime.stats("w").await.unwrap();
+        assert_eq!(first.memory_usage_bytes, Some(2048));
+        assert_eq!(first.network_rx_bytes, Some(10));
+        assert_eq!(first.network_tx_bytes, Some(20));
+        assert!(first.cpu_usage_percent.is_none());
+
+        std::fs::write(dir.join("cgroup/cpu.stat"), "usage_usec 200\n").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let second = runtime.stats("w").await.unwrap();
+        assert!(second.cpu_usage_percent.unwrap() > 0.0);
+
+        let unknown = runtime.stats("missing").await.unwrap();
+        assert!(unknown.memory_usage_bytes.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_cgroup_files_yield_no_samples() {
+        let dir = temp_dir();
+        assert!(read_memory_usage_bytes(&dir).await.is_none());
+        assert!(read_cgroup_u64(&dir, "cpu.stat", "usage_usec")
+            .await
+            .is_none());
+        assert!(read_network_bytes(&dir.join("none")).await.is_none());
+        std::fs::write(dir.join("cpu.stat"), "other 1\n").unwrap();
+        assert!(read_cgroup_u64(&dir, "cpu.stat", "usage_usec")
+            .await
+            .is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_lifecycle_calls_are_noops() {
+        let runtime = runtime();
+        runtime.pull_image("img").await.unwrap();
+        runtime.stop_workload("missing").await.unwrap();
+        runtime.check_dns_liveness().await;
+        assert!(runtime.exec("missing").await.is_err());
+    }
+
+    async fn serve_vsock(chroot: &Path, workload_id: &str, reply: &'static [u8]) {
+        let path = vsock_uds_path(chroot, workload_id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 64];
+            let read = socket.read(&mut request).await.unwrap();
+            assert!(request[..read].starts_with(b"CONNECT "));
+            socket.write_all(reply).await.unwrap();
+        });
+    }
+
+    #[tokio::test]
+    async fn vsock_handshake_accepts_ok_and_rejects_refusals() {
+        let dir = temp_dir();
+        serve_vsock(&dir, "1234-5678-9abc", b"OK 1\npayload").await;
+        let mut stream = connect_guest_vsock(&dir, "1234-5678-9abc", 10001)
+            .await
+            .unwrap();
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).await.unwrap();
+        assert_eq!(rest, b"payload");
+
+        serve_vsock(&dir, "aaaa-bbbb-cccc", b"NO\n").await;
+        let refused = connect_guest_vsock(&dir, "aaaa-bbbb-cccc", 10001).await;
+        assert!(refused.is_err());
+        assert!(connect_guest_vsock(&dir, "zzzz", 1).await.is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn exec_session_opens_the_exec_vsock_port() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        serve_vsock(&dir, "w", b"OK 2\n").await;
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+        assert!(runtime.exec("w").await.is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn log_stream_relays_guest_output_and_reports_failures() {
+        use futures_util::StreamExt;
+        let dir = temp_dir();
+        serve_vsock(&dir, "w", b"OK 1\nhello").await;
+        let stream = vsock_log_stream(dir.clone(), "w".to_string());
+        futures_util::pin_mut!(stream);
+        let chunk = stream.next().await.unwrap().unwrap();
+        assert_eq!(&chunk[..], b"hello");
+        assert!(stream.next().await.is_none());
+
+        let failing = vsock_log_stream(dir.clone(), "missing".to_string());
+        futures_util::pin_mut!(failing);
+        assert!(failing.next().await.unwrap().is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

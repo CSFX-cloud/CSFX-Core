@@ -1317,3 +1317,268 @@ async fn push_workload_stats(
 }
 
 const MGMT_WG_PORT: u16 = 51820;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use axum::Router;
+    use runtime::{ContainerStats, ExecSession, LogStream};
+    use spec::WorkloadSpec;
+
+    struct MockRuntime {
+        status: Option<&'static str>,
+        stopped: Mutex<Vec<String>>,
+    }
+
+    impl MockRuntime {
+        fn new(status: Option<&'static str>) -> Self {
+            Self {
+                status,
+                stopped: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl runtime::Runtime for MockRuntime {
+        async fn pull_image(&self, _image: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
+            Ok(spec.workload_id.clone())
+        }
+
+        async fn inspect_status(&self, _workload_handle: &str) -> Result<String> {
+            self.status
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!("inspect failed"))
+        }
+
+        fn logs(&self, _workload_handle: &str) -> LogStream {
+            Box::pin(futures_util::stream::empty())
+        }
+
+        async fn exec(&self, _workload_handle: &str) -> Result<ExecSession> {
+            anyhow::bail!("unsupported")
+        }
+
+        async fn stop_workload(&self, workload_handle: &str) -> Result<()> {
+            self.stopped.lock().await.push(workload_handle.to_string());
+            Ok(())
+        }
+
+        async fn stats(&self, _workload_handle: &str) -> Result<ContainerStats> {
+            Ok(ContainerStats::default())
+        }
+    }
+
+    fn workload(id: &str, policy: &str, max_restarts: Option<i32>) -> client::AssignedWorkload {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "image": "img", "cpu_millicores": 100, "memory_bytes": 1,
+            "restart_policy": policy, "max_restarts": max_restarts, "disk_bytes": 1
+        }))
+        .unwrap()
+    }
+
+    fn shared<T: Default>() -> Arc<Mutex<T>> {
+        Arc::new(Mutex::new(T::default()))
+    }
+
+    async fn api_client() -> client::ApiClient {
+        client::install_test_crypto_provider();
+        let app = Router::new()
+            .route(
+                "/api/agents/self/volumes",
+                get(|| async {
+                    axum::Json(serde_json::json!([{
+                        "id": "v1", "name": "n", "pool": "p", "image_name": "i",
+                        "status": "in_use", "mapped_device": null
+                    }]))
+                }),
+            )
+            .route(
+                "/api/agents/self/workloads/stats",
+                axum::routing::post(|| async { axum::http::StatusCode::OK }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        client::ApiClient::new(url, "pub".to_string(), None, None, None).unwrap()
+    }
+
+    fn runtimes() -> (
+        firecracker::runtime::FirecrackerRuntime,
+        qemu::runtime::QemuRuntime,
+    ) {
+        client::install_test_crypto_provider();
+        let registry = Arc::new(rg_dns::RgDnsRegistry::new());
+        (
+            firecracker::runtime::FirecrackerRuntime::new("k".to_string(), registry.clone(), None),
+            qemu::runtime::QemuRuntime::new("k".to_string(), registry),
+        )
+    }
+
+    #[tokio::test]
+    async fn start_tracker_admits_one_start_per_workload() {
+        let tracker = StartTracker::default();
+        assert!(tracker.try_begin("w").await);
+        assert!(!tracker.try_begin("w").await);
+        tracker.finish("w", true).await;
+        tokio::time::timeout(Duration::from_secs(1), tracker.completed.notified())
+            .await
+            .unwrap();
+        assert!(tracker.try_begin("w").await);
+        tracker.finish("w", false).await;
+    }
+
+    #[test]
+    fn loopback_gateways_ignore_the_override() {
+        let local = "http://127.0.0.1:8000".to_string();
+        assert_eq!(effective_gateway_url(local.clone()), local);
+        adopt_advertised_gateway("http://127.0.0.1:8000", Some("https://other"));
+        adopt_advertised_gateway("https://same", Some("https://same"));
+        adopt_advertised_gateway("https://gw", None);
+    }
+
+    #[tokio::test]
+    async fn healthy_and_unreachable_containers_are_not_restarted() {
+        let counts = shared();
+        let wl = workload("w", "always", None);
+        let running = MockRuntime::new(Some("running"));
+        assert!(!should_restart_after_crash(&running, &wl, "c", &counts).await);
+        let broken = MockRuntime::new(None);
+        assert!(!should_restart_after_crash(&broken, &wl, "c", &counts).await);
+    }
+
+    #[tokio::test]
+    async fn crashed_containers_follow_the_restart_policy() {
+        let counts = shared();
+        let failed = MockRuntime::new(Some("failed"));
+
+        let never = workload("n", "never", None);
+        assert!(!should_restart_after_crash(&failed, &never, "cn", &counts).await);
+        assert_eq!(*failed.stopped.lock().await, vec!["cn".to_string()]);
+
+        let limited = workload("l", "always", Some(1));
+        assert!(should_restart_after_crash(&failed, &limited, "cl", &counts).await);
+        assert!(!should_restart_after_crash(&failed, &limited, "cl", &counts).await);
+        assert_eq!(failed.stopped.lock().await.len(), 2);
+
+        let unlimited = workload("u", "always", None);
+        assert!(should_restart_after_crash(&failed, &unlimited, "cu", &counts).await);
+        assert!(should_restart_after_crash(&failed, &unlimited, "cu", &counts).await);
+        assert_eq!(counts.lock().await["u"], 2);
+    }
+
+    #[tokio::test]
+    async fn removed_workloads_are_torn_down_on_the_matching_runtime() {
+        let firecracker = MockRuntime::new(None);
+        let qemu = MockRuntime::new(None);
+        let vm_ids: Arc<Mutex<HashSet<String>>> = shared();
+        let running: Arc<Mutex<HashMap<String, String>>> = shared();
+        let phases: Arc<Mutex<HashMap<String, String>>> = shared();
+        let counts: Arc<Mutex<HashMap<String, u32>>> = shared();
+        let dns: Arc<Mutex<HashMap<String, (String, String)>>> = shared();
+        {
+            let mut running = running.lock().await;
+            for id in ["keep", "container-gone", "vm-gone"] {
+                running.insert(id.to_string(), format!("handle-{id}"));
+            }
+        }
+        vm_ids.lock().await.insert("vm-gone".to_string());
+        dns.lock().await.insert(
+            "container-gone".to_string(),
+            ("rg".to_string(), "svc".to_string()),
+        );
+        let registry = rg_dns::RgDnsRegistry::new();
+
+        reap_stale_containers(
+            &firecracker,
+            &qemu,
+            &vm_ids,
+            &running,
+            &phases,
+            &counts,
+            &dns,
+            &registry,
+            &[workload("keep", "always", None)],
+        )
+        .await;
+
+        assert_eq!(
+            *firecracker.stopped.lock().await,
+            vec!["handle-container-gone"]
+        );
+        assert_eq!(*qemu.stopped.lock().await, vec!["handle-vm-gone"]);
+        assert_eq!(running.lock().await.len(), 1);
+        assert!(dns.lock().await.is_empty());
+        assert!(vm_ids.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn container_statuses_include_pending_phases() {
+        let (firecracker, qemu) = runtimes();
+        let running: Arc<Mutex<HashMap<String, String>>> = shared();
+        let vm_ids: Arc<Mutex<HashSet<String>>> = shared();
+        let phases: Arc<Mutex<HashMap<String, String>>> = shared();
+        running
+            .lock()
+            .await
+            .insert("a".to_string(), "ca".to_string());
+        running
+            .lock()
+            .await
+            .insert("b".to_string(), "cb".to_string());
+        vm_ids.lock().await.insert("b".to_string());
+        phases
+            .lock()
+            .await
+            .insert("a".to_string(), "creating".to_string());
+        phases
+            .lock()
+            .await
+            .insert("pending".to_string(), "pulling".to_string());
+
+        let mut statuses =
+            build_container_statuses(&firecracker, &qemu, &running, &vm_ids, &phases).await;
+        statuses.sort_by(|left, right| left.workload_id.cmp(&right.workload_id));
+
+        assert_eq!(statuses.len(), 3);
+        assert_eq!(statuses[0].status, "failed");
+        assert_eq!(statuses[1].status, "failed");
+        assert_eq!(statuses[2].workload_id, "pending");
+        assert_eq!(statuses[2].status, "pulling");
+        assert!(statuses[2].container_id.is_empty());
+        assert!(!phases.lock().await.contains_key("a"));
+    }
+
+    #[tokio::test]
+    async fn workload_stats_are_pushed_only_when_something_runs() {
+        let (firecracker, _) = runtimes();
+        let client = api_client().await;
+        let running: Arc<Mutex<HashMap<String, String>>> = shared();
+        push_workload_stats(&client, "k", &firecracker, &running).await;
+        running
+            .lock()
+            .await
+            .insert("w".to_string(), "c".to_string());
+        push_workload_stats(&client, "k", &firecracker, &running).await;
+    }
+
+    #[tokio::test]
+    async fn volumes_that_cannot_be_mapped_stay_unmounted() {
+        let client = api_client().await;
+        let mounted: Arc<Mutex<HashMap<String, String>>> = shared();
+        process_volumes(&client, uuid::Uuid::nil(), "k", &mounted).await;
+        assert!(mounted.lock().await.is_empty());
+
+        mounted
+            .lock()
+            .await
+            .insert("old".to_string(), "/dev/missing".to_string());
+        release_unassigned_volumes(&mounted, &[]).await;
+        assert!(mounted.lock().await.contains_key("old"));
+    }
+}

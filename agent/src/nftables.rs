@@ -313,3 +313,22 @@ async fn run_nft(args: &[&str]) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rule_comments_are_derived_from_the_bridge_name() {
+        assert_eq!(mesh_comment("csfxrg1"), "csfxrg1-mesh");
+        assert_eq!(snat_comment("csfxrg1"), "csfxrg1-snat");
+    }
+
+    #[tokio::test]
+    async fn bridges_are_never_isolated_from_themselves() {
+        isolate_bridge("csfxrg1", &["csfxrg1".to_string()])
+            .await
+            .unwrap();
+        isolate_bridge("csfxrg1", &[]).await.unwrap();
+    }
+}

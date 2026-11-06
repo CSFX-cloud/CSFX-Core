@@ -314,3 +314,32 @@ async fn run_wg(args: &[&str]) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interface_name_is_stable_and_prefixed() {
+        let name = rg_interface_name("rg-1");
+        assert_eq!(name, rg_interface_name("rg-1"));
+        assert_ne!(name, rg_interface_name("rg-2"));
+        assert!(name.starts_with("wgrg"));
+        assert_eq!(name.len(), 12);
+        assert!(name.len() <= 15);
+    }
+
+    #[test]
+    fn peer_round_trips_through_json() {
+        let peers = vec![Peer {
+            public_key: "key".to_string(),
+            endpoint: None,
+            allowed_ips: "10.0.0.1/32".to_string(),
+        }];
+        let raw = serde_json::to_string(&peers).unwrap();
+        let parsed: Vec<Peer> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed[0].public_key, "key");
+        assert!(parsed[0].endpoint.is_none());
+        assert_eq!(parsed[0].allowed_ips, "10.0.0.1/32");
+    }
+}
