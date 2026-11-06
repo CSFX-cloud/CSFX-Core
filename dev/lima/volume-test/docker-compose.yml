@@ -1,0 +1,9 @@
+services:
+  volume-test:
+    build: .
+    image: csfx-volume-test:latest
+    volumes:
+      - volume-test-data:/data
+
+volumes:
+  volume-test-data:
