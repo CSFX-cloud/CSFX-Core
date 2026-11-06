@@ -133,8 +133,8 @@ jobs:
           jq -r --argjson total "$TOTAL" --slurpfile current crates.json '
             def delta($now; $base):
               (($now - $base) * 100 | round / 100) as $change
-              | if $change > 0 then "$\\color{green}{+\($change)\\%}$"
-                elif $change < 0 then "$\\color{red}{\($change)\\%}$"
+              | if $change > 0 then "$\\color{green}{+\($change)\\\\%}$"
+                elif $change < 0 then "$\\color{red}{\($change)\\\\%}$"
                 else "0%" end;
             def trend($now; $base):
               if $base == null then "\($now)%" else "\($now)% (\(delta($now; $base)))" end;
