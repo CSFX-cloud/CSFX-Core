@@ -1,9 +1,9 @@
 use crate::config::Config;
 use crate::error::ServiceError;
 use crate::token::deployment_token;
+use crate::{detect::Mode, images::SITE_IMAGE_HOST, validate};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use site_builder::{detect::Mode, images::SITE_IMAGE_HOST, validate};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 

@@ -230,4 +230,26 @@ mod tests {
         assert_ne!(a, c);
         assert!(a.starts_with("52:54:"));
     }
+
+    #[test]
+    fn dhcp_range_skips_gateway_and_broadcast() {
+        let (start, end) = dhcp_range("10.0.0.0/24").unwrap();
+        assert_eq!(start, "10.0.0.3");
+        assert_eq!(end, "10.0.0.254");
+        assert!(dhcp_range("garbage").is_none());
+    }
+
+    #[test]
+    fn state_files_live_under_the_dhcp_directory() {
+        assert!(leases_file_path("rg").ends_with("rg.leases"));
+        assert!(hosts_file_path("rg").ends_with("rg.hosts"));
+        assert!(pid_file_path("rg").ends_with("rg.pid"));
+    }
+
+    #[tokio::test]
+    async fn liveness_check_and_stop_on_empty_supervisor_are_noops() {
+        let supervisor = RgDhcpSupervisor::default();
+        supervisor.check_liveness().await;
+        assert!(supervisor.processes.lock().await.is_empty());
+    }
 }

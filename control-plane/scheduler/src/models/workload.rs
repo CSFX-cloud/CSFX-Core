@@ -280,3 +280,119 @@ pub struct AgentResources {
     pub kvm_capable: bool,
     pub spread_counts: HashMap<String, u32>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> CreateWorkloadRequest {
+        serde_json::from_value(serde_json::json!({
+            "name": "web",
+            "image": "nginx:latest",
+            "cpu_millicores": 100,
+            "memory_bytes": 1024,
+            "disk_bytes": 2048
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn workload_status_round_trips_through_its_name() {
+        let statuses = [
+            WorkloadStatus::Pending,
+            WorkloadStatus::Scheduled,
+            WorkloadStatus::Pulling,
+            WorkloadStatus::Creating,
+            WorkloadStatus::Starting,
+            WorkloadStatus::Running,
+            WorkloadStatus::Failed,
+            WorkloadStatus::Stopped,
+        ];
+        for status in statuses {
+            assert_eq!(WorkloadStatus::from_str(status.as_str()), status);
+        }
+        assert_eq!(WorkloadStatus::from_str("unknown"), WorkloadStatus::Pending);
+    }
+
+    #[test]
+    fn restart_policy_round_trips_and_defaults_to_always() {
+        for policy in [
+            RestartPolicy::Always,
+            RestartPolicy::OnFailure,
+            RestartPolicy::Never,
+        ] {
+            assert_eq!(RestartPolicy::from_str(policy.as_str()), policy);
+        }
+        assert_eq!(RestartPolicy::from_str("sometimes"), RestartPolicy::Always);
+    }
+
+    #[test]
+    fn runtime_class_round_trips_and_always_needs_kvm() {
+        for class in [RuntimeClass::Firecracker, RuntimeClass::Vm] {
+            assert_eq!(RuntimeClass::from_str(class.as_str()), class);
+            assert!(class.requires_kvm());
+        }
+        assert_eq!(RuntimeClass::from_str("docker"), RuntimeClass::Firecracker);
+    }
+
+    #[test]
+    fn desired_state_round_trips_and_defaults_to_running() {
+        for state in [DesiredState::Running, DesiredState::Stopped] {
+            assert_eq!(DesiredState::from_str(state.as_str()), state);
+        }
+        assert_eq!(DesiredState::from_str("paused"), DesiredState::Running);
+    }
+
+    #[test]
+    fn requests_apply_defaults_for_optional_fields() {
+        let request = request();
+        assert_eq!(request.restart_policy, RestartPolicy::Always);
+        assert_eq!(request.runtime_class, RuntimeClass::Firecracker);
+        assert!(!request.auto_resources);
+        assert!(request.replicas.is_none());
+        assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn negative_resources_are_rejected() {
+        for mutate in [
+            |r: &mut CreateWorkloadRequest| r.cpu_millicores = -1,
+            |r: &mut CreateWorkloadRequest| r.memory_bytes = -1,
+            |r: &mut CreateWorkloadRequest| r.disk_bytes = -1,
+        ] {
+            let mut request = request();
+            mutate(&mut request);
+            assert!(request.validate().unwrap_err().contains("negative"));
+        }
+    }
+
+    #[test]
+    fn limits_below_requests_are_rejected() {
+        let mut cpu = request();
+        cpu.cpu_limit_millicores = Some(99);
+        assert!(cpu.validate().unwrap_err().contains("cpu limit"));
+
+        let mut memory = request();
+        memory.memory_limit_bytes = Some(1023);
+        assert!(memory.validate().unwrap_err().contains("memory limit"));
+
+        let mut equal = request();
+        equal.cpu_limit_millicores = Some(100);
+        equal.memory_limit_bytes = Some(1024);
+        assert!(equal.validate().is_ok());
+    }
+
+    #[test]
+    fn replica_counts_are_bounded() {
+        for count in [0, MAX_REPLICAS + 1] {
+            let mut request = request();
+            request.replicas = Some(count);
+            assert!(request.validate().unwrap_err().contains("replicas"));
+        }
+        for count in [1, MAX_REPLICAS] {
+            let mut request = request();
+            request.replicas = Some(count);
+            assert!(request.validate().is_ok());
+        }
+    }
+}

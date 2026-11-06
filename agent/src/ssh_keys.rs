@@ -54,3 +54,16 @@ pub async fn run_authorized_keys_command(gateway_url: &str, agent_id: Uuid, user
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_body_lists_keys() {
+        let parsed: AuthorizedKeysResponse =
+            serde_json::from_str(r#"{"keys":["ssh-ed25519 AAAA a","ssh-rsa BBBB b"]}"#).unwrap();
+        assert_eq!(parsed.keys.len(), 2);
+        assert!(serde_json::from_str::<AuthorizedKeysResponse>("{}").is_err());
+    }
+}

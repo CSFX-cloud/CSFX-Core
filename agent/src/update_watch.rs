@@ -57,3 +57,31 @@ fn jitter_delay(agent_id: Uuid) -> u64 {
 fn is_valid_sha(rev: &str) -> bool {
     rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_forty_hex_characters_are_a_valid_sha() {
+        assert!(is_valid_sha(&"a".repeat(40)));
+        assert!(is_valid_sha("0123456789abcdefABCDEF0123456789abcdef01"));
+        assert!(!is_valid_sha(&"a".repeat(39)));
+        assert!(!is_valid_sha(&"g".repeat(40)));
+    }
+
+    #[test]
+    fn jitter_is_deterministic_and_bounded() {
+        let id = Uuid::from_u128(0xdead_beef_1234_5678_9abc_def0_1122_3344);
+        assert_eq!(jitter_delay(id), jitter_delay(id));
+        assert!(jitter_delay(id) < MAX_JITTER_SECS);
+        assert_eq!(jitter_delay(Uuid::nil()), 0);
+    }
+
+    #[tokio::test]
+    async fn handle_ignores_identical_and_invalid_revisions() {
+        let id = Uuid::new_v4();
+        handle(id, "abc", "abc").await;
+        handle(id, "not-a-sha", "abc").await;
+    }
+}

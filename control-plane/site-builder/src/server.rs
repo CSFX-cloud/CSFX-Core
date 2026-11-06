@@ -46,7 +46,7 @@ async fn detect_handler(
 ) -> Result<Json<Value>, ServiceError> {
     require_admin(&builds, &headers)?;
     let snapshot = git::snapshot(&request).await?;
-    let detection = site_builder::detect::detect(&snapshot);
+    let detection = crate::detect::detect(&snapshot);
     Ok(Json(json!({ "detection": detection })))
 }
 
@@ -132,7 +132,7 @@ async fn registry_delete_tag_handler(
     Json(request): Json<DeleteTagRequest>,
 ) -> Result<StatusCode, ServiceError> {
     require_admin(&builds, &headers)?;
-    let repository = site_builder::images::repository_path(&request.prefix, &request.repository)
+    let repository = crate::images::repository_path(&request.prefix, &request.repository)
         .ok_or_else(|| ServiceError::Invalid("repository name is invalid".to_string()))?;
     registry_client(&builds)?
         .delete_tag(&repository, &request.tag)

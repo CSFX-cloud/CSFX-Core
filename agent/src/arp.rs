@@ -107,4 +107,16 @@ mod tests {
         assert_eq!(&frame[28..32], &[10, 20, 0, 4]);
         assert_eq!(&frame[38..42], &[10, 20, 0, 4]);
     }
+
+    #[test]
+    fn loopback_interface_metadata_is_readable() {
+        assert_eq!(read_mac("lo").unwrap(), [0u8; 6]);
+        assert!(read_index("lo").unwrap() > 0);
+    }
+
+    #[test]
+    fn unknown_interfaces_are_errors() {
+        assert!(read_mac("csfx-no-such-if").is_err());
+        assert!(read_index("csfx-no-such-if").is_err());
+    }
 }

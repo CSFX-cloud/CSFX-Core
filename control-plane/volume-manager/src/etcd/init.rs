@@ -22,7 +22,7 @@ pub async fn init_cluster() -> anyhow::Result<InitData> {
     log_info!("etcd::init", "Connected to etcd cluster");
 
     let state_manager = Arc::new(StateManager::new(etcd_client.clone()));
-    let health_checker = Arc::new(HealthChecker::new(etcd_client.clone()));
+    let health_checker = Arc::new(HealthChecker::new());
 
     let node_id = std::env::var("NODE_ID")
         .unwrap_or_else(|_| format!("volume-manager-{}", uuid::Uuid::new_v4()));

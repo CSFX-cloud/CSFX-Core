@@ -89,3 +89,27 @@ fn set_permissions_600(path: &str) -> Result<()> {
 fn set_permissions_600(_path: &str) -> Result<()> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_urls_are_detected() {
+        assert!(is_loopback_url("https://localhost:8000"));
+        assert!(is_loopback_url("http://127.0.0.1:8000"));
+        assert!(!is_loopback_url("https://10.0.0.5:8000"));
+    }
+
+    #[test]
+    fn daemon_config_defaults_missing_tunnel_ip() {
+        let id = Uuid::new_v4();
+        let raw = format!(
+            r#"{{"gateway_url":"https://gw","agent_id":"{id}","heartbeat_interval_secs":15}}"#
+        );
+        let config: DaemonConfig = serde_json::from_str(&raw).unwrap();
+        assert_eq!(config.agent_id, id);
+        assert_eq!(config.heartbeat_interval_secs, 15);
+        assert!(config.wg_tunnel_ip.is_none());
+    }
+}

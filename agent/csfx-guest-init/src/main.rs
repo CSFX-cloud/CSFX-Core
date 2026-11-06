@@ -1059,4 +1059,116 @@ mod tests {
         let netmask = ipv4_to_sockaddr(prefix_to_netmask(16).unwrap());
         assert_eq!(netmask.sin_addr.s_addr.to_ne_bytes(), [255, 255, 0, 0]);
     }
+
+    #[test]
+    fn netmask_follows_the_prefix_length() {
+        assert_eq!(
+            prefix_to_netmask(0).unwrap(),
+            std::net::Ipv4Addr::UNSPECIFIED
+        );
+        assert_eq!(
+            prefix_to_netmask(24).unwrap(),
+            std::net::Ipv4Addr::new(255, 255, 255, 0)
+        );
+        assert_eq!(
+            prefix_to_netmask(32).unwrap(),
+            std::net::Ipv4Addr::BROADCAST
+        );
+        assert!(prefix_to_netmask(33).is_err());
+    }
+
+    #[test]
+    fn generic_sockaddr_keeps_the_inet_layout() {
+        let sockaddr = ipv4_to_sockaddr_storage(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(sockaddr.sa_family, libc::AF_INET as libc::sa_family_t);
+        assert_eq!(
+            sockaddr.sa_data[2..6]
+                .iter()
+                .map(|b| *b as u8)
+                .collect::<Vec<_>>(),
+            [10, 0, 0, 1]
+        );
+    }
+
+    #[test]
+    fn backlog_keeps_only_the_newest_bytes() {
+        let mut backlog = std::collections::VecDeque::new();
+        push_to_backlog(&mut backlog, b"abc");
+        push_to_backlog(&mut backlog, b"def");
+        assert_eq!(backlog.iter().copied().collect::<Vec<_>>(), b"abcdef");
+
+        let full = vec![1u8; LOG_BACKLOG_CAPACITY - 2];
+        push_to_backlog(&mut backlog, &full);
+        assert_eq!(backlog.len(), LOG_BACKLOG_CAPACITY);
+        assert_eq!(backlog.back(), Some(&1));
+        assert_eq!(backlog.front(), Some(&b'e'));
+
+        let oversized = vec![7u8; LOG_BACKLOG_CAPACITY + 10];
+        push_to_backlog(&mut backlog, &oversized);
+        assert_eq!(backlog.len(), LOG_BACKLOG_CAPACITY);
+        assert!(backlog.iter().all(|b| *b == 7));
+    }
+
+    #[test]
+    fn header_terminator_is_located() {
+        assert_eq!(find_header_end(b"HTTP/1.1 200 OK\r\n\r\nbody"), Some(15));
+        assert_eq!(find_header_end(b"HTTP/1.1 200 OK\r\n"), None);
+    }
+
+    #[test]
+    fn mmds_data_tolerates_missing_sections() {
+        let empty: MmdsData = serde_json::from_str("{}").unwrap();
+        assert!(empty.volumes.is_empty() && empty.network.is_none() && empty.env.is_empty());
+
+        let full: MmdsData = serde_json::from_str(
+            r#"{"volumes":[{"device":"/dev/vdb","mount_path":"/data"}],
+                "network":{"ip":"10.0.0.3","prefix":"24","gateway":"10.0.0.2"},
+                "env":{"A":"b"}}"#,
+        )
+        .unwrap();
+        assert_eq!(full.volumes[0].device, "/dev/vdb");
+        assert_eq!(full.volumes[0].mount_path, "/data");
+        let network = full.network.unwrap();
+        assert_eq!(network.ip, "10.0.0.3");
+        assert_eq!(network.gateway.as_deref(), Some("10.0.0.2"));
+        assert!(network.dns.is_none() && network.search.is_none());
+        assert_eq!(network.prefix, "24");
+        assert_eq!(full.env["A"], "b");
+    }
+
+    #[test]
+    fn empty_extra_env_needs_no_runtime_config() {
+        apply_extra_env(&std::collections::HashMap::new()).unwrap();
+        let extra = std::collections::HashMap::from([("A".to_string(), "b".to_string())]);
+        assert!(apply_extra_env(&extra).is_err());
+    }
+
+    async fn serve_once(response: &'static [u8]) -> TcpStream {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket.write_all(response).await.unwrap();
+        });
+        TcpStream::connect(address).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn http_bodies_are_read_by_content_length() {
+        let mut stream =
+            serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello-extra").await;
+        assert_eq!(read_http_body(&mut stream).await.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn malformed_http_responses_are_rejected() {
+        let mut missing = serve_once(b"HTTP/1.1 200 OK\r\n\r\nhello").await;
+        assert!(read_http_body(&mut missing).await.is_err());
+        let mut invalid = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: x\r\n\r\n").await;
+        assert!(read_http_body(&mut invalid).await.is_err());
+        let mut truncated = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nab").await;
+        assert!(read_http_body(&mut truncated).await.is_err());
+        let mut headless = serve_once(b"HTTP/1.1 200").await;
+        assert!(read_http_body(&mut headless).await.is_err());
+    }
 }

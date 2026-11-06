@@ -99,3 +99,73 @@ async fn connect_with_retry(socket_path: &str) -> Result<UnixStream> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::UnixListener;
+
+    fn socket_path() -> String {
+        std::env::temp_dir()
+            .join(format!("csfx-qmp-{}.sock", uuid::Uuid::new_v4()))
+            .display()
+            .to_string()
+    }
+
+    async fn serve(path: &str, script: &'static [&'static str]) {
+        let listener = UnixListener::bind(path).unwrap();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read_half, mut write_half) = stream.into_split();
+            let mut reader = BufReader::new(read_half);
+            write_half
+                .write_all(b"{\"QMP\":{\"version\":{}}}\n")
+                .await
+                .unwrap();
+            for reply in script {
+                let mut request = String::new();
+                reader.read_line(&mut request).await.unwrap();
+                write_half.write_all(reply.as_bytes()).await.unwrap();
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn commands_skip_events_and_return_values() {
+        let path = socket_path();
+        serve(
+            &path,
+            &[
+                "{\"return\":{}}\n",
+                "{\"event\":\"STOP\"}\n{\"return\":{\"status\":\"running\"}}\n",
+                "{\"error\":{\"desc\":\"bad\"}}\n",
+            ],
+        )
+        .await;
+        let mut client = QmpClient::connect(&path).await.unwrap();
+        let status = client.send_command("query-status", None).await.unwrap();
+        assert_eq!(status["status"], "running");
+        let failure = client
+            .send_command("balloon", Some(json!({"value": 1})))
+            .await;
+        assert!(failure.unwrap_err().to_string().contains("balloon"));
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn closed_sockets_are_reported() {
+        let path = socket_path();
+        serve(&path, &["{\"return\":{}}\n"]).await;
+        let mut client = QmpClient::connect(&path).await.unwrap();
+        assert!(client.send_command("quit", None).await.is_err());
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_responses_are_errors() {
+        let path = socket_path();
+        serve(&path, &["garbage\n"]).await;
+        assert!(QmpClient::connect(&path).await.is_err());
+        std::fs::remove_file(&path).unwrap();
+    }
+}

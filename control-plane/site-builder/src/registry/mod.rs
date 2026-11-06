@@ -171,7 +171,7 @@ async fn registry_principal(
         .await?
         .ok_or(ServiceError::Unauthorized)?;
     let principal = Principal::Registry {
-        prefix: site_builder::images::registry_prefix(registry.resource_group_id, &registry.name),
+        prefix: crate::images::registry_prefix(registry.resource_group_id, &registry.name),
         write: token.scope == "push",
     };
     touch_token(state, token).await;

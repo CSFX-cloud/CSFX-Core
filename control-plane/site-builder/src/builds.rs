@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::detect::Mode;
 use crate::error::ServiceError;
 use crate::job::{builder_request, stored_reference, BuildJob};
 use crate::prune::{self, Candidate};
@@ -10,7 +11,6 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     Set, Statement,
 };
-use site_builder::detect::Mode;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;

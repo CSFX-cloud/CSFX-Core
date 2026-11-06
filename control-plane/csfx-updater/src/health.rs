@@ -36,3 +36,52 @@ pub async fn wait_for_gateway(
         sleep(Duration::from_secs(retry_interval_secs)).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    async fn serve_status(status: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buffer = [0u8; 1024];
+                let _ = stream.read(&mut buffer).await;
+                let response =
+                    format!("HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{address}/")
+    }
+
+    fn install_crypto_provider() {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn success_and_unauthorized_count_as_healthy() {
+        install_crypto_provider();
+        assert!(wait_for_gateway(&serve_status("200 OK").await, 2, 1).await);
+        assert!(wait_for_gateway(&serve_status("401 Unauthorized").await, 2, 1).await);
+    }
+
+    #[tokio::test]
+    async fn persistent_server_errors_exhaust_the_deadline() {
+        install_crypto_provider();
+        let url = serve_status("503 Service Unavailable").await;
+        assert!(!wait_for_gateway(&url, 0, 1).await);
+    }
+
+    #[tokio::test]
+    async fn unreachable_gateways_exhaust_the_deadline() {
+        install_crypto_provider();
+        assert!(!wait_for_gateway("http://127.0.0.1:1", 0, 1).await);
+    }
+}

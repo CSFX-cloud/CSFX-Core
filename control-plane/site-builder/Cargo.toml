@@ -41,3 +41,8 @@ serde_urlencoded = "0.7"
 flate2 = "1"
 tar = "0.4"
 mime_guess = "2"
+
+[dev-dependencies]
+migration = { path = "../shared/migration" }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

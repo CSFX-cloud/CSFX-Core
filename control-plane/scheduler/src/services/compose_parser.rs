@@ -392,4 +392,173 @@ mod tests {
             Err(ComposeParseError::UndeclaredVolume { .. })
         ));
     }
+
+    fn service_with_resources(limits: &str) -> String {
+        format!(
+            "services:\n  web:\n    image: nginx\n    deploy:\n      resources:\n        limits:\n{limits}"
+        )
+    }
+
+    #[test]
+    fn ports_accept_host_mappings_and_bare_container_ports() {
+        let spec = parse_single(
+            "services:\n  web:\n    image: nginx\n    ports:\n      - '8080:80'\n      - '443'\n      - 'abc:90'\n      - 'x'\n",
+        );
+        let ports = spec.ports.unwrap();
+        assert_eq!(ports.len(), 3);
+        assert_eq!(
+            (ports[0].rg_port, ports[0].container_port),
+            (Some(8080), 80)
+        );
+        assert_eq!((ports[1].rg_port, ports[1].container_port), (None, 443));
+        assert_eq!((ports[2].rg_port, ports[2].container_port), (None, 90));
+        assert!(ports.iter().all(|port| port.node_port.is_none()));
+    }
+
+    #[test]
+    fn environment_accepts_maps_and_lists() {
+        let map = parse_single(
+            "services:\n  web:\n    image: nginx\n    environment:\n      A: '1'\n      B: two\n",
+        );
+        let env = map.env_vars.unwrap();
+        assert_eq!(env["A"], "1");
+        assert_eq!(env["B"], "two");
+
+        let list = parse_single(
+            "services:\n  web:\n    image: nginx\n    environment:\n      - A=1\n      - URL=http://x?a=b\n      - NOVALUE\n",
+        );
+        let env = list.env_vars.unwrap();
+        assert_eq!(env.len(), 2);
+        assert_eq!(env["URL"], "http://x?a=b");
+        assert!(parse_single("services:\n  web:\n    image: nginx\n")
+            .env_vars
+            .is_none());
+    }
+
+    #[test]
+    fn external_volumes_resolve_their_names() {
+        let spec = parse_single(
+            "services:\n  db:\n    image: postgres\n    volumes:\n      - a:/a\n      - b:/b\n      - c:/c\n      - d:/d\nvolumes:\n  a:\n    external:\n      name: shared-a\n  b:\n    external: true\n    name: shared-b\n  c:\n    external: true\n  d:\n    external: false\n",
+        );
+        let names: Vec<_> = spec
+            .volumes
+            .iter()
+            .map(|mount| mount.external_name.as_deref())
+            .collect();
+        assert_eq!(names, [Some("shared-a"), Some("shared-b"), Some("c"), None]);
+    }
+
+    #[test]
+    fn cpu_values_accept_numbers_and_strings() {
+        let number = parse_single(&service_with_resources("          cpus: 1.5\n"));
+        assert_eq!(number.cpu_limit_millicores, Some(1500));
+        let text = parse_single(&service_with_resources("          cpus: ' 0.25 '\n"));
+        assert_eq!(text.cpu_limit_millicores, Some(250));
+        for invalid in ["0", "-1", "many", "[1]"] {
+            let result = parse_compose(&service_with_resources(&format!(
+                "          cpus: {invalid}\n"
+            )));
+            assert!(
+                matches!(result, Err(ComposeParseError::InvalidResources(_))),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn memory_values_support_every_unit() {
+        let cases = [
+            ("1024", 1024),
+            ("2k", 2 * 1024),
+            ("3KB", 3 * 1024),
+            ("4m", 4 * 1024 * 1024),
+            ("5MB", 5 * 1024 * 1024),
+            ("1g", 1024 * 1024 * 1024),
+            ("7b", 7),
+        ];
+        for (text, expected) in cases {
+            let spec = parse_single(&service_with_resources(&format!(
+                "          memory: '{text}'\n"
+            )));
+            assert_eq!(spec.memory_limit_bytes, Some(expected), "{text}");
+        }
+        for invalid in ["'1t'", "'abc'", "'99999999999999g'", "[1]"] {
+            let result = parse_compose(&service_with_resources(&format!(
+                "          memory: {invalid}\n"
+            )));
+            assert!(
+                matches!(result, Err(ComposeParseError::InvalidResources(_))),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn requests_never_exceed_limits() {
+        let spec = parse_single(
+            "services:\n  web:\n    image: nginx\n    deploy:\n      resources:\n        limits:\n          cpus: '1'\n          memory: 100M\n        reservations:\n          cpus: '4'\n          memory: 1G\n",
+        );
+        assert_eq!(spec.cpu_millicores, 1000);
+        assert_eq!(spec.memory_bytes, 100 * 1024 * 1024);
+    }
+
+    #[test]
+    fn structural_errors_are_reported() {
+        assert!(matches!(
+            parse_compose("services: ["),
+            Err(ComposeParseError::InvalidYaml(_))
+        ));
+        assert!(matches!(
+            parse_compose("services: {}"),
+            Err(ComposeParseError::NoServicesDefined)
+        ));
+        assert!(matches!(
+            parse_compose("services:\n  web:\n    build: .\n"),
+            Err(ComposeParseError::UnsupportedBuildDirective(_))
+        ));
+        assert!(matches!(
+            parse_compose("services:\n  web:\n    ports: ['80']\n"),
+            Err(ComposeParseError::MissingImage(_))
+        ));
+    }
+
+    #[test]
+    fn mount_sources_and_targets_are_validated() {
+        let invalid_sources = [
+            "      - /abs:/data\n",
+            "      - ~/home:/data\n",
+            "      - ':/data'\n",
+            "      - data\n",
+            "      - type: bind\n        source: data\n        target: /data\n",
+            "      - type: volume\n        target: /data\n",
+        ];
+        for entry in invalid_sources {
+            let yaml = format!(
+                "services:\n  web:\n    image: nginx\n    volumes:\n{entry}volumes:\n  data:\n"
+            );
+            assert!(
+                matches!(
+                    parse_compose(&yaml),
+                    Err(ComposeParseError::UnsupportedVolumeSource(_))
+                ),
+                "{entry}"
+            );
+        }
+        let relative = parse_compose(
+            "services:\n  web:\n    image: nginx\n    volumes:\n      - data:relative\nvolumes:\n  data:\n",
+        );
+        assert!(matches!(
+            relative,
+            Err(ComposeParseError::InvalidMountPath(_))
+        ));
+    }
+
+    #[test]
+    fn error_messages_name_the_service() {
+        let error = parse_compose("services:\n  web:\n    build: .\n").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "service 'web' uses build, only image is supported"
+        );
+    }
 }

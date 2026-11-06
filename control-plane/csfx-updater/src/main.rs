@@ -222,3 +222,22 @@ async fn execute_once(cfg: &config::Config, last_applied: &str) -> anyhow::Resul
 fn is_valid_sha(rev: &str) -> bool {
     rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_sha;
+
+    #[test]
+    fn full_length_hex_revisions_are_accepted() {
+        assert!(is_valid_sha("0123456789abcdef0123456789ABCDEF01234567"));
+    }
+
+    #[test]
+    fn malformed_revisions_are_rejected() {
+        assert!(!is_valid_sha(""));
+        assert!(!is_valid_sha("abc123"));
+        assert!(!is_valid_sha(&"a".repeat(41)));
+        assert!(!is_valid_sha(&"g".repeat(40)));
+        assert!(!is_valid_sha("main"));
+    }
+}

@@ -47,3 +47,64 @@ impl Config {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MANAGED_KEYS: [&str; 10] = [
+        "ETCD_ENDPOINTS",
+        "POLL_INTERVAL_SECS",
+        "INFRA_REPO_MIRROR_DIR",
+        "INFRA_REPO_MIRROR_URL",
+        "INFRA_REPO_GITHUB",
+        "INFRA_REPO_BRANCH",
+        "NIXOS_CONFIG",
+        "GATEWAY_URL",
+        "HEALTH_CHECK_TIMEOUT_SECS",
+        "HEALTH_CHECK_RETRY_INTERVAL_SECS",
+    ];
+
+    fn clear_environment() {
+        for key in MANAGED_KEYS {
+            env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn configuration_is_read_from_the_environment() {
+        clear_environment();
+        assert!(Config::from_env().is_err());
+
+        env::set_var("INFRA_REPO_MIRROR_URL", "https://mirror.invalid/infra.git");
+        assert!(Config::from_env().is_err());
+
+        env::set_var("INFRA_REPO_GITHUB", "csfx-cloud/CSFX-Infra");
+        let defaults = Config::from_env().unwrap();
+        assert_eq!(defaults.etcd_endpoints, vec!["http://localhost:2379"]);
+        assert_eq!(defaults.poll_interval_secs, 120);
+        assert_eq!(
+            defaults.infra_repo_mirror_dir,
+            "/var/lib/csfx-updater/infra.git"
+        );
+        assert_eq!(defaults.infra_repo_branch, "main");
+        assert_eq!(defaults.nixos_config, "csfx-node");
+        assert_eq!(defaults.gateway_url, "https://localhost:8000");
+        assert_eq!(defaults.health_check_timeout_secs, 120);
+        assert_eq!(defaults.health_check_retry_interval_secs, 5);
+
+        env::set_var("ETCD_ENDPOINTS", "http://a:2379, http://b:2379");
+        env::set_var("POLL_INTERVAL_SECS", "30");
+        env::set_var("HEALTH_CHECK_TIMEOUT_SECS", "not-a-number");
+        env::set_var("NIXOS_CONFIG", "custom-node");
+        let overridden = Config::from_env().unwrap();
+        assert_eq!(
+            overridden.etcd_endpoints,
+            vec!["http://a:2379", "http://b:2379"]
+        );
+        assert_eq!(overridden.poll_interval_secs, 30);
+        assert_eq!(overridden.health_check_timeout_secs, 120);
+        assert_eq!(overridden.nixos_config, "custom-node");
+        clear_environment();
+    }
+}

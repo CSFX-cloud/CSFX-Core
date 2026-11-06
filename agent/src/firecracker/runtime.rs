@@ -1485,6 +1485,7 @@ async fn create_tap_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::Runtime;
 
     #[tokio::test]
     async fn sidecar_metadata_round_trips() {
@@ -1516,6 +1517,442 @@ mod tests {
     #[tokio::test]
     async fn missing_sidecar_metadata_returns_none() {
         let dir = std::env::temp_dir().join(format!("csfx-sidecar-test-{}", uuid::Uuid::new_v4()));
+        assert!(read_sidecar_metadata(&dir).await.is_none());
+    }
+
+    fn temp_dir() -> PathBuf {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let dir = std::env::temp_dir().join(format!("fc-{}", &id[..8]));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn runtime() -> FirecrackerRuntime {
+        crate::client::install_test_crypto_provider();
+        let _tools = FakeTools::install(&[("ip", "exit 0")]);
+        FirecrackerRuntime::new(
+            "key".to_string(),
+            Arc::new(crate::rg_dns::RgDnsRegistry::new()),
+            None,
+        )
+    }
+
+    fn handle(workload_id: &str, cid: u32, dir: &Path) -> VmHandle {
+        VmHandle {
+            workload_id: workload_id.to_string(),
+            jailer_pid: std::process::id(),
+            chroot_dir: dir.to_path_buf(),
+            tap_device: "fctap1".to_string(),
+            vsock_cid: cid,
+            resource_group_id: None,
+            guest_ip: Some("10.0.0.3".to_string()),
+            cgroup_path: dir.join("cgroup"),
+            metrics_path: dir.join("metrics.fifo"),
+            previous_cpu_sample: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn identifiers_are_derived_from_the_workload_id() {
+        assert_eq!(jailer_short_id("1234-5678-9abc-def0"), "12345678");
+        assert_eq!(jailer_unit_name("12345678"), "csfx-jailer-12345678");
+        assert_eq!(guest_device_letter(0), "/dev/vdb");
+        assert_eq!(guest_device_letter(2), "/dev/vdd");
+        let path = cgroup_path("1234-5678-9abc");
+        assert!(path.ends_with("system.slice/csfx-jailer-12345678.service"));
+    }
+
+    #[test]
+    fn vsock_path_lives_inside_the_jail_root() {
+        let chroot = Path::new("/c");
+        let path = vsock_uds_path(chroot, "1234-5678-9abc");
+        assert!(path.starts_with("/c/jail"));
+        assert!(path.ends_with("12345678/root/firecracker.socket.vsock"));
+        assert_eq!(jailer_chroot_base_dir(chroot), PathBuf::from("/c/jail"));
+    }
+
+    #[tokio::test]
+    async fn cids_are_unique_per_allocation() {
+        let runtime = runtime();
+        let first = runtime.allocate_cid().await;
+        let second = runtime.allocate_cid().await;
+        assert_eq!(second, first + 1);
+        let dir = temp_dir();
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", second + 1, &dir));
+        assert_eq!(runtime.allocate_cid().await, second + 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_and_network_follow_the_tracked_handles() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "running");
+        assert_eq!(
+            runtime
+                .service_network_ip("w", "n")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("10.0.0.3")
+        );
+        assert!(runtime
+            .service_network_ip("x", "n")
+            .await
+            .unwrap()
+            .is_none());
+        runtime
+            .handles
+            .lock()
+            .await
+            .get_mut("w")
+            .unwrap()
+            .jailer_pid = u32::MAX;
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stats_read_cgroup_and_metrics_files() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("cgroup")).unwrap();
+        std::fs::write(dir.join("cgroup/memory.current"), "2048\n").unwrap();
+        std::fs::write(dir.join("cgroup/cpu.stat"), "usage_usec 100\nuser_usec 5\n").unwrap();
+        std::fs::write(
+            dir.join("metrics.fifo"),
+            "{\"net\":{\"rx_bytes_count\":1,\"tx_bytes_count\":2}}\n{\"net\":{\"rx_bytes_count\":10,\"tx_bytes_count\":20}}\n",
+        )
+        .unwrap();
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+
+        let first = runtime.stats("w").await.unwrap();
+        assert_eq!(first.memory_usage_bytes, Some(2048));
+        assert_eq!(first.network_rx_bytes, Some(10));
+        assert_eq!(first.network_tx_bytes, Some(20));
+        assert!(first.cpu_usage_percent.is_none());
+
+        std::fs::write(dir.join("cgroup/cpu.stat"), "usage_usec 200\n").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let second = runtime.stats("w").await.unwrap();
+        assert!(second.cpu_usage_percent.unwrap() > 0.0);
+
+        let unknown = runtime.stats("missing").await.unwrap();
+        assert!(unknown.memory_usage_bytes.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_cgroup_files_yield_no_samples() {
+        let dir = temp_dir();
+        assert!(read_memory_usage_bytes(&dir).await.is_none());
+        assert!(read_cgroup_u64(&dir, "cpu.stat", "usage_usec")
+            .await
+            .is_none());
+        assert!(read_network_bytes(&dir.join("none")).await.is_none());
+        std::fs::write(dir.join("cpu.stat"), "other 1\n").unwrap();
+        assert!(read_cgroup_u64(&dir, "cpu.stat", "usage_usec")
+            .await
+            .is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_lifecycle_calls_are_noops() {
+        let runtime = runtime();
+        runtime.pull_image("img").await.unwrap();
+        runtime.stop_workload("missing").await.unwrap();
+        runtime.check_dns_liveness().await;
+        assert!(runtime.exec("missing").await.is_err());
+    }
+
+    async fn serve_vsock(chroot: &Path, workload_id: &str, reply: &'static [u8]) {
+        let path = vsock_uds_path(chroot, workload_id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 64];
+            let read = socket.read(&mut request).await.unwrap();
+            assert!(request[..read].starts_with(b"CONNECT "));
+            socket.write_all(reply).await.unwrap();
+        });
+    }
+
+    #[tokio::test]
+    async fn vsock_handshake_accepts_ok_and_rejects_refusals() {
+        let dir = temp_dir();
+        serve_vsock(&dir, "1234-5678-9abc", b"OK 1\npayload").await;
+        let mut stream = connect_guest_vsock(&dir, "1234-5678-9abc", 10001)
+            .await
+            .unwrap();
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).await.unwrap();
+        assert_eq!(rest, b"payload");
+
+        serve_vsock(&dir, "aaaa-bbbb-cccc", b"NO\n").await;
+        let refused = connect_guest_vsock(&dir, "aaaa-bbbb-cccc", 10001).await;
+        assert!(refused.is_err());
+        assert!(connect_guest_vsock(&dir, "zzzz", 1).await.is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn exec_session_opens_the_exec_vsock_port() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        serve_vsock(&dir, "w", b"OK 2\n").await;
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+        assert!(runtime.exec("w").await.is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn log_stream_relays_guest_output_and_reports_failures() {
+        use futures_util::StreamExt;
+        let dir = temp_dir();
+        serve_vsock(&dir, "w", b"OK 1\nhello").await;
+        let stream = vsock_log_stream(dir.clone(), "w".to_string());
+        futures_util::pin_mut!(stream);
+        let chunk = stream.next().await.unwrap().unwrap();
+        assert_eq!(&chunk[..], b"hello");
+        assert!(stream.next().await.is_none());
+
+        let failing = vsock_log_stream(dir.clone(), "missing".to_string());
+        futures_util::pin_mut!(failing);
+        assert!(failing.next().await.unwrap().is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    use crate::spec::PortMapping;
+    use crate::testing::FakeTools;
+
+    fn spec_with_ports(ports: Option<Vec<PortMapping>>, cidr: Option<&str>) -> WorkloadSpec {
+        WorkloadSpec {
+            workload_id: "w-1".to_string(),
+            image: "img".to_string(),
+            cpu_millicores: 100,
+            cpu_limit_millicores: 100,
+            memory_bytes: 1,
+            memory_limit_bytes: 1,
+            env_vars: None,
+            ports,
+            volume_mounts: None,
+            service_name: None,
+            resource_group_id: None,
+            resource_group_cidr: cidr.map(str::to_string),
+            guest_ip: None,
+            vm_spec: None,
+        }
+    }
+
+    fn port(
+        container: u16,
+        protocol: Option<&str>,
+        rg: Option<u16>,
+        node: Option<u16>,
+    ) -> PortMapping {
+        PortMapping {
+            container_port: container,
+            protocol: protocol.map(str::to_string),
+            rg_port: rg,
+            node_port: node,
+        }
+    }
+
+    #[tokio::test]
+    async fn workloads_without_ports_add_no_rules() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+
+        apply_port_dnat("w-1", "10.0.0.2", &spec_with_ports(None, None))
+            .await
+            .unwrap();
+
+        assert!(tools.calls("nft").is_empty());
+    }
+
+    #[tokio::test]
+    async fn node_and_group_ports_become_dnat_rules() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+        let spec = spec_with_ports(
+            Some(vec![
+                port(80, None, None, Some(30080)),
+                port(53, Some("udp"), Some(5353), None),
+            ]),
+            Some("10.20.0.0/24"),
+        );
+
+        apply_port_dnat("w-1", "10.20.0.5", &spec).await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].contains("tcp dport 30080 dnat to 10.20.0.5:80"));
+        assert!(calls[1].contains("ip daddr 10.20.0.2 udp dport 5353 dnat to 10.20.0.5:53"));
+    }
+
+    #[tokio::test]
+    async fn group_ports_require_a_group_cidr() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+        let spec = spec_with_ports(Some(vec![port(80, None, Some(8080), None)]), None);
+
+        let error = apply_port_dnat("w-1", "10.0.0.2", &spec)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("rg_port requires a resource group with a cidr"));
+        assert!(tools.calls("nft").is_empty());
+    }
+
+    #[tokio::test]
+    async fn rule_failures_are_attributed_to_the_port_kind() {
+        let _tools = FakeTools::install(&[("nft", "echo denied >&2\nexit 1")]);
+
+        let node = spec_with_ports(Some(vec![port(80, None, None, Some(30080))]), None);
+        let error = format!(
+            "{:#}",
+            apply_port_dnat("w", "10.0.0.2", &node).await.unwrap_err()
+        );
+        assert!(error.contains("Failed to add node port dnat rule"));
+
+        let group = spec_with_ports(
+            Some(vec![port(80, None, Some(80), None)]),
+            Some("10.0.0.0/24"),
+        );
+        let error = format!(
+            "{:#}",
+            apply_port_dnat("w", "10.0.0.2", &group).await.unwrap_err()
+        );
+        assert!(error.contains("Failed to add rg port dnat rule"));
+    }
+
+    #[tokio::test]
+    async fn tap_devices_are_created_attached_and_raised() {
+        let tools = FakeTools::install(&[("ip", "exit 0")]);
+
+        create_tap_device("fctap1", Some("br0"), 60001)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tools.calls("ip"),
+            vec![
+                "tuntap add dev fctap1 mode tap user 60001".to_string(),
+                "link set dev fctap1 master br0".to_string(),
+                "link set dev fctap1 up".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn tap_device_failures_name_the_failing_step() {
+        {
+            let _tools = FakeTools::install(&[("ip", r#"case "$*" in tuntap*) exit 1;; esac"#)]);
+            let error = create_tap_device("fctap1", None, 0)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("failed to create tap device fctap1"));
+        }
+        {
+            let _tools = FakeTools::install(&[("ip", r#"case "$*" in *master*) exit 1;; esac"#)]);
+            let error = create_tap_device("fctap1", Some("br0"), 0)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("failed to attach tap device fctap1 to bridge br0"));
+        }
+        let _tools = FakeTools::install(&[("ip", r#"case "$*" in *" up") exit 1;; esac"#)]);
+        let error = create_tap_device("fctap1", None, 0)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("failed to bring up tap device fctap1"));
+    }
+
+    #[tokio::test]
+    async fn chroot_directories_are_removed_through_a_transient_unit() {
+        {
+            let tools = FakeTools::install(&[("systemd-run", "exit 0")]);
+            remove_chroot_dir_privileged(Path::new("/srv/jail/fc-1/root"))
+                .await
+                .unwrap();
+            let call = &tools.calls("systemd-run")[0];
+            assert!(call.contains("--unit=csfx-jailer-cleanup--srv-jail-fc-1-root"));
+            assert!(call.ends_with("rm -rf -- /srv/jail/fc-1/root"));
+        }
+        let _tools = FakeTools::install(&[("systemd-run", "exit 1")]);
+        let error = remove_chroot_dir_privileged(Path::new("/srv/jail/x"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("privileged cleanup of chroot directory"));
+    }
+
+    #[tokio::test]
+    async fn files_are_staged_with_sparse_reflink_copies() {
+        {
+            let tools = FakeTools::install(&[("cp", "exit 0")]);
+            reflink_copy(Path::new("/a"), Path::new("/b"))
+                .await
+                .unwrap();
+            assert_eq!(
+                tools.calls("cp"),
+                vec!["--reflink=auto --sparse=always /a /b".to_string()]
+            );
+        }
+        let _tools = FakeTools::install(&[("cp", "exit 1")]);
+        assert!(reflink_copy(Path::new("/a"), Path::new("/b"))
+            .await
+            .is_err());
+        assert!(stage_rootfs_into_jail(Path::new("/a"), Path::new("/jail"))
+            .await
+            .is_err());
+    }
+
+    #[test]
+    fn cleanup_unit_slugs_replace_every_special_character() {
+        assert_eq!(unit_slug(Path::new("/a b/c.d")), "-a-b-c-d");
+    }
+
+    #[test]
+    fn metrics_fifos_are_created_idempotently() {
+        let path = std::env::temp_dir().join(format!("csfx-fifo-{}", uuid::Uuid::new_v4()));
+
+        create_metrics_fifo(&path).unwrap();
+        create_metrics_fifo(&path).unwrap();
+
+        use std::os::unix::fs::FileTypeExt;
+        assert!(std::fs::metadata(&path).unwrap().file_type().is_fifo());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn unknown_jailer_ids_have_no_live_process() {
+        assert_eq!(find_live_jailer_pid("csfx-no-such-jailer-id").await, None);
+    }
+
+    #[tokio::test]
+    async fn sidecar_metadata_is_absent_for_unwritten_directories() {
+        let dir = std::env::temp_dir().join(format!("csfx-no-sidecar-{}", uuid::Uuid::new_v4()));
         assert!(read_sidecar_metadata(&dir).await.is_none());
     }
 }

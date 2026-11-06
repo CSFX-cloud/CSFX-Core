@@ -535,4 +535,72 @@ mod tests {
         assert!(!first.puts.is_empty());
         assert_eq!(second, EntryDiff::default());
     }
+
+    fn with_site_edge<T>(value: Option<&str>, check: impl FnOnce() -> T) -> T {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var(SITE_EDGE_VARIABLE).ok();
+        match value {
+            Some(value) => std::env::set_var(SITE_EDGE_VARIABLE, value),
+            None => std::env::remove_var(SITE_EDGE_VARIABLE),
+        }
+        let result = check();
+        match saved {
+            Some(saved) => std::env::set_var(SITE_EDGE_VARIABLE, saved),
+            None => std::env::remove_var(SITE_EDGE_VARIABLE),
+        }
+        result
+    }
+
+    #[test]
+    fn site_edge_is_absent_when_unset_or_empty() {
+        for value in [None, Some("")] {
+            with_site_edge(value, || {
+                assert!(site_edge_backend().is_none());
+                assert!(site_edge_address().is_none());
+                assert!(site_edge_port().is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn site_edge_exposes_address_and_port_of_an_ip_backend() {
+        with_site_edge(Some("http://10.1.2.3:8080/path"), || {
+            assert_eq!(
+                site_edge_backend().as_deref(),
+                Some("http://10.1.2.3:8080/path")
+            );
+            assert_eq!(site_edge_address().as_deref(), Some("10.1.2.3"));
+            assert_eq!(site_edge_port(), Some(8080));
+        });
+    }
+
+    #[test]
+    fn site_edge_hostnames_have_no_address_and_ports_are_optional() {
+        with_site_edge(Some("http://edge.internal:9000"), || {
+            assert!(site_edge_address().is_none());
+            assert_eq!(site_edge_port(), Some(9000));
+        });
+        with_site_edge(Some("http://10.0.0.9"), || {
+            assert_eq!(site_edge_address().as_deref(), Some("10.0.0.9"));
+            assert!(site_edge_port().is_none());
+        });
+    }
+
+    #[test]
+    fn site_domains_become_tls_routes_to_the_edge() {
+        let domain = site_domains::Model {
+            id: Uuid::new_v4(),
+            site_id: Uuid::new_v4(),
+            hostname: "app.example.test".to_string(),
+            kind: "custom".to_string(),
+            branch: None,
+            created_at: chrono::NaiveDateTime::default(),
+        };
+        let target = domain_target(domain.clone(), "http://10.0.0.9:80");
+        assert_eq!(target.id, domain.id);
+        assert_eq!(target.hostname, "app.example.test");
+        assert!(target.tls);
+        assert_eq!(target.backend, "http://10.0.0.9:80");
+    }
 }
