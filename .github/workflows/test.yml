@@ -87,9 +87,8 @@ jobs:
             | group_by(.crate)
             | map({crate: .[0].crate, count: (map(.c) | add), covered: (map(.v) | add)})
             | sort_by(.crate)
-            | map("| \(.crate) | \(if .count == 0 then 0 else (.covered * 10000 / .count | round / 100) end)% | \(.covered) / \(.count) |")
-            | .[]
-          ' coverage.json > crates.md
+            | map(. + {percent: (if .count == 0 then 0 else (.covered * 10000 / .count | round / 100) end)})
+          ' coverage.json > crates.json
 
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
@@ -98,6 +97,7 @@ jobs:
           path: |
             lcov.info
             coverage.json
+            crates.json
             coverage-html
 
       - name: Update coverage history
@@ -116,7 +116,8 @@ jobs:
             echo '[]' > history/history.json
           fi
           jq --arg sha "${GITHUB_SHA::7}" --arg date "$(date -u +%F)" --argjson lines "$TOTAL" --argjson limit "$HISTORY_LIMIT" \
-            '(. + [{sha: $sha, date: $date, lines: $lines}]) | .[-$limit:]' \
+            --slurpfile crates crates.json \
+            '(. + [{sha: $sha, date: $date, lines: $lines, crates: ($crates[0] | map({(.crate): .percent}) | add)}]) | .[-$limit:]' \
             history/history.json > history/history.next
           mv history/history.next history/history.json
           git -C history add history.json
@@ -129,28 +130,24 @@ jobs:
         run: |
           git fetch origin "$HISTORY_BRANCH" 2>/dev/null || true
           HISTORY=$(git show "origin/$HISTORY_BRANCH:history.json" 2>/dev/null || echo '[]')
-          BASE=$(jq -r 'if length == 0 then "" else .[-1].lines end' <<<"$HISTORY")
-          {
-            echo "<!-- csfx-coverage -->"
-            echo "## Test coverage"
-            echo
-            if [ -n "$BASE" ]; then
-              DELTA=$(jq -n --argjson a "$TOTAL" --argjson b "$BASE" '($a - $b) * 100 | round / 100')
-              echo "Line coverage **${TOTAL}%** (${DELTA} pp against main at ${BASE}%)"
-            else
-              echo "Line coverage **${TOTAL}%**"
-            fi
-            echo
-            echo "| Crate | Lines | Covered / total |"
-            echo "|---|---|---|"
-            cat crates.md
-            echo
-            echo "### Trend on main"
-            echo
-            echo "| Date | Commit | Lines |"
-            echo "|---|---|---|"
-            jq -r '.[-10:] | reverse | .[] | "| \(.date) | \(.sha) | \(.lines)% |"' <<<"$HISTORY"
-          } > report.md
+          jq -r --argjson total "$TOTAL" --slurpfile current crates.json '
+            def delta($now; $base):
+              (($now - $base) * 100 | round / 100) as $change
+              | if $change > 0 then "$\\color{green}{+\($change)\\%}$"
+                elif $change < 0 then "$\\color{red}{\($change)\\%}$"
+                else "0%" end;
+            def trend($now; $base):
+              if $base == null then "\($now)%" else "\($now)% (\(delta($now; $base)))" end;
+            (.[-1] // {}) as $main
+            | "<!-- csfx-coverage -->",
+              "## Test coverage",
+              "",
+              "Line coverage **\(trend($total; $main.lines))** against main",
+              "",
+              "| Crate | Lines | Covered / total |",
+              "|---|---|---|",
+              ($current[0][] | "| \(.crate) | \(trend(.percent; $main.crates[.crate])) | \(.covered) / \(.count) |")
+          ' <<<"$HISTORY" > report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Comment on pull request
