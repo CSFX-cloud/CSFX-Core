@@ -35,6 +35,7 @@ pub mod masters;
 pub mod networks;
 pub mod organizations;
 pub mod registries;
+pub mod image_resolution;
 pub mod registry;
 pub mod releases;
 pub mod resource_groups;
@@ -134,7 +135,8 @@ pub fn create_router() -> Router<AppState> {
     let internal_api_router = Router::new()
         .merge(registry::registry_routes())
         .merge(ssh_keys::ssh_keys_internal_routes())
-        .merge(agent_stream::agent_stream_internal_routes());
+        .merge(agent_stream::agent_stream_internal_routes())
+        .merge(image_resolution::image_resolution_internal_routes());
 
     let agent_unmetered_router = Router::new()
         .merge(agents::agents_unmetered_routes())
