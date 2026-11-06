@@ -274,13 +274,7 @@ async fn delete_rules_containing(
         .context("failed to list nftables rules")?;
 
     let listing = String::from_utf8_lossy(&output.stdout);
-    let handles: Vec<u32> = listing
-        .lines()
-        .filter(|line| line.contains(needle))
-        .filter_map(|line| line.rsplit("handle ").next()?.trim().parse().ok())
-        .collect();
-
-    for handle in handles {
+    for handle in rule_handles(&listing, needle) {
         run_nft(&[
             "delete",
             "rule",
@@ -294,6 +288,14 @@ async fn delete_rules_containing(
     }
 
     Ok(())
+}
+
+fn rule_handles(listing: &str, needle: &str) -> Vec<u32> {
+    listing
+        .lines()
+        .filter(|line| line.contains(needle))
+        .filter_map(|line| line.rsplit("handle ").next()?.trim().parse().ok())
+        .collect()
 }
 
 async fn run_nft(args: &[&str]) -> Result<()> {
@@ -322,6 +324,21 @@ mod tests {
     fn rule_comments_are_derived_from_the_bridge_name() {
         assert_eq!(mesh_comment("csfxrg1"), "csfxrg1-mesh");
         assert_eq!(snat_comment("csfxrg1"), "csfxrg1-snat");
+    }
+
+    #[test]
+    fn rule_handles_are_read_from_matching_lines_only() {
+        let listing = "table ip csfx_nat {\n\tchain node_port_dnat {\n\t\tdnat to 10.0.0.2:80 comment \"w-1\" # handle 7\n\t\tdnat to 10.0.0.3:80 comment \"w-2\" # handle 9\n\t\tdnat to 10.0.0.4:80 comment \"w-1\" # handle 12\n\t}\n}";
+        assert_eq!(rule_handles(listing, "\"w-1\""), vec![7, 12]);
+        assert_eq!(rule_handles(listing, "\"w-2\""), vec![9]);
+        assert!(rule_handles(listing, "\"w-3\"").is_empty());
+        assert!(rule_handles("", "w-1").is_empty());
+    }
+
+    #[test]
+    fn lines_without_a_numeric_handle_are_ignored() {
+        assert!(rule_handles("rule comment \"w-1\" handle abc", "w-1").is_empty());
+        assert!(rule_handles("rule comment \"w-1\"", "w-1").is_empty());
     }
 
     #[tokio::test]

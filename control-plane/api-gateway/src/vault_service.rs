@@ -351,3 +351,69 @@ pub fn spawn_purge_job(state: AppState) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vault(sealed: bool) -> vaults::Model {
+        vaults::Model {
+            id: Uuid::new_v4(),
+            resource_group_id: Uuid::new_v4(),
+            name: "production".to_string(),
+            sealed,
+            soft_delete_days: 7,
+            created_at: Utc::now().naive_utc(),
+        }
+    }
+
+    #[test]
+    fn scope_carries_the_group_and_vault_ids() {
+        let vault = vault(false);
+        let scope = scope_of(&vault);
+        assert_eq!(scope.resource_group_id, vault.resource_group_id);
+        assert_eq!(scope.vault_id, vault.id);
+    }
+
+    #[test]
+    fn sealed_vaults_are_rejected() {
+        assert!(ensure_unsealed(&vault(false)).is_ok());
+        assert!(matches!(
+            ensure_unsealed(&vault(true)),
+            Err(VaultError::Sealed)
+        ));
+    }
+
+    #[test]
+    fn reveal_denials_expose_message_and_audit_result() {
+        let denials = [
+            (RevealDenial::TwoFactorRequired, "denied - no 2fa"),
+            (RevealDenial::InvalidCode, "denied - invalid 2fa code"),
+            (RevealDenial::ApprovalRequired, "denied - no approval"),
+        ];
+        for (denial, audit) in denials {
+            assert_eq!(denial.audit_result(), audit);
+            assert!(!denial.message().is_empty());
+        }
+        assert_eq!(
+            RevealDenial::ApprovalRequired.message(),
+            "approval required"
+        );
+    }
+
+    #[test]
+    fn vault_errors_render_readable_messages() {
+        assert_eq!(
+            VaultError::Unavailable.to_string(),
+            "vault service is not configured"
+        );
+        assert_eq!(VaultError::NotFound.to_string(), "vault not found");
+        assert_eq!(VaultError::Sealed.to_string(), "vault is sealed");
+        assert_eq!(VaultError::Invalid("bad name").to_string(), "bad name");
+        assert_eq!(VaultError::Forbidden("no access").to_string(), "no access");
+        assert_eq!(VaultError::TimedOut.to_string(), "vault cleanup timed out");
+        assert!(VaultError::Database(DbErr::Custom("boom".to_string()))
+            .to_string()
+            .starts_with("database error:"));
+    }
+}

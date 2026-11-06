@@ -42,8 +42,7 @@ async fn ensure_address(iface: &str, tunnel_ip: &str) -> Result<()> {
         .output()
         .await
         .context("failed to execute ip addr show")?;
-    let current = String::from_utf8_lossy(&output.stdout);
-    if current.split_whitespace().any(|field| field == wanted) {
+    if has_address(&String::from_utf8_lossy(&output.stdout), &wanted) {
         return Ok(());
     }
     run_ip(&["address", "flush", "dev", iface]).await?;
@@ -163,13 +162,50 @@ async fn list_host_routes(iface: &str) -> Result<std::collections::HashSet<Strin
         );
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout)
+    Ok(parse_host_routes(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn has_address(listing: &str, wanted: &str) -> bool {
+    listing.split_whitespace().any(|field| field == wanted)
+}
+
+fn parse_host_routes(listing: &str) -> std::collections::HashSet<String> {
+    listing
         .lines()
         .filter_map(|line| line.split_whitespace().next())
         .filter_map(|destination| destination.strip_suffix("/32").or(Some(destination)))
         .filter(|destination| destination.parse::<std::net::Ipv4Addr>().is_ok())
         .map(str::to_string)
-        .collect())
+        .collect()
+}
+
+fn parse_peer_keys(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn peer_arguments(iface: &str, peer: &Peer) -> Vec<String> {
+    let mut args = vec![
+        "set".to_string(),
+        iface.to_string(),
+        "peer".to_string(),
+        peer.public_key.clone(),
+        "allowed-ips".to_string(),
+        peer.allowed_ips.clone(),
+    ];
+    if let Some(endpoint) = &peer.endpoint {
+        args.extend([
+            "endpoint".to_string(),
+            endpoint.clone(),
+            "persistent-keepalive".to_string(),
+            "25".to_string(),
+        ]);
+    }
+    args
 }
 
 pub async fn remove_interface(iface: &str) -> Result<()> {
@@ -194,22 +230,7 @@ pub async fn remove_interface(iface: &str) -> Result<()> {
 
 pub async fn set_peers(iface: &str, peers: &[Peer]) -> Result<()> {
     for peer in peers {
-        let mut args = vec![
-            "set".to_string(),
-            iface.to_string(),
-            "peer".to_string(),
-            peer.public_key.clone(),
-            "allowed-ips".to_string(),
-            peer.allowed_ips.clone(),
-        ];
-
-        if let Some(endpoint) = &peer.endpoint {
-            args.push("endpoint".to_string());
-            args.push(endpoint.clone());
-            args.push("persistent-keepalive".to_string());
-            args.push("25".to_string());
-        }
-
+        let args = peer_arguments(iface, peer);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         run_wg(&arg_refs).await?;
     }
@@ -242,11 +263,7 @@ async fn list_peer_public_keys(iface: &str) -> Result<Vec<String>> {
         anyhow::bail!("wg show peers failed iface={} stderr={}", iface, stderr);
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect())
+    Ok(parse_peer_keys(&String::from_utf8_lossy(&output.stdout)))
 }
 
 async fn interface_exists(iface: &str) -> Result<bool> {
@@ -341,5 +358,52 @@ mod tests {
         assert_eq!(parsed[0].public_key, "key");
         assert!(parsed[0].endpoint.is_none());
         assert_eq!(parsed[0].allowed_ips, "10.0.0.1/32");
+    }
+
+    #[test]
+    fn address_is_matched_as_a_whole_field() {
+        let listing = "5: wgmgmt0    inet 10.100.0.7/32 scope global wgmgmt0";
+        assert!(has_address(listing, "10.100.0.7/32"));
+        assert!(!has_address(listing, "10.100.0.7/3"));
+        assert!(!has_address(listing, "10.100.0.8/32"));
+        assert!(!has_address("", "10.100.0.7/32"));
+    }
+
+    #[test]
+    fn host_routes_keep_only_ipv4_destinations() {
+        let listing = "10.0.0.5 scope link\n10.0.0.6/32 scope link\n10.0.1.0/24 proto kernel\ndefault via 10.0.0.1\n\n";
+        let routes = parse_host_routes(listing);
+        assert_eq!(routes.len(), 2);
+        assert!(routes.contains("10.0.0.5"));
+        assert!(routes.contains("10.0.0.6"));
+    }
+
+    #[test]
+    fn peer_keys_skip_blank_lines() {
+        assert_eq!(
+            parse_peer_keys("key-a\n  key-b  \n\n"),
+            vec!["key-a".to_string(), "key-b".to_string()]
+        );
+        assert!(parse_peer_keys("\n").is_empty());
+    }
+
+    #[test]
+    fn peers_with_endpoints_get_a_keepalive() {
+        let mut peer = Peer {
+            public_key: "key".to_string(),
+            endpoint: None,
+            allowed_ips: "10.0.0.1/32".to_string(),
+        };
+        assert_eq!(
+            peer_arguments("wg0", &peer),
+            ["set", "wg0", "peer", "key", "allowed-ips", "10.0.0.1/32"]
+        );
+        peer.endpoint = Some("192.0.2.1:51820".to_string());
+        let args = peer_arguments("wg0", &peer);
+        assert_eq!(args.len(), 10);
+        assert_eq!(
+            args[6..],
+            ["endpoint", "192.0.2.1:51820", "persistent-keepalive", "25"]
+        );
     }
 }

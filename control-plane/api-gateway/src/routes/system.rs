@@ -371,3 +371,45 @@ async fn get_usage_history(
 
     Ok(Json(rows.into_iter().map(usage_point).collect()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_ranges_map_to_interval_and_bucket_size() {
+        assert_eq!(usage_range(Some("7d")), ("7 days", 3600));
+        assert_eq!(usage_range(Some("24h")), ("24 hours", 900));
+        assert_eq!(usage_range(Some("1h")), ("1 hour", 60));
+        assert_eq!(usage_range(Some("bogus")), ("1 hour", 60));
+        assert_eq!(usage_range(None), ("1 hour", 60));
+    }
+
+    #[test]
+    fn usage_sql_embeds_interval_bucket_and_agent_filter() {
+        let agent = Uuid::new_v4();
+        let filtered = usage_history_sql("7 days", 3600, Some(agent));
+        assert!(filtered.contains("INTERVAL '7 days'"));
+        assert!(filtered.contains("/ 3600) * 3600"));
+        assert!(filtered.contains(&format!("AND agent_id = '{agent}'")));
+
+        let unfiltered = usage_history_sql("1 hour", 60, None);
+        assert!(!unfiltered.contains("agent_id"));
+        assert!(unfiltered.contains("ORDER BY bucket ASC"));
+    }
+
+    #[test]
+    fn container_ids_are_twelve_hex_characters() {
+        std::env::remove_var("CSFX_INCLUDE_CONTAINERS");
+        assert!(is_container_id("0123456789ab"));
+        assert!(is_container_id("  0123456789AB \n"));
+        assert!(!is_container_id("0123456789a"));
+        assert!(!is_container_id("0123456789abc"));
+        assert!(!is_container_id("node-alpha01"));
+        assert!(!is_container_id("zzzzzzzzzzzz"));
+
+        std::env::set_var("CSFX_INCLUDE_CONTAINERS", "true");
+        assert!(!is_container_id("0123456789ab"));
+        std::env::remove_var("CSFX_INCLUDE_CONTAINERS");
+    }
+}
