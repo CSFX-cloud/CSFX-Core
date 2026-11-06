@@ -1529,6 +1529,7 @@ mod tests {
 
     fn runtime() -> FirecrackerRuntime {
         crate::client::install_test_crypto_provider();
+        let _tools = FakeTools::install(&[("ip", "exit 0")]);
         FirecrackerRuntime::new(
             "key".to_string(),
             Arc::new(crate::rg_dns::RgDnsRegistry::new()),
