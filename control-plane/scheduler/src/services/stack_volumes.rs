@@ -29,7 +29,7 @@ pub fn volume_name(stack_name: &str, mount: &ComposeVolumeMount) -> String {
         .unwrap_or_else(|| format!("{}-{}", stack_name, mount.source))
 }
 
-pub fn required_mounts<'a>(services: &'a [ComposeServiceSpec]) -> Vec<&'a ComposeVolumeMount> {
+pub fn required_mounts(services: &[ComposeServiceSpec]) -> Vec<&ComposeVolumeMount> {
     let mut mounts: Vec<&ComposeVolumeMount> = Vec::new();
     for mount in services.iter().flat_map(|service| &service.volumes) {
         if !mounts.iter().any(|known| known.source == mount.source) {
