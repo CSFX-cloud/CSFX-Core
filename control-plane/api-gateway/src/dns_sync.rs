@@ -561,4 +561,81 @@ mod tests {
             vec![("/skydns/internal/csfx/new/x1".to_string(), "c".to_string())]
         );
     }
+
+    fn with_variables<T>(pairs: &[(&str, Option<&str>)], check: impl FnOnce() -> T) -> T {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<_> = pairs
+            .iter()
+            .map(|(name, _)| (*name, std::env::var(name).ok()))
+            .collect();
+        for (name, value) in pairs {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+        let result = check();
+        for (name, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn zone_defaults_and_normalizes_environment_values() {
+        with_variables(&[("CSFX_LOCAL_ZONE", None)], || {
+            assert_eq!(zone_from_env(), "csfx.internal");
+        });
+        with_variables(&[("CSFX_LOCAL_ZONE", Some("  .Example.Test. "))], || {
+            assert_eq!(zone_from_env(), "example.test");
+        });
+        with_variables(&[("CSFX_LOCAL_ZONE", Some("  "))], || {
+            assert_eq!(zone_from_env(), "csfx.internal");
+        });
+    }
+
+    #[test]
+    fn platform_hostname_defaults_to_the_console_of_the_zone() {
+        with_variables(&[("CSFX_PLATFORM_HOSTNAME", None)], || {
+            assert_eq!(platform_hostname("csfx.internal"), "console.csfx.internal");
+        });
+        with_variables(
+            &[("CSFX_PLATFORM_HOSTNAME", Some(" .Cloud.Example. "))],
+            || {
+                assert_eq!(platform_hostname("csfx.internal"), "cloud.example");
+            },
+        );
+        with_variables(&[("CSFX_PLATFORM_HOSTNAME", Some(""))], || {
+            assert_eq!(platform_hostname("z.test"), "console.z.test");
+        });
+    }
+
+    #[test]
+    fn dns_servers_are_split_trimmed_and_filtered() {
+        with_variables(&[("CSFX_LOCAL_DNS_ADDRESSES", None)], || {
+            assert!(servers_from_env().is_empty());
+        });
+        with_variables(
+            &[("CSFX_LOCAL_DNS_ADDRESSES", Some(" 10.0.0.1, ,10.0.0.2 ,"))],
+            || assert_eq!(servers_from_env(), vec!["10.0.0.1", "10.0.0.2"]),
+        );
+    }
+
+    #[test]
+    fn hostnames_belong_to_a_zone_only_below_a_dot_boundary() {
+        assert!(in_zone("a.csfx.internal", "csfx.internal"));
+        assert!(!in_zone("csfx.internal", "csfx.internal"));
+        assert!(!in_zone("acsfx.internal", "csfx.internal"));
+        assert!(!in_zone("a.other.test", "csfx.internal"));
+    }
+
+    #[test]
+    fn record_keys_reverse_the_label_order() {
+        assert_eq!(record_key("a.b.example"), "/skydns/example/b/a/x1");
+        assert_eq!(zone_prefix("csfx.internal"), "/skydns/internal/csfx/");
+    }
 }
