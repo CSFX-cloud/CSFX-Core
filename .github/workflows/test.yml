@@ -68,7 +68,7 @@ jobs:
         run: cargo llvm-cov --no-report --workspace
 
       - name: Database integration tests
-        run: cargo llvm-cov --no-report -p shared -p registry -p scheduler -- --ignored
+        run: cargo llvm-cov --no-report -p shared -p registry -p scheduler -p api-gateway -- --ignored
 
       - name: Coverage reports
         run: |
