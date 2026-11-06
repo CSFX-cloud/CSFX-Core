@@ -1,7 +1,14 @@
-{ hostName }:
+{ hostName, singleNode }:
 { lib, pkgs, ... }:
 let
   binDir = "/opt/csfx-dev/aarch64-unknown-linux-musl/debug";
+  rbdSimDir = "/var/lib/csfx-agent/rbd-sim";
+
+  rbdSim = pkgs.writeShellApplication {
+    name = "rbd";
+    runtimeInputs = [ pkgs.bash pkgs.util-linux pkgs.coreutils pkgs.findutils pkgs.gawk pkgs.jq ];
+    text = ''exec bash /csfx-dev/rbd-sim.sh "$@"'';
+  };
 
   devUnits = {
     csfx-migrate = "csfx-migrate";
@@ -23,6 +30,8 @@ in
   };
 
   users.mutableUsers = lib.mkForce true;
+
+  systemd.tmpfiles.rules = [ "d ${rbdSimDir} 0750 csfx-agent csfx-agent -" ];
 
   services = {
     csfx-agent = {
@@ -53,7 +62,10 @@ in
         interface = "enp0s2";
       };
     };
-    csfx-garage.enable = true;
+    csfx-garage = {
+      enable = true;
+      replicationFactor = lib.mkIf singleNode 1;
+    };
     csfx-openbao.enable = true;
     csfx-site-registry.enable = true;
   };
@@ -70,6 +82,8 @@ in
       csfx-mgmt-up.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --mgmt-up";
       csfx-master-join.serviceConfig.ExecStart = lib.mkForce "${binDir}/csfx-agent --join-master";
       csfx-agent.environment.CSFX_SSH_CONTROL = lib.mkForce "0";
+      csfx-agent.environment.CSFX_RBD_SIM_DIR = rbdSimDir;
+      csfx-agent.path = [ rbdSim ];
       sshd.wantedBy = lib.mkForce [ "multi-user.target" ];
     }
   ];

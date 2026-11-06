@@ -39,18 +39,21 @@
         "csfx-site-registry"
       ];
 
-      mkNode = hostName: nixpkgs.lib.nixosSystem {
+      mkNode = hostName: singleNode: nixpkgs.lib.nixosSystem {
         system = "aarch64-linux";
         specialArgs = { inherit versions; };
         modules = infraModules ++ [
           "${nixos-lima}/lima.nix"
-          (import ./dev.nix { inherit hostName; })
+          (import ./dev.nix { inherit hostName singleNode; })
         ];
       };
 
-      nodeNames = [ "cp1" "cp2" "cp3" "w1" ];
+      mkNodes = prefix: singleNode: hostNames: nixpkgs.lib.listToAttrs (map
+        (hostName: nixpkgs.lib.nameValuePair "${prefix}${hostName}" (mkNode hostName singleNode))
+        hostNames);
     in
     {
-      nixosConfigurations = nixpkgs.lib.genAttrs nodeNames mkNode;
+      nixosConfigurations =
+        mkNodes "" true [ "cp1" "w1" ] // mkNodes "ha-" false [ "cp1" "cp2" "cp3" ];
     };
 }
