@@ -50,11 +50,6 @@ jobs:
           ETCD_INITIAL_CLUSTER: default=http://127.0.0.1:2380
         ports:
           - 2379:2379
-        options: >-
-          --health-cmd "etcdctl endpoint health"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v6
 
@@ -79,6 +74,15 @@ jobs:
             target
           key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-test-
+
+      - name: Wait for etcd
+        run: |
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:2379/health && exit 0
+            sleep 2
+          done
+          echo "[ERROR] etcd did not become healthy"
+          exit 1
 
       - name: Unit and workspace tests
         run: cargo llvm-cov --no-report --workspace
