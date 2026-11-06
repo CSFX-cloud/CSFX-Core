@@ -348,4 +348,138 @@ mod tests {
             .unwrap();
         isolate_bridge("csfxrg1", &[]).await.unwrap();
     }
+
+    use crate::testing::FakeTools;
+
+    const SUCCEEDING: &str = "exit 0";
+    const LISTING: &str = r#"case "$*" in *"list chain"*) printf '%s\n' 'iifname "br1" oifname "br2" drop # handle 4' 'iifname "br1" accept comment "br1-mesh" # handle 9' 'masquerade comment "br1-snat" # handle 11' 'dnat to 10.0.0.2:80 comment "w-1" # handle 15';; esac"#;
+
+    #[tokio::test]
+    async fn base_tables_and_chains_are_created_in_order() {
+        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
+
+        ensure_table_and_chain().await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(calls.len(), 5);
+        assert_eq!(calls[0], "add table inet csfx");
+        assert!(calls[1].starts_with("add chain inet csfx rg_isolation"));
+        assert_eq!(calls[2], "add table ip csfx_nat");
+        assert!(calls[3].contains("node_port_dnat"));
+        assert!(calls[4].contains("node_port_snat"));
+    }
+
+    #[tokio::test]
+    async fn existing_objects_are_not_an_error_but_other_failures_are() {
+        {
+            let _tools = FakeTools::install(&[("nft", "echo 'Error: File exists' >&2\nexit 1")]);
+            run_nft(&["add", "table", "inet", "csfx"]).await.unwrap();
+        }
+        let _tools = FakeTools::install(&[("nft", "echo 'syntax error' >&2\nexit 1")]);
+        let error = run_nft(&["add", "bogus"]).await.unwrap_err().to_string();
+        assert!(error.contains("nft command failed"));
+        assert!(error.contains("syntax error"));
+    }
+
+    #[tokio::test]
+    async fn isolation_adds_a_drop_rule_in_both_directions() {
+        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
+
+        isolate_bridge("br1", &["br2".to_string(), "br3".to_string()])
+            .await
+            .unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(calls.len(), 4);
+        assert!(calls
+            .contains(&"add rule inet csfx rg_isolation iifname br1 oifname br2 drop".to_string()));
+        assert!(calls
+            .contains(&"add rule inet csfx rg_isolation iifname br3 oifname br1 drop".to_string()));
+    }
+
+    #[tokio::test]
+    async fn node_port_rules_forward_to_the_guest() {
+        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
+
+        add_node_port_dnat("w-1", "tcp", 30080, "10.0.0.2", 80)
+            .await
+            .unwrap();
+        add_rg_port_dnat("w-1", "udp", "10.0.0.1", 5353, "10.0.0.2", 53)
+            .await
+            .unwrap();
+        dnat_bridge_port("br1", "10.0.0.1", 3900).await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert!(calls[0].contains("tcp dport 30080 dnat to 10.0.0.2:80 comment \"w-1\""));
+        assert!(calls[1].contains("ip daddr 10.0.0.1 udp dport 5353 dnat to 10.0.0.2:53"));
+        assert!(calls[2]
+            .contains("iifname br1 ip daddr 10.0.0.1 tcp dport 3900 dnat to 127.0.0.1:3900"));
+        assert!(calls[2].ends_with("comment \"br1-s3\""));
+    }
+
+    #[tokio::test]
+    async fn masquerade_covers_dnat_and_outbound_traffic() {
+        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
+
+        masquerade_bridge_traffic("br1").await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].contains("ct status dnat masquerade"));
+        assert!(calls[1].contains("oifname != br1 masquerade"));
+        assert!(calls
+            .iter()
+            .all(|call| call.ends_with("comment \"br1-snat\"")));
+    }
+
+    #[tokio::test]
+    async fn mesh_forwarding_replaces_the_previous_rule() {
+        let tools = FakeTools::install(&[("nft", LISTING)]);
+
+        allow_mesh_forwarding("br1", "wg0").await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert!(calls[0].starts_with("-a list chain ip csfx_nat node_port_snat"));
+        assert_eq!(calls[1], "delete rule ip csfx_nat node_port_snat handle 9");
+        assert!(calls[2]
+            .starts_with("insert rule ip csfx_nat node_port_snat iifname br1 oifname wg0 accept"));
+    }
+
+    #[tokio::test]
+    async fn workload_rules_are_removed_by_handle() {
+        let tools = FakeTools::install(&[("nft", LISTING)]);
+
+        remove_node_port_rules("w-1").await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1], "delete rule ip csfx_nat node_port_dnat handle 15");
+    }
+
+    #[tokio::test]
+    async fn bridge_removal_clears_isolation_snat_and_mesh_rules() {
+        let tools = FakeTools::install(&[("nft", LISTING)]);
+
+        remove_bridge_rules("br1").await.unwrap();
+
+        let deletes: Vec<_> = tools
+            .calls("nft")
+            .into_iter()
+            .filter(|call| call.starts_with("delete rule"))
+            .collect();
+        assert!(deletes.contains(&"delete rule inet csfx rg_isolation handle 4".to_string()));
+        assert!(deletes.contains(&"delete rule inet csfx rg_isolation handle 9".to_string()));
+        assert!(deletes.contains(&"delete rule ip csfx_nat node_port_snat handle 11".to_string()));
+        assert!(deletes.contains(&"delete rule ip csfx_nat node_port_snat handle 9".to_string()));
+    }
+
+    #[tokio::test]
+    async fn failed_rule_deletion_is_propagated() {
+        let _tools = FakeTools::install(&[(
+            "nft",
+            "case \"$*\" in *delete*) echo denied >&2; exit 1;; esac\nprintf '%s\\n' 'x comment \"w-1\" # handle 3'",
+        )]);
+
+        assert!(remove_node_port_rules("w-1").await.is_err());
+    }
 }

@@ -26,6 +26,8 @@ mod spec;
 mod ssh_control;
 mod ssh_keys;
 mod system;
+#[cfg(test)]
+mod testing;
 mod update_watch;
 mod vip_sync;
 mod wg_identity;
