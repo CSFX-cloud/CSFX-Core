@@ -194,6 +194,18 @@ impl Harness {
         token: Option<&str>,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
+        self.send_from("127.0.0.1:4000", method, uri, token, body)
+            .await
+    }
+
+    pub async fn send_from(
+        &self,
+        peer: &str,
+        method: Method,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
@@ -205,7 +217,7 @@ impl Harness {
         let mut request = builder.body(payload).unwrap();
         request
             .extensions_mut()
-            .insert(ConnectInfo("127.0.0.1:4000".parse::<SocketAddr>().unwrap()));
+            .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
         let response = self.app.clone().oneshot(request).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
