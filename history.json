@@ -28,5 +28,27 @@
     "sha": "9bdf80f",
     "date": "2026-11-06",
     "lines": 13.71
+  },
+  {
+    "sha": "1a1df97",
+    "date": "2026-11-06",
+    "lines": 78.46,
+    "crates": {
+      "agent": 74.42,
+      "api-gateway": 86.22,
+      "csfx-guest-init": 21.78,
+      "csfx-migrate": 0,
+      "csfx-updater": 43.77,
+      "entity": 17.68,
+      "failover-controller": 77.97,
+      "migration": 60.84,
+      "object-storage": 67.34,
+      "registry": 60.69,
+      "scheduler": 82.89,
+      "sdn-controller": 61.96,
+      "shared": 59.86,
+      "site-builder": 92.57,
+      "volume-manager": 90.19
+    }
   }
 ]
