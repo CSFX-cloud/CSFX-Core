@@ -14,6 +14,17 @@ use crate::models::volume::{
     VolumeResponse,
 };
 
+pub enum ServiceError {
+    Conflict(String),
+    Internal(String),
+}
+
+impl From<String> for ServiceError {
+    fn from(message: String) -> Self {
+        Self::Internal(message)
+    }
+}
+
 const IMAGE_FEATURES: [&str; 2] = ["layering", "exclusive-lock"];
 
 pub struct VolumeService {
@@ -70,11 +81,18 @@ impl VolumeService {
         Ok(model.map(db::into_response))
     }
 
-    pub async fn delete_volume(&self, id: Uuid) -> Result<(), String> {
+    pub async fn delete_volume(&self, id: Uuid) -> Result<(), ServiceError> {
         let model = db::get_by_id(&self.db, id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Volume {} not found", id))?;
+
+        if model.attached_to_agent.is_some() {
+            return Err(ServiceError::Conflict(format!(
+                "Volume {} is attached and cannot be deleted",
+                id
+            )));
+        }
 
         if let Some(ceph) = &self.ceph {
             let rbd = &ceph.rbd_manager;
@@ -89,14 +107,14 @@ impl VolumeService {
             }
         }
 
-        db::delete(&self.db, id).await.map_err(|e| e.to_string())
+        Ok(db::delete(&self.db, id).await.map_err(|e| e.to_string())?)
     }
 
     pub async fn attach_volume(
         &self,
         volume_id: Uuid,
         req: AttachVolumeRequest,
-    ) -> Result<VolumeResponse, String> {
+    ) -> Result<VolumeResponse, ServiceError> {
         db::get_by_id(&self.db, volume_id)
             .await
             .map_err(|e| e.to_string())?
@@ -104,7 +122,10 @@ impl VolumeService {
 
         let updated = db::attach(&self.db, volume_id, req.agent_id, req.workload_id)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                ServiceError::Conflict(format!("Volume {} is attached to another agent", volume_id))
+            })?;
 
         Ok(db::into_response(updated))
     }

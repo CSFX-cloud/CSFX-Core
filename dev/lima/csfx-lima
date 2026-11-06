@@ -59,6 +59,14 @@ instance() {
   echo "csfx-$1"
 }
 
+flake_attr() {
+  if [ "$(mode)" = ha ]; then
+    echo "ha-$1"
+  else
+    echo "$1"
+  fi
+}
+
 require_tools() {
   local tool
   for tool in limactl nix rustup cargo-zigbuild zig watchexec jq curl openssl; do
@@ -167,7 +175,7 @@ rebuild_node() {
   mkdir -p "$STATE_DIR"
   report_progress "$1" "$rebuild_log" "$started" &
   heartbeat_pid=$!
-  on_node "$1" sudo nixos-rebuild "$2" --flake "path:/csfx-dev#$1" $(flake_overrides) > "$rebuild_log" 2>&1 || status=$?
+  on_node "$1" sudo nixos-rebuild "$2" --flake "path:/csfx-dev#$(flake_attr "$1")" $(flake_overrides) > "$rebuild_log" 2>&1 || status=$?
   kill "$heartbeat_pid" 2> /dev/null || true
   wait "$heartbeat_pid" 2> /dev/null || true
   if [ "$status" -eq 0 ]; then
@@ -181,7 +189,7 @@ rebuild_node() {
 
 copy_closure() {
   local node="$1" out
-  out="$(on_node cp1 nix build --no-link --print-out-paths "path:/csfx-dev#nixosConfigurations.$node.config.system.build.toplevel" $(flake_overrides))"
+  out="$(on_node cp1 nix build --no-link --print-out-paths "path:/csfx-dev#nixosConfigurations.$(flake_attr "$node").config.system.build.toplevel" $(flake_overrides))"
   log INFO "copying closure node=$node"
   on_node cp1 sh -c "nix-store --export \$(nix-store --query --requisites $out)" | on_node "$node" sudo nix-store --import > /dev/null
 }

@@ -19,7 +19,7 @@ use crate::{auth::agent::AgentApiKey, AppState};
 
 const ASSIGNMENT_SIGNAL: &str = "assignment";
 
-fn is_internal_source(addr: &SocketAddr) -> bool {
+pub(crate) fn is_internal_source(addr: &SocketAddr) -> bool {
     let ip = addr.ip();
     ip.is_loopback()
         || match ip {

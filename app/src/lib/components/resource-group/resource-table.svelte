@@ -19,7 +19,19 @@
     import { deleteSite, redeploySite, type SiteSummary } from "$lib/api/sites";
     import { deleteVault, type Vault } from "$lib/api/vaults";
     import { buildResourceItems, filterResources, workloadHref, type ResourceTab } from "$lib/utils/resource-items";
+    import {
+        singleDeletePreview,
+        stackDeletePreview,
+        stopAndWait,
+        volumeDeletePreview,
+        workloadDeletePreview,
+        displayName,
+        type DeleteEntry,
+        type DeletePreview,
+        type GroupInventory,
+    } from "$lib/utils/delete-preview";
     import BucketRow from "./bucket-row.svelte";
+    import DeleteDialog from "./delete-dialog.svelte";
     import RegistryRow from "./registry-row.svelte";
     import SiteRow from "./site-row.svelte";
     import StackRow from "./stack-row.svelte";
@@ -37,6 +49,7 @@
     const NODE_ID_LENGTH = 8;
 
     type Props = {
+        groupId: string;
         groupName: string;
         base: string;
         workloads: Workload[];
@@ -51,10 +64,11 @@
         onError: (message: string) => void;
     };
 
-    let { groupName, base, workloads, volumes, buckets, vaults, sites, registries, gateways, nodeNames, onChanged, onError }: Props = $props();
+    let { groupId, groupName, base, workloads, volumes, buckets, vaults, sites, registries, gateways, nodeNames, onChanged, onError }: Props = $props();
 
     let activeTab = $state<ResourceTab>("all");
     let expandedStacks = $state<Set<string>>(new Set());
+    let deleteDialog = $state<DeleteDialog | null>(null);
 
     const allResources = $derived(buildResourceItems(workloads, volumes, buckets, vaults, sites, registries));
     const visible = $derived(filterResources(allResources, activeTab));
@@ -71,6 +85,28 @@
         } catch (e) {
             onError(e instanceof Error ? e.message : failure);
         }
+    }
+
+    function inventory(): GroupInventory {
+        return { workloads, volumes, buckets, vaults, sites, registries, gateways };
+    }
+
+    function requestDelete(title: string, name: string, preview: DeletePreview, remove: () => Promise<unknown>) {
+        deleteDialog?.open({
+            title,
+            name,
+            requireStop: false,
+            load: async () => preview,
+            run: async (loaded, stopRunning) => {
+                if (stopRunning) await stopAndWait(token(), groupId, loaded.running);
+                await remove();
+                await onChanged();
+            },
+        });
+    }
+
+    function requestSimpleDelete(title: string, entry: DeleteEntry, remove: () => Promise<unknown>) {
+        requestDelete(title, entry.name, singleDeletePreview(entry), remove);
     }
 
     function toggleStack(stackId: string) {
@@ -99,9 +135,11 @@
         nodeName={nodeName(w.assigned_agent_id)}
         onRestart={() => run(() => restartWorkload(token(), w.id), "Failed to restart container")}
         onStop={() => run(() => stopWorkload(token(), w.id), "Failed to stop container")}
-        onDelete={() => run(() => deleteWorkload(token(), w.id), "Failed to delete container")}
+        onDelete={() => requestDelete(`Delete ${displayName(w)}`, displayName(w), workloadDeletePreview(w, inventory()), () => deleteWorkload(token(), w.id))}
     />
 {/snippet}
+
+<DeleteDialog bind:this={deleteDialog} />
 
 {#if allResources.length === 0}
     <section class="cx-stage empty" aria-label="No resources">
@@ -149,7 +187,7 @@
                                 onToggle={() => toggleStack(stack.stack_id)}
                                 onRestart={() => run(() => restartStack(token(), stack.stack_id), "Failed to restart stack")}
                                 onStop={() => run(() => stopStack(token(), stack.stack_id), "Failed to stop stack")}
-                                onDelete={() => run(() => deleteStack(token(), stack.stack_id), "Failed to delete stack")}
+                                onDelete={() => requestDelete(`Delete ${stack.stack_name}`, stack.stack_name, stackDeletePreview(stack.children, inventory()), () => deleteStack(token(), stack.stack_id))}
                             />
                             {#if expanded}
                                 {#each stack.children as child (child.id)}
@@ -157,30 +195,30 @@
                                 {/each}
                             {/if}
                         {:else if item.kind === "volume"}
-                            <VolumeRow v={item.data} onDelete={() => run(() => deleteVolume(token(), item.data.id), "Failed to delete volume")} />
+                            <VolumeRow v={item.data} onDelete={() => requestDelete(`Delete ${item.data.name}`, item.data.name, volumeDeletePreview(item.data, inventory()), () => deleteVolume(token(), item.data.id))} />
                         {:else if item.kind === "vault"}
                             <VaultRow
                                 v={item.data}
                                 href="{base}/vault/{item.data.id}"
-                                onDelete={() => run(() => deleteVault(token(), item.data.resource_group_id, item.data.id), "Failed to delete vault")}
+                                onDelete={() => requestSimpleDelete(`Delete ${item.data.name}`, { type: "Vault", name: item.data.name, status: item.data.sealed ? "sealed" : "active" }, () => deleteVault(token(), item.data.resource_group_id, item.data.id))}
                             />
                         {:else if item.kind === "registry"}
                             <RegistryRow
                                 r={item.data}
                                 href="{base}/registry/{item.data.id}"
-                                onDelete={() => run(() => deleteRegistry(token(), item.data.resource_group_id, item.data.id), "Failed to delete registry")}
+                                onDelete={() => requestSimpleDelete(`Delete ${item.data.name}`, { type: "Registry", name: item.data.name, status: "active" }, () => deleteRegistry(token(), item.data.resource_group_id, item.data.id))}
                             />
                         {:else if item.kind === "site"}
                             <SiteRow
                                 s={item.data}
                                 href="{base}/site/{item.data.id}"
                                 onRedeploy={() => run(() => redeploySite(token(), item.data.resource_group_id, item.data.id), "Failed to start deployment")}
-                                onDelete={() => run(() => deleteSite(token(), item.data.resource_group_id, item.data.id), "Failed to delete web app")}
+                                onDelete={() => requestSimpleDelete(`Delete ${item.data.name}`, { type: "Web app", name: item.data.name, status: item.data.latest?.status ?? "no deployment" }, () => deleteSite(token(), item.data.resource_group_id, item.data.id))}
                             />
                         {:else}
                             <BucketRow
                                 b={item.data}
-                                onDelete={() => run(() => deleteBucket(token(), item.data.id), "Failed to delete bucket")}
+                                onDelete={() => requestSimpleDelete(`Delete ${item.data.name}`, { type: "Bucket", name: item.data.name, status: item.data.status }, () => deleteBucket(token(), item.data.id))}
                             />
                         {/if}
                     {/each}

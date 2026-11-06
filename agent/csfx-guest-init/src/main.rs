@@ -1,16 +1,18 @@
 use anyhow::{Context, Result};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
-use nix::mount::{MsFlags, mount};
+use nix::mount::{MsFlags, mount, umount};
 use nix::pty::openpty;
-use nix::sys::reboot::{RebootMode, reboot};
+use nix::sys::reboot::{RebootMode, reboot, set_cad_enabled};
+use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::Pid;
+use nix::unistd::{Pid, sync};
 use serde::Deserialize;
 use std::os::fd::{AsRawFd, OwnedFd};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::signal::unix::{Signal as TokioSignal, SignalKind, signal};
 use tokio::time::{Duration, timeout};
 use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener};
 use tracing::{debug, error, info, warn};
@@ -27,6 +29,7 @@ const MMDS_BOOTSTRAP_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(169, 254, 
 const MMDS_BOOTSTRAP_NETMASK: std::net::Ipv4Addr = std::net::Ipv4Addr::new(255, 255, 0, 0);
 const MMDS_TIMEOUT: Duration = Duration::from_secs(5);
 const RESOLV_CONF_PATH: &str = "/etc/resolv.conf";
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Deserialize)]
 struct MmdsVolume {
@@ -64,10 +67,15 @@ async fn main() {
 
     info!("csfx-guest-init starting");
 
+    if let Err(e) = set_cad_enabled(false) {
+        warn!(error = %e, "Failed to route ctrl-alt-del to init");
+    }
+
     if let Err(e) = run().await {
         error!(error = ?e, "csfx-guest-init failed");
     }
 
+    flush_volumes();
     power_off();
 }
 
@@ -149,22 +157,13 @@ async fn run() -> Result<()> {
     let log_task = tokio::spawn(stream_logs(log_listener, stdout_read, stderr_read));
     tokio::spawn(serve_exec(exec_listener));
 
-    let exit_status = tokio::task::spawn_blocking(move || {
-        loop {
-            match waitpid(container_pid, None) {
-                Ok(WaitStatus::Exited(pid, code)) if pid == container_pid => {
-                    return Ok(WaitStatus::Exited(pid, code));
-                }
-                Ok(WaitStatus::Signaled(pid, sig, core)) if pid == container_pid => {
-                    return Ok(WaitStatus::Signaled(pid, sig, core));
-                }
-                Ok(_) => continue,
-                Err(nix::errno::Errno::EINTR) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    })
-    .await
+    let mut wait_task = tokio::task::spawn_blocking(move || wait_for_exit(container_pid));
+    let mut shutdown = ShutdownSignals::register()?;
+
+    let exit_status = tokio::select! {
+        joined = &mut wait_task => joined,
+        _ = shutdown.recv() => stop_container(container_pid, &mut wait_task).await,
+    }
     .context("Container wait task panicked")?
     .context("Failed to wait on container process")?;
     info!(status = ?exit_status, "entrypoint exited");
@@ -658,6 +657,92 @@ fn mount_pseudo_filesystems() {
             warn!(target = %target, error = %e, "Failed to mount pseudo filesystem");
         }
     }
+}
+
+fn wait_for_exit(container_pid: Pid) -> nix::Result<WaitStatus> {
+    loop {
+        match waitpid(container_pid, None) {
+            Ok(status @ WaitStatus::Exited(pid, _)) if pid == container_pid => return Ok(status),
+            Ok(status @ WaitStatus::Signaled(pid, _, _)) if pid == container_pid => {
+                return Ok(status);
+            }
+            Ok(_) | Err(nix::errno::Errno::EINTR) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+struct ShutdownSignals {
+    terminate: TokioSignal,
+    interrupt: TokioSignal,
+}
+
+impl ShutdownSignals {
+    fn register() -> Result<Self> {
+        Ok(Self {
+            terminate: signal(SignalKind::terminate())
+                .context("Failed to register SIGTERM handler")?,
+            interrupt: signal(SignalKind::interrupt())
+                .context("Failed to register SIGINT handler")?,
+        })
+    }
+
+    async fn recv(&mut self) {
+        tokio::select! {
+            _ = self.terminate.recv() => {}
+            _ = self.interrupt.recv() => {}
+        }
+    }
+}
+
+async fn stop_container(
+    container_pid: Pid,
+    wait_task: &mut tokio::task::JoinHandle<nix::Result<WaitStatus>>,
+) -> Result<nix::Result<WaitStatus>, tokio::task::JoinError> {
+    info!(
+        container_pid = container_pid.as_raw(),
+        "shutdown requested, terminating container"
+    );
+    if let Err(e) = kill(container_pid, Signal::SIGTERM) {
+        warn!(error = %e, "Failed to send SIGTERM to container");
+    }
+    if let Ok(joined) = timeout(SHUTDOWN_GRACE, &mut *wait_task).await {
+        return joined;
+    }
+    warn!(
+        grace_seconds = SHUTDOWN_GRACE.as_secs(),
+        "container ignored SIGTERM, killing"
+    );
+    if let Err(e) = kill(container_pid, Signal::SIGKILL) {
+        warn!(error = %e, "Failed to send SIGKILL to container");
+    }
+    wait_task.await
+}
+
+fn volume_mount_points() -> Vec<String> {
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    mounts
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let device = fields.next()?;
+            let mount_point = fields.next()?;
+            let is_volume =
+                device.starts_with("/dev/vd") && mount_point.starts_with(CONTAINER_BUNDLE_PATH);
+            is_volume.then(|| mount_point.to_string())
+        })
+        .collect()
+}
+
+fn flush_volumes() {
+    sync();
+    for mount_point in volume_mount_points().into_iter().rev() {
+        match umount(mount_point.as_str()) {
+            Ok(()) => info!(mount_point = %mount_point, "Volume unmounted"),
+            Err(e) => error!(mount_point = %mount_point, error = %e, "Failed to unmount volume"),
+        }
+    }
+    sync();
 }
 
 fn power_off() -> ! {

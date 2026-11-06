@@ -9,11 +9,9 @@ use uuid::Uuid;
 #[derive(Debug, Deserialize, Clone)]
 pub struct AssignedVolume {
     pub id: String,
-    pub name: String,
     pub pool: String,
     pub image_name: String,
     pub status: String,
-    pub mapped_device: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -835,10 +833,7 @@ impl ApiClient {
             .await
             .context("Failed to parse volumes response")?;
 
-        Ok(all
-            .into_iter()
-            .filter(|v| v.status == "in_use" && v.mapped_device.is_none())
-            .collect())
+        Ok(all.into_iter().filter(|v| v.status == "in_use").collect())
     }
 }
 

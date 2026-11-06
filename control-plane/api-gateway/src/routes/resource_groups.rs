@@ -518,8 +518,48 @@ pub async fn delete_resource_group_icon_image(
     ))
 }
 
+type ContainedResource = (&'static str, Uuid, String);
+
+async fn contained_resources(
+    db: &sea_orm::DatabaseConnection,
+    group_id: Uuid,
+) -> Result<Vec<ContainedResource>, sea_orm::DbErr> {
+    let workloads = Workloads::find()
+        .filter(workloads::Column::ResourceGroupId.eq(group_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| ("workload", row.id, row.name));
+    let volumes = Volumes::find()
+        .filter(volumes::Column::ResourceGroupId.eq(group_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| ("volume", row.id, row.name));
+    let buckets = Buckets::find()
+        .filter(buckets::Column::ResourceGroupId.eq(group_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| ("bucket", row.id, row.name));
+    Ok(workloads.chain(volumes).chain(buckets).collect())
+}
+
+fn audit_cascade(actor: Uuid, group_id: Uuid, resources: &[ContainedResource]) {
+    for (kind, id, name) in resources {
+        shared::audit!(
+            actor,
+            "resource_groups.cascade_delete",
+            *kind,
+            id,
+            resource_group_id = group_id,
+            name = name
+        );
+    }
+}
+
 pub async fn delete_resource_group(
-    CanManageResourceGroups(_claims): CanManageResourceGroups,
+    CanManageResourceGroups(claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -563,6 +603,14 @@ pub async fn delete_resource_group(
         ));
     }
 
+    let contained = contained_resources(&state.db_conn, id).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to list contained resources");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "database error" })),
+        )
+    })?;
+
     let mut active: resource_groups::ActiveModel = group.into();
     active.status = Set("deleting".to_string());
     active.updated_at = Set(Some(Utc::now().naive_utc()));
@@ -593,6 +641,7 @@ pub async fn delete_resource_group(
             )
         })?;
 
+    audit_cascade(claims.user_id, id, &contained);
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

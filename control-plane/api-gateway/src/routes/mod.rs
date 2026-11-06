@@ -28,6 +28,7 @@ pub mod cluster_vip;
 pub mod dns_records;
 pub mod events;
 pub mod identity_providers;
+pub mod image_resolution;
 pub mod ingress;
 pub mod ingress_gateways;
 pub mod logs;
@@ -134,7 +135,8 @@ pub fn create_router() -> Router<AppState> {
     let internal_api_router = Router::new()
         .merge(registry::registry_routes())
         .merge(ssh_keys::ssh_keys_internal_routes())
-        .merge(agent_stream::agent_stream_internal_routes());
+        .merge(agent_stream::agent_stream_internal_routes())
+        .merge(image_resolution::image_resolution_internal_routes());
 
     let agent_unmetered_router = Router::new()
         .merge(agents::agents_unmetered_routes())

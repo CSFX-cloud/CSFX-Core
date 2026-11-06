@@ -29,6 +29,8 @@ const API_SOCKET_NAME: &str = "firecracker.socket";
 const METRICS_FILE_NAME: &str = "metrics.fifo";
 const JAIL_KERNEL_NAME: &str = "vmlinux";
 const JAIL_ROOTFS_NAME: &str = "rootfs.ext4";
+const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
+const GRACEFUL_STOP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn firecracker_bin_path() -> String {
     std::env::var("CSFX_FIRECRACKER_BIN_PATH")
@@ -486,10 +488,14 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 
     async fn stop_workload(&self, workload_handle: &str) -> Result<()> {
-        let mut handles = self.handles.lock().await;
-        let Some(handle) = handles.remove(workload_handle) else {
+        let removed = self.handles.lock().await.remove(workload_handle);
+        let Some(handle) = removed else {
             return Ok(());
         };
+
+        if let Err(e) = shutdown_guest(&handle).await {
+            warn!(workload_id = %handle.workload_id, error = %e, "Graceful guest shutdown failed, forcing stop");
+        }
 
         let _ = Command::new("systemctl")
             .args([
@@ -882,13 +888,15 @@ async fn spawn_jailer(
     anyhow::bail!("jailer process for id {} did not appear", jailer_id)
 }
 
-async fn remove_chroot_dir_privileged(path: &Path) -> Result<()> {
-    let slug: String = path
-        .to_string_lossy()
+fn unit_slug(path: &Path) -> String {
+    path.to_string_lossy()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let unit = format!("csfx-jailer-cleanup-{slug}");
+        .collect()
+}
+
+async fn remove_chroot_dir_privileged(path: &Path) -> Result<()> {
+    let unit = format!("csfx-jailer-cleanup-{}", unit_slug(path));
 
     let status = Command::new("systemd-run")
         .args([
@@ -1037,6 +1045,29 @@ async fn read_sidecar_metadata(chroot_dir: &Path) -> Option<VmSidecarMetadata> {
         .await
         .ok()?;
     serde_json::from_slice(&content).ok()
+}
+
+async fn shutdown_guest(handle: &VmHandle) -> Result<()> {
+    let jailer_id = jailer_short_id(&handle.workload_id);
+    let api_socket = jailer_vm_root_dir(&handle.chroot_dir, &jailer_id).join(API_SOCKET_NAME);
+
+    FirecrackerApiClient::new(api_socket.to_string_lossy().to_string())
+        .put("/actions", &json!({ "action_type": "SendCtrlAltDel" }))
+        .await
+        .context("Failed to request guest shutdown")?;
+
+    let deadline = tokio::time::Instant::now() + GRACEFUL_STOP_TIMEOUT;
+    while find_live_jailer_pid(&jailer_id).await.is_some() {
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "guest did not power off within {} seconds",
+                GRACEFUL_STOP_TIMEOUT.as_secs()
+            );
+        }
+        tokio::time::sleep(GRACEFUL_STOP_POLL_INTERVAL).await;
+    }
+
+    Ok(())
 }
 
 async fn find_live_jailer_pid(jailer_id: &str) -> Option<u32> {
@@ -1270,6 +1301,7 @@ async fn attach_volume_drives(
     for (index, volume_mount) in volume_mounts.iter().enumerate() {
         let guest_device = guest_device_letter(index);
         let jail_device_name = format!("vd-{}", volume_mount.volume_id);
+        let drive_id = volume_mount.volume_id.replace('-', "_");
 
         stage_block_device_into_jail(&volume_mount.device_path, vm_root_dir, &jail_device_name)
             .await
@@ -1277,12 +1309,13 @@ async fn attach_volume_drives(
 
         client
             .put(
-                &format!("/drives/{}", volume_mount.volume_id),
+                &format!("/drives/{}", drive_id),
                 &json!({
-                    "drive_id": volume_mount.volume_id,
+                    "drive_id": drive_id,
                     "path_on_host": jail_device_name,
                     "is_root_device": false,
                     "is_read_only": false,
+                    "cache_type": "Writeback",
                 }),
             )
             .await
@@ -1313,15 +1346,16 @@ async fn stage_block_device_into_jail(
     let target_path = vm_root_dir.join(jail_device_name);
 
     let status = Command::new("systemd-run")
-        .args([
-            "--pipe",
-            "--wait",
-            "--collect",
-            "--uid=0",
-            "--gid=0",
-            "sh",
-            "-c",
-        ])
+        .args(["--pipe", "--wait", "--collect", "--uid=0", "--gid=0"])
+        .arg(format!(
+            "--unit=csfx-jailer-mknod-{}",
+            unit_slug(&target_path)
+        ))
+        .arg(format!(
+            "--setenv=PATH={}",
+            std::env::var("PATH").unwrap_or_default()
+        ))
+        .args(["/bin/sh", "-c"])
         .arg(format!(
             "rm -f {target} && mknod {target} b {major} {minor} && chown {uid}:{gid} {target}",
             target = target_path.to_string_lossy(),
