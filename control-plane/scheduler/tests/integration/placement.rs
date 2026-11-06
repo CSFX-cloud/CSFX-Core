@@ -1,10 +1,12 @@
 use scheduler::db::workloads;
 use scheduler::models::workload::{CreateWorkloadRequest, WorkloadStatus};
+use sea_orm::EntityTrait;
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::common::{
-    insert_agent, insert_resource_group, placing, small_request, unique_name, Placing,
+    insert_agent, insert_resource_group, insert_volume, placing, request_with_volumes,
+    small_request, unique_name, Placing,
 };
 
 async fn placement_key_exists(fixture: &Placing, workload_id: Uuid) -> bool {
@@ -292,4 +294,99 @@ async fn redeploying_an_unknown_stack_fails() {
         .unwrap_err();
 
     assert!(error.contains("not found"));
+}
+
+async fn volume_state(fixture: &Placing, volume_id: Uuid) -> entity::entities::volumes::Model {
+    entity::entities::volumes::Entity::find_by_id(volume_id)
+        .one(&fixture.db)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires postgres and etcd"]
+async fn free_volumes_are_claimed_and_released_with_the_workload() {
+    let fixture = placing().await;
+    let volume = insert_volume(&fixture.db, None, None).await;
+
+    let response = fixture
+        .service
+        .schedule(request_with_volumes(&unique_name("mounted"), &[volume]))
+        .await
+        .unwrap();
+
+    let claimed = volume_state(&fixture, volume).await;
+    assert_eq!(claimed.status, "in_use");
+    assert_eq!(claimed.attached_to_agent, response.assigned_agent_id);
+    assert_eq!(claimed.attached_to_workload, Some(response.workload_id));
+
+    fixture
+        .service
+        .delete_workload(response.workload_id)
+        .await
+        .unwrap();
+    let released = volume_state(&fixture, volume).await;
+    assert_eq!(released.status, "available");
+    assert!(released.attached_to_agent.is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires postgres and etcd"]
+async fn attached_volumes_pin_the_workload_to_their_agent() {
+    let fixture = placing().await;
+    let pinned_agent = insert_agent(&fixture.db).await;
+    let volume = insert_volume(&fixture.db, Some(pinned_agent), None).await;
+
+    let response = fixture
+        .service
+        .schedule(request_with_volumes(&unique_name("pinned"), &[volume]))
+        .await
+        .unwrap();
+
+    assert_eq!(response.assigned_agent_id, Some(pinned_agent));
+}
+
+#[tokio::test]
+#[ignore = "requires postgres and etcd"]
+async fn volumes_on_different_agents_conflict() {
+    let fixture = placing().await;
+    let first = insert_agent(&fixture.db).await;
+    let second = insert_agent(&fixture.db).await;
+    let volumes = [
+        insert_volume(&fixture.db, Some(first), None).await,
+        insert_volume(&fixture.db, Some(second), None).await,
+    ];
+
+    let error = fixture
+        .service
+        .schedule(request_with_volumes(&unique_name("split"), &volumes))
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("conflicting agents"));
+}
+
+#[tokio::test]
+#[ignore = "requires postgres and etcd"]
+async fn volumes_held_by_another_workload_leave_the_workload_pending() {
+    let fixture = placing().await;
+    let agent = insert_agent(&fixture.db).await;
+    let holder = workloads::create(&fixture.db, &small_request(&unique_name("holder")), None)
+        .await
+        .unwrap();
+    let volume = insert_volume(&fixture.db, Some(agent), Some(holder.id)).await;
+
+    let response = fixture
+        .service
+        .schedule(request_with_volumes(&unique_name("blocked"), &[volume]))
+        .await
+        .unwrap();
+
+    assert!(matches!(response.status, WorkloadStatus::Pending));
+    assert!(response.assigned_agent_id.is_none());
+    assert_eq!(
+        volume_state(&fixture, volume).await.attached_to_workload,
+        Some(holder.id)
+    );
 }

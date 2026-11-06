@@ -221,3 +221,45 @@ pub fn small_request(name: &str) -> CreateWorkloadRequest {
     }))
     .expect("request must deserialize")
 }
+
+pub async fn insert_volume(
+    db: &DatabaseConnection,
+    attached_agent: Option<Uuid>,
+    attached_workload: Option<Uuid>,
+) -> Uuid {
+    let id = Uuid::new_v4();
+    entity::entities::volumes::ActiveModel {
+        id: Set(id),
+        name: Set(unique_name("vol")),
+        size_gb: Set(1),
+        pool: Set("test".to_string()),
+        image_name: Set(unique_name("image")),
+        status: Set(if attached_agent.is_some() {
+            "in_use"
+        } else {
+            "available"
+        }
+        .to_string()),
+        attached_to_agent: Set(attached_agent),
+        attached_to_workload: Set(attached_workload),
+        mapped_device: Set(None),
+        organization_id: Set(None),
+        resource_group_id: Set(None),
+        created_at: Set(chrono::Utc::now().naive_utc()),
+        updated_at: Set(None),
+    }
+    .insert(db)
+    .await
+    .expect("volume must be inserted");
+    id
+}
+
+pub fn request_with_volumes(name: &str, volume_ids: &[Uuid]) -> CreateWorkloadRequest {
+    let mut request = small_request(name);
+    request.volume_mounts = serde_json::from_value(json!(volume_ids
+        .iter()
+        .map(|id| json!({"volume_id": id, "mount_path": "/data"}))
+        .collect::<Vec<_>>()))
+    .unwrap();
+    request
+}
