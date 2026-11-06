@@ -186,7 +186,7 @@ async fn rescheduling_an_unknown_workload_fails() {
 #[ignore = "requires postgres and etcd"]
 async fn guest_ips_are_assigned_within_the_resource_group() {
     let fixture = placing().await;
-    let group = insert_resource_group(&fixture.db).await;
+    let group = insert_resource_group().await;
     let mut request = small_request(&unique_name("addressed"));
     request.resource_group_id = Some(group);
 
@@ -210,7 +210,7 @@ async fn guest_ips_are_assigned_within_the_resource_group() {
 #[ignore = "requires postgres and etcd"]
 async fn missing_guest_ips_are_backfilled() {
     let fixture = placing().await;
-    let group = insert_resource_group(&fixture.db).await;
+    let group = insert_resource_group().await;
     let mut request = small_request(&unique_name("legacy"));
     request.resource_group_id = Some(group);
     let legacy = workloads::create(&fixture.db, &request, None)
@@ -231,7 +231,7 @@ async fn missing_guest_ips_are_backfilled() {
 #[ignore = "requires postgres and etcd"]
 async fn stacks_are_placed_updated_and_removed() {
     let fixture = placing().await;
-    let group = insert_resource_group(&fixture.db).await;
+    let group = insert_resource_group().await;
     let compose = "services:\n  web:\n    image: nginx:latest\n  cache:\n    image: redis:7\n";
 
     let created = fixture

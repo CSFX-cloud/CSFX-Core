@@ -179,24 +179,19 @@ pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
     id
 }
 
-pub async fn insert_resource_group(db: &DatabaseConnection) -> Uuid {
-    let now = chrono::Utc::now().naive_utc();
-    let organization_id = Uuid::new_v4();
-    entity::entities::organization::ActiveModel {
-        id: Set(organization_id),
-        name: Set(unique_name("org")),
-        description: Set(None),
-        created_at: Set(now),
-        updated_at: Set(now),
-    }
-    .insert(db)
+pub async fn insert_resource_group() -> Uuid {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let separator = if url.contains('?') { '&' } else { '?' };
+    let relaxed = Database::connect(&format!(
+        "{url}{separator}options=-c%20session_replication_role%3Dreplica"
+    ))
     .await
-    .expect("organization must be inserted");
+    .expect("database must be reachable");
     let bytes = Uuid::new_v4().into_bytes();
     let id = Uuid::new_v4();
     entity::entities::resource_groups::ActiveModel {
         id: Set(id),
-        organization_id: Set(organization_id),
+        organization_id: Set(Uuid::new_v4()),
         name: Set(unique_name("rg")),
         description: Set(None),
         internal_cidr: Set(format!("10.{}.{}.0/24", bytes[0], bytes[1])),
@@ -207,10 +202,10 @@ pub async fn insert_resource_group(db: &DatabaseConnection) -> Uuid {
         icon_image: Set(None),
         icon_image_mime: Set(None),
         preview_url: Set(None),
-        created_at: Set(now),
+        created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(None),
     }
-    .insert(db)
+    .insert(&relaxed)
     .await
     .expect("resource group must be inserted");
     id
