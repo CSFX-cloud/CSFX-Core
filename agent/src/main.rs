@@ -1637,4 +1637,515 @@ mod tests {
         release_unassigned_volumes(&mounted, &[]).await;
         assert!(mounted.lock().await.contains_key("old"));
     }
+
+    struct ScriptedRuntime {
+        pull_fails: bool,
+        start_fails: bool,
+        stop_fails: bool,
+        network_ip: Option<Option<&'static str>>,
+        started: Mutex<Vec<WorkloadSpec>>,
+        stopped: Mutex<Vec<String>>,
+        network_queries: Mutex<Vec<String>>,
+    }
+
+    impl ScriptedRuntime {
+        fn new() -> Self {
+            Self {
+                pull_fails: false,
+                start_fails: false,
+                stop_fails: false,
+                network_ip: Some(None),
+                started: Mutex::new(Vec::new()),
+                stopped: Mutex::new(Vec::new()),
+                network_queries: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl runtime::Runtime for ScriptedRuntime {
+        async fn pull_image(&self, _image: &str) -> Result<()> {
+            if self.pull_fails {
+                anyhow::bail!("registry unreachable");
+            }
+            Ok(())
+        }
+
+        async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
+            if self.start_fails {
+                anyhow::bail!("boot failed");
+            }
+            self.started.lock().await.push(spec.clone());
+            Ok(format!("handle-{}", spec.workload_id))
+        }
+
+        async fn inspect_status(&self, _workload_handle: &str) -> Result<String> {
+            Ok("running".to_string())
+        }
+
+        fn logs(&self, _workload_handle: &str) -> LogStream {
+            Box::pin(futures_util::stream::empty())
+        }
+
+        async fn exec(&self, _workload_handle: &str) -> Result<ExecSession> {
+            anyhow::bail!("unsupported")
+        }
+
+        async fn stop_workload(&self, workload_handle: &str) -> Result<()> {
+            if self.stop_fails {
+                anyhow::bail!("stop refused");
+            }
+            self.stopped.lock().await.push(workload_handle.to_string());
+            Ok(())
+        }
+
+        async fn stats(&self, _workload_handle: &str) -> Result<ContainerStats> {
+            Ok(ContainerStats::default())
+        }
+
+        async fn service_network_ip(
+            &self,
+            _workload_handle: &str,
+            network_name: &str,
+        ) -> Result<Option<String>> {
+            self.network_queries
+                .lock()
+                .await
+                .push(network_name.to_string());
+            match self.network_ip {
+                Some(ip) => Ok(ip.map(str::to_string)),
+                None => anyhow::bail!("network lookup failed"),
+            }
+        }
+    }
+
+    struct StartState {
+        running: Arc<Mutex<HashMap<String, String>>>,
+        phases: Arc<Mutex<HashMap<String, String>>>,
+        volumes: Arc<Mutex<HashMap<String, String>>>,
+        counts: Arc<Mutex<HashMap<String, u32>>>,
+        dns: Arc<Mutex<HashMap<String, (String, String)>>>,
+        registry: rg_dns::RgDnsRegistry,
+    }
+
+    impl StartState {
+        fn new() -> Self {
+            Self {
+                running: shared(),
+                phases: shared(),
+                volumes: shared(),
+                counts: shared(),
+                dns: shared(),
+                registry: rg_dns::RgDnsRegistry::new(),
+            }
+        }
+
+        async fn start(
+            &self,
+            runtime: &ScriptedRuntime,
+            workload: client::AssignedWorkload,
+        ) -> bool {
+            start_or_restart_workload(
+                runtime,
+                workload,
+                &self.running,
+                &self.phases,
+                &self.volumes,
+                &self.counts,
+                &self.dns,
+                &self.registry,
+            )
+            .await
+        }
+
+        async fn phase(&self, id: &str) -> Option<String> {
+            self.phases.lock().await.get(id).cloned()
+        }
+    }
+
+    fn workload_with(extra: serde_json::Value) -> client::AssignedWorkload {
+        let mut base = serde_json::json!({
+            "id": "w1", "image": "img", "cpu_millicores": 200, "memory_bytes": 1024,
+            "restart_policy": "always", "disk_bytes": 4096
+        });
+        base.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
+    #[tokio::test]
+    async fn started_workloads_are_tracked_and_report_the_starting_phase() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+
+        let restarted = state
+            .start(&runtime, workload_with(serde_json::json!({})))
+            .await;
+
+        assert!(!restarted);
+        assert_eq!(state.phase("w1").await.as_deref(), Some("starting"));
+        assert_eq!(state.running.lock().await["w1"], "handle-w1");
+        let spec = runtime.started.lock().await[0].clone();
+        assert_eq!(spec.cpu_limit_millicores, 200);
+        assert_eq!(spec.memory_limit_bytes, 1024);
+        assert!(spec.vm_spec.is_none());
+    }
+
+    #[tokio::test]
+    async fn limits_never_drop_below_the_requests() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        let workload = workload_with(serde_json::json!({
+            "cpu_limit_millicores": 50, "memory_limit_bytes": 10
+        }));
+
+        state.start(&runtime, workload).await;
+
+        let spec = runtime.started.lock().await[0].clone();
+        assert_eq!(
+            (spec.cpu_limit_millicores, spec.memory_limit_bytes),
+            (200, 1024)
+        );
+    }
+
+    #[tokio::test]
+    async fn virtual_machines_receive_a_boot_disk_specification() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+
+        state
+            .start(
+                &runtime,
+                workload_with(
+                    serde_json::json!({"runtime_class": "vm", "image": "http://iso/os.iso"}),
+                ),
+            )
+            .await;
+
+        let vm = runtime.started.lock().await[0].vm_spec.clone().unwrap();
+        assert_eq!(vm.boot_disk_size_bytes, 4096);
+        assert_eq!(vm.iso_url.as_deref(), Some("http://iso/os.iso"));
+        assert!(vm.boot_disk_path.contains("w1"));
+    }
+
+    #[tokio::test]
+    async fn workloads_wait_until_their_volumes_are_mounted() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        let workload = workload_with(serde_json::json!({
+            "volume_mounts": [{"volume_id": "vol-1", "mount_path": "/data"}]
+        }));
+
+        assert!(!state.start(&runtime, workload.clone()).await);
+        assert_eq!(state.phase("w1").await.as_deref(), Some("scheduled"));
+        assert!(runtime.started.lock().await.is_empty());
+
+        state
+            .volumes
+            .lock()
+            .await
+            .insert("vol-1".to_string(), "/dev/rbd0".to_string());
+        state.start(&runtime, workload).await;
+        let spec = runtime.started.lock().await[0].clone();
+        let mounts = spec.volume_mounts.unwrap();
+        assert_eq!(mounts[0].device_path, "/dev/rbd0");
+        assert_eq!(mounts[0].mount_path, "/data");
+    }
+
+    #[tokio::test]
+    async fn image_pull_failures_clear_the_phase() {
+        let state = StartState::new();
+        let mut runtime = ScriptedRuntime::new();
+        runtime.pull_fails = true;
+
+        assert!(
+            !state
+                .start(&runtime, workload_with(serde_json::json!({})))
+                .await
+        );
+
+        assert!(state.phase("w1").await.is_none());
+        assert!(state.running.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn exhausted_restart_budgets_fail_the_workload() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        state.counts.lock().await.insert("w1".to_string(), 3);
+
+        state
+            .start(
+                &runtime,
+                workload_with(serde_json::json!({"max_restarts": 3})),
+            )
+            .await;
+
+        assert_eq!(state.phase("w1").await.as_deref(), Some("failed"));
+        assert!(runtime.started.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_failures_are_counted_and_marked_failed() {
+        let state = StartState::new();
+        let mut runtime = ScriptedRuntime::new();
+        runtime.start_fails = true;
+
+        for _ in 0..2 {
+            assert!(
+                !state
+                    .start(&runtime, workload_with(serde_json::json!({})))
+                    .await
+            );
+        }
+
+        assert_eq!(state.phase("w1").await.as_deref(), Some("failed"));
+        assert_eq!(state.counts.lock().await["w1"], 2);
+    }
+
+    #[tokio::test]
+    async fn requested_restarts_stop_the_old_container_first() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        state
+            .running
+            .lock()
+            .await
+            .insert("w1".to_string(), "old-handle".to_string());
+
+        let restarted = state
+            .start(
+                &runtime,
+                workload_with(serde_json::json!({"restart_requested": true})),
+            )
+            .await;
+
+        assert!(restarted);
+        assert_eq!(
+            *runtime.stopped.lock().await,
+            vec!["old-handle".to_string()]
+        );
+        assert_eq!(state.running.lock().await["w1"], "handle-w1");
+    }
+
+    #[tokio::test]
+    async fn healthy_running_workloads_are_left_alone() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        state
+            .running
+            .lock()
+            .await
+            .insert("w1".to_string(), "handle".to_string());
+
+        assert!(
+            !state
+                .start(&runtime, workload_with(serde_json::json!({})))
+                .await
+        );
+
+        assert!(runtime.started.lock().await.is_empty());
+        assert!(runtime.stopped.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_stops_abort_the_restart() {
+        let state = StartState::new();
+        let mut runtime = ScriptedRuntime::new();
+        runtime.stop_fails = true;
+        state
+            .running
+            .lock()
+            .await
+            .insert("w1".to_string(), "old-handle".to_string());
+
+        let restarted = state
+            .start(
+                &runtime,
+                workload_with(serde_json::json!({"restart_requested": true})),
+            )
+            .await;
+
+        assert!(!restarted);
+        assert_eq!(state.running.lock().await["w1"], "old-handle");
+        assert!(runtime.started.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn services_are_registered_in_dns_after_start() {
+        for network_ip in [Some(Some("10.0.0.5")), Some(None), None] {
+            let state = StartState::new();
+            let mut runtime = ScriptedRuntime::new();
+            runtime.network_ip = network_ip;
+            let workload = workload_with(serde_json::json!({
+                "resource_group_id": "rg-1", "service_name": "web"
+            }));
+
+            state.start(&runtime, workload).await;
+
+            assert_eq!(
+                state.dns.lock().await["w1"],
+                ("rg-1".to_string(), "web".to_string())
+            );
+            assert_eq!(
+                runtime.network_queries.lock().await[0],
+                spec::rg_network_name("rg-1")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn workloads_without_a_service_name_skip_dns() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+
+        state
+            .start(
+                &runtime,
+                workload_with(serde_json::json!({"resource_group_id": "rg-1"})),
+            )
+            .await;
+
+        assert!(state.dns.lock().await.is_empty());
+        assert!(runtime.network_queries.lock().await.is_empty());
+    }
+
+    struct TickOutcome {
+        failures: u32,
+        flake_rev: String,
+        heartbeats: usize,
+    }
+
+    async fn run_tick(
+        heartbeat: Option<serde_json::Value>,
+        guard: &mut fence::FenceGuard,
+        starting_failures: u32,
+    ) -> TickOutcome {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _tools = crate::testing::FakeTools::install(&[
+            ("wg", "exit 0"),
+            ("ip", "exit 0"),
+            ("nft", "exit 0"),
+        ]);
+        let heartbeats = Arc::new(AtomicUsize::new(0));
+        let counter = heartbeats.clone();
+        let app = Router::new()
+            .route(
+                "/api/agents/self/volumes",
+                get(|| async { axum::Json(serde_json::json!([])) }),
+            )
+            .route(
+                "/api/agents/self/workloads",
+                get(|| async { axum::Json(serde_json::json!([])) }),
+            )
+            .route(
+                "/api/agents/mesh-peers",
+                get(|| async { axum::Json(serde_json::json!([])) }),
+            )
+            .route(
+                "/api/resource-groups/agent/active-ids",
+                get(|| async { axum::Json(serde_json::json!([])) }),
+            )
+            .route(
+                "/api/registry/agents/{id}/heartbeat",
+                axum::routing::post(move || {
+                    let counter = counter.clone();
+                    let heartbeat = heartbeat.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        match heartbeat {
+                            Some(body) => Ok(axum::Json(body)),
+                            None => Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        client::install_test_crypto_provider();
+        let client =
+            Arc::new(client::ApiClient::new(url, "pub".to_string(), None, None, None).unwrap());
+        let (firecracker, qemu) = runtimes();
+        let registry = Arc::new(rg_dns::RgDnsRegistry::new());
+        let mut failures = starting_failures;
+        let mut flake_rev = "current".to_string();
+
+        reconcile_tick(
+            &client,
+            &StartTracker::default(),
+            uuid::Uuid::new_v4(),
+            "key",
+            &Arc::new(firecracker),
+            &Arc::new(qemu),
+            &shared(),
+            &shared(),
+            &shared(),
+            &shared(),
+            &shared(),
+            &shared(),
+            &registry,
+            &mut failures,
+            guard,
+            &mut flake_rev,
+        )
+        .await;
+
+        TickOutcome {
+            failures,
+            flake_rev,
+            heartbeats: heartbeats.load(Ordering::SeqCst),
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_heartbeats_reset_failures_and_adopt_the_desired_revision() {
+        let mut guard = fence::FenceGuard::new(0);
+
+        let outcome = run_tick(
+            Some(serde_json::json!({"desired_flake_rev": "not-a-sha"})),
+            &mut guard,
+            2,
+        )
+        .await;
+
+        assert_eq!(outcome.heartbeats, 1);
+        assert_eq!(outcome.failures, 0);
+        assert_eq!(outcome.flake_rev, "not-a-sha");
+    }
+
+    #[tokio::test]
+    async fn heartbeats_without_a_new_revision_keep_the_current_one() {
+        let mut guard = fence::FenceGuard::new(0);
+
+        let outcome = run_tick(Some(serde_json::json!({})), &mut guard, 0).await;
+
+        assert_eq!(outcome.heartbeats, 1);
+        assert_eq!(outcome.flake_rev, "current");
+    }
+
+    #[tokio::test]
+    async fn failed_heartbeats_are_counted() {
+        let mut guard = fence::FenceGuard::new(0);
+
+        let outcome = run_tick(None, &mut guard, 1).await;
+
+        assert_eq!(outcome.heartbeats, 1);
+        assert_eq!(outcome.failures, 2);
+        assert_eq!(outcome.flake_rev, "current");
+    }
+
+    #[tokio::test]
+    async fn prolonged_isolation_fences_the_agent() {
+        let mut guard = fence::FenceGuard::new(1);
+        let long_ago = std::time::Instant::now() - Duration::from_secs(30);
+        assert!(!guard.record_failure(long_ago));
+
+        let outcome = run_tick(None, &mut guard, 0).await;
+
+        assert_eq!(outcome.failures, 1);
+        assert!(!guard.record_failure(std::time::Instant::now()));
+    }
 }
