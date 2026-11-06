@@ -874,4 +874,146 @@ mod tests {
             .unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    use crate::testing::FakeTools;
+
+    #[tokio::test]
+    async fn tap_devices_are_created_attached_and_raised() {
+        let tools = FakeTools::install(&[("ip", "exit 0")]);
+
+        create_tap_device("qtap1", Some("br0"), 77).await.unwrap();
+
+        assert_eq!(
+            tools.calls("ip"),
+            vec![
+                "tuntap add dev qtap1 mode tap user 77".to_string(),
+                "link set dev qtap1 master br0".to_string(),
+                "link set dev qtap1 up".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn tap_devices_without_a_bridge_skip_attachment() {
+        let tools = FakeTools::install(&[("ip", "exit 0")]);
+
+        create_tap_device("qtap1", None, 0).await.unwrap();
+
+        assert_eq!(tools.calls("ip").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn existing_tap_devices_are_tolerated() {
+        let _tools = FakeTools::install(&[(
+            "ip",
+            r#"case "$*" in tuntap*) echo 'ioctl: File exists' >&2; exit 1;; esac"#,
+        )]);
+
+        create_tap_device("qtap1", None, 0).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn tap_device_failures_name_the_failing_step() {
+        {
+            let _tools = FakeTools::install(&[(
+                "ip",
+                r#"case "$*" in tuntap*) echo 'Operation not permitted' >&2; exit 1;; esac"#,
+            )]);
+            let error = create_tap_device("qtap1", None, 0)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("failed to create tap device qtap1"));
+        }
+        {
+            let _tools = FakeTools::install(&[("ip", r#"case "$*" in *master*) exit 1;; esac"#)]);
+            let error = create_tap_device("qtap1", Some("br0"), 0)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("failed to attach tap device qtap1 to bridge br0"));
+        }
+        let _tools = FakeTools::install(&[("ip", r#"case "$*" in *" up") exit 1;; esac"#)]);
+        let error = create_tap_device("qtap1", None, 0)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("failed to bring up tap device qtap1"));
+    }
+
+    #[tokio::test]
+    async fn tap_devices_are_removed_by_name() {
+        {
+            let tools = FakeTools::install(&[("ip", "exit 0")]);
+            remove_tap_device("qtap1").await.unwrap();
+            assert_eq!(tools.calls("ip"), vec!["link delete qtap1".to_string()]);
+        }
+        let _tools = FakeTools::install(&[("ip", "exit 1")]);
+        assert!(remove_tap_device("qtap1").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn units_are_stopped_by_their_derived_name() {
+        {
+            let tools = FakeTools::install(&[("systemctl", "exit 0")]);
+            stop_unit("0123456789abcdef").await;
+            assert_eq!(
+                tools.calls("systemctl"),
+                vec![format!("stop {}", unit_name("0123456789abcdef"))]
+            );
+        }
+        let tools = FakeTools::install(&[("systemctl", "echo 'not loaded' >&2\nexit 5")]);
+        stop_unit("0123456789abcdef").await;
+        assert_eq!(tools.calls("systemctl").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unit_activity_follows_the_reported_state() {
+        {
+            let _tools = FakeTools::install(&[("systemctl", "echo active")]);
+            assert!(is_unit_active("csfx-qemu-x").await);
+        }
+        {
+            let _tools = FakeTools::install(&[("systemctl", "echo inactive\nexit 3")]);
+            assert!(!is_unit_active("csfx-qemu-x").await);
+        }
+        let _tools = FakeTools::install(&[]);
+        std::env::set_var("PATH", "/nonexistent");
+        assert!(!is_unit_active("csfx-qemu-x").await);
+    }
+
+    #[tokio::test]
+    async fn boot_disks_are_created_once() {
+        let dir = temp_dir();
+        let disk = dir.join("boot.raw");
+        let disk = disk.to_str().unwrap();
+        {
+            let tools = FakeTools::install(&[("qemu-img", "exit 0")]);
+            ensure_boot_disk(disk, 4096).await.unwrap();
+            assert_eq!(
+                tools.calls("qemu-img"),
+                vec![format!("create -f raw {disk} 4096")]
+            );
+        }
+        std::fs::write(disk, b"").unwrap();
+        let tools = FakeTools::install(&[("qemu-img", "exit 0")]);
+        ensure_boot_disk(disk, 4096).await.unwrap();
+        assert!(tools.calls("qemu-img").is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn boot_disk_creation_failures_are_reported() {
+        let dir = temp_dir();
+        let disk = dir.join("boot.raw");
+        let _tools = FakeTools::install(&[("qemu-img", "exit 1")]);
+
+        let error = ensure_boot_disk(disk.to_str().unwrap(), 4096)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("qemu-img create failed"));
+        std::fs::remove_dir_all(dir).ok();
+    }
 }
