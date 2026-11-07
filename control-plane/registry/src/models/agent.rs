@@ -141,11 +141,16 @@ pub struct HeartbeatRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct SignedRelease {
+    pub manifest: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct HeartbeatResponse {
     pub success: bool,
     pub message: String,
-    pub desired_flake_rev: Option<String>,
-    pub post_update_heartbeats: Option<u32>,
+    pub worker_releases: HashMap<String, SignedRelease>,
     pub ssh_enabled: bool,
     pub gateway_url: Option<String>,
 }
