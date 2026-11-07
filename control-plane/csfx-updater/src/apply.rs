@@ -49,6 +49,10 @@ fn guard_applicable(cfg: &Config, manifest: &Manifest, force: bool) -> Result<()
 }
 
 pub async fn apply(cfg: &Config, manifest_path: &Path, force: bool) -> Result<Outcome> {
+    if state::load_pending(&cfg.state_dir)?.is_some() {
+        info!("finishing interrupted update before applying");
+        return finish_pending(cfg).await;
+    }
     let manifest = load_verified(cfg, manifest_path)?;
     let previous = nix::current_system().await?;
     if manifest.toplevel == previous {
