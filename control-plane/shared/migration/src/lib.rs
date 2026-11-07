@@ -55,6 +55,7 @@ mod m20261102_000000_add_site_registry_keys;
 mod m20261102_010000_add_site_usage;
 mod m20261102_020000_add_image_registries;
 mod m20261104_000000_allow_internal_site_domains;
+mod m20261107_000000_add_workload_volume_usage;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -116,6 +117,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261102_010000_add_site_usage::Migration),
             Box::new(m20261102_020000_add_image_registries::Migration),
             Box::new(m20261104_000000_allow_internal_site_domains::Migration),
+            Box::new(m20261107_000000_add_workload_volume_usage::Migration),
         ]
     }
 }

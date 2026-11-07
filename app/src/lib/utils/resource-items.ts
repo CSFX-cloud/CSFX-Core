@@ -59,7 +59,7 @@ export function buildResourceItems(
 ): ResourceItem[] {
     return [
         ...groupWorkloadsByStack(workloads),
-        ...volumes.map((data): ResourceItem => ({ kind: "volume", data })),
+        ...volumes.filter((volume) => !volume.attached_to_workload).map((data): ResourceItem => ({ kind: "volume", data })),
         ...buckets.map((data): ResourceItem => ({ kind: "bucket", data })),
         ...vaults.map((data): ResourceItem => ({ kind: "vault", data })),
         ...sites.map((data): ResourceItem => ({ kind: "site", data })),

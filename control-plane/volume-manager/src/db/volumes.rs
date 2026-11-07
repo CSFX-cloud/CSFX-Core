@@ -107,6 +107,17 @@ pub async fn detach(
     active.update(db).await
 }
 
+pub async fn resize(
+    db: &DatabaseConnection,
+    volume: volumes::Model,
+    size_gb: i32,
+) -> Result<volumes::Model, sea_orm::DbErr> {
+    let mut active: volumes::ActiveModel = volume.into();
+    active.size_gb = Set(size_gb);
+    active.updated_at = Set(Some(Utc::now().naive_utc()));
+    active.update(db).await
+}
+
 pub async fn get_attached_to_agent(
     db: &DatabaseConnection,
     agent_id: Uuid,

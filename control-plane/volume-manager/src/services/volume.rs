@@ -10,8 +10,8 @@ use crate::ceph::ops::CephManager;
 use crate::ceph::storage::types::CephVolume;
 use crate::db::volumes as db;
 use crate::models::volume::{
-    AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest, SnapshotResponse,
-    VolumeResponse,
+    AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest, ResizeVolumeRequest,
+    SnapshotResponse, VolumeResponse,
 };
 
 pub enum ServiceError {
@@ -108,6 +108,36 @@ impl VolumeService {
         }
 
         Ok(db::delete(&self.db, id).await.map_err(|e| e.to_string())?)
+    }
+
+    pub async fn resize_volume(
+        &self,
+        volume_id: Uuid,
+        req: ResizeVolumeRequest,
+    ) -> Result<VolumeResponse, ServiceError> {
+        let model = db::get_by_id(&self.db, volume_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Volume {} not found", volume_id))?;
+
+        if req.size_gb <= model.size_gb {
+            return Err(ServiceError::Conflict(format!(
+                "Volume {} can only grow beyond {} GB",
+                volume_id, model.size_gb
+            )));
+        }
+
+        if let Some(ceph) = &self.ceph {
+            ceph.rbd_manager
+                .resize_image(&model.pool, &model.image_name, (req.size_gb as u64) * 1024)
+                .await
+                .map_err(|e| format!("{:#}", e))?;
+        }
+
+        let updated = db::resize(&self.db, model, req.size_gb)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(db::into_response(updated))
     }
 
     pub async fn attach_volume(

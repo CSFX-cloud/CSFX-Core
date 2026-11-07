@@ -6,12 +6,16 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::runtime::VolumeUsage;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AssignedVolume {
     pub id: String,
     pub pool: String,
     pub image_name: String,
     pub status: String,
+    #[serde(default)]
+    pub size_gb: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -70,6 +74,7 @@ pub struct WorkloadStatsUpdate {
     pub memory_usage_bytes: Option<i64>,
     pub network_rx_bytes: Option<i64>,
     pub network_tx_bytes: Option<i64>,
+    pub volume_usage: Vec<VolumeUsage>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1050,6 +1055,7 @@ mod tests {
             memory_usage_bytes: None,
             network_rx_bytes: None,
             network_tx_bytes: None,
+            volume_usage: Vec::new(),
         };
         client.push_workload_stats("k", vec![stat]).await.unwrap();
         let entry = JournalEntry {
@@ -1095,6 +1101,7 @@ mod tests {
             memory_usage_bytes: None,
             network_rx_bytes: None,
             network_tx_bytes: None,
+            volume_usage: Vec::new(),
         };
         assert!(client.push_workload_stats("k", vec![stat]).await.is_err());
     }

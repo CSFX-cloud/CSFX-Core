@@ -1,6 +1,7 @@
 use anyhow::Result;
 use axum::body::Bytes;
 use futures_util::Stream;
+use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -13,12 +14,28 @@ pub struct ExecSession {
     pub output: Pin<Box<dyn AsyncRead + Send>>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UsageEntry {
+    pub name: String,
+    pub bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VolumeUsage {
+    pub mount_path: String,
+    pub used_bytes: i64,
+    pub total_bytes: i64,
+    #[serde(default)]
+    pub entries: Vec<UsageEntry>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct ContainerStats {
     pub cpu_usage_percent: Option<f64>,
     pub memory_usage_bytes: Option<i64>,
     pub network_rx_bytes: Option<i64>,
     pub network_tx_bytes: Option<i64>,
+    pub volume_usage: Vec<VolumeUsage>,
 }
 
 #[async_trait::async_trait]

@@ -6,7 +6,9 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::models::volume::{AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest};
+use crate::models::volume::{
+    AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest, ResizeVolumeRequest,
+};
 use crate::server::AppState;
 use crate::services::volume::ServiceError;
 
@@ -67,6 +69,17 @@ pub async fn attach_volume(
     Json(req): Json<AttachVolumeRequest>,
 ) -> impl IntoResponse {
     match state.volume_service.attach_volume(id, req).await {
+        Ok(vol) => (StatusCode::OK, Json(serde_json::json!(vol))).into_response(),
+        Err(e) => service_error_response(e),
+    }
+}
+
+pub async fn resize_volume(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ResizeVolumeRequest>,
+) -> impl IntoResponse {
+    match state.volume_service.resize_volume(id, req).await {
         Ok(vol) => (StatusCode::OK, Json(serde_json::json!(vol))).into_response(),
         Err(e) => service_error_response(e),
     }

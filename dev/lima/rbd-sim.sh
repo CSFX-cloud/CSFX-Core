@@ -52,7 +52,18 @@ cmd_showmapped() {
       })'
 }
 
+cmd_resize() {
+  local spec="$1" size_mb="$2" file device
+  file="$DIR/$spec.img"
+  [ -f "$file" ] || fail "image not found image=$spec"
+  truncate -s "${size_mb}M" "$file"
+  device="$(mapped_device "$file")"
+  [ -z "$device" ] || losetup --set-capacity "$device"
+  log INFO "resized image=$spec size_mb=$size_mb"
+}
+
 case "${1:-}" in
+  resize) cmd_resize "${2:?image}" "${4:?size}" ;;
   map) cmd_map "${2:?image}" ;;
   unmap) cmd_unmap "${2:?device}" ;;
   showmapped) cmd_showmapped ;;

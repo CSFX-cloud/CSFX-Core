@@ -14,7 +14,7 @@ use crate::firecracker::api::FirecrackerApiClient;
 use crate::firecracker::rootfs::RootfsBuilder;
 use crate::firecracker::site_registry::SiteRegistry;
 use crate::rg_dns_process::RgDnsProcessSupervisor;
-use crate::runtime::{ExecSession, LogStream};
+use crate::runtime::{ExecSession, LogStream, VolumeUsage};
 use crate::spec::{rg_wireguard_port, WorkloadSpec};
 
 const JAILER_BASE_DIR: &str = "/var/lib/csfx-agent/firecracker";
@@ -134,6 +134,34 @@ async fn connect_guest_vsock(
     }
 
     Ok(stream)
+}
+
+const GUEST_USAGE_PORT: u32 = 10003;
+const GUEST_USAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+async fn query_volume_usage(chroot_dir: &Path, workload_id: &str) -> Result<Vec<VolumeUsage>> {
+    let mut stream = connect_guest_vsock(chroot_dir, workload_id, GUEST_USAGE_PORT).await?;
+    let mut payload = Vec::new();
+    stream
+        .read_to_end(&mut payload)
+        .await
+        .context("Failed to read guest volume usage")?;
+    serde_json::from_slice(&payload).context("Failed to parse guest volume usage")
+}
+
+async fn read_volume_usage(chroot_dir: &Path, workload_id: &str) -> Vec<VolumeUsage> {
+    let query = query_volume_usage(chroot_dir, workload_id);
+    match tokio::time::timeout(GUEST_USAGE_TIMEOUT, query).await {
+        Ok(Ok(usage)) => usage,
+        Ok(Err(e)) => {
+            debug!(workload_id = %workload_id, error = %e, "Guest volume usage unavailable");
+            Vec::new()
+        }
+        Err(_) => {
+            debug!(workload_id = %workload_id, "Guest volume usage timed out");
+            Vec::new()
+        }
+    }
 }
 
 struct VmHandle {
@@ -528,7 +556,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 
     async fn stats(&self, workload_handle: &str) -> Result<crate::runtime::ContainerStats> {
-        let (cpu_usage_percent, memory_usage_bytes, metrics_path) = {
+        let (cpu_usage_percent, memory_usage_bytes, metrics_path, chroot_dir) = {
             let handles = self.handles.lock().await;
             let Some(handle) = handles.get(workload_handle) else {
                 return Ok(crate::runtime::ContainerStats::default());
@@ -539,16 +567,19 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
                 cpu_usage_percent,
                 memory_usage_bytes,
                 handle.metrics_path.clone(),
+                handle.chroot_dir.clone(),
             )
         };
 
         let (network_rx_bytes, network_tx_bytes) = read_network_bytes(&metrics_path).await.unzip();
+        let volume_usage = read_volume_usage(&chroot_dir, workload_handle).await;
 
         Ok(crate::runtime::ContainerStats {
             cpu_usage_percent,
             memory_usage_bytes,
             network_rx_bytes,
             network_tx_bytes,
+            volume_usage,
         })
     }
 
@@ -1302,6 +1333,10 @@ async fn attach_volume_drives(
         let guest_device = guest_device_letter(index);
         let jail_device_name = format!("vd-{}", volume_mount.volume_id);
         let drive_id = volume_mount.volume_id.replace('-', "_");
+
+        if let Err(e) = crate::rbd::grow_filesystem(&volume_mount.device_path).await {
+            warn!(volume_id = %volume_mount.volume_id, device = %volume_mount.device_path, error = %e, "Volume filesystem not grown");
+        }
 
         stage_block_device_into_jail(&volume_mount.device_path, vm_root_dir, &jail_device_name)
             .await

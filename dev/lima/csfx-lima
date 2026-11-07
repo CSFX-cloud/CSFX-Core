@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "${1:-}" = "--external" ]; then
+  export LIMA_HOME="${CSFX_LIMA_EXTERNAL:-/Volumes/CedricExterne/lima}"
+  shift
+fi
+
 LIMA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CORE_DIR="$(cd "$LIMA_DIR/../.." && pwd)"
 INFRA_DIR="${CSFX_INFRA_DIR:-$(cd "$CORE_DIR/../CSFX-Infra" && pwd)}"
@@ -434,7 +439,7 @@ watch() {
 }
 
 usage() {
-  die "usage: csfx-lima up [ha] | down | destroy | build | ui | reload | watch | switch [node] | logs <node> [unit] | shell <node> | status | setup-code <node> | ip <node> | snapshot <name> | restore <name> | reset | reseed"
+  die "usage: csfx-lima [--external] up [ha] | down | destroy | build | ui | reload | watch | switch [node] | logs <node> [unit] | shell <node> | status | setup-code <node> | ip <node> | snapshot <name> | restore <name> | reset | reseed"
 }
 
 main() {
