@@ -619,7 +619,22 @@ async fn process_volumes(
     };
 
     map_missing_volumes(&volumes, mounted_volumes).await;
+    grow_mapped_volumes(&volumes, mounted_volumes).await;
     Some(volumes)
+}
+
+async fn grow_mapped_volumes(
+    volumes: &[client::AssignedVolume],
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    for volume in volumes.iter().filter(|volume| volume.size_gb > 0) {
+        let Some(device) = mounted_volumes.lock().await.get(&volume.id).cloned() else {
+            continue;
+        };
+        if let Err(e) = rbd::grow_image_to(&volume.pool, &volume.image_name, &device, volume.size_gb as u64).await {
+            warn!(volume_id = %volume.id, device = %device, error = %e, "Failed to grow volume image");
+        }
+    }
 }
 
 async fn map_missing_volumes(
@@ -1360,6 +1375,7 @@ async fn push_workload_stats(
                 memory_usage_bytes: s.memory_usage_bytes,
                 network_rx_bytes: s.network_rx_bytes,
                 network_tx_bytes: s.network_tx_bytes,
+                volume_usage: s.volume_usage,
             }),
             Err(e) => {
                 warn!(workload_id = %workload_id, container_id = %container_id, error = %e, "Failed to collect container stats");

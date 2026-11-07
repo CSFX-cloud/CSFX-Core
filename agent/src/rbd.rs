@@ -163,6 +163,83 @@ pub async fn ensure_filesystem(device: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+const BYTES_PER_GB: u64 = 1_073_741_824;
+const MB_PER_GB: u64 = 1024;
+const E2FSCK_MAX_CORRECTED_EXIT_CODE: i32 = 1;
+
+async fn device_bytes(device: &str) -> Result<u64> {
+    let output = Command::new("blockdev")
+        .args(["--getsize64", device])
+        .output()
+        .await
+        .context("Failed to execute blockdev")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("blockdev failed device={} {}", device, stderr));
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .context("Invalid blockdev output")
+}
+
+pub async fn grow_image_to(pool: &str, image: &str, device: &str, size_gb: u64) -> Result<bool> {
+    if device_bytes(device).await? >= size_gb * BYTES_PER_GB {
+        return Ok(false);
+    }
+
+    info!(pool = %pool, image = %image, size_gb = size_gb, "Growing RBD image");
+
+    let mut command = Command::new("rbd");
+    command
+        .arg("resize")
+        .arg(format!("{}/{}", pool, image))
+        .arg("--size")
+        .arg((size_gb * MB_PER_GB).to_string())
+        .kill_on_drop(true);
+    CephClientArgs::from_env().apply(&mut command);
+
+    let output = tokio::time::timeout(MAP_COMMAND_TIMEOUT, command.output())
+        .await
+        .context("rbd resize timed out")?
+        .context("Failed to execute rbd resize")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("rbd resize failed: {}", stderr));
+    }
+
+    Ok(true)
+}
+
+pub async fn grow_filesystem(device: &str) -> Result<()> {
+    let check = Command::new("e2fsck")
+        .args(["-fp", device])
+        .output()
+        .await
+        .context("Failed to execute e2fsck")?;
+
+    if check.status.code().is_none_or(|code| code > E2FSCK_MAX_CORRECTED_EXIT_CODE) {
+        let stderr = String::from_utf8_lossy(&check.stderr);
+        return Err(anyhow!("e2fsck failed device={} {}", device, stderr));
+    }
+
+    let resize = Command::new("resize2fs")
+        .arg(device)
+        .output()
+        .await
+        .context("Failed to execute resize2fs")?;
+
+    if !resize.status.success() {
+        let stderr = String::from_utf8_lossy(&resize.stderr);
+        return Err(anyhow!("resize2fs failed device={} {}", device, stderr));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +333,40 @@ mod tests {
 
         assert_eq!(tools.calls("blkid"), vec!["-p /dev/rbd0".to_string()]);
         assert!(tools.calls("mkfs.ext4").is_empty());
+    }
+
+    #[tokio::test]
+    async fn images_smaller_than_requested_are_resized() {
+        let tools = FakeTools::install(&[("blockdev", "echo 5368709120"), ("rbd", "exit 0")]);
+
+        assert!(grow_image_to("csfx", "vol-1", "/dev/loop0", 10).await.unwrap());
+        assert!(tools.calls("rbd")[0].starts_with("resize csfx/vol-1 --size 10240"));
+    }
+
+    #[tokio::test]
+    async fn images_at_the_requested_size_are_left_alone() {
+        let tools = FakeTools::install(&[("blockdev", "echo 10737418240"), ("rbd", "exit 0")]);
+
+        assert!(!grow_image_to("csfx", "vol-1", "/dev/loop0", 10).await.unwrap());
+        assert!(tools.calls("rbd").is_empty());
+    }
+
+    #[tokio::test]
+    async fn growing_checks_then_resizes_the_filesystem() {
+        let tools = FakeTools::install(&[("e2fsck", "exit 1"), ("resize2fs", "exit 0")]);
+
+        grow_filesystem("/dev/rbd0").await.unwrap();
+
+        assert_eq!(tools.calls("e2fsck"), vec!["-fp /dev/rbd0".to_string()]);
+        assert_eq!(tools.calls("resize2fs"), vec!["/dev/rbd0".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn growing_stops_when_the_check_finds_uncorrectable_errors() {
+        let tools = FakeTools::install(&[("e2fsck", "exit 4"), ("resize2fs", "exit 0")]);
+
+        assert!(grow_filesystem("/dev/rbd0").await.is_err());
+        assert!(tools.calls("resize2fs").is_empty());
     }
 
     #[tokio::test]

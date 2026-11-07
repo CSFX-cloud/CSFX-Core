@@ -5,10 +5,12 @@ use nix::mount::{MsFlags, mount, umount};
 use nix::pty::openpty;
 use nix::sys::reboot::{RebootMode, reboot, set_cad_enabled};
 use nix::sys::signal::{Signal, kill};
+use nix::sys::statvfs::statvfs;
 use nix::sys::wait::{WaitStatus, waitpid};
 use nix::unistd::{Pid, sync};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::MetadataExt;
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -19,6 +21,10 @@ use tracing::{debug, error, info, warn};
 
 const LOG_PORT: u32 = 10001;
 const EXEC_PORT: u32 = 10002;
+const USAGE_PORT: u32 = 10003;
+const USAGE_CACHE_TTL: Duration = Duration::from_secs(30);
+const USAGE_TOP_ENTRIES: usize = 5;
+const BLOCK_BYTES: u64 = 512;
 const LOG_BACKLOG_CAPACITY: usize = 65536;
 const CONTAINER_BUNDLE_PATH: &str = "/csfx-bundle";
 const CONTAINER_ROOTFS_DIR: &str = "rootfs";
@@ -135,6 +141,8 @@ async fn run() -> Result<()> {
         .context("Failed to bind vsock log port")?;
     let exec_listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, EXEC_PORT))
         .context("Failed to bind vsock exec port")?;
+    let usage_listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, USAGE_PORT))
+        .context("Failed to bind vsock usage port")?;
     debug!(
         stage = "vsock_listeners_bound",
         log_port = LOG_PORT,
@@ -156,6 +164,7 @@ async fn run() -> Result<()> {
 
     let log_task = tokio::spawn(stream_logs(log_listener, stdout_read, stderr_read));
     tokio::spawn(serve_exec(exec_listener));
+    tokio::spawn(serve_usage(usage_listener));
 
     let mut wait_task = tokio::task::spawn_blocking(move || wait_for_exit(container_pid));
     let mut shutdown = ShutdownSignals::register()?;
@@ -851,6 +860,114 @@ async fn stream_logs(listener: VsockListener, stdout: AsyncFd<OwnedFd>, stderr: 
                     Err(_) => stderr_open = false,
                 }
             }
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct UsageEntry {
+    name: String,
+    bytes: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct VolumeUsage {
+    mount_path: String,
+    used_bytes: u64,
+    total_bytes: u64,
+    entries: Vec<UsageEntry>,
+}
+
+static USAGE_CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<VolumeUsage>)>> =
+    std::sync::Mutex::new(None);
+
+fn allocated_bytes(path: &std::path::Path) -> u64 {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    let own = metadata.blocks() * BLOCK_BYTES;
+    if !metadata.is_dir() {
+        return own;
+    }
+    let Ok(children) = std::fs::read_dir(path) else {
+        return own;
+    };
+    own + children
+        .flatten()
+        .map(|child| allocated_bytes(&child.path()))
+        .sum::<u64>()
+}
+
+fn top_level_entries(mount_point: &str) -> Vec<UsageEntry> {
+    let Ok(children) = std::fs::read_dir(mount_point) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<UsageEntry> = children
+        .flatten()
+        .map(|child| UsageEntry {
+            name: child.file_name().to_string_lossy().into_owned(),
+            bytes: allocated_bytes(&child.path()),
+        })
+        .filter(|entry| entry.bytes > 0)
+        .collect();
+    entries.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    entries.truncate(USAGE_TOP_ENTRIES);
+    entries
+}
+
+fn cached_volume_usage() -> Vec<VolumeUsage> {
+    let mut cache = USAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((taken_at, usage)) = cache.as_ref() {
+        if taken_at.elapsed() < USAGE_CACHE_TTL {
+            return usage.clone();
+        }
+    }
+    let usage = read_volume_usage();
+    *cache = Some((std::time::Instant::now(), usage.clone()));
+    usage
+}
+
+fn read_volume_usage() -> Vec<VolumeUsage> {
+    let rootfs = format!("{CONTAINER_BUNDLE_PATH}/{CONTAINER_ROOTFS_DIR}");
+    volume_mount_points()
+        .into_iter()
+        .filter_map(|mount_point| {
+            let stats = statvfs(mount_point.as_str()).ok()?;
+            let block_size = stats.fragment_size() as u64;
+            let total_bytes = stats.blocks() as u64 * block_size;
+            let free_bytes = stats.blocks_free() as u64 * block_size;
+            let mount_path = mount_point.strip_prefix(&rootfs)?.to_string();
+            Some(VolumeUsage {
+                mount_path,
+                used_bytes: total_bytes.saturating_sub(free_bytes),
+                total_bytes,
+                entries: top_level_entries(&mount_point),
+            })
+        })
+        .collect()
+}
+
+async fn serve_usage(listener: VsockListener) {
+    loop {
+        let (mut stream, _) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                error!(error = %e, "Failed to accept usage connection");
+                continue;
+            }
+        };
+        let usage = tokio::task::spawn_blocking(cached_volume_usage)
+            .await
+            .unwrap_or_default();
+        let payload = match serde_json::to_vec(&usage) {
+            Ok(payload) => payload,
+            Err(e) => {
+                error!(error = %e, "Failed to encode volume usage");
+                continue;
+            }
+        };
+        if let Err(e) = stream.write_all(&payload).await {
+            warn!(error = %e, "Failed to write volume usage");
         }
     }
 }
