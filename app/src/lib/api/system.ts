@@ -5,8 +5,6 @@ const API_BASE = '/api';
 export interface UpdateStatus {
     current_version: string;
     desired_version: string | null;
-    available_flake_rev: string | null;
-    desired_flake_rev: string | null;
     build_status: string | null;
     last_result: string | null;
     paused: boolean;
