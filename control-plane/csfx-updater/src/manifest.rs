@@ -18,24 +18,46 @@ pub fn host_arch() -> String {
     format!("{}-linux", std::env::consts::ARCH)
 }
 
-pub fn verify(manifest: &[u8], signature_base64: &str, public_key: &str) -> Result<Manifest> {
-    let (_, key_base64) = public_key
-        .trim()
+fn decode_key(line: &str) -> Result<Vec<u8>> {
+    let (_, key_base64) = line
         .split_once(':')
         .context("release public key must be name:base64")?;
-    let key = STANDARD
+    STANDARD
         .decode(key_base64)
-        .context("release public key is not base64")?;
-    let signature = STANDARD
-        .decode(signature_base64.trim())
-        .context("manifest signature is not base64")?;
-    UnparsedPublicKey::new(&ED25519, key)
-        .verify(manifest, &signature)
-        .map_err(|_| anyhow::anyhow!("manifest signature verification failed"))?;
+        .context("release public key is not base64")
+}
+
+fn signed_by_any(manifest: &[u8], signatures: &[Vec<u8>], keys: &[Vec<u8>]) -> bool {
+    keys.iter().any(|key| {
+        let key = UnparsedPublicKey::new(&ED25519, key);
+        signatures
+            .iter()
+            .any(|signature| key.verify(manifest, signature).is_ok())
+    })
+}
+
+pub fn verify(manifest: &[u8], signatures: &str, public_keys: &str) -> Result<Manifest> {
+    let keys = lines(public_keys)
+        .map(decode_key)
+        .collect::<Result<Vec<_>>>()?;
+    let signatures = lines(signatures)
+        .map(|line| {
+            STANDARD
+                .decode(line)
+                .context("manifest signature is not base64")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if !signed_by_any(manifest, &signatures, &keys) {
+        bail!("manifest signature verification failed");
+    }
     let parsed: Manifest =
         serde_json::from_slice(manifest).context("manifest is not valid json")?;
     validate(&parsed)?;
     Ok(parsed)
+}
+
+fn lines(text: &str) -> impl Iterator<Item = &str> {
+    text.lines().map(str::trim).filter(|line| !line.is_empty())
 }
 
 fn validate(manifest: &Manifest) -> Result<()> {
@@ -79,6 +101,17 @@ mod tests {
         let (signature, public) = signing_material(&body);
         let manifest = verify(body.as_bytes(), &signature, &public).unwrap();
         assert_eq!(manifest.version, "0.3.0");
+    }
+
+    #[test]
+    fn rotation_accepts_any_trusted_key_and_any_signature() {
+        let body = body("/nix/store/abc-system");
+        let (signature, public) = signing_material(&body);
+        let other = format!("old-1:{}", STANDARD.encode([9u8; 32]));
+        let keys = format!("{other}\n{public}\n");
+        let signatures = format!("{}\n{signature}\n", STANDARD.encode([1u8; 64]));
+        assert!(verify(body.as_bytes(), &signatures, &keys).is_ok());
+        assert!(verify(body.as_bytes(), &signature, &other).is_err());
     }
 
     #[test]
