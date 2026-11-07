@@ -94,7 +94,12 @@ async fn claim_requested_volumes(
     let workload = match db::workloads::get_by_id(&state.db, workload_id).await {
         Ok(Some(workload)) => workload,
         Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
-        Err(e) => return Err(error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Err(e) => {
+            return Err(error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            ))
+        }
     };
     let Some(agent_id) = workload.assigned_agent_id else {
         return Ok(());
@@ -106,7 +111,10 @@ async fn claim_requested_volumes(
             StatusCode::CONFLICT,
             "A volume is attached to another workload or node".to_string(),
         )),
-        Err(e) => Err(error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Err(e) => Err(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        )),
     }
 }
 

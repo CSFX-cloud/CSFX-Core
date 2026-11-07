@@ -221,7 +221,11 @@ pub async fn grow_filesystem(device: &str) -> Result<()> {
         .await
         .context("Failed to execute e2fsck")?;
 
-    if check.status.code().is_none_or(|code| code > E2FSCK_MAX_CORRECTED_EXIT_CODE) {
+    if check
+        .status
+        .code()
+        .is_none_or(|code| code > E2FSCK_MAX_CORRECTED_EXIT_CODE)
+    {
         let stderr = String::from_utf8_lossy(&check.stderr);
         return Err(anyhow!("e2fsck failed device={} {}", device, stderr));
     }
@@ -339,7 +343,9 @@ mod tests {
     async fn images_smaller_than_requested_are_resized() {
         let tools = FakeTools::install(&[("blockdev", "echo 5368709120"), ("rbd", "exit 0")]);
 
-        assert!(grow_image_to("csfx", "vol-1", "/dev/loop0", 10).await.unwrap());
+        assert!(grow_image_to("csfx", "vol-1", "/dev/loop0", 10)
+            .await
+            .unwrap());
         assert!(tools.calls("rbd")[0].starts_with("resize csfx/vol-1 --size 10240"));
     }
 
@@ -347,7 +353,9 @@ mod tests {
     async fn images_at_the_requested_size_are_left_alone() {
         let tools = FakeTools::install(&[("blockdev", "echo 10737418240"), ("rbd", "exit 0")]);
 
-        assert!(!grow_image_to("csfx", "vol-1", "/dev/loop0", 10).await.unwrap());
+        assert!(!grow_image_to("csfx", "vol-1", "/dev/loop0", 10)
+            .await
+            .unwrap());
         assert!(tools.calls("rbd").is_empty());
     }
 

@@ -631,7 +631,14 @@ async fn grow_mapped_volumes(
         let Some(device) = mounted_volumes.lock().await.get(&volume.id).cloned() else {
             continue;
         };
-        if let Err(e) = rbd::grow_image_to(&volume.pool, &volume.image_name, &device, volume.size_gb as u64).await {
+        if let Err(e) = rbd::grow_image_to(
+            &volume.pool,
+            &volume.image_name,
+            &device,
+            volume.size_gb as u64,
+        )
+        .await
+        {
             warn!(volume_id = %volume.id, device = %device, error = %e, "Failed to grow volume image");
         }
     }

@@ -156,7 +156,7 @@ async fn victim_selection_ignores_non_running_workloads() {
         ..Default::default()
     };
     let first = insert_workload(&db, agent.id, pending).await;
-    assert_eq!(pick_victim(&[first.clone()], Pressure::Cpu), None);
+    assert_eq!(pick_victim(std::slice::from_ref(&first), Pressure::Cpu), None);
     let second = insert_workload(&db, agent.id, WorkloadSpec::default()).await;
     assert_eq!(
         pick_victim(&[first, second.clone()], Pressure::Cpu),

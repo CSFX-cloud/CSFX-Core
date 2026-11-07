@@ -917,11 +917,10 @@ fn top_level_entries(mount_point: &str) -> Vec<UsageEntry> {
 
 fn cached_volume_usage() -> Vec<VolumeUsage> {
     let mut cache = USAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((taken_at, usage)) = cache.as_ref() {
-        if taken_at.elapsed() < USAGE_CACHE_TTL {
+    if let Some((taken_at, usage)) = cache.as_ref()
+        && taken_at.elapsed() < USAGE_CACHE_TTL {
             return usage.clone();
         }
-    }
     let usage = read_volume_usage();
     *cache = Some((std::time::Instant::now(), usage.clone()));
     usage

@@ -433,7 +433,9 @@ fn into_response(m: workloads::Model) -> WorkloadResponse {
         memory_usage_bytes: m.memory_usage_bytes,
         network_rx_bytes: m.network_rx_bytes,
         network_tx_bytes: m.network_tx_bytes,
-        volume_usage: m.volume_usage.and_then(|usage| serde_json::from_value(usage).ok()),
+        volume_usage: m
+            .volume_usage
+            .and_then(|usage| serde_json::from_value(usage).ok()),
         stats_updated_at: m.stats_updated_at.map(|dt| dt.and_utc()),
         created_at: m.created_at.and_utc(),
         updated_at: m.updated_at.map(|dt| dt.and_utc()),
