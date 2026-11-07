@@ -392,6 +392,7 @@ pub async fn insert_workload(db: &DatabaseConnection, spec: WorkloadSpec) -> wor
         memory_usage_bytes: Set(None),
         network_rx_bytes: Set(None),
         network_tx_bytes: Set(None),
+        volume_usage: Set(None),
         stats_updated_at: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),

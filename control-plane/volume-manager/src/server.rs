@@ -37,6 +37,10 @@ pub fn create_router(state: AppState) -> Router {
             axum::routing::post(volumes::attach_volume),
         )
         .route(
+            "/volumes/{id}/resize",
+            axum::routing::post(volumes::resize_volume),
+        )
+        .route(
             "/volumes/{id}/detach",
             axum::routing::post(volumes::detach_volume),
         )

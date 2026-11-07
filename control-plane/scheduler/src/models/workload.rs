@@ -48,6 +48,21 @@ impl WorkloadStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageEntry {
+    pub name: String,
+    pub bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VolumeUsage {
+    pub mount_path: String,
+    pub used_bytes: i64,
+    pub total_bytes: i64,
+    #[serde(default)]
+    pub entries: Vec<UsageEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VolumeMount {
     pub volume_id: Uuid,
     pub mount_path: String,
@@ -151,6 +166,8 @@ pub struct UpdateWorkloadRequest {
     pub ports: Option<Vec<PortMapping>>,
     pub restart_policy: Option<RestartPolicy>,
     pub max_restarts: Option<i32>,
+    #[serde(default)]
+    pub volume_mounts: Option<Vec<VolumeMount>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +281,7 @@ pub struct WorkloadResponse {
     pub memory_usage_bytes: Option<i64>,
     pub network_rx_bytes: Option<i64>,
     pub network_tx_bytes: Option<i64>,
+    pub volume_usage: Option<Vec<VolumeUsage>>,
     pub stats_updated_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,

@@ -238,6 +238,7 @@ impl SchedulerService {
                 ports: service.ports.clone(),
                 restart_policy: None,
                 max_restarts: None,
+                volume_mounts: None,
             };
 
             let model = crate::db::workloads::update_spec(&self.db, workload.id, &update)

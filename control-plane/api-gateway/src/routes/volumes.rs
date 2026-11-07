@@ -141,6 +141,25 @@ pub async fn attach_volume(
     .await
 }
 
+pub async fn resize_volume(
+    CanManageVolumes(_claims): CanManageVolumes,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    let header_map = header_vec(&headers);
+    proxy_to_volume_manager(
+        &state,
+        reqwest::Method::POST,
+        &format!("/volumes/{}/resize", id),
+        body_json,
+        Some(header_map),
+    )
+    .await
+}
+
 pub async fn detach_volume(
     CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
@@ -201,6 +220,7 @@ pub fn volumes_routes() -> Router<AppState> {
         .route("/volumes/{id}", get(get_volume))
         .route("/volumes/{id}", delete(delete_volume))
         .route("/volumes/{id}/attach", post(attach_volume))
+        .route("/volumes/{id}/resize", post(resize_volume))
         .route("/volumes/{id}/detach", post(detach_volume))
         .route("/volumes/{id}/snapshots", post(create_snapshot))
         .route("/volumes/{id}/snapshots", get(list_snapshots))

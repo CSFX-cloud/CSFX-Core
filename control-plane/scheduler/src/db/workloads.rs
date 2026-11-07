@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 use crate::models::workload::{
-    CreateWorkloadRequest, DesiredState, RestartPolicy, RuntimeClass, WorkloadResponse,
-    WorkloadStatus,
+    CreateWorkloadRequest, DesiredState, RestartPolicy, RuntimeClass, VolumeUsage,
+    WorkloadResponse, WorkloadStatus,
 };
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
 use shared::qos::QosClass;
@@ -67,6 +67,7 @@ pub async fn create(
         memory_usage_bytes: Set(None),
         network_rx_bytes: Set(None),
         network_tx_bytes: Set(None),
+        volume_usage: Set(None),
         stats_updated_at: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
@@ -177,6 +178,9 @@ pub async fn update_spec(
     }
     if req.max_restarts.is_some() {
         active.max_restarts = Set(req.max_restarts);
+    }
+    if let Some(ref volume_mounts) = req.volume_mounts {
+        active.volume_mounts = Set(serde_json::to_value(volume_mounts).ok());
     }
 
     apply_auto_resources(&workload, &mut active);
@@ -313,6 +317,7 @@ pub async fn update_stats(
     memory_usage_bytes: Option<i64>,
     network_rx_bytes: Option<i64>,
     network_tx_bytes: Option<i64>,
+    volume_usage: Option<Vec<VolumeUsage>>,
 ) -> Result<(), sea_orm::DbErr> {
     let workload = workloads::Entity::find_by_id(workload_id)
         .one(db)
@@ -333,6 +338,7 @@ pub async fn update_stats(
     active.memory_usage_bytes = Set(memory_usage_bytes);
     active.network_rx_bytes = Set(network_rx_bytes);
     active.network_tx_bytes = Set(network_tx_bytes);
+    active.volume_usage = Set(volume_usage.and_then(|usage| serde_json::to_value(usage).ok()));
     active.stats_updated_at = Set(Some(Utc::now().naive_utc()));
 
     active.update(db).await?;
@@ -427,6 +433,7 @@ fn into_response(m: workloads::Model) -> WorkloadResponse {
         memory_usage_bytes: m.memory_usage_bytes,
         network_rx_bytes: m.network_rx_bytes,
         network_tx_bytes: m.network_tx_bytes,
+        volume_usage: m.volume_usage.and_then(|usage| serde_json::from_value(usage).ok()),
         stats_updated_at: m.stats_updated_at.map(|dt| dt.and_utc()),
         created_at: m.created_at.and_utc(),
         updated_at: m.updated_at.map(|dt| dt.and_utc()),
