@@ -404,7 +404,6 @@ async fn reconcile_tick(
     rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
     failure_count: &mut u32,
     fence_guard: &mut fence::FenceGuard,
-    current_flake_rev: &mut String,
 ) {
     let assigned_volumes = process_volumes(client, agent_id, api_key, mounted_volumes).await;
     let resource_group_ids = process_workloads(
@@ -462,7 +461,7 @@ async fn reconcile_tick(
 
             info!(
                 agent_id = %agent_id,
-                desired_flake_rev = ?resp.desired_flake_rev,
+                releases = resp.worker_releases.len(),
                 "heartbeat ok"
             );
 
@@ -472,25 +471,8 @@ async fn reconcile_tick(
 
             adopt_advertised_gateway(client.gateway_url(), resp.gateway_url.as_deref());
 
-            if let Some(count) = resp.post_update_heartbeats {
-                update_watch::write_heartbeat_counter(count).await;
-            }
-
-            if let Some(rev) = resp.desired_flake_rev {
-                if rev != *current_flake_rev {
-                    info!(
-                        agent_id = %agent_id,
-                        current_flake_rev = %current_flake_rev,
-                        desired_flake_rev = %rev,
-                        "update signal received from gateway, scheduling update"
-                    );
-                }
-                let rev_clone = rev.clone();
-                let current = current_flake_rev.clone();
-                tokio::spawn(async move {
-                    update_watch::handle(agent_id, &rev_clone, &current).await;
-                });
-                *current_flake_rev = rev;
+            if !resp.worker_releases.is_empty() {
+                tokio::spawn(update_watch::handle(agent_id, resp.worker_releases));
             }
         }
         Err(e) => {
@@ -542,14 +524,13 @@ async fn run_heartbeat_loop(
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
     let mut fence_guard = fence::FenceGuard::from_env();
-    let mut current_flake_rev = String::new();
     let starts = StartTracker::default();
     let completed = Arc::clone(&starts.completed);
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
             }
             signal = assignment_signal.recv() => {
                 if signal.is_none() {
@@ -559,11 +540,11 @@ async fn run_heartbeat_loop(
                 while assignment_signal.try_recv().is_ok() {}
                 info!(agent_id = %agent_id, "assignment push received, reconciling immediately");
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
             }
             _ = completed.notified() => {
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal received");
@@ -2036,7 +2017,6 @@ mod tests {
 
     struct TickOutcome {
         failures: u32,
-        flake_rev: String,
         heartbeats: usize,
     }
 
@@ -2094,7 +2074,6 @@ mod tests {
         let (firecracker, qemu) = runtimes();
         let registry = Arc::new(rg_dns::RgDnsRegistry::new());
         let mut failures = starting_failures;
-        let mut flake_rev = "current".to_string();
 
         reconcile_tick(
             &client,
@@ -2112,41 +2091,23 @@ mod tests {
             &registry,
             &mut failures,
             guard,
-            &mut flake_rev,
         )
         .await;
 
         TickOutcome {
             failures,
-            flake_rev,
             heartbeats: heartbeats.load(Ordering::SeqCst),
         }
     }
 
     #[tokio::test]
-    async fn successful_heartbeats_reset_failures_and_adopt_the_desired_revision() {
+    async fn successful_heartbeats_reset_failures() {
         let mut guard = fence::FenceGuard::new(0);
 
-        let outcome = run_tick(
-            Some(serde_json::json!({"desired_flake_rev": "not-a-sha"})),
-            &mut guard,
-            2,
-        )
-        .await;
+        let outcome = run_tick(Some(serde_json::json!({})), &mut guard, 2).await;
 
         assert_eq!(outcome.heartbeats, 1);
         assert_eq!(outcome.failures, 0);
-        assert_eq!(outcome.flake_rev, "not-a-sha");
-    }
-
-    #[tokio::test]
-    async fn heartbeats_without_a_new_revision_keep_the_current_one() {
-        let mut guard = fence::FenceGuard::new(0);
-
-        let outcome = run_tick(Some(serde_json::json!({})), &mut guard, 0).await;
-
-        assert_eq!(outcome.heartbeats, 1);
-        assert_eq!(outcome.flake_rev, "current");
     }
 
     #[tokio::test]
@@ -2157,7 +2118,6 @@ mod tests {
 
         assert_eq!(outcome.heartbeats, 1);
         assert_eq!(outcome.failures, 2);
-        assert_eq!(outcome.flake_rev, "current");
     }
 
     #[tokio::test]

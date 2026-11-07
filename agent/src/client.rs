@@ -83,9 +83,15 @@ struct WorkloadStatsRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SignedRelease {
+    pub manifest: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct HeartbeatResponse {
-    pub desired_flake_rev: Option<String>,
-    pub post_update_heartbeats: Option<u32>,
+    #[serde(default)]
+    pub worker_releases: HashMap<String, SignedRelease>,
     #[serde(default)]
     pub ssh_enabled: bool,
     #[serde(default)]
@@ -1181,7 +1187,7 @@ mod tests {
                     async move {
                         *sink.lock().unwrap() = Some((headers, body));
                         Json(json!({
-                            "desired_flake_rev": "abc", "post_update_heartbeats": 3,
+                            "worker_releases": {"x86_64-linux": {"manifest": "m", "signature": "s"}},
                             "ssh_enabled": true, "gateway_url": "https://gw"
                         }))
                     }
@@ -1207,7 +1213,7 @@ mod tests {
             .await
             .unwrap();
         assert!(response.ssh_enabled);
-        assert_eq!(response.post_update_heartbeats, Some(3));
+        assert_eq!(response.worker_releases["x86_64-linux"].manifest, "m");
         assert_eq!(response.gateway_url.as_deref(), Some("https://gw"));
 
         let (headers, body) = seen.lock().unwrap().take().unwrap();
@@ -1230,7 +1236,7 @@ mod tests {
             .heartbeat(Uuid::nil(), "k", None, None)
             .await
             .unwrap();
-        assert!(ok.desired_flake_rev.is_none());
+        assert!(ok.worker_releases.is_empty());
         assert!(!ok.ssh_enabled);
         let failed = failing_client()
             .await

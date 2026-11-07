@@ -2,6 +2,11 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
+use crate::config::Config;
+use crate::nix;
+
+const AGENT_UNIT: &str = "csfx-agent.service";
+
 pub async fn wait_for_gateway(
     gateway_url: &str,
     timeout_secs: u64,
@@ -33,6 +38,40 @@ pub async fn wait_for_gateway(
             return false;
         }
 
+        sleep(Duration::from_secs(retry_interval_secs)).await;
+    }
+}
+
+pub async fn check(cfg: &Config) -> bool {
+    match &cfg.gateway_url {
+        Some(url) => {
+            wait_for_gateway(
+                url,
+                cfg.health_check_timeout_secs,
+                cfg.health_check_retry_interval_secs,
+            )
+            .await
+        }
+        None => {
+            wait_for_agent(
+                cfg.health_check_timeout_secs,
+                cfg.health_check_retry_interval_secs,
+            )
+            .await
+        }
+    }
+}
+
+async fn wait_for_agent(timeout_secs: u64, retry_interval_secs: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        if nix::service_active(AGENT_UNIT).await {
+            info!(unit = AGENT_UNIT, "agent health check passed");
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
         sleep(Duration::from_secs(retry_interval_secs)).await;
     }
 }
