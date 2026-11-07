@@ -17,6 +17,7 @@ dotenvy = { workspace = true }
 anyhow = { workspace = true }
 etcd-client = { workspace = true }
 reqwest = { version = "0.13", features = ["json", "rustls-no-provider", "webpki-roots"], default-features = false }
+base64 = { workspace = true }
 ring = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }
