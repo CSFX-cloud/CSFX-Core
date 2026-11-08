@@ -18,7 +18,7 @@
         { key: "new", label: "New", badge: "cx-badge--success" },
         { key: "improved", label: "Improved", badge: "" },
         { key: "fixed", label: "Fixed", badge: "cx-badge--warning" },
-        { key: "security", label: "Security", badge: "cx-badge--danger" },
+        { key: "security", label: "Security", badge: "cx-badge--info" },
     ];
 
     const sections = $derived(

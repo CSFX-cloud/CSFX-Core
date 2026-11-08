@@ -3,7 +3,7 @@
   --border-100:#1f1f1f;--border-200:#2a2a2a;--border-control:#636363;--marker:#3a3a3a;
   --ink:#f5f5f5;--ink-soft:#a3a3a3;--ink-muted:#8a8a8a;
   --cx-accent:#f2f2f2;--accent-hover:#ffffff;--on-accent:#0a0a0a;--focus-ring:#f5f5f5;
-  --success:#4ade80;--success-tint:rgba(74,222,128,.12);--warning:#fbbf24;--warning-tint:rgba(251,191,36,.12);--danger:#f87171;--danger-tint:rgba(248,113,113,.12);
+  --success:#4ade80;--success-tint:rgba(74,222,128,.12);--warning:#fbbf24;--warning-tint:rgba(251,191,36,.12);--danger:#f87171;--danger-tint:rgba(248,113,113,.12);--info:#60a5fa;--info-tint:rgba(96,165,250,.12);
   --stage-slate:#1d2631;--stage-olive:#3a3624;--stage-teal:#11302a;--stage-ember:#5a4330;
   --font-sans:"Inter Variable","Inter",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
   --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
@@ -24,7 +24,7 @@
   --ink:#0a0a0a;--ink-soft:#525252;--ink-muted:#5e5e5e;
   --syn-keyword:#3451d1;
   --cx-accent:#0a0a0a;--accent-hover:#262626;--on-accent:#fafafa;--focus-ring:#0a0a0a;--focus-halo:rgba(10,10,10,.08);
-  --success:#11702f;--success-tint:rgba(17,112,47,.08);--warning:#9c4a06;--warning-tint:rgba(156,74,6,.08);--danger:#c42b2b;--danger-tint:rgba(196,43,43,.08);
+  --success:#11702f;--success-tint:rgba(17,112,47,.08);--warning:#9c4a06;--warning-tint:rgba(156,74,6,.08);--danger:#c42b2b;--danger-tint:rgba(196,43,43,.08);--info:#1d4ed8;--info-tint:rgba(29,78,216,.08);
   --chart-cpu:#0d9488;--chart-memory:#2563eb;
   --stage-slate:#d9e2ec;--stage-olive:#ede3c6;--stage-teal:#cfe7de;--stage-ember:#f0d8bf;
   --shadow-window:0 28px 64px rgba(16,24,32,.12),0 6px 18px rgba(16,24,32,.06);
@@ -72,6 +72,7 @@
 .cx-badge--success{color:var(--success);background:var(--success-tint)}
 .cx-badge--warning{color:var(--warning);background:var(--warning-tint)}
 .cx-badge--danger{color:var(--danger);background:var(--danger-tint)}
+.cx-badge--info{color:var(--info);background:var(--info-tint)}
 
 .cx-delta{display:inline-flex;align-items:center;gap:2px;height:20px;padding:0 6px;border-radius:var(--radius-xs);font:500 12px/1 var(--font-sans)}
 .cx-delta svg.cx-i{width:12px;height:12px;stroke-width:2}
