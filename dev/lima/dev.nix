@@ -49,7 +49,6 @@ in
     csfx-cp = {
       enable = true;
       dbUrl = "";
-      updater.infraRepoMirrorUrl = "";
     };
     csfx-setup = {
       enable = true;
