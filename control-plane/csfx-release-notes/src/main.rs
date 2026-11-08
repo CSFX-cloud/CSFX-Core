@@ -43,13 +43,24 @@ fn build(args: &[String]) -> Result<()> {
     let dir = Path::new(flag(args, "--dir").unwrap_or("releases"));
     let out = Path::new(flag(args, "--out").unwrap_or("."));
     let path = dir.join(format!("{version}.md"));
-    let source = fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
+    let source =
+        fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
     let notes = parse(&source).with_context(|| format!("invalid {}", path.display()))?;
-    ensure!(notes.version == version, "version {} does not match file name {version}", notes.version);
+    ensure!(
+        notes.version == version,
+        "version {} does not match file name {version}",
+        notes.version
+    );
     ensure_images_exist(&notes, &dir.join("assets").join(version))?;
-    fs::write(out.join("release-notes.json"), serde_json::to_string_pretty(&notes)?)?;
+    fs::write(
+        out.join("release-notes.json"),
+        serde_json::to_string_pretty(&notes)?,
+    )?;
     fs::write(out.join("release-notes.md"), to_markdown(&notes, asset_url))?;
-    println!("[INFO] release notes built version={version} channel={:?}", notes.channel);
+    println!(
+        "[INFO] release notes built version={version} channel={:?}",
+        notes.channel
+    );
     Ok(())
 }
 
@@ -76,7 +87,11 @@ fn write_draft(args: &[String]) -> Result<()> {
     let date = git(&["log", "-1", "--format=%cs"])?;
     fs::create_dir_all(dir)?;
     fs::write(&path, draft(version, date.trim(), &commits)?)?;
-    println!("[INFO] release notes draft written path={} since={since} commits={}", path.display(), commits.len());
+    println!(
+        "[INFO] release notes draft written path={} since={since} commits={}",
+        path.display(),
+        commits.len()
+    );
     Ok(())
 }
 
@@ -102,7 +117,15 @@ fn commits_since(tag: &str) -> Result<Vec<Commit>> {
 }
 
 fn git(args: &[&str]) -> Result<String> {
-    let output = Command::new("git").args(args).output().context("cannot run git")?;
-    ensure!(output.status.success(), "git {} failed: {}", args.join(" "), String::from_utf8_lossy(&output.stderr).trim());
+    let output = Command::new("git")
+        .args(args)
+        .output()
+        .context("cannot run git")?;
+    ensure!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
     Ok(String::from_utf8(output.stdout)?)
 }

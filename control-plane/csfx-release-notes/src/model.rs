@@ -23,7 +23,9 @@ impl Category {
     }
 
     pub fn from_label(label: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|category| category.label() == label)
+        Self::ALL
+            .into_iter()
+            .find(|category| category.label() == label)
     }
 }
 

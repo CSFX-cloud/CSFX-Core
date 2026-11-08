@@ -60,8 +60,15 @@ fn validate_version(version: &str) -> Result<(), NotesError> {
         Some((base, suffix)) => (base, Some(suffix)),
         None => (version, None),
     };
-    let numeric = base.split('.').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
-    let suffix_valid = suffix.is_none_or(|text| !text.is_empty() && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'));
+    let numeric = base
+        .split('.')
+        .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
+    let suffix_valid = suffix.is_none_or(|text| {
+        !text.is_empty()
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    });
     if base.split('.').count() != 3 || !numeric || !suffix_valid {
         return Err(invalid());
     }
@@ -70,7 +77,12 @@ fn validate_version(version: &str) -> Result<(), NotesError> {
 
 fn validate_date(date: &str) -> Result<(), NotesError> {
     let parts: Vec<&str> = date.split('-').collect();
-    let number = |part: &str| part.bytes().all(|b| b.is_ascii_digit()).then(|| part.parse::<u32>().ok()).flatten();
+    let number = |part: &str| {
+        part.bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| part.parse::<u32>().ok())
+            .flatten()
+    };
     let valid = matches!(parts.as_slice(), [year, month, day]
         if year.len() == 4
             && month.len() == 2
@@ -115,12 +127,20 @@ impl Builder {
         }
         if let Some(label) = line.strip_prefix("## ") {
             self.flush(line_no)?;
-            self.current = Some(Category::from_label(label.trim()).ok_or_else(|| NotesError::syntax(line_no, "unknown category"))?);
+            self.current = Some(
+                Category::from_label(label.trim())
+                    .ok_or_else(|| NotesError::syntax(line_no, "unknown category"))?,
+            );
             return Ok(());
         }
         if let Some(text) = line.strip_prefix("### ") {
             self.flush(line_no)?;
-            return self.push(line_no, Block::Heading { text: text.trim().to_string() });
+            return self.push(
+                line_no,
+                Block::Heading {
+                    text: text.trim().to_string(),
+                },
+            );
         }
         if line.starts_with('#') {
             return Err(NotesError::syntax(line_no, "unsupported heading level"));
@@ -152,7 +172,7 @@ impl Builder {
         if self.paragraph.is_empty() {
             return Ok(());
         }
-        let text = self.paragraph.drain(..).collect::<Vec<_>>().join(" ");
+        let text = std::mem::take(&mut self.paragraph).join(" ");
         self.push(line_no, Block::Paragraph { text })
     }
 
@@ -184,7 +204,8 @@ fn parse_image(line_no: usize, line: &str) -> Result<Block, NotesError> {
         .and_then(|rest| rest.split_once("]("))
         .and_then(|(alt, tail)| tail.strip_suffix(')').map(|src| (alt.trim(), src.trim())))
         .filter(|(alt, src)| !alt.is_empty() && !src.is_empty() && !src.contains('/'));
-    let (alt, src) = parsed.ok_or_else(|| NotesError::syntax(line_no, "invalid image, expected ![alt](file-name)"))?;
+    let (alt, src) = parsed
+        .ok_or_else(|| NotesError::syntax(line_no, "invalid image, expected ![alt](file-name)"))?;
     Ok(Block::Image {
         src: src.to_string(),
         alt: alt.to_string(),
@@ -209,36 +230,61 @@ mod tests {
         assert_eq!(notes.sections[&Category::New].len(), 3);
         assert_eq!(
             notes.sections[&Category::Fixed],
-            vec![Block::List { items: vec!["One".into(), "Two".into()] }]
+            vec![Block::List {
+                items: vec!["One".into(), "Two".into()]
+            }]
         );
         assert_eq!(
             notes.sections[&Category::New][1],
-            Block::Paragraph { text: "Short text second line".into() }
+            Block::Paragraph {
+                text: "Short text second line".into()
+            }
         );
     }
 
     #[test]
     fn rejects_channel_mismatch() {
-        assert!(matches!(parse(&replaced("channel: pre", "channel: stable")), Err(NotesError::ChannelMismatch { .. })));
+        assert!(matches!(
+            parse(&replaced("channel: pre", "channel: stable")),
+            Err(NotesError::ChannelMismatch { .. })
+        ));
     }
 
     #[test]
     fn rejects_invalid_version_and_date() {
-        assert!(matches!(parse(&replaced("0.3.0-alpha.1", "0.3")), Err(NotesError::InvalidVersion(_))));
-        assert!(matches!(parse(&replaced("2026-11-08", "2026-13-08")), Err(NotesError::InvalidDate(_))));
+        assert!(matches!(
+            parse(&replaced("0.3.0-alpha.1", "0.3")),
+            Err(NotesError::InvalidVersion(_))
+        ));
+        assert!(matches!(
+            parse(&replaced("2026-11-08", "2026-13-08")),
+            Err(NotesError::InvalidDate(_))
+        ));
     }
 
     #[test]
     fn rejects_unknown_category_and_frontmatter_key() {
-        assert!(matches!(parse(&replaced("## Fixed", "## Misc")), Err(NotesError::Syntax { .. })));
-        assert!(matches!(parse(&replaced("date:", "extra: 1\ndate:")), Err(NotesError::Frontmatter(_))));
+        assert!(matches!(
+            parse(&replaced("## Fixed", "## Misc")),
+            Err(NotesError::Syntax { .. })
+        ));
+        assert!(matches!(
+            parse(&replaced("date:", "extra: 1\ndate:")),
+            Err(NotesError::Frontmatter(_))
+        ));
     }
 
     #[test]
     fn rejects_bad_image_and_missing_entries() {
-        assert!(matches!(parse(&replaced("panel.png", "dir/panel.png")), Err(NotesError::Syntax { .. })));
+        assert!(matches!(
+            parse(&replaced("panel.png", "dir/panel.png")),
+            Err(NotesError::Syntax { .. })
+        ));
         let empty = "---\nversion: 0.3.0\nchannel: stable\ndate: 2026-11-08\n---\n";
         assert!(matches!(parse(empty), Err(NotesError::Empty)));
-        assert!(matches!(parse("no frontmatter"), Err(NotesError::MissingFrontmatter)));
+        assert!(matches!(
+            parse("no frontmatter"),
+            Err(NotesError::MissingFrontmatter)
+        ));
     }
 }

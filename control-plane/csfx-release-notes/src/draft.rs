@@ -21,7 +21,10 @@ pub fn draft(version: &str, date: &str, commits: &[Commit]) -> Result<String, No
         version: version.to_string(),
         channel: Channel::of_version(version),
         date: date.to_string(),
-        breaking: entries.iter().filter_map(|entry| entry.breaking.clone()).collect(),
+        breaking: entries
+            .iter()
+            .filter_map(|entry| entry.breaking.clone())
+            .collect(),
     };
     let yaml = serde_yaml::to_string(&frontmatter)?;
     Ok(format!("---\n{yaml}---\n\n{}", sections_markdown(&entries)))
@@ -31,7 +34,10 @@ fn sections_markdown(entries: &[Entry]) -> String {
     let mut grouped: BTreeMap<Category, Vec<&str>> = BTreeMap::new();
     for entry in entries {
         if let Some(category) = entry.category {
-            grouped.entry(category).or_default().push(&entry.description);
+            grouped
+                .entry(category)
+                .or_default()
+                .push(&entry.description);
         }
     }
     grouped
@@ -56,7 +62,8 @@ fn classify(commit: &Commit) -> Option<Entry> {
     };
     let category = category_of(kind, scope);
     let footer = breaking_footer(&commit.body);
-    let breaking = (marked_breaking || footer.is_some()).then(|| footer.unwrap_or(description).to_string());
+    let breaking =
+        (marked_breaking || footer.is_some()).then(|| footer.unwrap_or(description).to_string());
     (category.is_some() || breaking.is_some()).then(|| Entry {
         category,
         breaking,
@@ -89,7 +96,10 @@ mod tests {
     use crate::parse::parse;
 
     fn commit(subject: &str, body: &str) -> Commit {
-        Commit { subject: subject.into(), body: body.into() }
+        Commit {
+            subject: subject.into(),
+            body: body.into(),
+        }
     }
 
     #[test]
@@ -98,7 +108,10 @@ mod tests {
             commit("feat: add panel", ""),
             commit("fix(security): rotate tokens", ""),
             commit("fix: stop flicker", ""),
-            commit("refactor!: move keys", "BREAKING CHANGE: run csfx-migrate: first"),
+            commit(
+                "refactor!: move keys",
+                "BREAKING CHANGE: run csfx-migrate: first",
+            ),
             commit("chore: bump deps", ""),
             commit("not conventional", ""),
         ];

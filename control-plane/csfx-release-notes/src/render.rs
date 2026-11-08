@@ -12,7 +12,9 @@ pub fn to_markdown(notes: &ReleaseNotes, asset_base: &str) -> String {
             continue;
         };
         out.push_str(&format!("## {}\n\n", category.label()));
-        blocks.iter().for_each(|block| out.push_str(&block_markdown(block, asset_base)));
+        blocks
+            .iter()
+            .for_each(|block| out.push_str(&block_markdown(block, asset_base)));
     }
     out.trim_end().to_string() + "\n"
 }
@@ -49,10 +51,15 @@ mod tests {
     #[test]
     fn rewrites_image_sources_for_api_consumers() {
         let source = "---\nversion: 0.3.0\nchannel: stable\ndate: 2026-11-08\n---\n\n## New\n\n![Shot](shot.png)\n";
-        let notes = parse(source).unwrap().with_asset_base("https://mirror.test/dl/");
+        let notes = parse(source)
+            .unwrap()
+            .with_asset_base("https://mirror.test/dl/");
         assert_eq!(
             notes.sections[&Category::New],
-            vec![Block::Image { src: "https://mirror.test/dl/shot.png".into(), alt: "Shot".into() }]
+            vec![Block::Image {
+                src: "https://mirror.test/dl/shot.png".into(),
+                alt: "Shot".into()
+            }]
         );
     }
 }

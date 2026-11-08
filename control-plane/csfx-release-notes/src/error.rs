@@ -9,7 +9,10 @@ pub enum NotesError {
     #[error("invalid version: {0}")]
     InvalidVersion(String),
     #[error("channel {channel} does not match version {version}")]
-    ChannelMismatch { channel: &'static str, version: String },
+    ChannelMismatch {
+        channel: &'static str,
+        version: String,
+    },
     #[error("invalid date: {0}")]
     InvalidDate(String),
     #[error("empty breaking change entry")]
