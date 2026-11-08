@@ -6,7 +6,7 @@
 	const { Story } = defineMeta({
 		title: "Shell/ReleaseNotesDrawer",
 		component: ReleaseNotesDrawer,
-		tags: ["autodocs"],
+		parameters: { layout: "fullscreen" },
 	});
 
 	const releaseUrl = "https://github.com/CSFX-cloud/CSFX-Core/releases/tag/v0.3.0";
