@@ -1,6 +1,6 @@
 <script lang="ts">
     import SideDrawer from "$lib/components/shell/side-drawer.svelte";
-    import type { NoteBlock, NoteCategory, ReleaseNotes } from "$lib/api/system";
+    import type { NoteCategory, ReleaseNotes } from "$lib/api/system";
 
     type Props = {
         open: boolean;
@@ -24,10 +24,6 @@
     const sections = $derived(
         CATEGORIES.map((category) => ({ ...category, blocks: notes?.sections[category.key] ?? [] })).filter((section) => section.blocks.length > 0),
     );
-
-    function countEntries(blocks: NoteBlock[]): number {
-        return blocks.reduce((total, block) => total + (block.type === "list" ? block.items.length : block.type === "heading" ? 1 : 0), 0);
-    }
 </script>
 
 <SideDrawer {open} wide title={`v${version}`} subtitle={notes?.date} {onclose}>
@@ -44,7 +40,6 @@
             <section class="rn-section rn-breaking" role="alert">
                 <h3 class="rn-section__head">
                     <span class="cx-badge cx-badge--danger">Breaking changes</span>
-                    <span class="cx-hint cx-mono">{notes.breaking.length}</span>
                 </h3>
                 <ul class="rn-list">
                     {#each notes.breaking as entry (entry)}<li>{entry}</li>{/each}
@@ -56,7 +51,6 @@
                 <section class="rn-section">
                     <h3 class="rn-section__head">
                         <span class="cx-badge {section.badge}">{section.label}</span>
-                        <span class="cx-hint cx-mono">{countEntries(section.blocks)}</span>
                     </h3>
                     <div class="rn-blocks">
                         {#each section.blocks as block, index (index)}
