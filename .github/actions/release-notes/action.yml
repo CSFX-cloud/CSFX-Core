@@ -1,0 +1,33 @@
+name: Release notes
+description: Validate the release notes for a version and publish them as a build artifact
+
+inputs:
+  version:
+    description: Release version without the leading v
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Build release notes
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        mkdir -p release-notes
+        cargo run -p csfx-release-notes -- build "${VERSION}" \
+          --asset-url "https://github.com/${REPOSITORY}/releases/download/v${VERSION}" \
+          --out release-notes
+        if [ -d "releases/assets/${VERSION}" ]; then
+          cp releases/assets/"${VERSION}"/* release-notes/
+        fi
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: release-notes
+        path: release-notes
+        retention-days: 7
