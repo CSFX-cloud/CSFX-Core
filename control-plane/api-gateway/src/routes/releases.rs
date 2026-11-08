@@ -1,10 +1,19 @@
-use axum::{extract::Query, http::StatusCode, response::Json, routing::get, Router};
+use axum::{
+    extract::{Path, Query},
+    http::StatusCode,
+    response::Json,
+    routing::get,
+    Router,
+};
+use csfx_release_notes::ReleaseNotes;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::rbac::CanManageSystem;
+use crate::routes::update::is_valid_version;
 use crate::AppState;
 
 const RELEASES_API: &str = "https://api.github.com/repos/CSFX-cloud/CSFX-Core/releases";
+const DEFAULT_RELEASE_BASE_URL: &str = "https://github.com/CSFX-cloud/CSFX-Infra/releases";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Deserialize)]
@@ -41,7 +50,58 @@ pub struct ReleasesQuery {
 }
 
 pub fn routes() -> Router<AppState> {
-    Router::new().route("/system/releases", get(list_releases))
+    Router::new()
+        .route("/system/releases", get(list_releases))
+        .route("/system/releases/{version}/notes", get(release_notes))
+}
+
+async fn release_notes(
+    _auth: CanManageSystem,
+    Path(version): Path<String>,
+) -> Result<Json<ReleaseNotes>, StatusCode> {
+    if !is_valid_version(&version) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let base = release_download_base(&release_base_url(), &version);
+    let notes = fetch_release_notes(&format!("{base}/release-notes.json")).await?;
+    Ok(Json(notes.with_asset_base(&base)))
+}
+
+fn release_base_url() -> String {
+    std::env::var("RELEASE_BASE_URL").unwrap_or_else(|_| DEFAULT_RELEASE_BASE_URL.to_string())
+}
+
+fn release_download_base(base_url: &str, version: &str) -> String {
+    format!(
+        "{}/download/v{}",
+        base_url.trim_end_matches('/'),
+        version.trim_start_matches('v')
+    )
+}
+
+async fn fetch_release_notes(url: &str) -> Result<ReleaseNotes, StatusCode> {
+    let resp = reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "csfx-api-gateway")
+        .send()
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, url, "release notes fetch failed");
+            StatusCode::BAD_GATEWAY
+        })?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    if !resp.status().is_success() {
+        tracing::error!(status = %resp.status(), url, "release notes upstream error");
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    resp.json::<ReleaseNotes>().await.map_err(|e| {
+        tracing::error!(error = %e, url, "failed to deserialize release notes");
+        StatusCode::BAD_GATEWAY
+    })
 }
 
 async fn list_releases(
@@ -143,4 +203,17 @@ fn parse_semver(v: &str) -> Option<(u32, u32, u32, u32)> {
         parts[2].parse().ok()?,
         pre_release_number,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn download_base_normalizes_slashes_and_version_prefix() {
+        assert_eq!(
+            release_download_base("https://mirror.test/releases/", "v0.3.0"),
+            "https://mirror.test/releases/download/v0.3.0"
+        );
+    }
 }

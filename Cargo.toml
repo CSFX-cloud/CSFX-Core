@@ -6,6 +6,7 @@ members = [
     "control-plane/api-gateway",
     "control-plane/csfx-migrate",
     "control-plane/csfx-updater",
+    "control-plane/csfx-release-notes",
     "control-plane/scheduler",
     "control-plane/failover-controller",
     "control-plane/sdn-controller",
