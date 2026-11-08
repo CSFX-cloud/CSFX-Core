@@ -710,4 +710,4 @@
 .rn-list{margin:0;padding:0 0 0 var(--space-5);list-style:disc;display:grid;gap:var(--space-2);font:400 13px/19px var(--font-sans);color:var(--ink-soft)}
 .rn-figure{display:grid;gap:var(--space-2);margin:0}
 .rn-figure img{display:block;width:100%;height:auto;border:1px solid var(--border-100);border-radius:var(--radius-md);background:var(--bg-inset)}
-.rn-breaking{display:grid;gap:var(--space-2);border-color:color-mix(in srgb,var(--danger) 40%,transparent);background:var(--danger-tint)}
+.rn-breaking{padding-left:var(--space-4);border-left:2px solid var(--danger)}

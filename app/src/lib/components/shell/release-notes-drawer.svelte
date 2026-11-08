@@ -41,11 +41,15 @@
         </div>
     {:else if notes}
         {#if notes.breaking.length > 0}
-            <div class="cx-alert cx-alert--danger rn-breaking" role="alert">
-                <span class="cx-alert__dot" aria-hidden="true"></span>
-                <span class="cx-alert__title">Breaking changes</span>
-                {#each notes.breaking as entry (entry)}<p class="cx-alert__body">{entry}</p>{/each}
-            </div>
+            <section class="rn-section rn-breaking" role="alert">
+                <h3 class="rn-section__head">
+                    <span class="cx-badge cx-badge--danger">Breaking changes</span>
+                    <span class="cx-hint cx-mono">{notes.breaking.length}</span>
+                </h3>
+                <ul class="rn-list">
+                    {#each notes.breaking as entry (entry)}<li>{entry}</li>{/each}
+                </ul>
+            </section>
         {/if}
         <div class="rn-sections">
             {#each sections as section (section.key)}
