@@ -41,17 +41,25 @@
 </script>
 
 <Story name="Stable">
-	<ReleaseNotesDrawer open version="0.3.0" prerelease={false} htmlUrl={releaseUrl} notes={fullNotes} onclose={noop} />
+	<div class="cx-root" style="min-height: 100vh">
+		<ReleaseNotesDrawer open version="0.3.0" prerelease={false} htmlUrl={releaseUrl} notes={fullNotes} onclose={noop} />
+	</div>
 </Story>
 
 <Story name="Pre-release with breaking changes">
-	<ReleaseNotesDrawer open version="0.3.0-alpha.2" prerelease htmlUrl={releaseUrl} notes={breakingNotes} onclose={noop} />
+	<div class="cx-root" style="min-height: 100vh">
+		<ReleaseNotesDrawer open version="0.3.0-alpha.2" prerelease htmlUrl={releaseUrl} notes={breakingNotes} onclose={noop} />
+	</div>
 </Story>
 
 <Story name="Loading">
-	<ReleaseNotesDrawer open version="0.3.0" prerelease={false} htmlUrl={releaseUrl} notes={null} loading onclose={noop} />
+	<div class="cx-root" style="min-height: 100vh">
+		<ReleaseNotesDrawer open version="0.3.0" prerelease={false} htmlUrl={releaseUrl} notes={null} loading onclose={noop} />
+	</div>
 </Story>
 
 <Story name="Fallback">
-	<ReleaseNotesDrawer open version="0.2.9" prerelease={false} htmlUrl={releaseUrl} notes={null} onclose={noop} />
+	<div class="cx-root" style="min-height: 100vh">
+		<ReleaseNotesDrawer open version="0.2.9" prerelease={false} htmlUrl={releaseUrl} notes={null} onclose={noop} />
+	</div>
 </Story>
