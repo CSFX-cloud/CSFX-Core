@@ -92,24 +92,22 @@
     <div class="cx-side__section">Resources</div>
     {#each RESOURCE_NAV as item (item.href)}{@render link(item)}{/each}
 
-    {#if latestRelease}
-        <button class="db-update" type="button" onclick={openNotes}>
-            <ArrowUpCircle class="cx-i" aria-hidden="true" />
-            <span>Update available<small>v{latestRelease.version} is ready</small></span>
-            <i aria-hidden="true"></i>
-        </button>
-        <ReleaseNotesDrawer
-            open={notesOpen}
-            version={latestRelease.version}
-            prerelease={latestRelease.prerelease}
-            htmlUrl={latestRelease.html_url}
-            {notes}
-            loading={notesLoading}
-            onclose={() => (notesOpen = false)}
-        />
-    {/if}
-
     <div class="db-side__foot">
+        {#if latestRelease}
+            <button class="db-update" type="button" onclick={openNotes}>
+                <ArrowUpCircle class="cx-i" aria-hidden="true" />
+                <span>Update available<small>v{latestRelease.version} is ready</small></span>
+            </button>
+            <ReleaseNotesDrawer
+                open={notesOpen}
+                version={latestRelease.version}
+                prerelease={latestRelease.prerelease}
+                htmlUrl={latestRelease.html_url}
+                {notes}
+                loading={notesLoading}
+                onclose={() => (notesOpen = false)}
+            />
+        {/if}
         <div class="db-account" bind:this={account}>
             {#if menuOpen}
                 <div class="db-menu" role="menu" aria-label="Account menu">
