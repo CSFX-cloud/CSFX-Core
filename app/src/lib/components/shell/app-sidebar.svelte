@@ -95,7 +95,8 @@
     {#if latestRelease}
         <button class="db-update" type="button" onclick={openNotes}>
             <ArrowUpCircle class="cx-i" aria-hidden="true" />
-            <span>Update available<small>{latestRelease.version}{latestRelease.prerelease ? " (pre-release)" : ""}</small></span>
+            <span>Update available<small>v{latestRelease.version} is ready</small></span>
+            <i aria-hidden="true"></i>
         </button>
         <ReleaseNotesDrawer
             open={notesOpen}

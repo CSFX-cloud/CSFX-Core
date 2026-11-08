@@ -1,16 +1,20 @@
 <script lang="ts">
     import { onMount, onDestroy } from "svelte";
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
+    import ReleaseNotesDrawer from "$lib/components/shell/release-notes-drawer.svelte";
     import Switch from "$lib/components/shell/switch.svelte";
     import { auth } from "$lib/auth/store.svelte";
     import {
         getUpdateStatus,
         getReleases,
+        getReleaseNotes,
         triggerUpdate,
         pauseUpdate,
         resumeUpdate,
         type UpdateStatus,
         type ReleasesResponse,
+        type ReleaseEntry,
+        type ReleaseNotes,
     } from "$lib/api/system";
 
     let status = $state<UpdateStatus | null>(null);
@@ -20,6 +24,9 @@
     let error = $state<string | null>(null);
     let actionLoading = $state(false);
     let includePre = $state(false);
+    let notesRelease = $state<ReleaseEntry | null>(null);
+    let notes = $state<ReleaseNotes | null>(null);
+    let notesLoading = $state(false);
     let pollInterval: ReturnType<typeof setInterval> | null = null;
 
     async function fetchStatus() {
@@ -66,6 +73,20 @@
             error = e instanceof Error ? e.message : "trigger update failed";
         } finally {
             actionLoading = false;
+        }
+    }
+
+    async function openNotes(release: ReleaseEntry) {
+        if (!auth.token) return;
+        notesRelease = release;
+        notes = null;
+        notesLoading = true;
+        try {
+            notes = await getReleaseNotes(auth.token, release.version);
+        } catch {
+            notes = null;
+        } finally {
+            notesLoading = false;
         }
     }
 
@@ -200,7 +221,7 @@
                             {#if release.name}<p class="cx-hint" style="margin-top: 2px">{release.name}</p>{/if}
                         </div>
                         <div class="db-actions">
-                        <a class="cx-btn cx-btn--secondary cx-btn--sm" href="/admin/settings/patch-notes?version={release.version}">Patch notes</a>
+                        <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={() => openNotes(release)}>Patch notes</button>
                         {#if release.is_current}
                             <span class="cx-hint">Current</span>
                         {:else}
@@ -217,3 +238,15 @@
         {/if}
     </section>
 </SettingsPage>
+
+{#if notesRelease}
+    <ReleaseNotesDrawer
+        open
+        version={notesRelease.version}
+        prerelease={notesRelease.prerelease}
+        htmlUrl={notesRelease.html_url}
+        {notes}
+        loading={notesLoading}
+        onclose={() => (notesRelease = null)}
+    />
+{/if}
