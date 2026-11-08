@@ -125,7 +125,7 @@ async fn etcd_get(client: &mut Client, key: &str) -> Result<Option<String>, Stat
         .map(|s| s.to_string()))
 }
 
-fn is_valid_version(version: &str) -> bool {
+pub(crate) fn is_valid_version(version: &str) -> bool {
     let v = version.trim_start_matches('v');
     !v.is_empty()
         && v.chars()

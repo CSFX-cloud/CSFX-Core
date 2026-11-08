@@ -16,6 +16,7 @@ entity = { path = "../shared/entity" }
 site-builder = { path = "../site-builder" }
 migration = { path = "../shared/migration" }
 shared = { path = "../shared/shared" }
+csfx-release-notes = { path = "../csfx-release-notes" }
 
 # Async runtime
 tokio = { workspace = true }

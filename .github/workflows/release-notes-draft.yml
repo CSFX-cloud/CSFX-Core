@@ -1,0 +1,55 @@
+name: Draft Release Notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to draft notes for (e.g. 1.2.3 or 1.2.3-alpha.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  draft:
+    name: Draft release notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION#v}"
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "invalid version: $VERSION"; exit 1; }
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate draft
+        run: cargo run -p csfx-release-notes -- draft "${{ steps.v.outputs.version }}"
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          BRANCH="release-notes/${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "${BRANCH}"
+          git add "releases/${VERSION}.md"
+          git commit -m "docs: add draft release notes for v${VERSION}"
+          git push origin "${BRANCH}"
+          gh pr create \
+            --base "${{ github.event.repository.default_branch }}" \
+            --head "${BRANCH}" \
+            --title "docs: release notes for v${VERSION}" \
+            --body "Draft generated from the commits since the previous release. Rewrite the entries for users, add screenshots under releases/assets/${VERSION}/ and merge before starting the release workflow."
