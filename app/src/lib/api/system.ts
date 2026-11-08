@@ -63,6 +63,22 @@ export interface ReleasesResponse {
     releases: ReleaseEntry[];
 }
 
+export type NoteCategory = "new" | "improved" | "fixed" | "security";
+
+export type NoteBlock =
+    | { type: "heading"; text: string }
+    | { type: "paragraph"; text: string }
+    | { type: "list"; items: string[] }
+    | { type: "image"; src: string; alt: string };
+
+export interface ReleaseNotes {
+    version: string;
+    channel: "pre" | "stable";
+    date: string;
+    breaking: string[];
+    sections: Partial<Record<NoteCategory, NoteBlock[]>>;
+}
+
 export async function getReleases(token: string, includePre = false): Promise<ReleasesResponse> {
     const url = `${API_BASE}/system/releases${includePre ? '?include_pre=true' : ''}`;
     const res = await authedFetch(url, {
