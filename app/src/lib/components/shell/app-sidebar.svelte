@@ -2,23 +2,44 @@
     import { goto } from "$app/navigation";
     import { page } from "$app/state";
     import { ArrowUpCircle, ChevronsUpDown, LogOut, Search } from "@lucide/svelte";
-    import { getReleases, getUpdateStatus } from "$lib/api/system";
+    import { getReleaseNotes, getReleases, getUpdateStatus, type ReleaseEntry, type ReleaseNotes } from "$lib/api/system";
     import { auth } from "$lib/auth/store.svelte";
     import { commandPalette } from "$lib/components/command-palette/command-palette-store.svelte.js";
+    import ReleaseNotesDrawer from "$lib/components/shell/release-notes-drawer.svelte";
     import UserAvatar from "$lib/components/shell/user-avatar.svelte";
     import { isActive, PRIMARY_NAV, RESOURCE_NAV, SETTINGS_NAV, type NavItem } from "$lib/components/shell/navigation";
 
     const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
     let version = $state<string | null>(null);
-    let latestUpdate = $state<string | null>(null);
+    let latestRelease = $state<ReleaseEntry | null>(null);
+    let notesOpen = $state(false);
+    let notes = $state<ReleaseNotes | null>(null);
+    let notesLoading = $state(false);
     let menuOpen = $state(false);
     let account = $state<HTMLElement>();
 
     async function loadVersions(token: string) {
         const [status, releases] = await Promise.allSettled([getUpdateStatus(token), getReleases(token)]);
         if (status.status === "fulfilled") version = status.value.current_version;
-        if (releases.status === "fulfilled") latestUpdate = releases.value.latest_update;
+        if (releases.status !== "fulfilled") return;
+        const { latest_update, releases: entries } = releases.value;
+        latestRelease = entries.find((entry) => entry.version === latest_update) ?? null;
+    }
+
+    async function openNotes() {
+        const token = auth.token;
+        if (!latestRelease || !token) return;
+        notesOpen = true;
+        notes = null;
+        notesLoading = true;
+        try {
+            notes = await getReleaseNotes(token, latestRelease.version);
+        } catch {
+            notes = null;
+        } finally {
+            notesLoading = false;
+        }
     }
 
     $effect(() => {
@@ -71,11 +92,20 @@
     <div class="cx-side__section">Resources</div>
     {#each RESOURCE_NAV as item (item.href)}{@render link(item)}{/each}
 
-    {#if latestUpdate}
-        <a class="db-update" href="/admin/settings">
+    {#if latestRelease}
+        <button class="db-update" type="button" onclick={openNotes}>
             <ArrowUpCircle class="cx-i" aria-hidden="true" />
-            <span>Update available<small>{latestUpdate}</small></span>
-        </a>
+            <span>Update available<small>{latestRelease.version}{latestRelease.prerelease ? " (pre-release)" : ""}</small></span>
+        </button>
+        <ReleaseNotesDrawer
+            open={notesOpen}
+            version={latestRelease.version}
+            prerelease={latestRelease.prerelease}
+            htmlUrl={latestRelease.html_url}
+            {notes}
+            loading={notesLoading}
+            onclose={() => (notesOpen = false)}
+        />
     {/if}
 
     <div class="db-side__foot">

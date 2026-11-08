@@ -80,5 +80,8 @@
     {/if}
 
     <div class="md__sep"></div>
-    <a class="cx-link" href={htmlUrl} target="_blank" rel="noreferrer">View on GitHub</a>
+    <div class="md__foot">
+        <a class="cx-btn cx-btn--secondary cx-btn--sm" href={htmlUrl} target="_blank" rel="noreferrer">View on GitHub</a>
+        <a class="cx-btn cx-btn--primary cx-btn--sm" href="/admin/settings">Update settings</a>
+    </div>
 </SideDrawer>

@@ -87,3 +87,12 @@ export async function getReleases(token: string, includePre = false): Promise<Re
     if (!res.ok) throw new Error(`releases fetch failed: ${res.status}`);
     return res.json();
 }
+
+export async function getReleaseNotes(token: string, version: string): Promise<ReleaseNotes | null> {
+    const res = await authedFetch(`${API_BASE}/system/releases/${encodeURIComponent(version)}/notes`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`release notes fetch failed: ${res.status}`);
+    return res.json();
+}
