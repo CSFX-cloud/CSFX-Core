@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::rbac::CanManageSystem;
 use crate::AppState;
 
-const RELEASES_API: &str = "https://api.github.com/repos/CSFX-cloud/CSF-Core/releases";
+const RELEASES_API: &str = "https://api.github.com/repos/CSFX-cloud/CSFX-Core/releases";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Deserialize)]
@@ -30,7 +30,7 @@ pub struct ReleaseEntry {
 pub struct ReleasesResponse {
     pub current_version: String,
     pub update_available: bool,
-    pub latest_stable: Option<String>,
+    pub latest_update: Option<String>,
     pub releases: Vec<ReleaseEntry>,
 }
 
@@ -49,10 +49,11 @@ async fn list_releases(
     Query(query): Query<ReleasesQuery>,
 ) -> Result<Json<ReleasesResponse>, StatusCode> {
     let github_releases = fetch_github_releases().await?;
+    let include_pre = query.include_pre || is_prerelease_version(CURRENT_VERSION);
 
     let releases: Vec<ReleaseEntry> = github_releases
         .iter()
-        .filter(|r| query.include_pre || !r.prerelease)
+        .filter(|r| include_pre || !r.prerelease)
         .take(10)
         .map(|r| {
             let version = r.tag_name.trim_start_matches('v').to_string();
@@ -70,17 +71,17 @@ async fn list_releases(
         })
         .collect();
 
-    let latest_stable = releases
+    let latest_update = releases
         .iter()
-        .find(|r| !r.prerelease && r.is_newer)
+        .find(|r| r.is_newer)
         .map(|r| r.version.clone());
 
-    let update_available = latest_stable.is_some();
+    let update_available = latest_update.is_some();
 
     Ok(Json(ReleasesResponse {
         current_version: CURRENT_VERSION.to_string(),
         update_available,
-        latest_stable,
+        latest_update,
         releases,
     }))
 }
@@ -107,6 +108,10 @@ async fn fetch_github_releases() -> Result<Vec<GithubRelease>, StatusCode> {
         tracing::error!(error = %e, "failed to deserialize github releases");
         StatusCode::INTERNAL_SERVER_ERROR
     })
+}
+
+fn is_prerelease_version(version: &str) -> bool {
+    version.contains('-')
 }
 
 fn semver_is_newer(candidate: &str, current: &str) -> bool {

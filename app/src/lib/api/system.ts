@@ -59,7 +59,7 @@ export interface ReleaseEntry {
 export interface ReleasesResponse {
     current_version: string;
     update_available: boolean;
-    latest_stable: string | null;
+    latest_update: string | null;
     releases: ReleaseEntry[];
 }
 

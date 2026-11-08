@@ -8,22 +8,25 @@
     import UserAvatar from "$lib/components/shell/user-avatar.svelte";
     import { isActive, PRIMARY_NAV, RESOURCE_NAV, SETTINGS_NAV, type NavItem } from "$lib/components/shell/navigation";
 
+    const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
     let version = $state<string | null>(null);
-    let latestStable = $state<string | null>(null);
+    let latestUpdate = $state<string | null>(null);
     let menuOpen = $state(false);
     let account = $state<HTMLElement>();
 
     async function loadVersions(token: string) {
         const [status, releases] = await Promise.allSettled([getUpdateStatus(token), getReleases(token)]);
         if (status.status === "fulfilled") version = status.value.current_version;
-        if (releases.status === "fulfilled" && releases.value.update_available) {
-            latestStable = releases.value.latest_stable;
-        }
+        if (releases.status === "fulfilled") latestUpdate = releases.value.latest_update;
     }
 
     $effect(() => {
         const token = auth.token;
-        if (token) loadVersions(token);
+        if (!token) return;
+        loadVersions(token);
+        const timer = setInterval(() => loadVersions(token), UPDATE_CHECK_INTERVAL_MS);
+        return () => clearInterval(timer);
     });
 
     function logout() {
@@ -68,10 +71,10 @@
     <div class="cx-side__section">Resources</div>
     {#each RESOURCE_NAV as item (item.href)}{@render link(item)}{/each}
 
-    {#if latestStable}
+    {#if latestUpdate}
         <a class="db-update" href="/admin/settings">
             <ArrowUpCircle class="cx-i" aria-hidden="true" />
-            <span>Update available<small>{latestStable}</small></span>
+            <span>Update available<small>{latestUpdate}</small></span>
         </a>
     {/if}
 
