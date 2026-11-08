@@ -1,5 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
+    import { page } from "$app/state";
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import Switch from "$lib/components/shell/switch.svelte";
     import { auth } from "$lib/auth/store.svelte";
@@ -42,7 +43,7 @@
         releasesLoading = true;
         try {
             releases = await getReleases(auth.token, includePre);
-            const first = releases.releases.find((release) => release.version === releases?.latest_update) ?? releases.releases[0];
+            const first = releases.releases.find((release) => release.version === (page.url.searchParams.get("version") ?? releases?.latest_update)) ?? releases.releases[0];
             if (first) await select(first);
         } catch (e) {
             error = e instanceof Error ? e.message : "failed to fetch releases";

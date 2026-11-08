@@ -2,7 +2,6 @@
     import { onMount, onDestroy } from "svelte";
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import Switch from "$lib/components/shell/switch.svelte";
-    import { CircleArrowUp } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import {
         getUpdateStatus,
@@ -96,18 +95,6 @@
         }
     }
 
-    const scheduled = $derived(!!status?.desired_version && status.desired_version !== status.current_version);
-    const targetVersion = $derived(scheduled ? status?.desired_version : (releases?.latest_update ?? null));
-    const isPrerelease = $derived(!!status?.current_version.includes("-"));
-    const heroTitle = $derived(status?.paused ? "Updates paused" : scheduled ? "Update scheduled" : releases?.latest_update ? "Update available" : "Up to date");
-    const heroBadge = $derived(
-        status?.paused
-            ? { label: "Paused", tone: "cx-badge--warning" }
-            : scheduled || releases?.latest_update
-              ? { label: "Newer", tone: "cx-badge--warning" }
-              : { label: "Active", tone: "cx-badge--success" },
-    );
-
     function buildStatusLabel(s: string | null): string {
         if (!s) return "idle";
         return s.replace(/_/g, " ").toLowerCase();
@@ -138,48 +125,25 @@
 
 {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 
-<SettingsPage title="Update" description="New csfx.cloud versions roll out as releases. You can pause updates at any point.">
-    {#if statusLoading}
-        <div class="db-skeleton db-skeleton--row" aria-hidden="true"></div>
-    {:else if status}
-        <section class="cx-stage" aria-label="Update status">
-            <div class="cx-stage__canvas"></div>
-            <div class="rd-head">
-                <div class="rd-id" style="align-items: flex-start">
-                    <span class="up-tile"><CircleArrowUp class="cx-i" aria-hidden="true" /></span>
-                    <div style="min-width: 0">
-                        <div class="rd-title">
-                            <h1>{heroTitle}</h1>
-                            <span class="cx-badge {heroBadge.tone}">{heroBadge.label}</span>
-                        </div>
-                        <p class="up-sub">
-                            {status.paused ? "Updates are paused. No automatic upgrades will run." : "Updates are enabled. The system checks for new releases automatically."}
-                        </p>
-                        <div class="up-vers">
-                            <span>Installed <b>{status.current_version}</b></span>
-                            <span class="rs-arrow">to</span>
-                            <span>Target <b>{targetVersion ?? "up to date"}</b></span>
-                            <span class="rs-chip">channel: {isPrerelease ? "pre-release" : "stable"}</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="db-actions">
-                    <a class="cx-btn cx-btn--secondary cx-btn--sm" href="/admin/settings/patch-notes">Patch notes</a>
-                    {#if releases?.latest_update && !scheduled}
-                        <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" disabled={actionLoading} onclick={() => releases?.latest_update && handleTrigger(releases.latest_update)}>
-                            Update to {releases.latest_update}
-                        </button>
-                    {/if}
-                    {#if !status.paused}
-                        <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" disabled={actionLoading} onclick={handlePause}>Pause updates</button>
-                    {:else}
-                        <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" disabled={actionLoading} onclick={handleResume}>Resume updates</button>
-                    {/if}
-                </div>
+<SettingsPage title="Update" description="The installed version and the releases you can move to.">
+    <section class="cx-panel st-panel" aria-labelledby="st-version">
+        <div class="st-split">
+            <div>
+                <h3 id="st-version">System version</h3>
+                <p>Current installation and update state.</p>
             </div>
-        </section>
-        {#if status.build_status || status.last_result}
+            {#if status}<span class="cx-badge {status.paused ? 'cx-badge--warning' : 'cx-badge--success'}">{status.paused ? "Paused" : "Active"}</span>{/if}
+        </div>
+        {#if statusLoading}
+            <div class="db-skeleton db-skeleton--row" aria-hidden="true"></div>
+        {:else if status}
             <div class="db-stats">
+                {@render kv("Installed", status.current_version, "var(--ink)")}
+                {#if status.desired_version && status.desired_version !== status.current_version}
+                    {@render kv("Scheduled", status.desired_version, "var(--warning)")}
+                {:else}
+                    {@render kv("Target", "up to date", "var(--ink-muted)")}
+                {/if}
                 {#if status.build_status}
                     {@render kv("Build status", buildStatusLabel(status.build_status), isActive(status.build_status) ? "var(--warning)" : "var(--ink)")}
                 {/if}
@@ -187,8 +151,18 @@
                     {@render kv("Last result", buildStatusLabel(status.last_result), "var(--ink)")}
                 {/if}
             </div>
+            <div class="st-split">
+                <p class="cx-hint" style="flex: 1">
+                    {status.paused ? "Updates are paused. No automatic upgrades will run." : "Updates are enabled. The system checks for new releases automatically."}
+                </p>
+                {#if !status.paused}
+                    <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" disabled={actionLoading} onclick={handlePause}>Pause updates</button>
+                {:else}
+                    <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" disabled={actionLoading} onclick={handleResume}>Resume updates</button>
+                {/if}
+            </div>
         {/if}
-    {/if}
+    </section>
 
     <section class="cx-panel st-panel" aria-labelledby="st-releases">
         <div class="st-split">
@@ -225,6 +199,8 @@
                             </div>
                             {#if release.name}<p class="cx-hint" style="margin-top: 2px">{release.name}</p>{/if}
                         </div>
+                        <div class="db-actions">
+                        <a class="cx-btn cx-btn--secondary cx-btn--sm" href="/admin/settings/patch-notes?version={release.version}">Patch notes</a>
                         {#if release.is_current}
                             <span class="cx-hint">Current</span>
                         {:else}
@@ -232,6 +208,7 @@
                                 {release.is_newer ? "Update" : "Downgrade"}
                             </button>
                         {/if}
+                        </div>
                     </div>
                 {/each}
             </div>
