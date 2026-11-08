@@ -30,7 +30,7 @@
     }
 </script>
 
-<SideDrawer {open} title={`v${version}`} subtitle={notes?.date} {onclose}>
+<SideDrawer {open} wide title={`v${version}`} subtitle={notes?.date} {onclose}>
     <div class="rn-meta">
         {#if prerelease}<span class="cx-badge cx-badge--warning">Pre-release</span>{:else}<span class="cx-badge">Stable</span>{/if}
     </div>
@@ -52,7 +52,7 @@
                 <section class="rn-section">
                     <h3 class="rn-section__head">
                         <span class="cx-badge {section.badge}">{section.label}</span>
-                        <span class="cx-mono cx-muted">{countEntries(section.blocks)}</span>
+                        <span class="cx-hint cx-mono">{countEntries(section.blocks)}</span>
                     </h3>
                     <div class="rn-blocks">
                         {#each section.blocks as block, index (index)}
@@ -79,9 +79,8 @@
         <p class="st-note">No patch notes are available for this release.</p>
     {/if}
 
-    <div class="md__sep"></div>
-    <div class="md__foot">
+    {#snippet footer()}
         <a class="cx-btn cx-btn--secondary cx-btn--sm" href={htmlUrl} target="_blank" rel="noreferrer">View on GitHub</a>
         <a class="cx-btn cx-btn--primary cx-btn--sm" href="/admin/settings">Update settings</a>
-    </div>
+    {/snippet}
 </SideDrawer>

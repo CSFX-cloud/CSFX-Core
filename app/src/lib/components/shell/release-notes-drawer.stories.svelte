@@ -5,7 +5,6 @@
 
 	const { Story } = defineMeta({
 		title: "Shell/ReleaseNotesDrawer",
-		component: ReleaseNotesDrawer,
 		parameters: { layout: "fullscreen" },
 	});
 
