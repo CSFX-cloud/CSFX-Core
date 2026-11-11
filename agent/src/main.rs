@@ -1473,6 +1473,7 @@ mod tests {
         qemu::runtime::QemuRuntime,
     ) {
         client::install_test_crypto_provider();
+        let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
         let registry = Arc::new(rg_dns::RgDnsRegistry::new());
         (
             firecracker::runtime::FirecrackerRuntime::new("k".to_string(), registry.clone(), None),
