@@ -162,20 +162,12 @@ async fn registry_health_reports_backend_state() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn bootstrap_token_endpoint_is_limited_to_private_networks() {
+async fn internal_bootstrap_token_endpoint_does_not_exist() {
     let harness = harness().await;
     let uri = "/api/registry/internal/bootstrap-token";
 
-    for peer in ["127.0.0.1:1", "10.1.2.3:1", "172.16.0.9:1", "192.168.5.5:1"] {
-        let (status, echoed) = harness.send_from(peer, Method::GET, uri, None, None).await;
-        assert_eq!(status, StatusCode::OK, "{}", peer);
-        assert_eq!(echoed["path"], "/admin/bootstrap-tokens");
-        assert_eq!(echoed["body"]["role"], "master");
-        assert_eq!(echoed["body"]["max_uses"], 1);
-    }
-
-    for peer in ["8.8.8.8:1", "172.32.0.1:1", "[2001:db8::1]:1"] {
+    for peer in ["127.0.0.1:1", "192.168.5.5:1", "8.8.8.8:1"] {
         let (status, _) = harness.send_from(peer, Method::GET, uri, None, None).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{}", peer);
+        assert_eq!(status, StatusCode::NOT_FOUND, "{}", peer);
     }
 }

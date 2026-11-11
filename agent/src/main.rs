@@ -306,10 +306,7 @@ async fn resolve_trust_anchor(
     Ok(Some(ca_pem))
 }
 
-async fn resolve_registration_token(
-    client: &client::ApiClient,
-    join_ticket: Option<&join::JoinTicket>,
-) -> Result<String> {
+fn resolve_registration_token(join_ticket: Option<&join::JoinTicket>) -> Result<String> {
     if let Some(ticket) = join_ticket {
         return Ok(ticket.token.clone());
     }
@@ -319,11 +316,7 @@ async fn resolve_registration_token(
     {
         return Ok(token);
     }
-    info!("CSFX_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
-    client
-        .fetch_bootstrap_token()
-        .await
-        .context("Failed to fetch bootstrap token from gateway")
+    anyhow::bail!("Neither CSFX_JOIN nor CSFX_REGISTRATION_TOKEN is set")
 }
 
 async fn perform_registration(
@@ -333,7 +326,7 @@ async fn perform_registration(
     agent_pki: &pki::AgentPki,
     join_ticket: Option<&join::JoinTicket>,
 ) -> Result<(uuid::Uuid, String)> {
-    let token = resolve_registration_token(client, join_ticket).await?;
+    let token = resolve_registration_token(join_ticket)?;
 
     let info = system::collect_info();
 
