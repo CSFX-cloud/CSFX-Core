@@ -18,6 +18,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
   DATABASE_URL: postgres://postgres:postgres@localhost:5432/csfx
   ETCD_ENDPOINTS: http://127.0.0.1:2379
   HISTORY_BRANCH: coverage-data
@@ -66,14 +68,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev libpq-dev protobuf-compiler jq
 
-      - uses: actions/cache@v5
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-test-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-test-
+          shared-key: test
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Wait for etcd
         run: |
