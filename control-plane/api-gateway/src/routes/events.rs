@@ -9,7 +9,10 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::{auth::middleware::AuthenticatedUser, AppState};
+use crate::{
+    auth::rbac::{CanManageSystem, CanViewAgents},
+    AppState,
+};
 
 async fn proxy_to_failover(
     state: &AppState,
@@ -46,7 +49,7 @@ async fn proxy_to_failover(
 }
 
 pub async fn list_events(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanViewAgents(_claims): CanViewAgents,
     State(state): State<AppState>,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
@@ -63,7 +66,7 @@ pub async fn list_events(
 }
 
 pub async fn resolve_event(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
     Path(event_id): Path<Uuid>,
     headers: HeaderMap,
@@ -83,7 +86,7 @@ pub async fn resolve_event(
 }
 
 pub async fn set_maintenance(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
@@ -104,7 +107,7 @@ pub async fn set_maintenance(
 }
 
 pub async fn clear_maintenance(
-    AuthenticatedUser(_claims): AuthenticatedUser,
+    CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
