@@ -7,11 +7,12 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, TransactionTrait,
 };
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use super::{error::OidcError, identity::ExternalIdentity};
 use crate::rbac_service::RbacService;
+use crate::role_grants::{ensure_not_last_admin, GrantError};
 
 const AUTH_SOURCE: &str = "oidc";
 
@@ -144,9 +145,33 @@ pub async fn sign_in(
         None if provider.auto_provision => create_user(db, provider, identity).await?,
         None => return Err(OidcError::AccessDenied("not_provisioned")),
     };
-    RbacService::new(db.clone())
-        .assign_role_to_user(user.id, provider.organization_id, role_id)
+    assign_role(db, provider, &user, role_id).await?;
+    Ok(user)
+}
+
+async fn assign_role(
+    db: &DatabaseConnection,
+    provider: &identity_providers::Model,
+    user: &user::Model,
+    role_id: Uuid,
+) -> Result<(), OidcError> {
+    let rbac = RbacService::new(db.clone());
+    let current = rbac
+        .get_user_role(user.id, provider.organization_id)
         .await
         .map_err(|error| OidcError::RoleAssignment(error.to_string()))?;
-    Ok(user)
+    if current.is_some_and(|role| role.id != role_id) {
+        match ensure_not_last_admin(db, provider.organization_id, user.id).await {
+            Ok(()) => {}
+            Err(GrantError::LastAdmin) => {
+                warn!(user_id = %user.id, provider = %provider.slug, "kept last admin role despite identity provider mapping");
+                return Ok(());
+            }
+            Err(other) => return Err(OidcError::RoleAssignment(other.message().to_string())),
+        }
+    }
+    rbac.assign_role_to_user(user.id, provider.organization_id, role_id)
+        .await
+        .map_err(|error| OidcError::RoleAssignment(error.to_string()))?;
+    Ok(())
 }
