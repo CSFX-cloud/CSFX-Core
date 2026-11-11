@@ -789,32 +789,6 @@ impl ApiClient {
         Ok(())
     }
 
-    pub async fn fetch_bootstrap_token(&self) -> Result<String> {
-        let url = format!("{}/api/registry/internal/bootstrap-token", self.gateway_url);
-
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to fetch bootstrap token")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!("Bootstrap token fetch failed status={}", status);
-        }
-
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .context("Failed to parse bootstrap token response")?;
-
-        body["token"]
-            .as_str()
-            .map(|s| s.to_string())
-            .context("Bootstrap token response missing 'token' field")
-    }
-
     pub async fn fetch_assigned_volumes(
         &self,
         _agent_id: Uuid,
@@ -961,10 +935,6 @@ mod tests {
             )
             .route("/api/agents/self/logs", post(|| async { StatusCode::OK }))
             .route(
-                "/api/registry/internal/bootstrap-token",
-                get(|| async { Json(json!({"token": "tok"})) }),
-            )
-            .route(
                 "/api/agents/self/volumes",
                 get(|| async { Json(volumes()) }),
             )
@@ -1048,7 +1018,6 @@ mod tests {
         assert_eq!(volumes[0].id, "1");
         assert_eq!(volumes[1].id, "2");
         client.ack_workload_restart("k", "w1").await.unwrap();
-        assert_eq!(client.fetch_bootstrap_token().await.unwrap(), "tok");
     }
 
     #[tokio::test]
@@ -1099,7 +1068,6 @@ mod tests {
             .await
             .is_err());
         assert!(client.ack_workload_restart("k", "w").await.is_err());
-        assert!(client.fetch_bootstrap_token().await.is_err());
         assert!(client.push_logs("k", Vec::new()).await.is_err());
         let stat = WorkloadStatsUpdate {
             workload_id: "w".to_string(),
@@ -1118,13 +1086,6 @@ mod tests {
         let client = serve(app).await;
         assert!(client.request_master_bundle("k").await.is_err());
         assert!(client.fetch_mesh_peers("k").await.is_err());
-        assert!(client.fetch_bootstrap_token().await.is_err());
-    }
-
-    #[tokio::test]
-    async fn bootstrap_token_must_be_present() {
-        let app = Router::new().fallback(|| async { Json(json!({"other": 1})) });
-        assert!(serve(app).await.fetch_bootstrap_token().await.is_err());
     }
 
     #[tokio::test]
