@@ -41,3 +41,8 @@ opentelemetry-otlp = { workspace = true }
 opentelemetry-semantic-conventions = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 nix = { version = "0.31", features = ["fs"] }
+
+[dev-dependencies]
+migration = { path = "../shared/migration" }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

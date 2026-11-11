@@ -2,28 +2,33 @@
     import { goto } from "$app/navigation";
     import { page } from "$app/state";
     import { ArrowUpCircle, ChevronsUpDown, LogOut, Search } from "@lucide/svelte";
-    import { getReleases, getUpdateStatus } from "$lib/api/system";
+    import { getReleases, getUpdateStatus, type ReleaseEntry } from "$lib/api/system";
     import { auth } from "$lib/auth/store.svelte";
     import { commandPalette } from "$lib/components/command-palette/command-palette-store.svelte.js";
     import UserAvatar from "$lib/components/shell/user-avatar.svelte";
     import { isActive, PRIMARY_NAV, RESOURCE_NAV, SETTINGS_NAV, type NavItem } from "$lib/components/shell/navigation";
 
+    const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+
     let version = $state<string | null>(null);
-    let latestStable = $state<string | null>(null);
+    let latestRelease = $state<ReleaseEntry | null>(null);
     let menuOpen = $state(false);
     let account = $state<HTMLElement>();
 
     async function loadVersions(token: string) {
         const [status, releases] = await Promise.allSettled([getUpdateStatus(token), getReleases(token)]);
         if (status.status === "fulfilled") version = status.value.current_version;
-        if (releases.status === "fulfilled" && releases.value.update_available) {
-            latestStable = releases.value.latest_stable;
-        }
+        if (releases.status !== "fulfilled") return;
+        const { latest_update, releases: entries } = releases.value;
+        latestRelease = entries.find((entry) => entry.version === latest_update) ?? null;
     }
 
     $effect(() => {
         const token = auth.token;
-        if (token) loadVersions(token);
+        if (!token) return;
+        loadVersions(token);
+        const timer = setInterval(() => loadVersions(token), UPDATE_CHECK_INTERVAL_MS);
+        return () => clearInterval(timer);
     });
 
     function logout() {
@@ -68,14 +73,13 @@
     <div class="cx-side__section">Resources</div>
     {#each RESOURCE_NAV as item (item.href)}{@render link(item)}{/each}
 
-    {#if latestStable}
-        <a class="db-update" href="/admin/settings">
-            <ArrowUpCircle class="cx-i" aria-hidden="true" />
-            <span>Update available<small>{latestStable}</small></span>
-        </a>
-    {/if}
-
     <div class="db-side__foot">
+        {#if latestRelease}
+            <a class="db-update" href="/admin/settings/update">
+                <ArrowUpCircle class="cx-i" aria-hidden="true" />
+                <span>Update available<small>v{latestRelease.version} is ready</small></span>
+            </a>
+        {/if}
         <div class="db-account" bind:this={account}>
             {#if menuOpen}
                 <div class="db-menu" role="menu" aria-label="Account menu">

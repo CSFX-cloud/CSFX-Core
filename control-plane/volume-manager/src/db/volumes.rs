@@ -1,8 +1,9 @@
 use chrono::Utc;
 use entity::entities::{volume_snapshots, volumes};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait,
-    QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
+    ModelTrait, QueryFilter,
 };
 use uuid::Uuid;
 
@@ -56,19 +57,35 @@ pub async fn attach(
     volume_id: Uuid,
     agent_id: Uuid,
     workload_id: Option<Uuid>,
-) -> Result<volumes::Model, sea_orm::DbErr> {
-    let volume = volumes::Entity::find_by_id(volume_id)
-        .one(db)
-        .await?
-        .ok_or(sea_orm::DbErr::RecordNotFound(volume_id.to_string()))?;
+) -> Result<Option<volumes::Model>, sea_orm::DbErr> {
+    let attached = volumes::Entity::update_many()
+        .col_expr(volumes::Column::AttachedToAgent, Expr::value(agent_id))
+        .col_expr(
+            volumes::Column::AttachedToWorkload,
+            Expr::value(workload_id),
+        )
+        .col_expr(
+            volumes::Column::Status,
+            Expr::value(VolumeStatus::InUse.as_str()),
+        )
+        .col_expr(
+            volumes::Column::UpdatedAt,
+            Expr::value(Utc::now().naive_utc()),
+        )
+        .filter(volumes::Column::Id.eq(volume_id))
+        .filter(
+            Condition::any()
+                .add(volumes::Column::AttachedToAgent.is_null())
+                .add(volumes::Column::AttachedToAgent.eq(agent_id)),
+        )
+        .exec(db)
+        .await?;
 
-    let mut active: volumes::ActiveModel = volume.into();
-    active.attached_to_agent = Set(Some(agent_id));
-    active.attached_to_workload = Set(workload_id);
-    active.status = Set(VolumeStatus::InUse.as_str().to_string());
-    active.updated_at = Set(Some(Utc::now().naive_utc()));
+    if attached.rows_affected == 0 {
+        return Ok(None);
+    }
 
-    active.update(db).await
+    volumes::Entity::find_by_id(volume_id).one(db).await
 }
 
 pub async fn detach(
@@ -87,6 +104,17 @@ pub async fn detach(
     active.status = Set(VolumeStatus::Available.as_str().to_string());
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
+    active.update(db).await
+}
+
+pub async fn resize(
+    db: &DatabaseConnection,
+    volume: volumes::Model,
+    size_gb: i32,
+) -> Result<volumes::Model, sea_orm::DbErr> {
+    let mut active: volumes::ActiveModel = volume.into();
+    active.size_gb = Set(size_gb);
+    active.updated_at = Set(Some(Utc::now().naive_utc()));
     active.update(db).await
 }
 

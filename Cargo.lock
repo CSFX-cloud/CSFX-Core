@@ -160,11 +160,13 @@ dependencies = [
  "bcrypt",
  "chrono",
  "cookie",
+ "csfx-release-notes",
  "dotenvy",
  "entity",
  "etcd-client",
  "futures-util",
  "http",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "image",
@@ -189,11 +191,13 @@ dependencies = [
  "sha1 0.11.0",
  "sha2 0.11.1",
  "shared",
+ "site-builder",
  "sysinfo",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
  "totp-rs",
+ "tower",
  "tower-http 0.7.1",
  "tower_governor",
  "tracing",
@@ -1325,10 +1329,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "csfx-release-notes"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "csfx-updater"
 version = "0.2.2"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "dotenvy",
  "etcd-client",
  "reqwest",
@@ -1767,6 +1783,8 @@ dependencies = [
  "dotenvy",
  "entity",
  "etcd-client",
+ "http-body-util",
+ "migration",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
@@ -1780,6 +1798,7 @@ dependencies = [
  "serde_json",
  "shared",
  "tokio",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -3345,6 +3364,8 @@ dependencies = [
  "entity",
  "etcd-client",
  "http",
+ "http-body-util",
+ "migration",
  "nix 0.31.3",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -3360,6 +3381,7 @@ dependencies = [
  "serde_json",
  "shared",
  "tokio",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -4109,9 +4131,9 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.5"
+version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
 dependencies = [
  "bitflags",
  "memchr",
@@ -4466,6 +4488,7 @@ dependencies = [
  "dotenvy",
  "entity",
  "etcd-client",
+ "http-body-util",
  "migration",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -4482,6 +4505,7 @@ dependencies = [
  "sha2 0.11.1",
  "shared",
  "tokio",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -4786,6 +4810,8 @@ dependencies = [
  "dotenvy",
  "entity",
  "etcd-client",
+ "http-body-util",
+ "migration",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
@@ -4800,6 +4826,7 @@ dependencies = [
  "shared",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -4822,6 +4849,8 @@ dependencies = [
  "dotenvy",
  "entity",
  "etcd-client",
+ "http-body-util",
+ "migration",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
@@ -4835,6 +4864,7 @@ dependencies = [
  "serde_json",
  "shared",
  "tokio",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
@@ -5253,6 +5283,40 @@ dependencies = [
  "num-traits",
  "thiserror 2.0.21",
  "time",
+]
+
+[[package]]
+name = "site-builder"
+version = "0.2.2"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "dotenvy",
+ "entity",
+ "flate2",
+ "http-body-util",
+ "jsonwebtoken",
+ "migration",
+ "mime_guess",
+ "rcgen",
+ "reqwest",
+ "ring",
+ "rsa",
+ "rustls",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "shared",
+ "tar",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -6403,6 +6467,8 @@ dependencies = [
  "dotenvy",
  "entity",
  "etcd-client",
+ "http-body-util",
+ "migration",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry-semantic-conventions",
@@ -6417,6 +6483,7 @@ dependencies = [
  "shared",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",

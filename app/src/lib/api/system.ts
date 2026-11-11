@@ -5,8 +5,6 @@ const API_BASE = '/api';
 export interface UpdateStatus {
     current_version: string;
     desired_version: string | null;
-    available_flake_rev: string | null;
-    desired_flake_rev: string | null;
     build_status: string | null;
     last_result: string | null;
     paused: boolean;
@@ -61,8 +59,24 @@ export interface ReleaseEntry {
 export interface ReleasesResponse {
     current_version: string;
     update_available: boolean;
-    latest_stable: string | null;
+    latest_update: string | null;
     releases: ReleaseEntry[];
+}
+
+export type NoteCategory = "new" | "improved" | "fixed" | "security";
+
+export type NoteBlock =
+    | { type: "heading"; text: string }
+    | { type: "paragraph"; text: string }
+    | { type: "list"; items: string[] }
+    | { type: "image"; src: string; alt: string };
+
+export interface ReleaseNotes {
+    version: string;
+    channel: "pre" | "stable";
+    date: string;
+    breaking: string[];
+    sections: Partial<Record<NoteCategory, NoteBlock[]>>;
 }
 
 export async function getReleases(token: string, includePre = false): Promise<ReleasesResponse> {
@@ -71,5 +85,14 @@ export async function getReleases(token: string, includePre = false): Promise<Re
         headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`releases fetch failed: ${res.status}`);
+    return res.json();
+}
+
+export async function getReleaseNotes(token: string, version: string): Promise<ReleaseNotes | null> {
+    const res = await authedFetch(`${API_BASE}/system/releases/${encodeURIComponent(version)}/notes`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`release notes fetch failed: ${res.status}`);
     return res.json();
 }

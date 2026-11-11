@@ -6,7 +6,7 @@ images:
     arch: aarch64
     digest: "sha256:dc40482a45929e4cf86ad57425e1c6ac1b376fd81111cc93ba3c9b34e7f900b6"
 cpus: 2
-memory: 3GiB
+memory: 6GiB
 disk: 30GiB
 mountType: virtiofs
 mountInotify: false

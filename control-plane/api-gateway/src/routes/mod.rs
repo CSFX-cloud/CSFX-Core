@@ -28,12 +28,14 @@ pub mod cluster_vip;
 pub mod dns_records;
 pub mod events;
 pub mod identity_providers;
+pub mod image_resolution;
 pub mod ingress;
 pub mod ingress_gateways;
 pub mod logs;
 pub mod masters;
 pub mod networks;
 pub mod organizations;
+pub mod registries;
 pub mod registry;
 pub mod releases;
 pub mod resource_groups;
@@ -41,6 +43,8 @@ pub mod roles;
 pub mod s3_proxy;
 pub mod settings;
 pub mod setup;
+pub mod site_usage;
+pub mod sites;
 pub mod ssh_access;
 pub mod ssh_keys;
 pub mod sso;
@@ -131,7 +135,8 @@ pub fn create_router() -> Router<AppState> {
     let internal_api_router = Router::new()
         .merge(registry::registry_routes())
         .merge(ssh_keys::ssh_keys_internal_routes())
-        .merge(agent_stream::agent_stream_internal_routes());
+        .merge(agent_stream::agent_stream_internal_routes())
+        .merge(image_resolution::image_resolution_internal_routes());
 
     let agent_unmetered_router = Router::new()
         .merge(agents::agents_unmetered_routes())
@@ -144,6 +149,9 @@ pub fn create_router() -> Router<AppState> {
         .merge(agents::agents_routes())
         .merge(buckets::buckets_routes())
         .merge(vaults::vaults_routes())
+        .merge(sites::sites_routes())
+        .merge(registries::registries_routes())
+        .merge(site_usage::usage_routes())
         .merge(cluster::cluster_routes())
         .merge(masters::masters_routes())
         .merge(cluster_vip::cluster_vip_routes())
@@ -173,6 +181,7 @@ pub fn create_router() -> Router<AppState> {
         .merge(users::public_users_routes())
         .merge(setup::routes())
         .merge(sso::sso_routes())
+        .merge(sites::sites_hook_routes())
         .layer(GovernorLayer::new(login_governor_config));
 
     let api_router = Router::new()

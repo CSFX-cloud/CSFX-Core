@@ -13,7 +13,20 @@
 
   outputs = { nixpkgs, nixos-lima, csfx-infra, ... }:
     let
-      versions = import "${csfx-infra}/versions.nix";
+      siteBuilderPlaceholder = {
+        amd64 = {
+          url = "https://invalid.example/site-builder-amd64";
+          sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+        };
+        arm64 = {
+          url = "https://invalid.example/site-builder-arm64";
+          sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+        };
+      };
+
+      versions = nixpkgs.lib.recursiveUpdate
+        { csfx.controlPlane.site-builder = siteBuilderPlaceholder; }
+        (import "${csfx-infra}/versions.nix");
 
       infraModules = map (name: "${csfx-infra}/modules/${name}.nix") [
         "csfx-agent"
@@ -23,20 +36,24 @@
         "csfx-cluster"
         "csfx-openbao"
         "csfx-ingress"
+        "csfx-site-registry"
       ];
 
-      mkNode = hostName: nixpkgs.lib.nixosSystem {
+      mkNode = hostName: singleNode: nixpkgs.lib.nixosSystem {
         system = "aarch64-linux";
         specialArgs = { inherit versions; };
         modules = infraModules ++ [
           "${nixos-lima}/lima.nix"
-          (import ./dev.nix { inherit hostName; })
+          (import ./dev.nix { inherit hostName singleNode; })
         ];
       };
 
-      nodeNames = [ "cp1" "cp2" "cp3" "w1" ];
+      mkNodes = prefix: singleNode: hostNames: nixpkgs.lib.listToAttrs (map
+        (hostName: nixpkgs.lib.nameValuePair "${prefix}${hostName}" (mkNode hostName singleNode))
+        hostNames);
     in
     {
-      nixosConfigurations = nixpkgs.lib.genAttrs nodeNames mkNode;
+      nixosConfigurations =
+        mkNodes "" true [ "cp1" "w1" ] // mkNodes "ha-" false [ "cp1" "cp2" "cp3" ];
     };
 }

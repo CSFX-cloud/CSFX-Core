@@ -251,4 +251,18 @@ mod tests {
         ));
         assert_eq!(contents.matches("bind 10.0.0.2").count(), 3);
     }
+
+    #[test]
+    fn zone_name_embeds_the_resource_group() {
+        assert_eq!(zone_name("rg1"), "svc.rg1.internal");
+        assert!(corefile_path("rg1").ends_with("rg1.Corefile"));
+        assert!(zone_file_path("rg1").ends_with("rg1.zone"));
+    }
+
+    #[test]
+    fn only_s3_and_platform_records_are_platform_owned() {
+        assert!(is_platform_record("s3"));
+        assert!(is_platform_record("csfx"));
+        assert!(!is_platform_record("web"));
+    }
 }

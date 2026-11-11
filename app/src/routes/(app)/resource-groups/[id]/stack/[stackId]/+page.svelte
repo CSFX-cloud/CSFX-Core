@@ -6,6 +6,7 @@
     import { auth } from "$lib/auth/store.svelte";
     import { deleteStack, getStack, restartStack, stopStack, type Stack } from "$lib/api/resource-groups";
     import ComposeEditor from "$lib/components/resource-group/compose-editor.svelte";
+    import StorageUsageTab from "$lib/components/resource-group/storage-usage-tab.svelte";
     import StackLogsTab from "$lib/components/resource-group/stack-logs-tab.svelte";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
@@ -13,15 +14,17 @@
     import WorkloadHero, { type MetaItem } from "$lib/components/workload/workload-hero.svelte";
     import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
     import { knownWorkloadIcon } from "$lib/utils/image-icon";
+    import { storageRows } from "$lib/utils/storage";
     import { stackStatus } from "$lib/utils/resource-items";
     import { badgeClass, statusLabel } from "$lib/utils/tone";
 
-    type Tab = "logs" | "services" | "compose";
+    type Tab = "logs" | "services" | "storage" | "compose";
 
     const POLL_INTERVAL_MS = 5000;
     const TABS: { id: Tab; label: string }[] = [
         { id: "logs", label: "Logs" },
         { id: "services", label: "Services" },
+        { id: "storage", label: "Storage" },
         { id: "compose", label: "Compose" },
     ];
 
@@ -35,6 +38,7 @@
     let actionBusy = $state(false);
 
     const children = $derived(rg.workloads.filter((workload) => workload.stack_id === stackId));
+    const storage = $derived(storageRows(children, rg.volumes));
     const running = $derived(children.filter((child) => child.status === "running").length);
     const name = $derived(stack?.name ?? "Stack");
     const meta = $derived<MetaItem[]>([
@@ -143,6 +147,8 @@
                     </table>
                 </div>
             </section>
+        {:else if tab === "storage"}
+            <StorageUsageTab rows={storage} title={name} rgId={rg.rgId} available={[]} restart={() => restartStack(auth.token ?? "", stackId)} onChanged={rg.load} />
         {:else}
             <ComposeEditor rgId={rg.rgId} groupName={rg.group?.name ?? "the group"} {stackId} onDone={done} />
         {/if}

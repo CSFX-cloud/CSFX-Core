@@ -4,17 +4,20 @@
     import { auth } from "$lib/auth/store.svelte";
     import { listNodes } from "$lib/api/nodes";
     import { deleteResourceGroup } from "$lib/api/resource-groups";
+    import DeleteDialog from "$lib/components/resource-group/delete-dialog.svelte";
     import AppearanceDialog from "$lib/components/resource-group/appearance-dialog.svelte";
     import GroupHero from "$lib/components/resource-group/group-hero.svelte";
     import GroupStats from "$lib/components/resource-group/group-stats.svelte";
     import ResourceTable from "$lib/components/resource-group/resource-table.svelte";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
+    import { groupDeletePreview, loadGroupInventory, stopAndWait } from "$lib/utils/delete-preview";
 
     const rg = useResourceGroupState();
     const base = `/resource-groups/${rg.rgId}`;
 
     let appearanceDialog = $state<AppearanceDialog | null>(null);
+    let deleteDialog = $state<DeleteDialog | null>(null);
     let nodeNames = $state(new Map<string, string>());
 
     async function loadNodeNames() {
@@ -23,14 +26,21 @@
         nodeNames = new Map(nodes.map((node) => [node.id, node.hostname]));
     }
 
-    async function deleteGroup() {
-        if (!auth.token || !rg.group || !confirm(`Delete resource group ${rg.group.name}? All of its resources are removed.`)) return;
-        try {
-            await deleteResourceGroup(auth.token, rg.group.id);
-            await goto("/resource-groups");
-        } catch (e) {
-            rg.error = e instanceof Error ? e.message : "Failed to delete resource group";
-        }
+    function deleteGroup() {
+        const group = rg.group;
+        const token = auth.token;
+        if (!token || !group) return;
+        deleteDialog?.open({
+            title: `Delete ${group.name}`,
+            name: group.name,
+            requireStop: true,
+            load: async () => groupDeletePreview(await loadGroupInventory(token, group.id), group.internal_cidr),
+            run: async (preview, stopRunning) => {
+                if (stopRunning) await stopAndWait(token, group.id, preview.running);
+                await deleteResourceGroup(token, group.id);
+                await goto("/resource-groups");
+            },
+        });
     }
 
     $effect(() => {
@@ -43,6 +53,7 @@
     });
 </script>
 
+<DeleteDialog bind:this={deleteDialog} />
 <AppearanceDialog bind:this={appearanceDialog} group={rg.group} onUpdated={(updated) => (rg.group = updated)} />
 
 <div class="db-content">
@@ -65,12 +76,15 @@
 
         <GroupStats workloads={rg.workloads} volumes={rg.volumes} buckets={rg.buckets} cidr={rg.group.internal_cidr} />
         <ResourceTable
+            groupId={rg.group.id}
             groupName={rg.group.name}
             {base}
             workloads={rg.workloads}
             volumes={rg.volumes}
             buckets={rg.buckets}
             vaults={rg.vaults}
+            sites={rg.sites}
+            registries={rg.registries}
             gateways={rg.gateways}
             {nodeNames}
             onChanged={rg.load}

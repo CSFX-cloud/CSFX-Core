@@ -39,6 +39,7 @@ pub struct Model {
     pub memory_usage_bytes: Option<i64>,
     pub network_rx_bytes: Option<i64>,
     pub network_tx_bytes: Option<i64>,
+    pub volume_usage: Option<Json>,
     pub stats_updated_at: Option<DateTime>,
     pub created_at: DateTime,
     pub updated_at: Option<DateTime>,

@@ -7,6 +7,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::models::workload::VolumeUsage;
 use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +53,8 @@ pub struct WorkloadStatsUpdate {
     pub memory_usage_bytes: Option<i64>,
     pub network_rx_bytes: Option<i64>,
     pub network_tx_bytes: Option<i64>,
+    #[serde(default)]
+    pub volume_usage: Option<Vec<VolumeUsage>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +74,7 @@ pub async fn update_workload_stats(
             update.memory_usage_bytes,
             update.network_rx_bytes,
             update.network_tx_bytes,
+            update.volume_usage.clone(),
         )
         .await
         {

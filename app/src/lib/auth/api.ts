@@ -153,7 +153,7 @@ export async function changePassword(
     token: string,
     oldPassword: string,
     newPassword: string,
-): Promise<void> {
+): Promise<string> {
     const pem = await fetchPublicKeyPem();
     const publicKey = await importRsaKey(pem);
     const encryptedOld = await encryptPassword(oldPassword, publicKey);
@@ -172,6 +172,8 @@ export async function changePassword(
     });
 
     if (!res.ok) throw new Error(`change-password failed: ${res.status}`);
+    const body: { token: string } = await res.json();
+    return body.token;
 }
 
 export async function validateSession(token: string): Promise<UserProfile> {
@@ -182,14 +184,18 @@ export async function validateSession(token: string): Promise<UserProfile> {
     return res.json();
 }
 
-export async function changeEmail(token: string, newEmail: string): Promise<void> {
+export async function changeEmail(token: string, newEmail: string, password: string): Promise<void> {
+    const pem = await fetchPublicKeyPem();
+    const publicKey = await importRsaKey(pem);
+    const encryptedPassword = await encryptPassword(password, publicKey);
+
     const res = await fetch(`${API_BASE}/change-email`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ new_email: newEmail }),
+        body: JSON.stringify({ new_email: newEmail, password: encryptedPassword }),
     });
     if (!res.ok) throw new Error(`change-email failed: ${res.status}`);
 }
@@ -244,10 +250,18 @@ export interface Setup2FAResponse {
     qr_code: string;
 }
 
-export async function setup2FA(token: string): Promise<Setup2FAResponse> {
+export async function setup2FA(token: string, password: string): Promise<Setup2FAResponse> {
+    const pem = await fetchPublicKeyPem();
+    const publicKey = await importRsaKey(pem);
+    const encryptedPassword = await encryptPassword(password, publicKey);
+
     const res = await fetch(`${API_BASE}/2fa/setup`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ password: encryptedPassword }),
     });
     if (!res.ok) throw new Error(`2fa setup failed: ${res.status}`);
     return res.json();

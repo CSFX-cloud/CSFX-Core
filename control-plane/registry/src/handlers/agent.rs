@@ -3,11 +3,13 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
     models::agent::{
         ErrorResponse, HeartbeatRequest, HeartbeatResponse, RegisterRequest, RegisterResponse,
+        SignedRelease,
     },
     server::AppState,
     services::registry::RegisterAgentParams,
@@ -15,6 +17,8 @@ use crate::{
 
 const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
 const GATEWAY_PORT: u16 = 8000;
+const WORKER_MANIFEST_PREFIX: &str = "/csfx/config/worker_release_manifest/";
+const WORKER_SIGNATURE_PREFIX: &str = "/csfx/config/worker_release_manifest_sig/";
 
 pub async fn register_agent(
     State(state): State<AppState>,
@@ -243,22 +247,18 @@ pub async fn heartbeat(
                 }
             }
 
-            let desired_flake_rev = read_desired_flake_rev(&state.etcd_endpoints).await;
-            let post_update_heartbeats =
-                increment_post_update_heartbeats(&state.etcd_endpoints, agent_id).await;
+            let worker_releases = read_worker_releases(&state.etcd_endpoints).await;
 
             tracing::info!(
                 agent_id = %agent_id,
-                desired_flake_rev = ?desired_flake_rev,
-                post_update_heartbeats = ?post_update_heartbeats,
+                releases = worker_releases.len(),
                 "heartbeat processed"
             );
 
             Ok(Json(HeartbeatResponse {
                 success: true,
                 message: "Heartbeat recorded".to_string(),
-                desired_flake_rev,
-                post_update_heartbeats,
+                worker_releases,
                 ssh_enabled: read_ssh_enabled(&state).await,
                 gateway_url: advertised_gateway_url(std::env::var(VIP_ADDRESS_VAR).ok().as_deref()),
             }))
@@ -288,45 +288,49 @@ async fn read_ssh_enabled(state: &AppState) -> bool {
     }
 }
 
-async fn read_desired_flake_rev(etcd_endpoints: &str) -> Option<String> {
-    let mut client = etcd_client::Client::connect([etcd_endpoints], None)
-        .await
-        .ok()?;
-
-    let resp = client
-        .get("/csfx/config/desired_flake_rev", None)
-        .await
-        .ok()?;
-
-    resp.kvs()
-        .first()
-        .and_then(|kv| std::str::from_utf8(kv.value()).ok())
-        .map(|s| s.to_string())
+async fn read_worker_releases(etcd_endpoints: &str) -> HashMap<String, SignedRelease> {
+    let mut client = match etcd_client::Client::connect([etcd_endpoints], None).await {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(error = %error, "etcd unreachable while reading worker releases");
+            return HashMap::new();
+        }
+    };
+    let manifests = read_prefix(&mut client, WORKER_MANIFEST_PREFIX).await;
+    let mut signatures = read_prefix(&mut client, WORKER_SIGNATURE_PREFIX).await;
+    manifests
+        .into_iter()
+        .filter_map(|(arch, manifest)| {
+            signatures.remove(&arch).map(|signature| {
+                (
+                    arch,
+                    SignedRelease {
+                        manifest,
+                        signature,
+                    },
+                )
+            })
+        })
+        .collect()
 }
 
-async fn increment_post_update_heartbeats(etcd_endpoints: &str, agent_id: Uuid) -> Option<u32> {
-    let key = format!("/csfx/nodes/{}/post_update_heartbeats", agent_id);
-
-    let mut client = etcd_client::Client::connect([etcd_endpoints], None)
-        .await
-        .ok()?;
-
-    let current: u32 = client
-        .get(key.as_str(), None)
-        .await
-        .ok()
-        .and_then(|r| r.kvs().first().map(|kv| kv.value().to_vec()))
-        .and_then(|v| std::str::from_utf8(&v).ok().and_then(|s| s.parse().ok()))
-        .unwrap_or(0);
-
-    let next = current + 1;
-
-    client
-        .put(key.as_str(), next.to_string().as_bytes(), None)
-        .await
-        .ok()?;
-
-    Some(next)
+async fn read_prefix(client: &mut etcd_client::Client, prefix: &str) -> HashMap<String, String> {
+    let options = etcd_client::GetOptions::new().with_prefix();
+    let response = match client.get(prefix, Some(options)).await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(error = %error, prefix, "failed to read etcd prefix");
+            return HashMap::new();
+        }
+    };
+    response
+        .kvs()
+        .iter()
+        .filter_map(|kv| {
+            let key = kv.key_str().ok()?.strip_prefix(prefix)?.to_string();
+            Some((key, kv.value_str().ok()?.to_string()))
+        })
+        .collect()
 }
 
 async fn forward_container_statuses(

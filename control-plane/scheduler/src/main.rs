@@ -3,13 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-mod db;
-mod handlers;
-mod logger;
-mod metrics;
-mod models;
-mod server;
-mod services;
+use scheduler::{log_error, log_info, logger, metrics, server, services};
 
 const LEADER_KEY: &str = "/csfx/leaders/scheduler";
 

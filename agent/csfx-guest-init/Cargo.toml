@@ -14,7 +14,7 @@ tokio-vsock = "0.7"
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-nix = { version = "0.31", features = ["term", "process", "signal", "mount", "reboot", "socket", "sched", "mman", "resource", "dir", "hostname", "personality"] }
+nix = { version = "0.31", features = ["term", "process", "signal", "mount", "reboot", "socket", "sched", "mman", "resource", "dir", "hostname", "personality", "fs"] }
 libc = "0.2"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

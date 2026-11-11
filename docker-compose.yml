@@ -85,6 +85,10 @@ services:
       FAILOVER_CONTROLLER_URL: http://failover-controller:8004
       SDN_CONTROLLER_URL: http://sdn-controller:8005
       OBJECT_STORAGE_URL: http://object-storage:8006
+      SITE_BUILDER_URL: http://site-builder:8007
+      CSFX_SITE_SECRET: ${CSFX_SITE_SECRET:-dev_site_secret_change_in_production}
+      CSFX_SITE_EDGE_URL: http://site-builder:8008
+      CSFX_SITE_DOMAIN: ${CSFX_SITE_DOMAIN:-}
       FRONTEND_URL: http://localhost:5173
       CSFX_LOCAL_ZONE: csfx.internal
       CSFX_INCLUDE_CONTAINERS: "true"
@@ -105,6 +109,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./control-plane/api-gateway:/app/control-plane/api-gateway
+      - ./control-plane/site-builder:/app/control-plane/site-builder
       - ./control-plane/shared:/app/control-plane/shared
       - cargo_target_api_gateway:/app/target
     command: cargo watch -x "run -p api-gateway"
@@ -142,6 +147,39 @@ services:
     command: cargo watch -x "run -p registry"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  site-builder:
+    <<: *rust-service
+    container_name: csfx-site-builder-dev
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
+      SITE_BUILDER_PORT: "8007"
+      SITE_EDGE_PORT: "8008"
+      RUST_LOG: ${RUST_LOG:-debug}
+      SCHEDULER_SERVICE_URL: http://scheduler:8002
+      CSFX_SITE_CALLBACK_URL: ${CSFX_SITE_CALLBACK_URL:-http://site-builder:8007}
+      CSFX_SITE_SECRET: ${CSFX_SITE_SECRET:-dev_site_secret_change_in_production}
+      CSFX_SITE_BUILDER_IMAGE: ${CSFX_SITE_BUILDER_IMAGE:-ghcr.io/csfx-cloud/csfx-site-builder:latest}
+      CSFX_SITE_REGISTRY: ${CSFX_SITE_REGISTRY:-}
+      CSFX_SITE_PREVIEW_DOMAIN: ${CSFX_SITE_PREVIEW_DOMAIN:-}
+    ports:
+      - "8007:8007"
+      - "8008:8008"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./control-plane/site-builder:/app/control-plane/site-builder
+      - ./control-plane/shared:/app/control-plane/shared
+      - cargo_target_site_builder:/app/target
+    command: cargo watch -x "run -p site-builder"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -451,6 +489,7 @@ volumes:
   cargo_target_api_gateway:
   cargo_target_registry:
   cargo_target_scheduler:
+  cargo_target_site_builder:
   cargo_target_volume_manager:
   cargo_target_failover_controller:
   cargo_target_sdn_controller:

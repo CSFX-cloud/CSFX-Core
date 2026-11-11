@@ -6,12 +6,105 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
-use serde_json::json;
+use sea_orm::EntityTrait;
+use serde_json::{json, Value};
+use site_builder::images::{uses_site_registry, SITE_IMAGE_HOST};
+use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageWorkloads, CanViewWorkloads},
     AppState,
 };
+
+const RESERVED_IMAGE_HOST_MESSAGE: &str = "this image host is reserved for web apps";
+
+fn references_site_images(body: &Value) -> bool {
+    let image = body["image"].as_str().is_some_and(uses_site_registry);
+    let compose = body["compose_yaml"]
+        .as_str()
+        .is_some_and(|yaml| yaml.to_ascii_lowercase().contains(SITE_IMAGE_HOST));
+    image || compose
+}
+
+fn reject_site_images(body: &Option<Value>) -> Result<(), (StatusCode, Json<Value>)> {
+    if body.as_ref().is_some_and(references_site_images) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": RESERVED_IMAGE_HOST_MESSAGE })),
+        ));
+    }
+    Ok(())
+}
+
+const FOREIGN_GROUP_MESSAGE: &str = "images from another resource group's registry cannot be used";
+const GROUP_MARKER: &str = "rg-";
+const GROUP_ID_LENGTH: usize = 32;
+
+fn group_references(text: &str) -> Vec<String> {
+    let lowered = text.to_ascii_lowercase();
+    lowered
+        .match_indices(GROUP_MARKER)
+        .filter_map(|(start, _)| {
+            let id_start = start + GROUP_MARKER.len();
+            let id = lowered.get(id_start..id_start + GROUP_ID_LENGTH)?;
+            let is_id = id.chars().all(|c| c.is_ascii_hexdigit());
+            let slash = lowered.get(id_start + GROUP_ID_LENGTH..)?.starts_with('/');
+            (is_id && slash).then(|| id.to_string())
+        })
+        .collect()
+}
+
+fn references_foreign_group(body: &Value, own_group: Option<Uuid>) -> bool {
+    let own = own_group.map(|id| id.simple().to_string());
+    let texts = [body["image"].as_str(), body["compose_yaml"].as_str()];
+    texts
+        .into_iter()
+        .flatten()
+        .flat_map(group_references)
+        .any(|id| own.as_deref() != Some(id.as_str()))
+}
+
+fn reject_foreign_group_images(
+    body: &Option<Value>,
+    own_group: Option<Uuid>,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    if body
+        .as_ref()
+        .is_some_and(|body| references_foreign_group(body, own_group))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": FOREIGN_GROUP_MESSAGE })),
+        ));
+    }
+    Ok(())
+}
+
+async fn workload_group(state: &AppState, id: &str) -> Option<Uuid> {
+    let id = Uuid::parse_str(id).ok()?;
+    entity::workloads::Entity::find_by_id(id)
+        .one(&state.db_conn)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|workload| workload.resource_group_id)
+}
+
+async fn stack_group(state: &AppState, id: &str) -> Option<Uuid> {
+    let id = Uuid::parse_str(id).ok()?;
+    entity::workload_stacks::Entity::find_by_id(id)
+        .one(&state.db_conn)
+        .await
+        .ok()
+        .flatten()
+        .map(|stack| stack.resource_group_id)
+}
+
+fn body_group(body: &Option<Value>) -> Option<Uuid> {
+    body.as_ref()?["resource_group_id"]
+        .as_str()
+        .and_then(|raw| Uuid::parse_str(raw).ok())
+}
 
 async fn proxy_to_scheduler(
     state: &AppState,
@@ -52,6 +145,8 @@ pub async fn create_workload(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    reject_site_images(&body_json)?;
+    reject_foreign_group_images(&body_json, body_group(&body_json))?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -104,6 +199,8 @@ pub async fn update_workload(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    reject_site_images(&body_json)?;
+    reject_foreign_group_images(&body_json, workload_group(&state, &id).await)?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -156,6 +253,8 @@ pub async fn create_stack(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    reject_site_images(&body_json)?;
+    reject_foreign_group_images(&body_json, body_group(&body_json))?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -243,6 +342,8 @@ pub async fn redeploy_stack(
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    reject_site_images(&body_json)?;
+    reject_foreign_group_images(&body_json, stack_group(&state, &id).await)?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -275,4 +376,55 @@ pub fn workloads_routes() -> Router<AppState> {
         .route("/workload-stacks/{id}/stop", post(stop_stack))
         .route("/workload-stacks/{id}/restart", post(restart_stack))
         .route("/workload-stacks/{id}", patch(redeploy_stack))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn site_image_hosts_are_rejected_in_images_and_compose_files() {
+        assert!(references_site_images(
+            &json!({ "image": "sites.csfx.invalid/x:1" })
+        ));
+        let compose = "services:\n  a:\n    image: Sites.CSFX.invalid/x:1\n";
+        assert!(references_site_images(&json!({ "compose_yaml": compose })));
+    }
+
+    #[test]
+    fn only_the_own_groups_registry_namespace_is_allowed() {
+        let own = Uuid::from_u128(0xabc);
+        let other = Uuid::from_u128(0xdef);
+        let image = |group: Uuid| json!({ "image": format!("10.0.0.5:5060/rg-{}/main/app:1", group.simple()) });
+        assert!(!references_foreign_group(&image(own), Some(own)));
+        assert!(references_foreign_group(&image(other), Some(own)));
+        assert!(references_foreign_group(&image(own), None));
+        assert!(!references_foreign_group(
+            &json!({ "image": "nginx:1" }),
+            None
+        ));
+        let compose = format!(
+            "services:\n  a:\n    image: host/rg-{}/x/app\n",
+            other.simple()
+        );
+        assert!(references_foreign_group(
+            &json!({ "compose_yaml": compose }),
+            Some(own)
+        ));
+    }
+
+    #[test]
+    fn lookalike_names_are_not_group_references() {
+        assert!(group_references("registry/rg-short/x").is_empty());
+        assert!(group_references("rg-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/x").is_empty());
+    }
+
+    #[test]
+    fn ordinary_workloads_pass() {
+        assert!(!references_site_images(&json!({ "image": "nginx:1" })));
+        assert!(!references_site_images(
+            &json!({ "compose_yaml": "services: {}" })
+        ));
+        assert!(reject_site_images(&None).is_ok());
+    }
 }

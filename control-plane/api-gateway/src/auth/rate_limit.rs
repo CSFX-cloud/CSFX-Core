@@ -26,6 +26,12 @@ impl JwtOrIpKeyExtractor {
     }
 }
 
+impl Default for JwtOrIpKeyExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeyExtractor for JwtOrIpKeyExtractor {
     type Key = RateLimitKey;
 

@@ -10,15 +10,17 @@
     import ContainerLogsTab from "$lib/components/resource-group/container-logs-tab.svelte";
     import ContainerNetworkTab from "$lib/components/resource-group/container-network-tab.svelte";
     import ContainerSettingsTab from "$lib/components/resource-group/container-settings-tab.svelte";
+    import StorageUsageTab from "$lib/components/resource-group/storage-usage-tab.svelte";
     import ContainerShellTab from "$lib/components/resource-group/container-shell-tab.svelte";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
     import WorkloadHero, { type MetaItem } from "$lib/components/workload/workload-hero.svelte";
     import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
+    import { storageRows } from "$lib/utils/storage";
     import { knownWorkloadIcon } from "$lib/utils/image-icon";
 
-    type Tab = "logs" | "shell" | "insights" | "network" | "settings";
+    type Tab = "logs" | "shell" | "insights" | "network" | "storage" | "settings";
 
     const POLL_INTERVAL_MS = 5000;
     const rg = useResourceGroupState();
@@ -37,8 +39,11 @@
         { id: "shell", label: "Shell" },
         { id: "insights", label: "Performance" },
         { id: "network", label: "Network" },
+        { id: "storage", label: "Storage" },
         ...(container?.stack_id ? [] : [{ id: "settings" as Tab, label: "Settings" }]),
     ]);
+    const storage = $derived(container ? storageRows([container], rg.volumes) : []);
+    const available = $derived(rg.volumes.filter((volume) => !volume.attached_to_workload && volume.status === "available"));
     const meta = $derived<MetaItem[]>([
         { icon: Package, text: container?.image ?? "" },
         { icon: Layers, text: rg.group?.name ?? "Resource group", href: `/resource-groups/${rg.rgId}` },
@@ -126,6 +131,8 @@
             <ContainerInsightsTab workload={container} />
         {:else if tab === "network"}
             <ContainerNetworkTab workload={container} rgId={rg.rgId} groupName={rg.group?.name ?? "the group"} cidr={rg.group?.internal_cidr ?? "—"} />
+        {:else if tab === "storage"}
+            <StorageUsageTab rows={storage} title={name} rgId={rg.rgId} workload={container} {available} restart={() => restartWorkload(auth.token ?? "", container.id)} onChanged={rg.load} />
         {:else}
             <ContainerSettingsTab workload={container} onRedeployed={rg.load} />
         {/if}
