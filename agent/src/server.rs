@@ -530,6 +530,7 @@ mod tests {
 
     fn state() -> ServerState {
         crate::client::install_test_crypto_provider();
+        let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
         let registry = Arc::new(RgDnsRegistry::new());
         ServerState {
             firecracker: Arc::new(crate::firecracker::runtime::FirecrackerRuntime::new(
