@@ -771,6 +771,121 @@ mod tests {
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
+    fn raw_whiteout_layer(path: &str) -> Vec<u8> {
+        let mut header = layer_header("placeholder", tar::EntryType::Regular, 0, 0o644);
+        let name = &mut header.as_old_mut().name;
+        name.fill(0);
+        name[..path.len()].copy_from_slice(path.as_bytes());
+        header.set_cksum();
+        let mut builder = tar::Builder::new(Vec::new());
+        builder.append(&header, std::io::empty()).unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&builder.into_inner().unwrap()).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn symlink_layer(path: &str, target: &str) -> Vec<u8> {
+        let mut header = layer_header(path, tar::EntryType::Symlink, 0, 0o777);
+        header.set_link_name(target).unwrap();
+        header.set_cksum();
+        let mut builder = tar::Builder::new(Vec::new());
+        builder.append(&header, std::io::empty()).unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        encoder.write_all(&builder.into_inner().unwrap()).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn sandbox() -> (PathBuf, PathBuf) {
+        let root = PathBuf::from(format!(
+            "/tmp/csfx-rootfs-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let dest = root.join("dest");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::create_dir_all(outside.join("sub")).unwrap();
+        std::fs::write(outside.join("keep.txt"), b"x").unwrap();
+        std::fs::write(outside.join("sub/keep.txt"), b"x").unwrap();
+        (root, outside)
+    }
+
+    fn assert_outside_untouched(outside: &Path) {
+        assert!(outside.join("keep.txt").exists());
+        assert!(outside.join("sub/keep.txt").exists());
+    }
+
+    #[test]
+    fn whiteouts_with_parent_traversal_are_refused() {
+        let (root, outside) = sandbox();
+        let dest = root.join("dest");
+        for path in [
+            "../outside/.wh.keep.txt",
+            "../outside/.wh..wh..opq",
+            "a/../../outside/.wh.sub",
+        ] {
+            let layer = raw_whiteout_layer(path);
+            assert!(extract_layer_blocking(&layer, &dest).is_err(), "{path}");
+        }
+        assert_outside_untouched(&outside);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn whiteouts_with_absolute_paths_are_refused() {
+        let (root, outside) = sandbox();
+        let dest = root.join("dest");
+        let absolute = outside.join(".wh.keep.txt");
+        let layer = raw_whiteout_layer(absolute.to_str().unwrap());
+        assert!(extract_layer_blocking(&layer, &dest).is_err());
+        let opaque = outside.join(".wh..wh..opq");
+        let layer = raw_whiteout_layer(opaque.to_str().unwrap());
+        assert!(extract_layer_blocking(&layer, &dest).is_err());
+        assert_outside_untouched(&outside);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn whiteouts_through_symlinks_are_refused() {
+        let (root, outside) = sandbox();
+        let dest = root.join("dest");
+        let link = symlink_layer("a", outside.to_str().unwrap());
+        extract_layer_blocking(&link, &dest).unwrap();
+
+        for path in ["a/.wh.keep.txt", "a/sub/.wh.keep.txt", "a/sub/.wh..wh..opq"] {
+            let layer = build_gzip_layer(&[(path, b"", false)]);
+            assert!(extract_layer_blocking(&layer, &dest).is_err(), "{path}");
+        }
+        assert_outside_untouched(&outside);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn whiteouts_remove_symlinks_without_following_them() {
+        let (root, outside) = sandbox();
+        let dest = root.join("dest");
+        let link = symlink_layer("link", outside.to_str().unwrap());
+        extract_layer_blocking(&link, &dest).unwrap();
+
+        let layer = build_gzip_layer(&[(".wh.link", b"", false)]);
+        extract_layer_blocking(&layer, &dest).unwrap();
+
+        assert!(std::fs::symlink_metadata(dest.join("link")).is_err());
+        assert_outside_untouched(&outside);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn whiteout_names_cannot_target_their_own_directory() {
+        let (root, _) = sandbox();
+        let dest = root.join("dest");
+        std::fs::create_dir_all(dest.join("a")).unwrap();
+        for name in ["", ".", "..", "x/y"] {
+            assert!(apply_whiteout(&dest, Path::new("a/.wh.x"), name).is_err());
+        }
+        assert!(dest.join("a").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn unsafe_layer_entries_are_refused() {
         let tmp = std::env::temp_dir().join(format!("csfx-rootfs-test-{}", uuid::Uuid::new_v4()));
