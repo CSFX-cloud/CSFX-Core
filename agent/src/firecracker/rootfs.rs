@@ -9,7 +9,7 @@ use oci_spec::runtime::{
     LinuxNamespaceType, ProcessBuilder, RootBuilder, Spec, SpecBuilder, User, UserBuilder,
 };
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::process::Command;
@@ -315,12 +315,37 @@ fn extract_layer_blocking(gzip_data: &[u8], dest: &Path) -> Result<()> {
     Ok(())
 }
 
+fn resolve_directory_within(dest: &Path, relative: &Path) -> Result<PathBuf> {
+    let mut resolved = dest.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            if component == Component::CurDir {
+                continue;
+            }
+            anyhow::bail!("Refused layer whiteout path {:?}", relative);
+        };
+        resolved.push(name);
+        match std::fs::symlink_metadata(&resolved) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                anyhow::bail!("Refused layer whiteout path through symlink {:?}", relative)
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to inspect whiteout path {:?}", resolved))
+            }
+        }
+    }
+    Ok(resolved)
+}
+
 fn clear_opaque_directory(dest: &Path, whiteout_path: &Path) -> Result<()> {
     let Some(parent) = whiteout_path.parent() else {
         return Ok(());
     };
-    let target_dir = dest.join(parent);
-    if target_dir.exists() {
+    let target_dir = resolve_directory_within(dest, parent)?;
+    if target_dir.is_dir() {
         std::fs::remove_dir_all(&target_dir)
             .with_context(|| format!("Failed to clear opaque directory {:?}", target_dir))?;
         std::fs::create_dir_all(&target_dir)
@@ -330,10 +355,17 @@ fn clear_opaque_directory(dest: &Path, whiteout_path: &Path) -> Result<()> {
 }
 
 fn apply_whiteout(dest: &Path, whiteout_path: &Path, deleted_name: &str) -> Result<()> {
+    let mut deleted = Path::new(deleted_name).components();
+    let (Some(Component::Normal(name)), None) = (deleted.next(), deleted.next()) else {
+        anyhow::bail!("Refused layer whiteout name {:?}", deleted_name);
+    };
     let parent = whiteout_path.parent().unwrap_or_else(|| Path::new(""));
-    let target = dest.join(parent).join(deleted_name);
+    let target = resolve_directory_within(dest, parent)?.join(name);
 
-    if target.is_dir() {
+    let Ok(metadata) = std::fs::symlink_metadata(&target) else {
+        return Ok(());
+    };
+    if metadata.is_dir() {
         let _ = std::fs::remove_dir_all(&target);
     } else {
         let _ = std::fs::remove_file(&target);
