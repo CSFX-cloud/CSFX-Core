@@ -197,3 +197,74 @@ async fn run_ip(args: &[&str]) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::FakeTools;
+
+    #[tokio::test]
+    async fn bridges_are_deleted_by_interface_name() {
+        let tools = FakeTools::install(&[("ip", "exit 0")]);
+
+        teardown_bridge("rg-1").await.unwrap();
+
+        assert_eq!(
+            tools.calls("ip"),
+            vec![format!("link delete {}", rg_bridge_iface_name("rg-1"))]
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_bridges_are_tolerated_on_teardown() {
+        {
+            let _tools =
+                FakeTools::install(&[("ip", "echo 'Cannot find device \"x\"' >&2\nexit 1")]);
+            teardown_bridge("rg-1").await.unwrap();
+        }
+        let _tools = FakeTools::install(&[("ip", "echo 'Operation not permitted' >&2\nexit 1")]);
+        let error = teardown_bridge("rg-1").await.unwrap_err().to_string();
+        assert!(error.contains("ip link delete failed"));
+    }
+
+    #[tokio::test]
+    async fn existing_addresses_and_links_are_not_an_error() {
+        {
+            let _tools =
+                FakeTools::install(&[("ip", "echo 'RTNETLINK answers: File exists' >&2\nexit 2")]);
+            run_ip(&["link", "add", "name", "br0", "type", "bridge"])
+                .await
+                .unwrap();
+        }
+        let _tools = FakeTools::install(&[("ip", "echo 'bad' >&2\nexit 2")]);
+        assert!(run_ip(&["link", "add"]).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn interface_existence_follows_the_exit_status() {
+        {
+            let _tools = FakeTools::install(&[("ip", "exit 0")]);
+            assert!(interface_exists("br0").await.unwrap());
+        }
+        let _tools = FakeTools::install(&[("ip", "exit 1")]);
+        assert!(!interface_exists("br0").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn announcing_requires_a_valid_guest_address() {
+        let tools = FakeTools::install(&[("ip", "exit 0")]);
+
+        let error = announce_remote_guest("rg-1", "not-an-ip")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("invalid guest ip"));
+        assert!(tools.calls("ip").is_empty());
+    }
+
+    #[test]
+    fn registry_entries_live_below_the_registry_directory() {
+        let path = registry_entry_path("rg-1");
+        assert_eq!(path, Path::new(RG_REGISTRY_DIR).join("rg-1"));
+    }
+}

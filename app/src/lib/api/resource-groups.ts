@@ -47,6 +47,18 @@ export interface VolumeMount {
     mount_path: string;
 }
 
+export interface UsageEntry {
+    name: string;
+    bytes: number;
+}
+
+export interface VolumeUsage {
+    mount_path: string;
+    used_bytes: number;
+    total_bytes: number;
+    entries: UsageEntry[];
+}
+
 export interface Volume {
     id: string;
     name: string;
@@ -126,6 +138,7 @@ export interface Workload {
     env_vars: Record<string, string> | null;
     ports: PortMapping[] | null;
     volume_mounts: VolumeMount[] | null;
+    volume_usage: VolumeUsage[] | null;
     resource_group_id: string | null;
     stack_id: string | null;
     service_name: string | null;
@@ -175,6 +188,7 @@ export interface UpdateWorkloadRequest {
     ports?: PortMapping[] | null;
     restart_policy?: 'always' | 'on-failure' | 'never';
     max_restarts?: number | null;
+    volume_mounts?: VolumeMount[];
 }
 
 export interface CreateVolumeRequest {
@@ -303,7 +317,10 @@ export async function deleteResourceGroup(token: string, id: string): Promise<vo
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) throw new Error(`Failed to delete resource group: ${res.status}`);
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `Failed to delete resource group: ${res.status}`);
+    }
 }
 
 export async function listResourceGroupWorkloads(token: string, rgId: string): Promise<Workload[]> {
@@ -535,6 +552,19 @@ export async function createVolume(token: string, req: CreateVolumeRequest): Pro
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.status }));
         throw new Error(err.error ?? `Failed to create volume: ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function resizeVolume(token: string, id: string, sizeGb: number): Promise<Volume> {
+    const res = await authedFetch(`${API_BASE}/volumes/${id}/resize`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ size_gb: sizeGb }),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.status }));
+        throw new Error(err.error ?? `Failed to resize volume: ${res.status}`);
     }
     return res.json();
 }

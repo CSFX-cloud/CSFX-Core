@@ -22,7 +22,7 @@
         if (!canSubmit || !auth.token) return;
         status = "loading";
         try {
-            await changePassword(auth.token, "", newPassword);
+            auth.setToken(await changePassword(auth.token, "", newPassword));
             status = "success";
             setTimeout(() => goto("/"), 600);
         } catch {

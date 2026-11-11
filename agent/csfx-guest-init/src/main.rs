@@ -1,22 +1,30 @@
 use anyhow::{Context, Result};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
-use nix::mount::{MsFlags, mount};
+use nix::mount::{MsFlags, mount, umount};
 use nix::pty::openpty;
-use nix::sys::reboot::{RebootMode, reboot};
+use nix::sys::reboot::{RebootMode, reboot, set_cad_enabled};
+use nix::sys::signal::{Signal, kill};
+use nix::sys::statvfs::statvfs;
 use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::Pid;
-use serde::Deserialize;
+use nix::unistd::{Pid, sync};
+use serde::{Deserialize, Serialize};
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::fs::MetadataExt;
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::signal::unix::{Signal as TokioSignal, SignalKind, signal};
 use tokio::time::{Duration, timeout};
 use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener};
 use tracing::{debug, error, info, warn};
 
 const LOG_PORT: u32 = 10001;
 const EXEC_PORT: u32 = 10002;
+const USAGE_PORT: u32 = 10003;
+const USAGE_CACHE_TTL: Duration = Duration::from_secs(30);
+const USAGE_TOP_ENTRIES: usize = 5;
+const BLOCK_BYTES: u64 = 512;
 const LOG_BACKLOG_CAPACITY: usize = 65536;
 const CONTAINER_BUNDLE_PATH: &str = "/csfx-bundle";
 const CONTAINER_ROOTFS_DIR: &str = "rootfs";
@@ -27,6 +35,7 @@ const MMDS_BOOTSTRAP_IP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(169, 254, 
 const MMDS_BOOTSTRAP_NETMASK: std::net::Ipv4Addr = std::net::Ipv4Addr::new(255, 255, 0, 0);
 const MMDS_TIMEOUT: Duration = Duration::from_secs(5);
 const RESOLV_CONF_PATH: &str = "/etc/resolv.conf";
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Deserialize)]
 struct MmdsVolume {
@@ -64,10 +73,15 @@ async fn main() {
 
     info!("csfx-guest-init starting");
 
+    if let Err(e) = set_cad_enabled(false) {
+        warn!(error = %e, "Failed to route ctrl-alt-del to init");
+    }
+
     if let Err(e) = run().await {
         error!(error = ?e, "csfx-guest-init failed");
     }
 
+    flush_volumes();
     power_off();
 }
 
@@ -127,6 +141,8 @@ async fn run() -> Result<()> {
         .context("Failed to bind vsock log port")?;
     let exec_listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, EXEC_PORT))
         .context("Failed to bind vsock exec port")?;
+    let usage_listener = VsockListener::bind(VsockAddr::new(VMADDR_CID_ANY, USAGE_PORT))
+        .context("Failed to bind vsock usage port")?;
     debug!(
         stage = "vsock_listeners_bound",
         log_port = LOG_PORT,
@@ -148,23 +164,15 @@ async fn run() -> Result<()> {
 
     let log_task = tokio::spawn(stream_logs(log_listener, stdout_read, stderr_read));
     tokio::spawn(serve_exec(exec_listener));
+    tokio::spawn(serve_usage(usage_listener));
 
-    let exit_status = tokio::task::spawn_blocking(move || {
-        loop {
-            match waitpid(container_pid, None) {
-                Ok(WaitStatus::Exited(pid, code)) if pid == container_pid => {
-                    return Ok(WaitStatus::Exited(pid, code));
-                }
-                Ok(WaitStatus::Signaled(pid, sig, core)) if pid == container_pid => {
-                    return Ok(WaitStatus::Signaled(pid, sig, core));
-                }
-                Ok(_) => continue,
-                Err(nix::errno::Errno::EINTR) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    })
-    .await
+    let mut wait_task = tokio::task::spawn_blocking(move || wait_for_exit(container_pid));
+    let mut shutdown = ShutdownSignals::register()?;
+
+    let exit_status = tokio::select! {
+        joined = &mut wait_task => joined,
+        _ = shutdown.recv() => stop_container(container_pid, &mut wait_task).await,
+    }
     .context("Container wait task panicked")?
     .context("Failed to wait on container process")?;
     info!(status = ?exit_status, "entrypoint exited");
@@ -660,6 +668,92 @@ fn mount_pseudo_filesystems() {
     }
 }
 
+fn wait_for_exit(container_pid: Pid) -> nix::Result<WaitStatus> {
+    loop {
+        match waitpid(container_pid, None) {
+            Ok(status @ WaitStatus::Exited(pid, _)) if pid == container_pid => return Ok(status),
+            Ok(status @ WaitStatus::Signaled(pid, _, _)) if pid == container_pid => {
+                return Ok(status);
+            }
+            Ok(_) | Err(nix::errno::Errno::EINTR) => continue,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+struct ShutdownSignals {
+    terminate: TokioSignal,
+    interrupt: TokioSignal,
+}
+
+impl ShutdownSignals {
+    fn register() -> Result<Self> {
+        Ok(Self {
+            terminate: signal(SignalKind::terminate())
+                .context("Failed to register SIGTERM handler")?,
+            interrupt: signal(SignalKind::interrupt())
+                .context("Failed to register SIGINT handler")?,
+        })
+    }
+
+    async fn recv(&mut self) {
+        tokio::select! {
+            _ = self.terminate.recv() => {}
+            _ = self.interrupt.recv() => {}
+        }
+    }
+}
+
+async fn stop_container(
+    container_pid: Pid,
+    wait_task: &mut tokio::task::JoinHandle<nix::Result<WaitStatus>>,
+) -> Result<nix::Result<WaitStatus>, tokio::task::JoinError> {
+    info!(
+        container_pid = container_pid.as_raw(),
+        "shutdown requested, terminating container"
+    );
+    if let Err(e) = kill(container_pid, Signal::SIGTERM) {
+        warn!(error = %e, "Failed to send SIGTERM to container");
+    }
+    if let Ok(joined) = timeout(SHUTDOWN_GRACE, &mut *wait_task).await {
+        return joined;
+    }
+    warn!(
+        grace_seconds = SHUTDOWN_GRACE.as_secs(),
+        "container ignored SIGTERM, killing"
+    );
+    if let Err(e) = kill(container_pid, Signal::SIGKILL) {
+        warn!(error = %e, "Failed to send SIGKILL to container");
+    }
+    wait_task.await
+}
+
+fn volume_mount_points() -> Vec<String> {
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    mounts
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let device = fields.next()?;
+            let mount_point = fields.next()?;
+            let is_volume =
+                device.starts_with("/dev/vd") && mount_point.starts_with(CONTAINER_BUNDLE_PATH);
+            is_volume.then(|| mount_point.to_string())
+        })
+        .collect()
+}
+
+fn flush_volumes() {
+    sync();
+    for mount_point in volume_mount_points().into_iter().rev() {
+        match umount(mount_point.as_str()) {
+            Ok(()) => info!(mount_point = %mount_point, "Volume unmounted"),
+            Err(e) => error!(mount_point = %mount_point, error = %e, "Failed to unmount volume"),
+        }
+    }
+    sync();
+}
+
 fn power_off() -> ! {
     info!("powering off");
     match reboot(RebootMode::RB_POWER_OFF) {
@@ -766,6 +860,114 @@ async fn stream_logs(listener: VsockListener, stdout: AsyncFd<OwnedFd>, stderr: 
                     Err(_) => stderr_open = false,
                 }
             }
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct UsageEntry {
+    name: String,
+    bytes: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct VolumeUsage {
+    mount_path: String,
+    used_bytes: u64,
+    total_bytes: u64,
+    entries: Vec<UsageEntry>,
+}
+
+static USAGE_CACHE: std::sync::Mutex<Option<(std::time::Instant, Vec<VolumeUsage>)>> =
+    std::sync::Mutex::new(None);
+
+fn allocated_bytes(path: &std::path::Path) -> u64 {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    let own = metadata.blocks() * BLOCK_BYTES;
+    if !metadata.is_dir() {
+        return own;
+    }
+    let Ok(children) = std::fs::read_dir(path) else {
+        return own;
+    };
+    own + children
+        .flatten()
+        .map(|child| allocated_bytes(&child.path()))
+        .sum::<u64>()
+}
+
+fn top_level_entries(mount_point: &str) -> Vec<UsageEntry> {
+    let Ok(children) = std::fs::read_dir(mount_point) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<UsageEntry> = children
+        .flatten()
+        .map(|child| UsageEntry {
+            name: child.file_name().to_string_lossy().into_owned(),
+            bytes: allocated_bytes(&child.path()),
+        })
+        .filter(|entry| entry.bytes > 0)
+        .collect();
+    entries.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    entries.truncate(USAGE_TOP_ENTRIES);
+    entries
+}
+
+fn cached_volume_usage() -> Vec<VolumeUsage> {
+    let mut cache = USAGE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((taken_at, usage)) = cache.as_ref()
+        && taken_at.elapsed() < USAGE_CACHE_TTL
+    {
+        return usage.clone();
+    }
+    let usage = read_volume_usage();
+    *cache = Some((std::time::Instant::now(), usage.clone()));
+    usage
+}
+
+fn read_volume_usage() -> Vec<VolumeUsage> {
+    let rootfs = format!("{CONTAINER_BUNDLE_PATH}/{CONTAINER_ROOTFS_DIR}");
+    volume_mount_points()
+        .into_iter()
+        .filter_map(|mount_point| {
+            let stats = statvfs(mount_point.as_str()).ok()?;
+            let block_size = stats.fragment_size() as u64;
+            let total_bytes = stats.blocks() as u64 * block_size;
+            let free_bytes = stats.blocks_free() as u64 * block_size;
+            let mount_path = mount_point.strip_prefix(&rootfs)?.to_string();
+            Some(VolumeUsage {
+                mount_path,
+                used_bytes: total_bytes.saturating_sub(free_bytes),
+                total_bytes,
+                entries: top_level_entries(&mount_point),
+            })
+        })
+        .collect()
+}
+
+async fn serve_usage(listener: VsockListener) {
+    loop {
+        let (mut stream, _) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                error!(error = %e, "Failed to accept usage connection");
+                continue;
+            }
+        };
+        let usage = tokio::task::spawn_blocking(cached_volume_usage)
+            .await
+            .unwrap_or_default();
+        let payload = match serde_json::to_vec(&usage) {
+            Ok(payload) => payload,
+            Err(e) => {
+                error!(error = %e, "Failed to encode volume usage");
+                continue;
+            }
+        };
+        if let Err(e) = stream.write_all(&payload).await {
+            warn!(error = %e, "Failed to write volume usage");
         }
     }
 }
@@ -973,5 +1175,117 @@ mod tests {
 
         let netmask = ipv4_to_sockaddr(prefix_to_netmask(16).unwrap());
         assert_eq!(netmask.sin_addr.s_addr.to_ne_bytes(), [255, 255, 0, 0]);
+    }
+
+    #[test]
+    fn netmask_follows_the_prefix_length() {
+        assert_eq!(
+            prefix_to_netmask(0).unwrap(),
+            std::net::Ipv4Addr::UNSPECIFIED
+        );
+        assert_eq!(
+            prefix_to_netmask(24).unwrap(),
+            std::net::Ipv4Addr::new(255, 255, 255, 0)
+        );
+        assert_eq!(
+            prefix_to_netmask(32).unwrap(),
+            std::net::Ipv4Addr::BROADCAST
+        );
+        assert!(prefix_to_netmask(33).is_err());
+    }
+
+    #[test]
+    fn generic_sockaddr_keeps_the_inet_layout() {
+        let sockaddr = ipv4_to_sockaddr_storage(std::net::Ipv4Addr::new(10, 0, 0, 1));
+        assert_eq!(sockaddr.sa_family, libc::AF_INET as libc::sa_family_t);
+        assert_eq!(
+            sockaddr.sa_data[2..6]
+                .iter()
+                .map(|b| *b as u8)
+                .collect::<Vec<_>>(),
+            [10, 0, 0, 1]
+        );
+    }
+
+    #[test]
+    fn backlog_keeps_only_the_newest_bytes() {
+        let mut backlog = std::collections::VecDeque::new();
+        push_to_backlog(&mut backlog, b"abc");
+        push_to_backlog(&mut backlog, b"def");
+        assert_eq!(backlog.iter().copied().collect::<Vec<_>>(), b"abcdef");
+
+        let full = vec![1u8; LOG_BACKLOG_CAPACITY - 2];
+        push_to_backlog(&mut backlog, &full);
+        assert_eq!(backlog.len(), LOG_BACKLOG_CAPACITY);
+        assert_eq!(backlog.back(), Some(&1));
+        assert_eq!(backlog.front(), Some(&b'e'));
+
+        let oversized = vec![7u8; LOG_BACKLOG_CAPACITY + 10];
+        push_to_backlog(&mut backlog, &oversized);
+        assert_eq!(backlog.len(), LOG_BACKLOG_CAPACITY);
+        assert!(backlog.iter().all(|b| *b == 7));
+    }
+
+    #[test]
+    fn header_terminator_is_located() {
+        assert_eq!(find_header_end(b"HTTP/1.1 200 OK\r\n\r\nbody"), Some(15));
+        assert_eq!(find_header_end(b"HTTP/1.1 200 OK\r\n"), None);
+    }
+
+    #[test]
+    fn mmds_data_tolerates_missing_sections() {
+        let empty: MmdsData = serde_json::from_str("{}").unwrap();
+        assert!(empty.volumes.is_empty() && empty.network.is_none() && empty.env.is_empty());
+
+        let full: MmdsData = serde_json::from_str(
+            r#"{"volumes":[{"device":"/dev/vdb","mount_path":"/data"}],
+                "network":{"ip":"10.0.0.3","prefix":"24","gateway":"10.0.0.2"},
+                "env":{"A":"b"}}"#,
+        )
+        .unwrap();
+        assert_eq!(full.volumes[0].device, "/dev/vdb");
+        assert_eq!(full.volumes[0].mount_path, "/data");
+        let network = full.network.unwrap();
+        assert_eq!(network.ip, "10.0.0.3");
+        assert_eq!(network.gateway.as_deref(), Some("10.0.0.2"));
+        assert!(network.dns.is_none() && network.search.is_none());
+        assert_eq!(network.prefix, "24");
+        assert_eq!(full.env["A"], "b");
+    }
+
+    #[test]
+    fn empty_extra_env_needs_no_runtime_config() {
+        apply_extra_env(&std::collections::HashMap::new()).unwrap();
+        let extra = std::collections::HashMap::from([("A".to_string(), "b".to_string())]);
+        assert!(apply_extra_env(&extra).is_err());
+    }
+
+    async fn serve_once(response: &'static [u8]) -> TcpStream {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            socket.write_all(response).await.unwrap();
+        });
+        TcpStream::connect(address).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn http_bodies_are_read_by_content_length() {
+        let mut stream =
+            serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello-extra").await;
+        assert_eq!(read_http_body(&mut stream).await.unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn malformed_http_responses_are_rejected() {
+        let mut missing = serve_once(b"HTTP/1.1 200 OK\r\n\r\nhello").await;
+        assert!(read_http_body(&mut missing).await.is_err());
+        let mut invalid = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: x\r\n\r\n").await;
+        assert!(read_http_body(&mut invalid).await.is_err());
+        let mut truncated = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nab").await;
+        assert!(read_http_body(&mut truncated).await.is_err());
+        let mut headless = serve_once(b"HTTP/1.1 200").await;
+        assert!(read_http_body(&mut headless).await.is_err());
     }
 }

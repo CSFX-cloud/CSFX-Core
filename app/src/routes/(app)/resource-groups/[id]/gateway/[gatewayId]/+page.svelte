@@ -6,8 +6,10 @@
     import Trash2Icon from "@lucide/svelte/icons/trash-2";
     import { auth } from "$lib/auth/store.svelte";
     import { createIngress, deleteGateway, deleteIngress, listIngress, type IngressRoute } from "$lib/api/ingress";
+    import { addSiteDomain, updateSite, type SiteSummary } from "$lib/api/sites";
     import { Button } from "$lib/components/ui/button/index.js";
     import StatusBadge from "$lib/components/status-badge.svelte";
+    import ServiceIcon from "$lib/components/shell/service-icon.svelte";
     import ContainerLogsTab from "$lib/components/resource-group/container-logs-tab.svelte";
     import DnsRecordsPanel from "$lib/components/resource-group/dns-records-panel.svelte";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
@@ -39,8 +41,13 @@
     const candidates = $derived(
         rg.workloads.filter((workload) => workload.id !== gateway?.workload_id && (workload.ports ?? []).length > 0),
     );
+    const staticSites = $derived(rg.sites.filter((site) => site.mode === "static"));
+    const selectedSite = $derived(staticSites.find((site) => site.id === workloadId) ?? null);
+    const siteRoutes = $derived(
+        rg.sites.filter((site) => site.gateway_id === gatewayId).flatMap((site) => site.domains.map((domain) => ({ site, hostname: domain }))),
+    );
     const ports = $derived(candidates.find((workload) => workload.id === workloadId)?.ports ?? []);
-    const canSubmit = $derived(hostname.trim() !== "" && workloadId !== "" && containerPort !== null && !busy);
+    const canSubmit = $derived(hostname.trim() !== "" && workloadId !== "" && (selectedSite !== null || containerPort !== null) && !busy);
 
     $effect(() => {
         void workloadId;
@@ -69,17 +76,28 @@
         }
     }
 
+    async function connectSite(token: string, site: SiteSummary) {
+        await addSiteDomain(token, rg.rgId, site.id, hostname.trim());
+        if (site.gateway_id !== gatewayId) await updateSite(token, rg.rgId, site.id, { gateway_id: gatewayId });
+        await rg.load();
+    }
+
+    async function connectWorkload(token: string, port: number) {
+        await createIngress(token, rg.rgId, {
+            hostname: hostname.trim(),
+            gateway_id: gatewayId,
+            workload_id: workloadId,
+            container_port: port,
+            tls,
+        });
+    }
+
     async function handleCreate() {
-        if (!auth.token || containerPort === null) return;
+        if (!auth.token || (!selectedSite && containerPort === null)) return;
         busy = true;
         try {
-            await createIngress(auth.token, rg.rgId, {
-                hostname: hostname.trim(),
-                gateway_id: gatewayId,
-                workload_id: workloadId,
-                container_port: containerPort,
-                tls,
-            });
+            if (selectedSite) await connectSite(auth.token, selectedSite);
+            else if (containerPort !== null) await connectWorkload(auth.token, containerPort);
             hostname = "";
             await refresh();
         } catch (e) {
@@ -118,7 +136,7 @@
         <Icon icon="mdi:arrow-left" width={16} height={16} />
     </Button>
     {#if gateway}
-        <Icon icon="mdi:router-network" width={28} height={28} class="shrink-0" />
+        <ServiceIcon name="api-gateway" size="lg" />
         <div class="min-w-0">
             <div class="flex items-center gap-2">
                 <span class="text-base font-semibold leading-tight truncate">{gateway.name}</span>
@@ -174,14 +192,23 @@
                         <label class="text-xs text-muted-foreground" for="route-workload">Service</label>
                         <select id="route-workload" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={workloadId}>
                             <option value="">Select</option>
-                            {#each candidates as workload}
-                                <option value={workload.id}>{workload.name}</option>
-                            {/each}
+                            <optgroup label="Containers">
+                                {#each candidates as workload}
+                                    <option value={workload.id}>{workload.name}</option>
+                                {/each}
+                            </optgroup>
+                            {#if staticSites.length > 0}
+                                <optgroup label="Static sites">
+                                    {#each staticSites as site (site.id)}
+                                        <option value={site.id}>{site.name}</option>
+                                    {/each}
+                                </optgroup>
+                            {/if}
                         </select>
                     </div>
                     <div class="flex flex-col gap-1">
                         <label class="text-xs text-muted-foreground" for="route-port">Port</label>
-                        <select id="route-port" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={containerPort} disabled={ports.length === 0}>
+                        <select id="route-port" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={containerPort} disabled={selectedSite !== null || ports.length === 0}>
                             {#each ports as mapping}
                                 <option value={mapping.container_port}>{mapping.container_port}</option>
                             {/each}
@@ -189,14 +216,14 @@
                     </div>
                     <div class="flex items-center gap-3">
                         <label class="flex items-center gap-2 text-sm">
-                            <input type="checkbox" bind:checked={tls} />
+                            <input type="checkbox" bind:checked={tls} disabled={selectedSite !== null} />
                             TLS
                         </label>
                         <Button size="sm" onclick={handleCreate} disabled={!canSubmit}>Connect</Button>
                     </div>
                 </div>
 
-                {#if routes.length === 0}
+                {#if routes.length + siteRoutes.length === 0}
                     <p class="text-sm text-muted-foreground">No services connected yet.</p>
                 {:else}
                     <div class="border rounded-lg overflow-hidden">
@@ -221,6 +248,17 @@
                                             <Button variant="ghost" size="icon-sm" onclick={() => handleDeleteRoute(route)} aria-label="Remove route" title="Remove route">
                                                 <Trash2Icon class="size-4" />
                                             </Button>
+                                        </td>
+                                    </tr>
+                                {/each}
+                                {#each siteRoutes as entry (entry.hostname)}
+                                    <tr class="border-t">
+                                        <td class="px-4 py-2 font-mono text-xs">{entry.hostname}</td>
+                                        <td class="px-4 py-2">{entry.site.name}</td>
+                                        <td class="px-4 py-2">static</td>
+                                        <td class="px-4 py-2">yes</td>
+                                        <td class="px-4 py-2 text-right">
+                                            <a class="text-xs text-muted-foreground hover:text-foreground" href="{base}/site/{entry.site.id}">Manage</a>
                                         </td>
                                     </tr>
                                 {/each}

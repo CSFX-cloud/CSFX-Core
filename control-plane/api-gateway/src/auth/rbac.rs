@@ -1,5 +1,8 @@
 use crate::{
-    auth::jwt::{verify_jwt, Claims},
+    auth::{
+        jwt::{verify_jwt, Claims},
+        middleware::is_token_revoked,
+    },
     rbac_service::RbacService,
     AppState,
 };
@@ -8,8 +11,6 @@ use axum::{
     http::{request::Parts, StatusCode},
 };
 use chrono::Utc;
-use entity::InvalidJwt;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use uuid::Uuid;
 
 pub struct CanViewAgents(pub Claims);
@@ -68,23 +69,20 @@ async fn extract_claims(parts: &mut Parts, state: &AppState) -> Result<Claims, S
         })
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let is_blacklisted = InvalidJwt::find()
-        .filter(entity::invalid_jwt::Column::Token.eq(token))
-        .one(&state.db_conn)
+    let claims = verify_jwt(token)
+        .map_err(|_| StatusCode::UNAUTHORIZED)?
+        .claims;
+    if claims.exp < Utc::now().timestamp() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let revoked = is_token_revoked(&state.db_conn, token, &claims)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .is_some();
-
-    if is_blacklisted {
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if revoked {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
-    let token_data = verify_jwt(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    if token_data.claims.exp < Utc::now().timestamp() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    Ok(token_data.claims)
+    Ok(claims)
 }
 
 fn get_default_org(state: &AppState) -> Result<Uuid, StatusCode> {

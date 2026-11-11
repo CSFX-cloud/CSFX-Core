@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use entity::{invalid_jwt, key, user, user_ssh_keys, InvalidJwt, Key, User, UserSshKeys};
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
@@ -13,7 +13,7 @@ use crate::auth::{
     crypto::{
         decrypt_password, generate_salt, hash_password, verify_password, CryptoError, RsaKeyPair,
     },
-    jwt::create_jwt,
+    jwt::{create_jwt, TOKEN_LIFETIME_HOURS},
 };
 
 #[derive(Debug, Error)]
@@ -40,6 +40,12 @@ pub enum AuthError {
 }
 
 pub type AuthResult<T> = Result<T, AuthError>;
+
+pub const SESSION_CUTOFF_PREFIX: &str = "user-cutoff:";
+
+pub fn session_cutoff_token(user_id: Uuid, cutoff: i64) -> String {
+    format!("{SESSION_CUTOFF_PREFIX}{user_id}:{cutoff}")
+}
 
 #[derive(Clone)]
 pub struct AuthService {
@@ -186,8 +192,14 @@ impl AuthService {
     }
 
     // 2FA Methods
-    pub async fn generate_2fa_secret(&self, user_id: Uuid) -> AuthResult<(String, String)> {
+    pub async fn generate_2fa_secret(
+        &self,
+        user_id: Uuid,
+        encrypted_password: String,
+    ) -> AuthResult<(String, String)> {
         let user = self.get_user_by_id(user_id).await?;
+        self.verify_current_password(&user, &encrypted_password)
+            .await?;
 
         // Generate a new TOTP secret using raw bytes
         let secret_bytes: Vec<u8> = (0..20).map(|_| rand::random::<u8>()).collect();
@@ -276,21 +288,47 @@ impl AuthService {
     }
 
     // Password and Email Management
+    async fn verify_current_password(
+        &self,
+        user: &user::Model,
+        encrypted_password: &str,
+    ) -> AuthResult<()> {
+        if encrypted_password.is_empty() {
+            return Err(AuthError::InvalidCredentials);
+        }
+        let rsa_key = self.get_or_create_rsa_key("main").await?;
+        let password = decrypt_password(encrypted_password, &rsa_key.private_key)?;
+        if !verify_password(&password, &user.salt, &user.password)? {
+            return Err(AuthError::InvalidCredentials);
+        }
+        Ok(())
+    }
+
+    async fn revoke_user_sessions(&self, user_id: Uuid) -> AuthResult<()> {
+        let now = Utc::now();
+        let marker = invalid_jwt::ActiveModel {
+            id: ActiveValue::Set(Uuid::new_v4()),
+            token: ActiveValue::Set(session_cutoff_token(user_id, now.timestamp())),
+            exp: ActiveValue::Set((now + Duration::hours(TOKEN_LIFETIME_HOURS)).naive_utc()),
+        };
+        InvalidJwt::insert(marker)
+            .exec_without_returning(&self.db)
+            .await?;
+        Ok(())
+    }
+
     pub async fn change_password(
         &self,
         user_id: Uuid,
         old_encrypted_password: String,
         new_encrypted_password: String,
-    ) -> AuthResult<()> {
+    ) -> AuthResult<String> {
         let user = self.get_user_by_id(user_id).await?;
         let rsa_key = self.get_or_create_rsa_key("main").await?;
 
-        // Only verify old password if not forced password change
-        if !user.force_password_change && !old_encrypted_password.is_empty() {
-            let old_password = decrypt_password(&old_encrypted_password, &rsa_key.private_key)?;
-            if !verify_password(&old_password, &user.salt, &user.password)? {
-                return Err(AuthError::InvalidCredentials);
-            }
+        if !user.force_password_change {
+            self.verify_current_password(&user, &old_encrypted_password)
+                .await?;
         }
 
         // Hash new password with new salt
@@ -298,18 +336,26 @@ impl AuthService {
         let new_password = decrypt_password(&new_encrypted_password, &rsa_key.private_key)?;
         let hashed_password = hash_password(&new_password, &new_salt)?;
 
-        // Update password and remove force_password_change flag
+        let username = user.name.clone();
         let mut user_active: user::ActiveModel = user.into();
         user_active.password = Set(hashed_password);
         user_active.salt = Set(new_salt);
         user_active.force_password_change = Set(false);
         user_active.update(&self.db).await?;
 
-        Ok(())
+        self.revoke_user_sessions(user_id).await?;
+        Ok(create_jwt(user_id, username)?)
     }
 
-    pub async fn change_email(&self, user_id: Uuid, new_email: String) -> AuthResult<()> {
+    pub async fn change_email(
+        &self,
+        user_id: Uuid,
+        new_email: String,
+        encrypted_password: String,
+    ) -> AuthResult<()> {
         let user = self.get_user_by_id(user_id).await?;
+        self.verify_current_password(&user, &encrypted_password)
+            .await?;
 
         // Check if email is already in use
         if let Some(_existing) = User::find()

@@ -3,12 +3,10 @@ name: Pre-release Build
 on:
   workflow_dispatch:
     inputs:
-      channel:
-        description: "Channel"
+      version:
+        description: "Pre-release version (e.g. 1.2.3-alpha.1)"
         required: true
-        type: choice
-        options: [alpha, beta, rc]
-        default: alpha
+        type: string
 
 permissions:
   contents: write
@@ -22,15 +20,20 @@ jobs:
       version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
 
-      - name: Determine version
+      - name: Validate version
         id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          BASE=$(grep -m1 '^version' Cargo.toml | sed 's/[^"]*"\([^"]*\)".*/\1/')
-          COUNT=$(git rev-list --count HEAD)
-          echo "version=${BASE}-${{ inputs.channel }}.${COUNT}" >> $GITHUB_OUTPUT
+          VERSION="${INPUT_VERSION#v}"
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' || { echo "invalid version: $VERSION"; exit 1; }
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Validate release notes
+        uses: ./.github/actions/release-notes
+        with:
+          version: ${{ steps.v.outputs.version }}
 
   build-binaries:
     name: Build ${{ matrix.binary }} (${{ matrix.arch }})
@@ -149,6 +152,7 @@ jobs:
           - failover-controller
           - sdn-controller
           - object-storage
+          - site-builder
           - csfx-migrate
         arch:
           - amd64
@@ -216,11 +220,16 @@ jobs:
           pattern: csfx-*
           merge-multiple: true
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: release-notes
+
       - name: Create pre-release
         run: |
           VERSION="${{ needs.version.outputs.version }}"
           CP_BINS=""
-          for svc in api-gateway registry scheduler volume-manager failover-controller sdn-controller object-storage csfx-migrate; do
+          for svc in api-gateway registry scheduler volume-manager failover-controller sdn-controller object-storage site-builder csfx-migrate; do
             for arch in amd64 arm64; do
               CP_BINS="${CP_BINS} csfx-cp-${svc}-${arch} csfx-cp-${svc}-${arch}.sha256"
             done
@@ -229,7 +238,7 @@ jobs:
           gh release create "v${VERSION}" \
             --title "v${VERSION}" \
             --prerelease \
-            --generate-notes \
+            --notes-file release-notes/release-notes.md \
             csfx-updater-amd64 \
             csfx-updater-amd64.sha256 \
             csfx-updater-arm64 \
@@ -244,6 +253,7 @@ jobs:
             csfx-guest-init-arm64.sha256 \
             csfx-frontend.tar.gz \
             csfx-frontend.tar.gz.sha256 \
+            release-notes/* \
             ${CP_BINS}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -288,6 +298,11 @@ jobs:
         with:
           name: csfx-frontend
           path: /tmp/frontend
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: /tmp/release-notes
 
       - name: Write versions.nix
         run: |
@@ -422,6 +437,16 @@ jobs:
                     sha256 = "$(get_cp_sha256 csfx-cp-object-storage-arm64)";
                   };
                 };
+                site-builder = {
+                  amd64 = {
+                    url    = "${RELEASE_BASE}/csfx-cp-site-builder-amd64";
+                    sha256 = "$(get_cp_sha256 csfx-cp-site-builder-amd64)";
+                  };
+                  arm64 = {
+                    url    = "${RELEASE_BASE}/csfx-cp-site-builder-arm64";
+                    sha256 = "$(get_cp_sha256 csfx-cp-site-builder-arm64)";
+                  };
+                };
                 csfx-updater = {
                   amd64 = {
                     url    = "${RELEASE_BASE}/csfx-updater-amd64";
@@ -447,7 +472,10 @@ jobs:
           cd infra
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add versions.nix
+          mkdir -p release-notes
+          rm -f release-notes/*
+          cp /tmp/release-notes/* release-notes/
+          git add versions.nix release-notes
           git diff --cached --quiet && echo "no changes" && exit 0
           git commit -m "chore: update versions.nix for v${VERSION}"
           git push origin main

@@ -80,3 +80,33 @@ fn set_permissions_600(path: &str) -> Result<()> {
 fn set_permissions_600(_path: &str) -> Result<()> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_key_matches_rfc7748_vector() {
+        let private = B64.encode(hex_bytes(
+            "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a",
+        ));
+        let public = public_key_from_private(&private).unwrap();
+        let expected = B64.encode(hex_bytes(
+            "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+        ));
+        assert_eq!(public, expected);
+    }
+
+    #[test]
+    fn invalid_private_keys_are_rejected() {
+        assert!(public_key_from_private("!!!").is_err());
+        assert!(public_key_from_private(&B64.encode([0u8; 16])).is_err());
+    }
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+}

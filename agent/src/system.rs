@@ -243,3 +243,61 @@ pub fn collect_metrics() -> SystemMetrics {
         uptime_seconds: System::uptime(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn os_release_fields_are_unquoted() {
+        let content = "NAME=\"Debian GNU/Linux\"\nID=debian\nVERSION_ID=\"12\"\n";
+        assert_eq!(
+            parse_os_release_field(content, "ID").as_deref(),
+            Some("debian")
+        );
+        assert_eq!(
+            parse_os_release_field(content, "VERSION_ID").as_deref(),
+            Some("12")
+        );
+        assert!(parse_os_release_field(content, "BUILD_ID").is_none());
+    }
+
+    #[test]
+    fn simulator_stays_within_its_bounds() {
+        let mut simulator = LoadSimulator::new(8 * 1_073_741_824, 0);
+        let mut previous_rx = 0;
+        for _ in 0..200 {
+            let sample = simulator.sample();
+            assert_eq!(sample.cpu_cores, 1);
+            assert!((3.0..=95.0).contains(&sample.cpu_usage_percent));
+            assert!(sample.memory_used_bytes <= sample.memory_total_bytes);
+            assert!(sample.disk_used_bytes <= sample.disk_total_bytes);
+            assert!(sample.network_rx_bytes >= previous_rx);
+            previous_rx = sample.network_rx_bytes;
+        }
+    }
+
+    #[test]
+    fn real_metrics_describe_this_machine() {
+        let metrics = collect_metrics();
+        assert!(metrics.cpu_cores > 0);
+        assert!(metrics.memory_total_bytes >= metrics.memory_used_bytes);
+        let mut collector = LiveMetricsCollector::new();
+        let sample = collector.sample();
+        assert!(sample.memory_total_bytes > 0);
+        assert!(serde_json::to_string(&sample)
+            .unwrap()
+            .contains("uptime_seconds"));
+    }
+
+    #[test]
+    fn system_info_is_populated() {
+        let info = collect_info();
+        assert!(!info.hostname.is_empty());
+        assert!(!info.os_type.is_empty());
+        assert!(!info.os_version.is_empty());
+        assert_eq!(info.architecture, std::env::consts::ARCH);
+        assert!(info.machine_id.is_none_or(|id| !id.is_empty()));
+        let _ = is_kvm_capable();
+    }
+}

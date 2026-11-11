@@ -182,4 +182,40 @@ mod tests {
         assert_eq!(idle.vcpu_count(), 1);
         assert_eq!(idle.cpu_max(), "10000 100000");
     }
+
+    #[test]
+    fn host_addresses_are_offsets_from_the_network_address() {
+        assert_eq!(nth_host_ip("10.1.0.0/24", 3).as_deref(), Some("10.1.0.3"));
+        assert_eq!(second_host_ip("10.1.0.0/24").as_deref(), Some("10.1.0.2"));
+        assert_eq!(nth_host_ip("10.1.0.255/16", 1).as_deref(), Some("10.1.1.0"));
+        assert!(nth_host_ip("10.1.0.0", 1).is_none());
+        assert!(nth_host_ip("10.1.0/24", 1).is_none());
+    }
+
+    #[test]
+    fn host_count_follows_the_prefix_length() {
+        assert_eq!(cidr_host_count("10.0.0.0/24"), Some(256));
+        assert_eq!(cidr_host_count("10.0.0.0/32"), Some(1));
+        assert_eq!(cidr_host_count("10.0.0.0/33"), None);
+        assert_eq!(cidr_host_count("10.0.0.0"), None);
+        assert_eq!(cidr_host_count("10.0.0.0/x"), None);
+    }
+
+    #[test]
+    fn resource_group_names_are_deterministic() {
+        assert_eq!(rg_network_name("abc"), "csfx-rg-abc");
+        assert_eq!(rg_bridge_iface_name("abc"), rg_bridge_iface_name("abc"));
+        assert_ne!(rg_bridge_iface_name("abc"), rg_bridge_iface_name("abd"));
+        assert!(rg_bridge_iface_name("abc").starts_with("csfxrg"));
+        assert!(rg_bridge_iface_name("abc").len() <= 15);
+        let port = rg_wireguard_port("abc");
+        assert!((49152..65535).contains(&port));
+        assert_eq!(port, rg_wireguard_port("abc"));
+    }
+
+    #[test]
+    fn cpu_quota_percent_uses_the_limit() {
+        assert_eq!(spec(500, 2500, 1, 1).cpu_quota_percent(), 250);
+        assert_eq!(spec(500, 2500, 1, 1).cpu_quota_micros(), 250_000);
+    }
 }

@@ -1,5 +1,6 @@
 use entity::entities::{
-    agents, dns_records, ingress_gateways, ingress_routes, resource_groups, workloads,
+    agents, dns_records, ingress_gateways, ingress_routes, resource_groups, site_domains, sites,
+    workloads,
 };
 use etcd_client::{Client, GetOptions};
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
@@ -23,6 +24,13 @@ pub struct GatewayAddress {
 pub struct PlatformRecord {
     pub hostname: String,
     pub addresses: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteHost {
+    pub hostname: String,
+    pub gateway_id: Option<Uuid>,
+    pub edge_address: Option<String>,
 }
 
 pub fn platform_hostname(zone: &str) -> String {
@@ -86,6 +94,7 @@ pub fn desired_records(
     zone: &str,
     gateways: &[GatewayAddress],
     routes: &[ingress_routes::Model],
+    site_hosts: &[SiteHost],
     manual: &[dns_records::Model],
     platform: &PlatformRecord,
 ) -> BTreeMap<String, String> {
@@ -121,10 +130,32 @@ pub fn desired_records(
             record_value(&gateway.address, RECORD_TTL),
         );
     }
+    for host in site_hosts
+        .iter()
+        .filter(|host| in_zone(&host.hostname, zone))
+    {
+        let Some(address) = site_host_address(host, &by_id) else {
+            continue;
+        };
+        records.insert(
+            record_key(&host.hostname),
+            record_value(address, RECORD_TTL),
+        );
+    }
     if in_zone(&platform.hostname, zone) {
         records.extend(platform_records(platform));
     }
     records
+}
+
+fn site_host_address<'a>(
+    host: &'a SiteHost,
+    gateways: &HashMap<Uuid, &'a GatewayAddress>,
+) -> Option<&'a str> {
+    match host.gateway_id {
+        Some(id) => gateways.get(&id).map(|gateway| gateway.address.as_str()),
+        None => host.edge_address.as_deref(),
+    }
 }
 
 fn platform_records(platform: &PlatformRecord) -> Vec<(String, String)> {
@@ -277,6 +308,34 @@ async fn existing_records(
         .collect())
 }
 
+async fn load_site_hosts(db: &DatabaseConnection) -> Result<Vec<SiteHost>, DbErr> {
+    if crate::ingress_sync::site_edge_backend().is_none() {
+        return Ok(Vec::new());
+    }
+    let gateways: HashMap<Uuid, Option<Uuid>> = sites::Entity::find()
+        .filter(sites::Column::Mode.eq("static"))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|site| (site.id, site.gateway_id))
+        .collect();
+    let edge_address = crate::ingress_sync::site_edge_address();
+    Ok(site_domains::Entity::find()
+        .filter(site_domains::Column::SiteId.is_in(gateways.keys().copied().collect::<Vec<_>>()))
+        .all(db)
+        .await?
+        .into_iter()
+        .filter(|domain| domain.kind != "internal")
+        .filter_map(|domain| {
+            Some(SiteHost {
+                gateway_id: *gateways.get(&domain.site_id)?,
+                edge_address: edge_address.clone(),
+                hostname: domain.hostname,
+            })
+        })
+        .collect())
+}
+
 pub async fn reconcile_once(
     db: &DatabaseConnection,
     client: &mut Client,
@@ -284,12 +343,13 @@ pub async fn reconcile_once(
 ) -> anyhow::Result<EntryDiff> {
     let gateways = load_gateway_addresses(db, zone).await?;
     let routes = ingress_routes::Entity::find().all(db).await?;
+    let site_hosts = load_site_hosts(db).await?;
     let manual = dns_records::Entity::find().all(db).await?;
     let platform = PlatformRecord {
         hostname: platform_hostname(zone),
         addresses: load_platform_addresses(db).await?,
     };
-    let desired = desired_records(zone, &gateways, &routes, &manual, &platform);
+    let desired = desired_records(zone, &gateways, &routes, &site_hosts, &manual, &platform);
     let diff = diff_records(&existing_records(client, zone).await?, &desired);
     apply_diff(client, &diff).await?;
     Ok(diff)
@@ -329,6 +389,50 @@ mod tests {
     }
 
     #[test]
+    fn static_site_domains_resolve_to_their_gateway() {
+        let hosts = [
+            SiteHost {
+                hostname: "shop.csfx.internal".to_string(),
+                gateway_id: Some(Uuid::from_u128(1)),
+                edge_address: None,
+            },
+            SiteHost {
+                hostname: "shop.example.com".to_string(),
+                gateway_id: Some(Uuid::from_u128(1)),
+                edge_address: None,
+            },
+            SiteHost {
+                hostname: "orphan.csfx.internal".to_string(),
+                gateway_id: Some(Uuid::from_u128(9)),
+                edge_address: None,
+            },
+            SiteHost {
+                hostname: "direct.csfx.internal".to_string(),
+                gateway_id: None,
+                edge_address: Some("10.0.0.9".to_string()),
+            },
+        ];
+        let records = desired_records(
+            "csfx.internal",
+            &[gateway()],
+            &[],
+            &hosts,
+            &[],
+            &no_platform(),
+        );
+        assert_eq!(
+            records["/skydns/internal/csfx/shop/x1"],
+            r#"{"host":"10.0.0.5","ttl":30}"#
+        );
+        assert!(!records.contains_key("/skydns/internal/csfx/orphan/x1"));
+        assert!(!records.keys().any(|key| key.contains("example")));
+        assert_eq!(
+            records["/skydns/internal/csfx/direct/x1"],
+            r#"{"host":"10.0.0.9","ttl":30}"#
+        );
+    }
+
+    #[test]
     fn keys_reverse_labels_under_skydns_root() {
         assert_eq!(
             record_key("web.csfx.internal"),
@@ -353,7 +457,14 @@ mod tests {
             route("orphan.csfx.internal", None),
             route("lost.csfx.internal", Some(Uuid::from_u128(9))),
         ];
-        let records = desired_records("csfx.internal", &[gateway()], &routes, &[], &no_platform());
+        let records = desired_records(
+            "csfx.internal",
+            &[gateway()],
+            &routes,
+            &[],
+            &[],
+            &no_platform(),
+        );
         let keys: Vec<&str> = records.keys().map(String::as_str).collect();
         assert_eq!(
             keys,
@@ -383,6 +494,7 @@ mod tests {
             "csfx.internal",
             &[gateway()],
             &[],
+            &[],
             &[
                 manual("db.csfx.internal", "10.0.0.9"),
                 manual("gw.prod.csfx.internal", "10.9.9.9"),
@@ -411,7 +523,7 @@ mod tests {
                 "10.0.0.1".to_string(),
             ],
         };
-        let records = desired_records("csfx.internal", &[], &[], &[], &platform);
+        let records = desired_records("csfx.internal", &[], &[], &[], &[], &platform);
         assert_eq!(
             records["/skydns/internal/csfx/console/x1"],
             r#"{"host":"10.0.0.1","ttl":30}"#
@@ -429,7 +541,7 @@ mod tests {
             hostname: "console.example.com".to_string(),
             addresses: vec!["10.0.0.1".to_string()],
         };
-        assert!(desired_records("csfx.internal", &[], &[], &[], &platform).is_empty());
+        assert!(desired_records("csfx.internal", &[], &[], &[], &[], &platform).is_empty());
     }
 
     #[test]
@@ -448,5 +560,82 @@ mod tests {
             diff.puts,
             vec![("/skydns/internal/csfx/new/x1".to_string(), "c".to_string())]
         );
+    }
+
+    fn with_variables<T>(pairs: &[(&str, Option<&str>)], check: impl FnOnce() -> T) -> T {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<_> = pairs
+            .iter()
+            .map(|(name, _)| (*name, std::env::var(name).ok()))
+            .collect();
+        for (name, value) in pairs {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+        let result = check();
+        for (name, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn zone_defaults_and_normalizes_environment_values() {
+        with_variables(&[("CSFX_LOCAL_ZONE", None)], || {
+            assert_eq!(zone_from_env(), "csfx.internal");
+        });
+        with_variables(&[("CSFX_LOCAL_ZONE", Some("  .Example.Test. "))], || {
+            assert_eq!(zone_from_env(), "example.test");
+        });
+        with_variables(&[("CSFX_LOCAL_ZONE", Some("  "))], || {
+            assert_eq!(zone_from_env(), "csfx.internal");
+        });
+    }
+
+    #[test]
+    fn platform_hostname_defaults_to_the_console_of_the_zone() {
+        with_variables(&[("CSFX_PLATFORM_HOSTNAME", None)], || {
+            assert_eq!(platform_hostname("csfx.internal"), "console.csfx.internal");
+        });
+        with_variables(
+            &[("CSFX_PLATFORM_HOSTNAME", Some(" .Cloud.Example. "))],
+            || {
+                assert_eq!(platform_hostname("csfx.internal"), "cloud.example");
+            },
+        );
+        with_variables(&[("CSFX_PLATFORM_HOSTNAME", Some(""))], || {
+            assert_eq!(platform_hostname("z.test"), "console.z.test");
+        });
+    }
+
+    #[test]
+    fn dns_servers_are_split_trimmed_and_filtered() {
+        with_variables(&[("CSFX_LOCAL_DNS_ADDRESSES", None)], || {
+            assert!(servers_from_env().is_empty());
+        });
+        with_variables(
+            &[("CSFX_LOCAL_DNS_ADDRESSES", Some(" 10.0.0.1, ,10.0.0.2 ,"))],
+            || assert_eq!(servers_from_env(), vec!["10.0.0.1", "10.0.0.2"]),
+        );
+    }
+
+    #[test]
+    fn hostnames_belong_to_a_zone_only_below_a_dot_boundary() {
+        assert!(in_zone("a.csfx.internal", "csfx.internal"));
+        assert!(!in_zone("csfx.internal", "csfx.internal"));
+        assert!(!in_zone("acsfx.internal", "csfx.internal"));
+        assert!(!in_zone("a.other.test", "csfx.internal"));
+    }
+
+    #[test]
+    fn record_keys_reverse_the_label_order() {
+        assert_eq!(record_key("a.b.example"), "/skydns/example/b/a/x1");
+        assert_eq!(zone_prefix("csfx.internal"), "/skydns/internal/csfx/");
     }
 }

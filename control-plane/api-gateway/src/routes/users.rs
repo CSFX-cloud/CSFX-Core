@@ -327,6 +327,12 @@ pub struct ChangePasswordRequest {
 #[derive(Deserialize, ToSchema)]
 pub struct ChangeEmailRequest {
     pub new_email: String,
+    pub password: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct Setup2FARequest {
+    pub password: String,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -338,8 +344,10 @@ pub struct ChangeGravatarEmailRequest {
 #[utoipa::path(
     post,
     path = "/api/2fa/setup",
+    request_body = Setup2FARequest,
     responses(
         (status = 200, description = "2FA setup initiated", body = Setup2FAResponse),
+        (status = 401, description = "Invalid current password"),
         (status = 500, description = "Internal server error")
     ),
     security(
@@ -350,11 +358,16 @@ pub struct ChangeGravatarEmailRequest {
 pub async fn setup_2fa(
     AuthenticatedUser(claims): AuthenticatedUser,
     State(state): State<AppState>,
+    Json(payload): Json<Setup2FARequest>,
 ) -> Result<Json<Setup2FAResponse>, StatusCode> {
     let auth_service = AuthService::new(state.db_conn.clone());
 
-    match auth_service.generate_2fa_secret(claims.user_id).await {
+    match auth_service
+        .generate_2fa_secret(claims.user_id, payload.password)
+        .await
+    {
         Ok((secret, qr_code)) => Ok(Json(Setup2FAResponse { secret, qr_code })),
+        Err(crate::auth_service::AuthError::InvalidCredentials) => Err(StatusCode::UNAUTHORIZED),
         Err(err) => {
             tracing::error!("Failed to setup 2FA: {}", err);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -433,7 +446,7 @@ pub async fn disable_2fa(
     request_body = ChangePasswordRequest,
     responses(
         (status = 200, description = "Password changed successfully"),
-        (status = 400, description = "Invalid old password"),
+        (status = 401, description = "Invalid old password"),
         (status = 500, description = "Internal server error")
     ),
     security(
@@ -452,8 +465,10 @@ pub async fn change_password(
         .change_password(claims.user_id, payload.old_password, payload.new_password)
         .await
     {
-        Ok(_) => Ok(Json(json!({ "message": "Password changed successfully" }))),
-        Err(crate::auth_service::AuthError::InvalidCredentials) => Err(StatusCode::BAD_REQUEST),
+        Ok(token) => Ok(Json(
+            json!({ "message": "Password changed successfully", "token": token }),
+        )),
+        Err(crate::auth_service::AuthError::InvalidCredentials) => Err(StatusCode::UNAUTHORIZED),
         Err(err) => {
             tracing::error!("Failed to change password: {}", err);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -468,6 +483,7 @@ pub async fn change_password(
     request_body = ChangeEmailRequest,
     responses(
         (status = 200, description = "Email changed successfully"),
+        (status = 401, description = "Invalid current password"),
         (status = 409, description = "Email already in use"),
         (status = 500, description = "Internal server error")
     ),
@@ -484,10 +500,11 @@ pub async fn change_email(
     let auth_service = AuthService::new(state.db_conn.clone());
 
     match auth_service
-        .change_email(claims.user_id, payload.new_email)
+        .change_email(claims.user_id, payload.new_email, payload.password)
         .await
     {
         Ok(_) => Ok(Json(json!({ "message": "Email changed successfully" }))),
+        Err(crate::auth_service::AuthError::InvalidCredentials) => Err(StatusCode::UNAUTHORIZED),
         Err(crate::auth_service::AuthError::UserAlreadyExists) => Err(StatusCode::CONFLICT),
         Err(err) => {
             tracing::error!("Failed to change email: {}", err);

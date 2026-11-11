@@ -2,15 +2,7 @@ use shared::leader::LeaderLease;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-mod crypto;
-mod db;
-mod garage;
-mod handlers;
-mod logger;
-mod metrics;
-mod models;
-mod server;
-mod services;
+use object_storage::{crypto, garage, log_error, log_info, logger, metrics, server};
 
 const LAYOUT_LOCK_KEY: &str = "/csfx/object-storage/layout-lock";
 

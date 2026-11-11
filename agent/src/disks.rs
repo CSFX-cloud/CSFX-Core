@@ -206,3 +206,61 @@ fn parse_smart_json(json: &serde_json::Value) -> Option<SmartInfo> {
         reallocated_sectors,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn smart_json_is_summarised() {
+        let info = parse_smart_json(&json!({
+            "smart_status": {"passed": true},
+            "power_on_time": {"hours": 120},
+            "temperature": {"current": 38.5},
+            "ata_smart_attributes": {"table": [
+                {"id": 1, "raw": {"value": 9}},
+                {"id": 5, "raw": {"value": 4}}
+            ]}
+        }))
+        .unwrap();
+        assert_eq!(info.health, "healthy");
+        assert_eq!(info.power_on_hours, Some(120));
+        assert_eq!(info.temperature_celsius, Some(38.5));
+        assert_eq!(info.reallocated_sectors, Some(4));
+    }
+
+    #[test]
+    fn failing_and_unknown_smart_status() {
+        let failing = parse_smart_json(&json!({"smart_status": {"passed": false}})).unwrap();
+        assert_eq!(failing.health, "failing");
+        assert!(failing.power_on_hours.is_none());
+        assert!(failing.reallocated_sectors.is_none());
+        assert!(parse_smart_json(&json!({})).is_none());
+    }
+
+    #[test]
+    fn fake_disks_cover_each_health_state() {
+        let disks = fake_disks();
+        assert_eq!(disks.len(), 3);
+        assert!(disks
+            .iter()
+            .any(|d| d.smart.as_ref().is_some_and(|s| s.health == "failing")));
+        assert!(disks.iter().all(|d| d.used_bytes <= d.total_bytes));
+    }
+
+    #[test]
+    fn nvme_devices_are_detected_by_name() {
+        assert_eq!(detect_media_type("nvme0n1"), "nvme");
+        assert_eq!(detect_media_type("no-such-device"), "unknown");
+        assert!(read_sys_string("no-such-device", "size").is_none());
+        assert!(block_device_bytes("no-such-device").is_none());
+    }
+
+    #[tokio::test]
+    async fn smart_is_skipped_for_missing_devices() {
+        assert!(collect_smart("no-such-device").await.is_none());
+        let _ = list_block_devices();
+        let _ = collect_disks().await;
+    }
+}
