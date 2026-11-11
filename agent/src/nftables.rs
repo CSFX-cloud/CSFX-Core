@@ -7,6 +7,14 @@ const CHAIN_NAME: &str = "rg_isolation";
 const NAT_TABLE_NAME: &str = "csfx_nat";
 const NAT_CHAIN_NAME: &str = "node_port_dnat";
 const SNAT_CHAIN_NAME: &str = "node_port_snat";
+const MGMT_GUARD_CHAIN_NAME: &str = "guest_mgmt_guard";
+const GUEST_BRIDGE_PATTERN: &str = "csfxrg*";
+const MGMT_INTERFACE: &str = "wgmgmt0";
+const MGMT_MESH_CIDR: &str = "10.100.0.0/16";
+const MGMT_GUARD_SELECTORS: [&[&str]; 2] = [
+    &["oifname", MGMT_INTERFACE],
+    &["ip", "daddr", MGMT_MESH_CIDR],
+];
 
 pub async fn ensure_table_and_chain() -> Result<()> {
     run_nft(&["add", "table", "inet", TABLE_NAME]).await?;
@@ -26,6 +34,8 @@ pub async fn ensure_table_and_chain() -> Result<()> {
         chain = CHAIN_NAME,
         "nftables RG isolation chain ready"
     );
+
+    guard_management_mesh().await?;
 
     run_nft(&["add", "table", "ip", NAT_TABLE_NAME]).await?;
 
@@ -55,6 +65,39 @@ pub async fn ensure_table_and_chain() -> Result<()> {
         "nftables node port nat chains ready"
     );
 
+    Ok(())
+}
+
+async fn guard_management_mesh() -> Result<()> {
+    run_nft(&[
+        "add",
+        "chain",
+        "inet",
+        TABLE_NAME,
+        MGMT_GUARD_CHAIN_NAME,
+        "{ type filter hook forward priority -10 ; policy accept ; }",
+    ])
+    .await?;
+    run_nft(&["flush", "chain", "inet", TABLE_NAME, MGMT_GUARD_CHAIN_NAME]).await?;
+    for selector in MGMT_GUARD_SELECTORS {
+        let mut rule = vec![
+            "add",
+            "rule",
+            "inet",
+            TABLE_NAME,
+            MGMT_GUARD_CHAIN_NAME,
+            "iifname",
+            GUEST_BRIDGE_PATTERN,
+        ];
+        rule.extend_from_slice(selector);
+        rule.push("drop");
+        run_nft(&rule).await?;
+    }
+
+    info!(
+        chain = MGMT_GUARD_CHAIN_NAME,
+        "nftables management mesh guard ready"
+    );
     Ok(())
 }
 
@@ -361,12 +404,31 @@ mod tests {
         ensure_table_and_chain().await.unwrap();
 
         let calls = tools.calls("nft");
-        assert_eq!(calls.len(), 5);
+        assert_eq!(calls.len(), 9);
         assert_eq!(calls[0], "add table inet csfx");
         assert!(calls[1].starts_with("add chain inet csfx rg_isolation"));
-        assert_eq!(calls[2], "add table ip csfx_nat");
-        assert!(calls[3].contains("node_port_dnat"));
-        assert!(calls[4].contains("node_port_snat"));
+        assert!(calls[2].starts_with("add chain inet csfx guest_mgmt_guard"));
+        assert_eq!(calls[3], "flush chain inet csfx guest_mgmt_guard");
+        assert_eq!(calls[6], "add table ip csfx_nat");
+        assert!(calls[7].contains("node_port_dnat"));
+        assert!(calls[8].contains("node_port_snat"));
+    }
+
+    #[tokio::test]
+    async fn guests_are_blocked_from_the_management_mesh() {
+        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
+
+        ensure_table_and_chain().await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(
+            calls[4],
+            "add rule inet csfx guest_mgmt_guard iifname csfxrg* oifname wgmgmt0 drop"
+        );
+        assert_eq!(
+            calls[5],
+            "add rule inet csfx guest_mgmt_guard iifname csfxrg* ip daddr 10.100.0.0/16 drop"
+        );
     }
 
     #[tokio::test]
@@ -481,5 +543,134 @@ mod tests {
         )]);
 
         assert!(remove_node_port_rules("w-1").await.is_err());
+    }
+
+    mod lab {
+        use std::process::{Child, Command as Process, Stdio};
+
+        const SETUP: &[&str] = &[
+            "sysctl -qw net.ipv4.ip_forward=1",
+            "ip netns add csfxlab-guest",
+            "ip netns add csfxlab-peer",
+            "ip netns add csfxlab-other",
+            "ip link add csfxrglab0 type bridge",
+            "ip addr add 10.200.0.1/24 dev csfxrglab0",
+            "ip link set csfxrglab0 up",
+            "ip link add labg0 type veth peer name labg1",
+            "ip link set labg1 netns csfxlab-guest",
+            "ip link set labg0 master csfxrglab0",
+            "ip link set labg0 up",
+            "ip -n csfxlab-guest addr add 10.200.0.2/24 dev labg1",
+            "ip -n csfxlab-guest link set labg1 up",
+            "ip -n csfxlab-guest route add default via 10.200.0.1",
+            "ip link add csfxrglab1 type bridge",
+            "ip addr add 10.201.0.1/24 dev csfxrglab1",
+            "ip link set csfxrglab1 up",
+            "ip link add labo0 type veth peer name labo1",
+            "ip link set labo1 netns csfxlab-other",
+            "ip link set labo0 master csfxrglab1",
+            "ip link set labo0 up",
+            "ip -n csfxlab-other addr add 10.201.0.2/24 dev labo1",
+            "ip -n csfxlab-other link set labo1 up",
+            "ip -n csfxlab-other route add default via 10.201.0.1",
+            "ip link add wgmgmt0 type veth peer name labp1",
+            "ip link set labp1 netns csfxlab-peer",
+            "ip addr add 10.100.0.7/24 dev wgmgmt0",
+            "ip link set wgmgmt0 up",
+            "ip -n csfxlab-peer addr add 10.100.0.9/24 dev labp1",
+            "ip -n csfxlab-peer link set labp1 up",
+            "ip -n csfxlab-peer route add default via 10.100.0.7",
+        ];
+
+        const TEARDOWN: &[&str] = &[
+            "nft delete table inet csfx",
+            "nft delete table ip csfx_nat",
+            "ip netns del csfxlab-guest",
+            "ip netns del csfxlab-peer",
+            "ip netns del csfxlab-other",
+            "ip link del csfxrglab0",
+            "ip link del csfxrglab1",
+            "ip link del wgmgmt0",
+        ];
+
+        pub struct Lab {
+            listeners: Vec<Child>,
+        }
+
+        fn shell(command: &str) -> bool {
+            Process::new("sh")
+                .args(["-c", command])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        }
+
+        fn listen(namespace: &str, address: &str) -> Child {
+            Process::new("ip")
+                .args(["netns", "exec", namespace])
+                .args(["python3", "-m", "http.server", "8000", "--bind", address])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        }
+
+        impl Lab {
+            pub fn build() -> Self {
+                for command in SETUP {
+                    assert!(shell(command), "lab setup failed: {command}");
+                }
+                let listeners = vec![
+                    listen("csfxlab-peer", "10.100.0.9"),
+                    listen("csfxlab-other", "10.201.0.2"),
+                ];
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                Lab { listeners }
+            }
+
+            pub fn guest_reaches(&self, address: &str) -> bool {
+                let probe = format!(
+                    "ip netns exec csfxlab-guest python3 -c \
+                     \"import socket; socket.create_connection(('{address}', 8000), 2)\""
+                );
+                shell(&probe)
+            }
+        }
+
+        impl Drop for Lab {
+            fn drop(&mut self) {
+                for listener in &mut self.listeners {
+                    let _ = listener.kill();
+                }
+                for command in TEARDOWN {
+                    shell(command);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn isolation_holds_in_a_network_namespace_lab() {
+        if std::env::var("CSFX_ISOLATION_TEST").is_err() {
+            return;
+        }
+        let lab = lab::Lab::build();
+        ensure_table_and_chain().await.unwrap();
+        masquerade_bridge_traffic("csfxrglab0").await.unwrap();
+
+        run_nft(&["flush", "chain", "inet", TABLE_NAME, MGMT_GUARD_CHAIN_NAME])
+            .await
+            .unwrap();
+        assert!(lab.guest_reaches("10.100.0.9"));
+        assert!(lab.guest_reaches("10.201.0.2"));
+
+        ensure_table_and_chain().await.unwrap();
+        isolate_bridge("csfxrglab0", &["csfxrglab1".to_string()])
+            .await
+            .unwrap();
+        assert!(!lab.guest_reaches("10.100.0.9"));
+        assert!(!lab.guest_reaches("10.201.0.2"));
     }
 }
