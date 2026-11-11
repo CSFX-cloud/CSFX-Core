@@ -143,6 +143,22 @@ pub async fn ensure_not_last_admin(
     }
 }
 
+pub async fn ensure_user_manageable(
+    db: &impl sea_orm::ConnectionTrait,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    target_user_id: Uuid,
+) -> Result<(), GrantError> {
+    if actor_id == target_user_id {
+        return Ok(());
+    }
+    let target = membership(db, target_user_id, organization_id)
+        .await?
+        .ok_or(GrantError::NotMember)?;
+    let held_by_target = role_permission_ids(db, target.role_id).await?;
+    ensure_permissions_held(db, actor_id, organization_id, &held_by_target).await
+}
+
 pub async fn ensure_role_change_allowed(
     db: &impl sea_orm::ConnectionTrait,
     actor_id: Uuid,

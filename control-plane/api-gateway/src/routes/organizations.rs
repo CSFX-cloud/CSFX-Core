@@ -11,7 +11,10 @@ use uuid::Uuid;
 use crate::{
     auth::middleware::AuthenticatedUser,
     rbac_service::RbacService,
-    role_grants::{ensure_not_last_admin, ensure_role_change_allowed, ensure_role_grantable},
+    role_grants::{
+        ensure_not_last_admin, ensure_role_change_allowed, ensure_role_grantable,
+        ensure_user_manageable,
+    },
     AppState,
 };
 
@@ -436,6 +439,23 @@ async fn update_user(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    ensure_user_manageable(db, claims.user_id, org.id, user_id)
+        .await
+        .map_err(|error| error.status())?;
+
+    if let Some(email) = &req.email {
+        let taken = User::find()
+            .filter(user::Column::Email.eq(email))
+            .filter(user::Column::Id.ne(user_id))
+            .one(db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .is_some();
+        if taken {
+            return Err(StatusCode::CONFLICT);
+        }
+    }
 
     // Update user
     let mut active: user::ActiveModel = user.into();
