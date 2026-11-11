@@ -163,3 +163,184 @@ async fn unknown_users_are_not_found() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn role_changes_cannot_escalate_privileges() {
+    use axum::http::Method;
+
+    let harness = harness().await;
+    let (actor_id, actor) = harness
+        .token_with_permissions(&["users.update", "users.create", "agents.view"])
+        .await;
+    let (target_id, _, _) = harness.user_with_token().await;
+    let admin_role = harness.admin_role().await;
+    let viewer_role = harness.role_with_permissions(&["agents.view"]).await;
+    let role_uri = |id| format!("/api/organization/users/{}/role", id);
+
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &role_uri(actor_id),
+            Some(&actor),
+            Some(json!({"role_id": admin_role})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &role_uri(target_id),
+            Some(&actor),
+            Some(json!({"role_id": viewer_role})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (limited_id, _) = harness.token_with_permissions(&[]).await;
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &role_uri(limited_id),
+            Some(&actor),
+            Some(json!({"role_id": admin_role})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &role_uri(limited_id),
+            Some(&actor),
+            Some(json!({"role_id": viewer_role})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn users_cannot_be_created_with_unheld_or_foreign_roles() {
+    use axum::http::Method;
+
+    let harness = harness().await;
+    let (_, actor) = harness
+        .token_with_permissions(&["users.create", "agents.view"])
+        .await;
+    let admin_role = harness.admin_role().await;
+    let viewer_role = harness.role_with_permissions(&["agents.view"]).await;
+    let create = |role_id: uuid::Uuid, name: &str| {
+        json!({
+            "username": name,
+            "email": null,
+            "password": "Passw0rd!Passw0rd",
+            "role_id": role_id,
+            "force_password_change": false
+        })
+    };
+
+    for (role_id, name, expected) in [
+        (admin_role, "escalated", StatusCode::FORBIDDEN),
+        (uuid::Uuid::new_v4(), "foreign", StatusCode::NOT_FOUND),
+    ] {
+        let (status, _) = harness
+            .send(
+                Method::POST,
+                "/api/organization/users",
+                Some(&actor),
+                Some(create(role_id, name)),
+            )
+            .await;
+        assert_eq!(status, expected, "{name}");
+    }
+
+    let (status, _) = harness
+        .send(
+            Method::POST,
+            "/api/organization/users",
+            Some(&actor),
+            Some(create(viewer_role, "delegated")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn roles_cannot_carry_permissions_the_author_lacks() {
+    use axum::http::Method;
+
+    let harness = harness().await;
+    let (_, actor) = harness
+        .token_with_permissions(&["roles.manage", "agents.view"])
+        .await;
+    let held = harness.permission_id("agents.view").await;
+    let unheld = harness.permission_id("users.delete").await;
+
+    let (status, _) = harness
+        .send(
+            Method::POST,
+            "/api/roles",
+            Some(&actor),
+            Some(json!({"name": "greedy", "description": null, "permission_ids": [held, unheld]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = harness
+        .send(
+            Method::POST,
+            "/api/roles",
+            Some(&actor),
+            Some(json!({"name": "modest", "description": null, "permission_ids": [held]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn the_last_admin_of_an_organization_is_protected() {
+    use api_gateway::role_grants::{ensure_not_last_admin, GrantError};
+    use sea_orm::{ActiveModelTrait, Set};
+
+    let harness = harness().await;
+    let now = chrono::Utc::now().naive_utc();
+    let org_id = uuid::Uuid::new_v4();
+    entity::organization::ActiveModel {
+        id: Set(org_id),
+        name: Set(format!("org-{}", org_id.simple())),
+        description: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&harness.db)
+    .await
+    .unwrap();
+    let admin_role = crate::common::create_role(&harness.db, org_id).await;
+    entity::role::ActiveModel {
+        id: Set(admin_role),
+        name: Set("Admin".to_string()),
+        description: Set(None),
+        organization_id: Set(org_id),
+        is_system_role: Set(true),
+        created_at: Set(now),
+    }
+    .update(&harness.db)
+    .await
+    .unwrap();
+
+    let (first, _) = crate::common::create_user(&harness.db, org_id, admin_role).await;
+    let result = ensure_not_last_admin(&harness.db, org_id, first).await;
+    assert!(matches!(result, Err(GrantError::LastAdmin)));
+
+    let (second, _) = crate::common::create_user(&harness.db, org_id, admin_role).await;
+    assert!(ensure_not_last_admin(&harness.db, org_id, first)
+        .await
+        .is_ok());
+    assert!(ensure_not_last_admin(&harness.db, org_id, second)
+        .await
+        .is_ok());
+}
