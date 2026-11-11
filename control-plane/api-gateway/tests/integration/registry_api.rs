@@ -27,6 +27,8 @@ const ADMIN_CASES: [(&str, &str, &str); 12] = [
     ),
 ];
 
+const VIEWER_ALLOWED: [&str; 3] = ["/agents", "/statistics", "/agents/{id}/endpoint"];
+
 const AGENT_CASES: [(&str, &str, &str); 5] = [
     ("POST", "/agents/register", "/agents/register"),
     ("POST", "/agents/{id}/heartbeat", "/agents/{id}/heartbeat"),
@@ -65,6 +67,64 @@ async fn admin_routes_require_authentication_and_forward() {
         assert_eq!(status, StatusCode::OK, "{}", uri);
         assert_eq!(echoed["path"], resolve(backend, id), "{}", uri);
         assert_eq!(echoed["method"], method.as_str(), "{}", uri);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn admin_routes_reject_users_without_permission() {
+    let harness = harness().await;
+    let limited = harness.limited_token().await;
+    let id = Uuid::new_v4();
+
+    for (method, path, _) in ADMIN_CASES {
+        let method: Method = method.parse().unwrap();
+        let uri = format!("/api/registry/admin{}", resolve(path, id));
+        let body = Some(json!({"name": "node", "hostname": "node.test"}));
+
+        let (status, _) = harness.send(method, &uri, Some(&limited), body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{}", uri);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn viewers_can_read_inventory_but_not_manage_the_registry() {
+    let harness = harness().await;
+    let viewer = harness.viewer_token().await;
+    let id = Uuid::new_v4();
+
+    for (method, path, _) in ADMIN_CASES {
+        let method: Method = method.parse().unwrap();
+        let uri = format!("/api/registry/admin{}", resolve(path, id));
+        let body = Some(json!({"name": "node", "hostname": "node.test"}));
+        let expected = if method == Method::GET && VIEWER_ALLOWED.contains(&path) {
+            StatusCode::OK
+        } else {
+            StatusCode::FORBIDDEN
+        };
+
+        let (status, _) = harness.send(method, &uri, Some(&viewer), body).await;
+        assert_eq!(status, expected, "{}", uri);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn viewers_cannot_change_event_state() {
+    let harness = harness().await;
+    let viewer = harness.viewer_token().await;
+    let id = Uuid::new_v4();
+
+    for (method, uri) in [
+        (Method::POST, format!("/api/events/{id}/resolve")),
+        (Method::POST, format!("/api/agents/{id}/maintenance")),
+        (Method::DELETE, format!("/api/agents/{id}/maintenance")),
+    ] {
+        let (status, _) = harness
+            .send(method, &uri, Some(&viewer), Some(json!({"until": null})))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{}", uri);
     }
 }
 
