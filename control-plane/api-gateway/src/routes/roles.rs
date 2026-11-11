@@ -18,7 +18,12 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::{auth::rbac::CanManageRoles, rbac_service::RbacService, AppState};
+use crate::{
+    auth::rbac::CanManageRoles,
+    rbac_service::RbacService,
+    role_grants::{ensure_permissions_held, GrantError},
+    AppState,
+};
 
 type ApiError = (StatusCode, Json<Value>);
 
@@ -182,6 +187,7 @@ async fn create_role(
 ) -> Result<(StatusCode, Json<RoleDetail>), ApiError> {
     let organization_id = organization_id(&state)?;
     let payload = validated_payload(&state.db_conn, payload).await?;
+    ensure_grantable_permissions(&state, claims.user_id, organization_id, &payload).await?;
     ensure_unique_name(&state.db_conn, organization_id, &payload.name, None).await?;
     let rbac = RbacService::new(state.db_conn.clone());
     let created = rbac
@@ -196,6 +202,22 @@ async fn create_role(
         StatusCode::CREATED,
         Json(detail(created, payload.permission_ids)),
     ))
+}
+
+fn grant_failure(cause: GrantError) -> ApiError {
+    error(cause.status(), cause.message())
+}
+
+async fn ensure_grantable_permissions(
+    state: &AppState,
+    actor_id: Uuid,
+    organization_id: Uuid,
+    payload: &RolePayload,
+) -> Result<(), ApiError> {
+    let wanted: HashSet<Uuid> = payload.permission_ids.iter().copied().collect();
+    ensure_permissions_held(&state.db_conn, actor_id, organization_id, &wanted)
+        .await
+        .map_err(grant_failure)
 }
 
 fn internal_rbac(cause: String) -> ApiError {
@@ -228,6 +250,7 @@ async fn update_role(
         ));
     }
     let payload = validated_payload(&state.db_conn, payload).await?;
+    ensure_grantable_permissions(&state, claims.user_id, organization_id, &payload).await?;
     ensure_unique_name(&state.db_conn, organization_id, &payload.name, Some(id)).await?;
     let mut active: role::ActiveModel = existing.into();
     active.name = Set(payload.name);

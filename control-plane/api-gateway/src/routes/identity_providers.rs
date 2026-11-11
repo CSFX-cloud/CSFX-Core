@@ -7,8 +7,8 @@ use axum::{
 };
 use chrono::Utc;
 use entity::{
-    identity_providers, idp_group_mappings, role, user_identities, IdentityProviders,
-    IdpGroupMappings, Role, UserIdentities,
+    identity_providers, idp_group_mappings, user_identities, IdentityProviders, IdpGroupMappings,
+    UserIdentities,
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
@@ -16,6 +16,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use uuid::Uuid;
 
@@ -23,6 +24,7 @@ use crate::{
     auth::rbac::CanManageIdentityProviders,
     auth_service::AuthService,
     oidc::{client, public_origin, redirect_uri, secrets},
+    role_grants::{ensure_role_grantable, GrantError},
     AppState,
 };
 
@@ -192,25 +194,32 @@ fn secure_issuer(url: &str) -> bool {
         .is_some_and(is_local_address)
 }
 
-async fn ensure_role_in_organization(
+async fn ensure_role_assignable(
     db: &DatabaseConnection,
-    role_id: Uuid,
+    actor_id: Uuid,
     organization_id: Uuid,
+    role_id: Uuid,
+    already_assigned: &HashSet<Uuid>,
 ) -> Result<(), ApiError> {
-    let found = Role::find_by_id(role_id)
-        .filter(role::Column::OrganizationId.eq(organization_id))
-        .one(db)
-        .await
-        .map_err(internal("failed to load role"))?;
-    found
-        .map(|_| ())
-        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "role not found in organization"))
+    if already_assigned.contains(&role_id) {
+        return Ok(());
+    }
+    match ensure_role_grantable(db, actor_id, organization_id, role_id).await {
+        Ok(_) => Ok(()),
+        Err(GrantError::UnknownRole) => Err(error(
+            StatusCode::BAD_REQUEST,
+            "role not found in organization",
+        )),
+        Err(other) => Err(error(other.status(), other.message())),
+    }
 }
 
 async fn validate_payload(
     db: &DatabaseConnection,
+    actor_id: Uuid,
     payload: &ProviderPayload,
     organization_id: Uuid,
+    already_assigned: &HashSet<Uuid>,
 ) -> Result<(), ApiError> {
     if payload.display_name.trim().is_empty() || payload.client_id.trim().is_empty() {
         return Err(error(
@@ -225,7 +234,9 @@ async fn validate_payload(
         ));
     }
     match payload.default_role_id {
-        Some(role_id) => ensure_role_in_organization(db, role_id, organization_id).await,
+        Some(role_id) => {
+            ensure_role_assignable(db, actor_id, organization_id, role_id, already_assigned).await
+        }
         None => Ok(()),
     }
 }
@@ -290,7 +301,14 @@ async fn create(
 ) -> Result<(StatusCode, Json<ProviderResponse>), ApiError> {
     let organization_id = organization_id(&state)?;
     let payload = request.payload;
-    validate_payload(&state.db_conn, &payload, organization_id).await?;
+    validate_payload(
+        &state.db_conn,
+        claims.user_id,
+        &payload,
+        organization_id,
+        &HashSet::new(),
+    )
+    .await?;
     if !valid_slug(&request.slug) {
         return Err(error(
             StatusCode::BAD_REQUEST,
@@ -340,7 +358,15 @@ async fn update(
     Json(payload): Json<ProviderPayload>,
 ) -> Result<Json<ProviderResponse>, ApiError> {
     let existing = load_provider(&state.db_conn, id).await?;
-    validate_payload(&state.db_conn, &payload, existing.organization_id).await?;
+    let current_roles: HashSet<Uuid> = existing.default_role_id.into_iter().collect();
+    validate_payload(
+        &state.db_conn,
+        claims.user_id,
+        &payload,
+        existing.organization_id,
+        &current_roles,
+    )
+    .await?;
     let mut active: identity_providers::ActiveModel = existing.into();
     active.display_name = Set(payload.display_name);
     active.issuer_url = Set(payload.issuer_url);
@@ -464,9 +490,23 @@ async fn replace_mappings(
     Json(mappings): Json<Vec<MappingPayload>>,
 ) -> Result<StatusCode, ApiError> {
     let provider = load_provider(&state.db_conn, id).await?;
+    let current_roles: HashSet<Uuid> = IdpGroupMappings::find()
+        .filter(idp_group_mappings::Column::ProviderId.eq(id))
+        .all(&state.db_conn)
+        .await
+        .map_err(internal("failed to load group mappings"))?
+        .into_iter()
+        .map(|mapping| mapping.role_id)
+        .collect();
     for mapping in &mappings {
-        ensure_role_in_organization(&state.db_conn, mapping.role_id, provider.organization_id)
-            .await?;
+        ensure_role_assignable(
+            &state.db_conn,
+            claims.user_id,
+            provider.organization_id,
+            mapping.role_id,
+            &current_roles,
+        )
+        .await?;
     }
     let rows: Vec<idp_group_mappings::ActiveModel> = mappings
         .into_iter()

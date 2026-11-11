@@ -288,6 +288,37 @@ impl Harness {
         create_jwt(id, name).unwrap()
     }
 
+    pub async fn token_with_permissions(&self, names: &[&str]) -> (Uuid, String) {
+        let role_id = create_role(&self.db, self.org_id).await;
+        for name in names {
+            grant_permission(&self.db, role_id, name).await;
+        }
+        let (id, name) = create_user(&self.db, self.org_id, role_id).await;
+        (id, create_jwt(id, name).unwrap())
+    }
+
+    pub async fn admin_role(&self) -> Uuid {
+        admin_role_id(&self.db, self.org_id).await
+    }
+
+    pub async fn role_with_permissions(&self, names: &[&str]) -> Uuid {
+        let role_id = create_role(&self.db, self.org_id).await;
+        for name in names {
+            grant_permission(&self.db, role_id, name).await;
+        }
+        role_id
+    }
+
+    pub async fn permission_id(&self, name: &str) -> Uuid {
+        entity::Permission::find()
+            .filter(entity::permission::Column::Name.eq(name))
+            .one(&self.db)
+            .await
+            .unwrap()
+            .expect("permission must be seeded")
+            .id
+    }
+
     pub async fn encrypted(&self, password: &str) -> String {
         let (_, body) = self.send(Method::GET, "/api/public-key", None, None).await;
         encrypt_password(body["public_key"].as_str().unwrap(), password)

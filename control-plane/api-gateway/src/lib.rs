@@ -19,6 +19,7 @@ pub mod openbao;
 pub mod prune;
 pub mod rbac_service;
 pub mod recovery;
+pub mod role_grants;
 pub mod routes;
 pub mod service_client;
 pub mod setup;

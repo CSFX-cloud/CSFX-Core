@@ -8,7 +8,15 @@ use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilt
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{auth::middleware::AuthenticatedUser, rbac_service::RbacService, AppState};
+use crate::{
+    auth::middleware::AuthenticatedUser,
+    rbac_service::RbacService,
+    role_grants::{
+        ensure_not_last_admin, ensure_role_change_allowed, ensure_role_grantable,
+        ensure_user_manageable,
+    },
+    AppState,
+};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -342,6 +350,10 @@ async fn create_user(
         return Err(StatusCode::FORBIDDEN);
     }
 
+    ensure_role_grantable(db, claims.user_id, org.id, req.role_id)
+        .await
+        .map_err(|error| error.status())?;
+
     // Create user directly (not via AuthService as we need more control)
     let user_id = Uuid::new_v4();
 
@@ -428,6 +440,23 @@ async fn update_user(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    ensure_user_manageable(db, claims.user_id, org.id, user_id)
+        .await
+        .map_err(|error| error.status())?;
+
+    if let Some(email) = &req.email {
+        let taken = User::find()
+            .filter(user::Column::Email.eq(email))
+            .filter(user::Column::Id.ne(user_id))
+            .one(db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .is_some();
+        if taken {
+            return Err(StatusCode::CONFLICT);
+        }
+    }
+
     // Update user
     let mut active: user::ActiveModel = user.into();
     if let Some(email) = req.email {
@@ -503,6 +532,10 @@ async fn delete_user(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    ensure_not_last_admin(db, org.id, user_id)
+        .await
+        .map_err(|error| error.status())?;
+
     // Remove user from organization
     rbac.remove_user_from_organization(user_id, org.id)
         .await
@@ -542,6 +575,10 @@ async fn update_user_role(
     if !has_perm {
         return Err(StatusCode::FORBIDDEN);
     }
+
+    ensure_role_change_allowed(db, claims.user_id, org.id, user_id, req.role_id)
+        .await
+        .map_err(|error| error.status())?;
 
     // Update user's role
     rbac.assign_role_to_user(user_id, org.id, req.role_id)
