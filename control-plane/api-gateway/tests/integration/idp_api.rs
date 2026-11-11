@@ -477,3 +477,50 @@ async fn provider_admin_routes_require_permission() {
         );
     }
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn identity_provider_roles_cannot_exceed_the_managers_permissions() {
+    let harness = full_harness().await;
+    let (_, actor) = harness
+        .token_with_permissions(&["idp.manage", "agents.view"])
+        .await;
+    let admin_role = harness.admin_role().await;
+    let viewer_role = harness.role_with_permissions(&["agents.view"]).await;
+
+    let (status, _) = harness
+        .send(
+            Method::POST,
+            "/api/identity-providers",
+            Some(&actor),
+            Some(provider_body(&slug(), Some(admin_role))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, created) = harness
+        .send(
+            Method::POST,
+            "/api/identity-providers",
+            Some(&actor),
+            Some(provider_body(&slug(), Some(viewer_role))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let uri = format!(
+        "/api/identity-providers/{}/group-mappings",
+        created["id"].as_str().unwrap()
+    );
+
+    let escalating = json!([{"external_group": "ops", "role_id": admin_role, "priority": 1}]);
+    let (status, _) = harness
+        .send(Method::PUT, &uri, Some(&actor), Some(escalating))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let allowed = json!([{"external_group": "ops", "role_id": viewer_role, "priority": 1}]);
+    let (status, _) = harness
+        .send(Method::PUT, &uri, Some(&actor), Some(allowed))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}

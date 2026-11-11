@@ -344,3 +344,47 @@ async fn the_last_admin_of_an_organization_is_protected() {
         .await
         .is_ok());
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn user_details_cannot_be_changed_for_more_privileged_users() {
+    use axum::http::Method;
+
+    let harness = harness().await;
+    let (_, actor) = harness.token_with_permissions(&["users.update"]).await;
+    let (admin_id, _, _) = harness.user_with_token().await;
+    let (peer_id, _) = harness.token_with_permissions(&[]).await;
+    let uri = |id| format!("/api/organization/users/{}", id);
+    let email = format!("{}@csfx.test", uuid::Uuid::new_v4().simple());
+
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &uri(admin_id),
+            Some(&actor),
+            Some(json!({"force_password_change": true})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &uri(peer_id),
+            Some(&actor),
+            Some(json!({"email": email})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (other_id, _) = harness.token_with_permissions(&[]).await;
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &uri(other_id),
+            Some(&actor),
+            Some(json!({"email": email})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
