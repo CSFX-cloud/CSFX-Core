@@ -10,9 +10,7 @@ fn token_issued_at(user_id: uuid::Uuid, name: &str, issued_at: i64) -> String {
     jsonwebtoken::encode(
         &jsonwebtoken::Header::default(),
         &claims,
-        &jsonwebtoken::EncodingKey::from_secret(
-            api_gateway::auth::jwt::get_jwt_secret().as_ref(),
-        ),
+        &jsonwebtoken::EncodingKey::from_secret(api_gateway::auth::jwt::get_jwt_secret().as_ref()),
     )
     .unwrap()
 }
