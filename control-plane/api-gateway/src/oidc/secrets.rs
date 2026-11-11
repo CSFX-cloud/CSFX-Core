@@ -19,7 +19,8 @@ pub enum SecretError {
 }
 
 fn cipher() -> Aes256Gcm {
-    let material = std::env::var("CSFX_SECRET_KEY").unwrap_or_else(|_| get_jwt_secret());
+    let material =
+        std::env::var("CSFX_SECRET_KEY").unwrap_or_else(|_| get_jwt_secret().to_string());
     let digest = Sha256::digest(format!("csfx-secret-store:{material}").as_bytes());
     Aes256Gcm::new_from_slice(&digest).expect("sha256 digest is a valid aes-256 key")
 }
