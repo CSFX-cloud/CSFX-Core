@@ -53,6 +53,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_tamper_detection() {
+        std::env::set_var("CSFX_SECRET_KEY", "unit-test-secret-key-0123456789abcdef");
         let encoded = encrypt("client-secret").unwrap();
         assert_eq!(decrypt(&encoded).unwrap(), "client-secret");
         let mut payload = STANDARD.decode(&encoded).unwrap();
