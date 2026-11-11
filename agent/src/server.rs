@@ -39,6 +39,17 @@ pub struct ServerState {
 }
 
 pub async fn run(state: ServerState, port: u16) -> Result<()> {
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .context("Failed to bind agent inbound server")?;
+
+    info!(port = port, "csfx-agent inbound server listening");
+
+    serve(state, listener).await
+}
+
+async fn serve(state: ServerState, listener: tokio::net::TcpListener) -> Result<()> {
     let app = Router::new()
         .route("/logs/{workload_id}", get(logs_handler))
         .route("/exec/{workload_id}", get(exec_handler))
@@ -51,13 +62,6 @@ pub async fn run(state: ServerState, port: u16) -> Result<()> {
             get(ingress_config_handler),
         )
         .with_state(state);
-
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .context("Failed to bind agent inbound server")?;
-
-    info!(port = port, "csfx-agent inbound server listening");
 
     axum::serve(
         listener,
@@ -559,18 +563,9 @@ mod tests {
     }
 
     async fn start_server() -> String {
-        let port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap().port()
-        };
-        tokio::spawn(run(state(), port));
-        let base = format!("127.0.0.1:{port}");
-        for _ in 0..100 {
-            if tokio::net::TcpStream::connect(&base).await.is_ok() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = listener.local_addr().unwrap().to_string();
+        tokio::spawn(serve(state(), listener));
         base
     }
 
