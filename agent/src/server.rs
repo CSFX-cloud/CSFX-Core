@@ -39,6 +39,17 @@ pub struct ServerState {
 }
 
 pub async fn run(state: ServerState, port: u16) -> Result<()> {
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .context("Failed to bind agent inbound server")?;
+
+    info!(port = port, "csfx-agent inbound server listening");
+
+    serve(state, listener).await
+}
+
+async fn serve(state: ServerState, listener: tokio::net::TcpListener) -> Result<()> {
     let app = Router::new()
         .route("/logs/{workload_id}", get(logs_handler))
         .route("/exec/{workload_id}", get(exec_handler))
@@ -51,13 +62,6 @@ pub async fn run(state: ServerState, port: u16) -> Result<()> {
             get(ingress_config_handler),
         )
         .with_state(state);
-
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .context("Failed to bind agent inbound server")?;
-
-    info!(port = port, "csfx-agent inbound server listening");
 
     axum::serve(
         listener,
@@ -521,4 +525,178 @@ async fn power_handler(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rg_dns::RgDnsRegistry;
+
+    fn state() -> ServerState {
+        crate::client::install_test_crypto_provider();
+        let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
+        let registry = Arc::new(RgDnsRegistry::new());
+        ServerState {
+            firecracker: Arc::new(crate::firecracker::runtime::FirecrackerRuntime::new(
+                "key".to_string(),
+                registry.clone(),
+                None,
+            )),
+            qemu: Arc::new(crate::qemu::runtime::QemuRuntime::new(
+                "key".to_string(),
+                registry,
+            )),
+            running_containers: Arc::new(Mutex::new(HashMap::new())),
+            agent_id: uuid::Uuid::new_v4(),
+            api_client: Arc::new(
+                crate::client::ApiClient::new(
+                    "http://127.0.0.1:1".to_string(),
+                    "pub".to_string(),
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap(),
+            ),
+            api_key: "key".to_string(),
+        }
+    }
+
+    async fn start_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = listener.local_addr().unwrap().to_string();
+        tokio::spawn(serve(state(), listener));
+        base
+    }
+
+    #[test]
+    fn private_and_loopback_sources_are_internal() {
+        let internal = [
+            "127.0.0.1:1",
+            "10.1.2.3:1",
+            "172.16.0.1:1",
+            "172.31.9.9:1",
+            "192.168.1.1:1",
+            "[::1]:1",
+        ];
+        for addr in internal {
+            assert!(is_internal_source(&addr.parse().unwrap()), "{addr}");
+        }
+        let external = [
+            "8.8.8.8:1",
+            "172.32.0.1:1",
+            "172.15.0.1:1",
+            "[2001:db8::1]:1",
+        ];
+        for addr in external {
+            assert!(!is_internal_source(&addr.parse().unwrap()), "{addr}");
+        }
+    }
+
+    #[test]
+    fn claims_are_parsed_from_dotted_payloads() {
+        let claims = parse_claims(b"agent.workload.123").unwrap();
+        assert_eq!(claims.agent_id, "agent");
+        assert_eq!(claims.workload_id, "workload");
+        assert_eq!(claims.expires_at, 123);
+        assert!(parse_claims(b"agent").is_err());
+        assert!(parse_claims(b"agent.workload").is_err());
+        assert!(parse_claims(b"agent.workload.soon").is_err());
+        assert!(parse_claims(&[0xff, 0xfe]).is_err());
+    }
+
+    #[test]
+    fn ca_public_key_is_extracted_from_pem() {
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = rcgen::CertificateParams::default()
+            .self_signed(&key)
+            .unwrap();
+        let public = extract_ca_public_key(&cert.pem()).unwrap();
+        assert_eq!(public.len(), 65);
+        assert!(extract_ca_public_key("not pem").is_err());
+    }
+
+    #[test]
+    fn tickets_without_a_valid_shape_are_rejected() {
+        let mut headers = HeaderMap::new();
+        assert!(verify_ticket(&headers, "w", "a").is_err());
+        headers.insert(TICKET_HEADER, "nodot".parse().unwrap());
+        assert!(verify_ticket(&headers, "w", "a").is_err());
+        headers.insert(TICKET_HEADER, "!!!.???".parse().unwrap());
+        assert!(verify_ticket(&headers, "w", "a").is_err());
+        headers.insert(TICKET_HEADER, "YQ.Yg".parse().unwrap());
+        assert!(verify_ticket(&headers, "w", "a").is_err());
+    }
+
+    #[test]
+    fn power_actions_map_to_systemctl_verbs() {
+        let request: PowerRequest = serde_json::from_str(r#"{"action":"reboot"}"#).unwrap();
+        assert_eq!(request.action, PowerAction::Reboot);
+        assert_eq!(request.action.systemctl_verb(), "reboot");
+        assert_eq!(PowerAction::Poweroff.systemctl_verb(), "poweroff");
+        assert!(serde_json::from_str::<PowerRequest>(r#"{"action":"halt"}"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn http_routes_reject_requests_without_a_ticket() {
+        let base = start_server().await;
+        let client = reqwest::Client::new();
+
+        let logs = client
+            .get(format!("http://{base}/logs/w"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(logs.status(), 401);
+        let disks = client
+            .get(format!("http://{base}/disks"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(disks.status(), 401);
+        let power = client
+            .post(format!("http://{base}/power"))
+            .json(&serde_json::json!({"action": "reboot"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(power.status(), 401);
+        let malformed = client
+            .post(format!("http://{base}/power"))
+            .json(&serde_json::json!({"action": "halt"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(malformed.status(), 422);
+    }
+
+    #[tokio::test]
+    async fn ingress_config_is_refused_for_unknown_guests() {
+        let base = start_server().await;
+        let url = format!(
+            "http://{base}/ingress-config/{}/{}",
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4()
+        );
+        let response = reqwest::get(url).await.unwrap();
+        assert_eq!(response.status(), 403);
+        let invalid = reqwest::get(format!("http://{base}/ingress-config/x/y"))
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn websocket_routes_require_a_ticket() {
+        let base = start_server().await;
+        for path in ["exec/w", "vnc/w", "metrics/stream"] {
+            let result = tokio_tungstenite::connect_async(format!("ws://{base}/{path}")).await;
+            match result {
+                Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                    assert_eq!(response.status(), 401, "{path}");
+                }
+                other => panic!("unexpected result for {path}: {:?}", other.map(|_| ())),
+            }
+        }
+    }
 }

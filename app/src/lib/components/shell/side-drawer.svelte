@@ -2,9 +2,9 @@
     import type { Snippet } from "svelte";
     import { X } from "@lucide/svelte";
 
-    type Props = { open: boolean; title: string; subtitle?: string; onclose: () => void; header?: Snippet; children: Snippet };
+    type Props = { open: boolean; title: string; subtitle?: string; wide?: boolean; onclose: () => void; header?: Snippet; footer?: Snippet; children: Snippet };
 
-    let { open, title, subtitle, onclose, header, children }: Props = $props();
+    let { open, title, subtitle, wide = false, onclose, header, footer, children }: Props = $props();
 
     let element = $state<HTMLDialogElement | null>(null);
 
@@ -15,7 +15,7 @@
     });
 </script>
 
-<dialog bind:this={element} class="md-dialog md-drawer" {onclose} onclick={(event) => event.target === element && onclose()}>
+<dialog bind:this={element} class="md-dialog md-drawer" class:md-drawer--wide={wide} class:md-drawer--split={footer !== undefined} {onclose} onclick={(event) => event.target === element && onclose()}>
     <div class="md__body">
         <div class="md__head">
             <div class="st-split" style="justify-content: flex-start; gap: 12px; min-width: 0">
@@ -29,6 +29,11 @@
                 <X class="cx-i" aria-hidden="true" />
             </button>
         </div>
-        {@render children()}
+        {#if footer}
+            <div class="md__scroll">{@render children()}</div>
+            <div class="md__foot">{@render footer()}</div>
+        {:else}
+            {@render children()}
+        {/if}
     </div>
 </dialog>

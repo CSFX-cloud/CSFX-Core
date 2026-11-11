@@ -12,8 +12,9 @@ use tracing::{debug, info, warn};
 
 use crate::firecracker::api::FirecrackerApiClient;
 use crate::firecracker::rootfs::RootfsBuilder;
+use crate::firecracker::site_registry::SiteRegistry;
 use crate::rg_dns_process::RgDnsProcessSupervisor;
-use crate::runtime::{ExecSession, LogStream};
+use crate::runtime::{ExecSession, LogStream, VolumeUsage};
 use crate::spec::{rg_wireguard_port, WorkloadSpec};
 
 const JAILER_BASE_DIR: &str = "/var/lib/csfx-agent/firecracker";
@@ -28,6 +29,8 @@ const API_SOCKET_NAME: &str = "firecracker.socket";
 const METRICS_FILE_NAME: &str = "metrics.fifo";
 const JAIL_KERNEL_NAME: &str = "vmlinux";
 const JAIL_ROOTFS_NAME: &str = "rootfs.ext4";
+const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
+const GRACEFUL_STOP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn firecracker_bin_path() -> String {
     std::env::var("CSFX_FIRECRACKER_BIN_PATH")
@@ -133,6 +136,34 @@ async fn connect_guest_vsock(
     Ok(stream)
 }
 
+const GUEST_USAGE_PORT: u32 = 10003;
+const GUEST_USAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+async fn query_volume_usage(chroot_dir: &Path, workload_id: &str) -> Result<Vec<VolumeUsage>> {
+    let mut stream = connect_guest_vsock(chroot_dir, workload_id, GUEST_USAGE_PORT).await?;
+    let mut payload = Vec::new();
+    stream
+        .read_to_end(&mut payload)
+        .await
+        .context("Failed to read guest volume usage")?;
+    serde_json::from_slice(&payload).context("Failed to parse guest volume usage")
+}
+
+async fn read_volume_usage(chroot_dir: &Path, workload_id: &str) -> Vec<VolumeUsage> {
+    let query = query_volume_usage(chroot_dir, workload_id);
+    match tokio::time::timeout(GUEST_USAGE_TIMEOUT, query).await {
+        Ok(Ok(usage)) => usage,
+        Ok(Err(e)) => {
+            debug!(workload_id = %workload_id, error = %e, "Guest volume usage unavailable");
+            Vec::new()
+        }
+        Err(_) => {
+            debug!(workload_id = %workload_id, "Guest volume usage timed out");
+            Vec::new()
+        }
+    }
+}
+
 struct VmHandle {
     workload_id: String,
     jailer_pid: u32,
@@ -161,12 +192,14 @@ pub struct FirecrackerRuntime {
     handles: Mutex<HashMap<String, VmHandle>>,
     next_cid: Mutex<u32>,
     reconciled: AtomicBool,
+    site_registry: Option<SiteRegistry>,
 }
 
 impl FirecrackerRuntime {
     pub fn new(
         wg_private_key_b64: String,
         rg_dns_registry: Arc<crate::rg_dns::RgDnsRegistry>,
+        site_registry: Option<SiteRegistry>,
     ) -> Self {
         Self {
             wg_private_key_b64,
@@ -175,6 +208,7 @@ impl FirecrackerRuntime {
             handles: Mutex::new(HashMap::new()),
             next_cid: Mutex::new(next_free_cid_on_host()),
             reconciled: AtomicBool::new(false),
+            site_registry,
         }
     }
 
@@ -247,6 +281,12 @@ impl FirecrackerRuntime {
         cid
     }
 
+    pub async fn ensure_group_dns(&self, resource_group_id: &str, cidr: &str) -> Result<()> {
+        self.dns_supervisor
+            .ensure_running(resource_group_id, cidr)
+            .await
+    }
+
     pub async fn check_dns_liveness(&self) {
         self.dns_supervisor.check_liveness().await;
     }
@@ -280,7 +320,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
         debug!(workload_id = %spec.workload_id, image = %spec.image, stage = "start_workload", "Starting workload deploy");
 
-        let rootfs_builder = RootfsBuilder::new();
+        let rootfs_builder = RootfsBuilder::new(self.site_registry.clone());
         let rootfs_path = rootfs_builder.ensure_rootfs(&spec.image).await?;
         debug!(workload_id = %spec.workload_id, path = ?rootfs_path, stage = "rootfs_ready", "Rootfs image ready for boot");
 
@@ -476,10 +516,14 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 
     async fn stop_workload(&self, workload_handle: &str) -> Result<()> {
-        let mut handles = self.handles.lock().await;
-        let Some(handle) = handles.remove(workload_handle) else {
+        let removed = self.handles.lock().await.remove(workload_handle);
+        let Some(handle) = removed else {
             return Ok(());
         };
+
+        if let Err(e) = shutdown_guest(&handle).await {
+            warn!(workload_id = %handle.workload_id, error = %e, "Graceful guest shutdown failed, forcing stop");
+        }
 
         let _ = Command::new("systemctl")
             .args([
@@ -512,7 +556,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 
     async fn stats(&self, workload_handle: &str) -> Result<crate::runtime::ContainerStats> {
-        let (cpu_usage_percent, memory_usage_bytes, metrics_path) = {
+        let (cpu_usage_percent, memory_usage_bytes, metrics_path, chroot_dir) = {
             let handles = self.handles.lock().await;
             let Some(handle) = handles.get(workload_handle) else {
                 return Ok(crate::runtime::ContainerStats::default());
@@ -523,16 +567,19 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
                 cpu_usage_percent,
                 memory_usage_bytes,
                 handle.metrics_path.clone(),
+                handle.chroot_dir.clone(),
             )
         };
 
         let (network_rx_bytes, network_tx_bytes) = read_network_bytes(&metrics_path).await.unzip();
+        let volume_usage = read_volume_usage(&chroot_dir, workload_handle).await;
 
         Ok(crate::runtime::ContainerStats {
             cpu_usage_percent,
             memory_usage_bytes,
             network_rx_bytes,
             network_tx_bytes,
+            volume_usage,
         })
     }
 
@@ -872,13 +919,15 @@ async fn spawn_jailer(
     anyhow::bail!("jailer process for id {} did not appear", jailer_id)
 }
 
-async fn remove_chroot_dir_privileged(path: &Path) -> Result<()> {
-    let slug: String = path
-        .to_string_lossy()
+fn unit_slug(path: &Path) -> String {
+    path.to_string_lossy()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    let unit = format!("csfx-jailer-cleanup-{slug}");
+        .collect()
+}
+
+async fn remove_chroot_dir_privileged(path: &Path) -> Result<()> {
+    let unit = format!("csfx-jailer-cleanup-{}", unit_slug(path));
 
     let status = Command::new("systemd-run")
         .args([
@@ -1027,6 +1076,29 @@ async fn read_sidecar_metadata(chroot_dir: &Path) -> Option<VmSidecarMetadata> {
         .await
         .ok()?;
     serde_json::from_slice(&content).ok()
+}
+
+async fn shutdown_guest(handle: &VmHandle) -> Result<()> {
+    let jailer_id = jailer_short_id(&handle.workload_id);
+    let api_socket = jailer_vm_root_dir(&handle.chroot_dir, &jailer_id).join(API_SOCKET_NAME);
+
+    FirecrackerApiClient::new(api_socket.to_string_lossy().to_string())
+        .put("/actions", &json!({ "action_type": "SendCtrlAltDel" }))
+        .await
+        .context("Failed to request guest shutdown")?;
+
+    let deadline = tokio::time::Instant::now() + GRACEFUL_STOP_TIMEOUT;
+    while find_live_jailer_pid(&jailer_id).await.is_some() {
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "guest did not power off within {} seconds",
+                GRACEFUL_STOP_TIMEOUT.as_secs()
+            );
+        }
+        tokio::time::sleep(GRACEFUL_STOP_POLL_INTERVAL).await;
+    }
+
+    Ok(())
 }
 
 async fn find_live_jailer_pid(jailer_id: &str) -> Option<u32> {
@@ -1260,6 +1332,11 @@ async fn attach_volume_drives(
     for (index, volume_mount) in volume_mounts.iter().enumerate() {
         let guest_device = guest_device_letter(index);
         let jail_device_name = format!("vd-{}", volume_mount.volume_id);
+        let drive_id = volume_mount.volume_id.replace('-', "_");
+
+        if let Err(e) = crate::rbd::grow_filesystem(&volume_mount.device_path).await {
+            warn!(volume_id = %volume_mount.volume_id, device = %volume_mount.device_path, error = %e, "Volume filesystem not grown");
+        }
 
         stage_block_device_into_jail(&volume_mount.device_path, vm_root_dir, &jail_device_name)
             .await
@@ -1267,12 +1344,13 @@ async fn attach_volume_drives(
 
         client
             .put(
-                &format!("/drives/{}", volume_mount.volume_id),
+                &format!("/drives/{}", drive_id),
                 &json!({
-                    "drive_id": volume_mount.volume_id,
+                    "drive_id": drive_id,
                     "path_on_host": jail_device_name,
                     "is_root_device": false,
                     "is_read_only": false,
+                    "cache_type": "Writeback",
                 }),
             )
             .await
@@ -1303,15 +1381,16 @@ async fn stage_block_device_into_jail(
     let target_path = vm_root_dir.join(jail_device_name);
 
     let status = Command::new("systemd-run")
-        .args([
-            "--pipe",
-            "--wait",
-            "--collect",
-            "--uid=0",
-            "--gid=0",
-            "sh",
-            "-c",
-        ])
+        .args(["--pipe", "--wait", "--collect", "--uid=0", "--gid=0"])
+        .arg(format!(
+            "--unit=csfx-jailer-mknod-{}",
+            unit_slug(&target_path)
+        ))
+        .arg(format!(
+            "--setenv=PATH={}",
+            std::env::var("PATH").unwrap_or_default()
+        ))
+        .args(["/bin/sh", "-c"])
         .arg(format!(
             "rm -f {target} && mknod {target} b {major} {minor} && chown {uid}:{gid} {target}",
             target = target_path.to_string_lossy(),
@@ -1441,6 +1520,7 @@ async fn create_tap_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime::Runtime;
 
     #[tokio::test]
     async fn sidecar_metadata_round_trips() {
@@ -1472,6 +1552,442 @@ mod tests {
     #[tokio::test]
     async fn missing_sidecar_metadata_returns_none() {
         let dir = std::env::temp_dir().join(format!("csfx-sidecar-test-{}", uuid::Uuid::new_v4()));
+        assert!(read_sidecar_metadata(&dir).await.is_none());
+    }
+
+    fn temp_dir() -> PathBuf {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let dir = std::env::temp_dir().join(format!("fc-{}", &id[..8]));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn runtime() -> FirecrackerRuntime {
+        crate::client::install_test_crypto_provider();
+        let _tools = FakeTools::install(&[("ip", "exit 0")]);
+        FirecrackerRuntime::new(
+            "key".to_string(),
+            Arc::new(crate::rg_dns::RgDnsRegistry::new()),
+            None,
+        )
+    }
+
+    fn handle(workload_id: &str, cid: u32, dir: &Path) -> VmHandle {
+        VmHandle {
+            workload_id: workload_id.to_string(),
+            jailer_pid: std::process::id(),
+            chroot_dir: dir.to_path_buf(),
+            tap_device: "fctap1".to_string(),
+            vsock_cid: cid,
+            resource_group_id: None,
+            guest_ip: Some("10.0.0.3".to_string()),
+            cgroup_path: dir.join("cgroup"),
+            metrics_path: dir.join("metrics.fifo"),
+            previous_cpu_sample: Mutex::new(None),
+        }
+    }
+
+    #[test]
+    fn identifiers_are_derived_from_the_workload_id() {
+        assert_eq!(jailer_short_id("1234-5678-9abc-def0"), "12345678");
+        assert_eq!(jailer_unit_name("12345678"), "csfx-jailer-12345678");
+        assert_eq!(guest_device_letter(0), "/dev/vdb");
+        assert_eq!(guest_device_letter(2), "/dev/vdd");
+        let path = cgroup_path("1234-5678-9abc");
+        assert!(path.ends_with("system.slice/csfx-jailer-12345678.service"));
+    }
+
+    #[test]
+    fn vsock_path_lives_inside_the_jail_root() {
+        let chroot = Path::new("/c");
+        let path = vsock_uds_path(chroot, "1234-5678-9abc");
+        assert!(path.starts_with("/c/jail"));
+        assert!(path.ends_with("12345678/root/firecracker.socket.vsock"));
+        assert_eq!(jailer_chroot_base_dir(chroot), PathBuf::from("/c/jail"));
+    }
+
+    #[tokio::test]
+    async fn cids_are_unique_per_allocation() {
+        let runtime = runtime();
+        let first = runtime.allocate_cid().await;
+        let second = runtime.allocate_cid().await;
+        assert_eq!(second, first + 1);
+        let dir = temp_dir();
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", second + 1, &dir));
+        assert_eq!(runtime.allocate_cid().await, second + 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn status_and_network_follow_the_tracked_handles() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "running");
+        assert_eq!(
+            runtime
+                .service_network_ip("w", "n")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("10.0.0.3")
+        );
+        assert!(runtime
+            .service_network_ip("x", "n")
+            .await
+            .unwrap()
+            .is_none());
+        runtime
+            .handles
+            .lock()
+            .await
+            .get_mut("w")
+            .unwrap()
+            .jailer_pid = u32::MAX;
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stats_read_cgroup_and_metrics_files() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("cgroup")).unwrap();
+        std::fs::write(dir.join("cgroup/memory.current"), "2048\n").unwrap();
+        std::fs::write(dir.join("cgroup/cpu.stat"), "usage_usec 100\nuser_usec 5\n").unwrap();
+        std::fs::write(
+            dir.join("metrics.fifo"),
+            "{\"net\":{\"rx_bytes_count\":1,\"tx_bytes_count\":2}}\n{\"net\":{\"rx_bytes_count\":10,\"tx_bytes_count\":20}}\n",
+        )
+        .unwrap();
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+
+        let first = runtime.stats("w").await.unwrap();
+        assert_eq!(first.memory_usage_bytes, Some(2048));
+        assert_eq!(first.network_rx_bytes, Some(10));
+        assert_eq!(first.network_tx_bytes, Some(20));
+        assert!(first.cpu_usage_percent.is_none());
+
+        std::fs::write(dir.join("cgroup/cpu.stat"), "usage_usec 200\n").unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        let second = runtime.stats("w").await.unwrap();
+        assert!(second.cpu_usage_percent.unwrap() > 0.0);
+
+        let unknown = runtime.stats("missing").await.unwrap();
+        assert!(unknown.memory_usage_bytes.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_cgroup_files_yield_no_samples() {
+        let dir = temp_dir();
+        assert!(read_memory_usage_bytes(&dir).await.is_none());
+        assert!(read_cgroup_u64(&dir, "cpu.stat", "usage_usec")
+            .await
+            .is_none());
+        assert!(read_network_bytes(&dir.join("none")).await.is_none());
+        std::fs::write(dir.join("cpu.stat"), "other 1\n").unwrap();
+        assert!(read_cgroup_u64(&dir, "cpu.stat", "usage_usec")
+            .await
+            .is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsupported_lifecycle_calls_are_noops() {
+        let runtime = runtime();
+        runtime.pull_image("img").await.unwrap();
+        runtime.stop_workload("missing").await.unwrap();
+        runtime.check_dns_liveness().await;
+        assert!(runtime.exec("missing").await.is_err());
+    }
+
+    async fn serve_vsock(chroot: &Path, workload_id: &str, reply: &'static [u8]) {
+        let path = vsock_uds_path(chroot, workload_id);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 64];
+            let read = socket.read(&mut request).await.unwrap();
+            assert!(request[..read].starts_with(b"CONNECT "));
+            socket.write_all(reply).await.unwrap();
+        });
+    }
+
+    #[tokio::test]
+    async fn vsock_handshake_accepts_ok_and_rejects_refusals() {
+        let dir = temp_dir();
+        serve_vsock(&dir, "1234-5678-9abc", b"OK 1\npayload").await;
+        let mut stream = connect_guest_vsock(&dir, "1234-5678-9abc", 10001)
+            .await
+            .unwrap();
+        let mut rest = Vec::new();
+        stream.read_to_end(&mut rest).await.unwrap();
+        assert_eq!(rest, b"payload");
+
+        serve_vsock(&dir, "aaaa-bbbb-cccc", b"NO\n").await;
+        let refused = connect_guest_vsock(&dir, "aaaa-bbbb-cccc", 10001).await;
+        assert!(refused.is_err());
+        assert!(connect_guest_vsock(&dir, "zzzz", 1).await.is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn exec_session_opens_the_exec_vsock_port() {
+        let runtime = runtime();
+        let dir = temp_dir();
+        serve_vsock(&dir, "w", b"OK 2\n").await;
+        runtime
+            .handles
+            .lock()
+            .await
+            .insert("w".to_string(), handle("w", 1, &dir));
+        assert!(runtime.exec("w").await.is_ok());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn log_stream_relays_guest_output_and_reports_failures() {
+        use futures_util::StreamExt;
+        let dir = temp_dir();
+        serve_vsock(&dir, "w", b"OK 1\nhello").await;
+        let stream = vsock_log_stream(dir.clone(), "w".to_string());
+        futures_util::pin_mut!(stream);
+        let chunk = stream.next().await.unwrap().unwrap();
+        assert_eq!(&chunk[..], b"hello");
+        assert!(stream.next().await.is_none());
+
+        let failing = vsock_log_stream(dir.clone(), "missing".to_string());
+        futures_util::pin_mut!(failing);
+        assert!(failing.next().await.unwrap().is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    use crate::spec::PortMapping;
+    use crate::testing::FakeTools;
+
+    fn spec_with_ports(ports: Option<Vec<PortMapping>>, cidr: Option<&str>) -> WorkloadSpec {
+        WorkloadSpec {
+            workload_id: "w-1".to_string(),
+            image: "img".to_string(),
+            cpu_millicores: 100,
+            cpu_limit_millicores: 100,
+            memory_bytes: 1,
+            memory_limit_bytes: 1,
+            env_vars: None,
+            ports,
+            volume_mounts: None,
+            service_name: None,
+            resource_group_id: None,
+            resource_group_cidr: cidr.map(str::to_string),
+            guest_ip: None,
+            vm_spec: None,
+        }
+    }
+
+    fn port(
+        container: u16,
+        protocol: Option<&str>,
+        rg: Option<u16>,
+        node: Option<u16>,
+    ) -> PortMapping {
+        PortMapping {
+            container_port: container,
+            protocol: protocol.map(str::to_string),
+            rg_port: rg,
+            node_port: node,
+        }
+    }
+
+    #[tokio::test]
+    async fn workloads_without_ports_add_no_rules() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+
+        apply_port_dnat("w-1", "10.0.0.2", &spec_with_ports(None, None))
+            .await
+            .unwrap();
+
+        assert!(tools.calls("nft").is_empty());
+    }
+
+    #[tokio::test]
+    async fn node_and_group_ports_become_dnat_rules() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+        let spec = spec_with_ports(
+            Some(vec![
+                port(80, None, None, Some(30080)),
+                port(53, Some("udp"), Some(5353), None),
+            ]),
+            Some("10.20.0.0/24"),
+        );
+
+        apply_port_dnat("w-1", "10.20.0.5", &spec).await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].contains("tcp dport 30080 dnat to 10.20.0.5:80"));
+        assert!(calls[1].contains("ip daddr 10.20.0.2 udp dport 5353 dnat to 10.20.0.5:53"));
+    }
+
+    #[tokio::test]
+    async fn group_ports_require_a_group_cidr() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+        let spec = spec_with_ports(Some(vec![port(80, None, Some(8080), None)]), None);
+
+        let error = apply_port_dnat("w-1", "10.0.0.2", &spec)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("rg_port requires a resource group with a cidr"));
+        assert!(tools.calls("nft").is_empty());
+    }
+
+    #[tokio::test]
+    async fn rule_failures_are_attributed_to_the_port_kind() {
+        let _tools = FakeTools::install(&[("nft", "echo denied >&2\nexit 1")]);
+
+        let node = spec_with_ports(Some(vec![port(80, None, None, Some(30080))]), None);
+        let error = format!(
+            "{:#}",
+            apply_port_dnat("w", "10.0.0.2", &node).await.unwrap_err()
+        );
+        assert!(error.contains("Failed to add node port dnat rule"));
+
+        let group = spec_with_ports(
+            Some(vec![port(80, None, Some(80), None)]),
+            Some("10.0.0.0/24"),
+        );
+        let error = format!(
+            "{:#}",
+            apply_port_dnat("w", "10.0.0.2", &group).await.unwrap_err()
+        );
+        assert!(error.contains("Failed to add rg port dnat rule"));
+    }
+
+    #[tokio::test]
+    async fn tap_devices_are_created_attached_and_raised() {
+        let tools = FakeTools::install(&[("ip", "exit 0")]);
+
+        create_tap_device("fctap1", Some("br0"), 60001)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            tools.calls("ip"),
+            vec![
+                "tuntap add dev fctap1 mode tap user 60001".to_string(),
+                "link set dev fctap1 master br0".to_string(),
+                "link set dev fctap1 up".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn tap_device_failures_name_the_failing_step() {
+        {
+            let _tools = FakeTools::install(&[("ip", r#"case "$*" in tuntap*) exit 1;; esac"#)]);
+            let error = create_tap_device("fctap1", None, 0)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("failed to create tap device fctap1"));
+        }
+        {
+            let _tools = FakeTools::install(&[("ip", r#"case "$*" in *master*) exit 1;; esac"#)]);
+            let error = create_tap_device("fctap1", Some("br0"), 0)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("failed to attach tap device fctap1 to bridge br0"));
+        }
+        let _tools = FakeTools::install(&[("ip", r#"case "$*" in *" up") exit 1;; esac"#)]);
+        let error = create_tap_device("fctap1", None, 0)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("failed to bring up tap device fctap1"));
+    }
+
+    #[tokio::test]
+    async fn chroot_directories_are_removed_through_a_transient_unit() {
+        {
+            let tools = FakeTools::install(&[("systemd-run", "exit 0")]);
+            remove_chroot_dir_privileged(Path::new("/srv/jail/fc-1/root"))
+                .await
+                .unwrap();
+            let call = &tools.calls("systemd-run")[0];
+            assert!(call.contains("--unit=csfx-jailer-cleanup--srv-jail-fc-1-root"));
+            assert!(call.ends_with("rm -rf -- /srv/jail/fc-1/root"));
+        }
+        let _tools = FakeTools::install(&[("systemd-run", "exit 1")]);
+        let error = remove_chroot_dir_privileged(Path::new("/srv/jail/x"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("privileged cleanup of chroot directory"));
+    }
+
+    #[tokio::test]
+    async fn files_are_staged_with_sparse_reflink_copies() {
+        {
+            let tools = FakeTools::install(&[("cp", "exit 0")]);
+            reflink_copy(Path::new("/a"), Path::new("/b"))
+                .await
+                .unwrap();
+            assert_eq!(
+                tools.calls("cp"),
+                vec!["--reflink=auto --sparse=always /a /b".to_string()]
+            );
+        }
+        let _tools = FakeTools::install(&[("cp", "exit 1")]);
+        assert!(reflink_copy(Path::new("/a"), Path::new("/b"))
+            .await
+            .is_err());
+        assert!(stage_rootfs_into_jail(Path::new("/a"), Path::new("/jail"))
+            .await
+            .is_err());
+    }
+
+    #[test]
+    fn cleanup_unit_slugs_replace_every_special_character() {
+        assert_eq!(unit_slug(Path::new("/a b/c.d")), "-a-b-c-d");
+    }
+
+    #[test]
+    fn metrics_fifos_are_created_idempotently() {
+        let path = std::env::temp_dir().join(format!("csfx-fifo-{}", uuid::Uuid::new_v4()));
+
+        create_metrics_fifo(&path).unwrap();
+        create_metrics_fifo(&path).unwrap();
+
+        use std::os::unix::fs::FileTypeExt;
+        assert!(std::fs::metadata(&path).unwrap().file_type().is_fifo());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn unknown_jailer_ids_have_no_live_process() {
+        assert_eq!(find_live_jailer_pid("csfx-no-such-jailer-id").await, None);
+    }
+
+    #[tokio::test]
+    async fn sidecar_metadata_is_absent_for_unwritten_directories() {
+        let dir = std::env::temp_dir().join(format!("csfx-no-sidecar-{}", uuid::Uuid::new_v4()));
         assert!(read_sidecar_metadata(&dir).await.is_none());
     }
 }

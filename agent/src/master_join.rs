@@ -241,8 +241,12 @@ pub(crate) fn write_file(path: &str, contents: &str, mode: u32) -> Result<()> {
 }
 
 fn render_cp_env(bundle: &MasterBundle) -> String {
+    let site_secret = bundle
+        .site_secret
+        .as_ref()
+        .map_or_else(String::new, |secret| format!("CSFX_SITE_SECRET={secret}\n"));
     format!(
-        "DATABASE_URL=postgres://csfx:{}@localhost:5432/csfx\nJWT_SECRET={}\nETCD_ENDPOINTS=http://localhost:2379\nGARAGE_ADMIN_TOKEN={}\nOBJECT_STORAGE_ENCRYPTION_KEY={}\n",
+        "DATABASE_URL=postgres://csfx:{}@localhost:5432/csfx\nJWT_SECRET={}\nETCD_ENDPOINTS=http://localhost:2379\nGARAGE_ADMIN_TOKEN={}\nOBJECT_STORAGE_ENCRYPTION_KEY={}\n{site_secret}",
         bundle.db_password,
         bundle.jwt_secret,
         bundle.garage_admin_token,
@@ -292,6 +296,7 @@ mod tests {
             openbao_seal_key: "seal".into(),
             openbao_role_id: "role".into(),
             openbao_secret_id: "secret".into(),
+            site_secret: Some("site".into()),
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),
@@ -306,6 +311,14 @@ mod tests {
         assert!(env.contains("JWT_SECRET=jwt\n"));
         assert!(env.contains("ETCD_ENDPOINTS=http://localhost:2379\n"));
         assert!(env.contains("OBJECT_STORAGE_ENCRYPTION_KEY=enc\n"));
+        assert!(env.ends_with("CSFX_SITE_SECRET=site\n"));
+    }
+
+    #[test]
+    fn cp_env_omits_the_site_secret_when_the_cluster_has_none() {
+        let mut older = bundle();
+        older.site_secret = None;
+        assert!(!render_cp_env(&older).contains("CSFX_SITE_SECRET"));
     }
 
     #[test]
@@ -348,5 +361,54 @@ mod tests {
             render_garage_env(&bundle()),
             "GARAGE_RPC_SECRET=rpc\nGARAGE_ADMIN_TOKEN=admin\n"
         );
+    }
+
+    fn temp_dir() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("csfx-join-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn files_are_written_with_the_requested_mode() {
+        let dir = temp_dir();
+        let path = dir.join("nested/secret.env");
+        let path_str = path.to_str().unwrap();
+        write_file(path_str, "first-longer-value", 0o600).unwrap();
+        write_file(path_str, "short", 0o640).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "short");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o640);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn clearing_a_directory_keeps_the_directory_itself() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(dir.join("sub/deep")).unwrap();
+        std::fs::write(dir.join("file"), b"x").unwrap();
+        clear_directory(dir.to_str().unwrap()).unwrap();
+        assert!(dir.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+        clear_directory(dir.to_str().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn absent_vip_leaves_the_cluster_env_untouched() {
+        apply_vip(None).unwrap();
+    }
+
+    #[tokio::test]
+    async fn promotion_completes_once_the_gateway_accepts() {
+        use axum::routing::post;
+        crate::client::install_test_crypto_provider();
+        let app = axum::Router::new().route(
+            "/api/cluster/masters/promote",
+            post(|| async { axum::http::StatusCode::OK }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = ApiClient::new(url, String::new(), None, None, None).unwrap();
+        wait_for_promotion(&client, "key").await.unwrap();
     }
 }

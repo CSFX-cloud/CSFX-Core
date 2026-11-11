@@ -395,3 +395,9 @@ impl ServiceClient {
         Ok((status, json_body))
     }
 }
+
+impl Default for ServiceClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}

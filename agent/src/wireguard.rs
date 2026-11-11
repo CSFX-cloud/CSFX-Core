@@ -42,8 +42,7 @@ async fn ensure_address(iface: &str, tunnel_ip: &str) -> Result<()> {
         .output()
         .await
         .context("failed to execute ip addr show")?;
-    let current = String::from_utf8_lossy(&output.stdout);
-    if current.split_whitespace().any(|field| field == wanted) {
+    if has_address(&String::from_utf8_lossy(&output.stdout), &wanted) {
         return Ok(());
     }
     run_ip(&["address", "flush", "dev", iface]).await?;
@@ -163,13 +162,50 @@ async fn list_host_routes(iface: &str) -> Result<std::collections::HashSet<Strin
         );
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout)
+    Ok(parse_host_routes(&String::from_utf8_lossy(&output.stdout)))
+}
+
+fn has_address(listing: &str, wanted: &str) -> bool {
+    listing.split_whitespace().any(|field| field == wanted)
+}
+
+fn parse_host_routes(listing: &str) -> std::collections::HashSet<String> {
+    listing
         .lines()
         .filter_map(|line| line.split_whitespace().next())
         .filter_map(|destination| destination.strip_suffix("/32").or(Some(destination)))
         .filter(|destination| destination.parse::<std::net::Ipv4Addr>().is_ok())
         .map(str::to_string)
-        .collect())
+        .collect()
+}
+
+fn parse_peer_keys(listing: &str) -> Vec<String> {
+    listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn peer_arguments(iface: &str, peer: &Peer) -> Vec<String> {
+    let mut args = vec![
+        "set".to_string(),
+        iface.to_string(),
+        "peer".to_string(),
+        peer.public_key.clone(),
+        "allowed-ips".to_string(),
+        peer.allowed_ips.clone(),
+    ];
+    if let Some(endpoint) = &peer.endpoint {
+        args.extend([
+            "endpoint".to_string(),
+            endpoint.clone(),
+            "persistent-keepalive".to_string(),
+            "25".to_string(),
+        ]);
+    }
+    args
 }
 
 pub async fn remove_interface(iface: &str) -> Result<()> {
@@ -194,22 +230,7 @@ pub async fn remove_interface(iface: &str) -> Result<()> {
 
 pub async fn set_peers(iface: &str, peers: &[Peer]) -> Result<()> {
     for peer in peers {
-        let mut args = vec![
-            "set".to_string(),
-            iface.to_string(),
-            "peer".to_string(),
-            peer.public_key.clone(),
-            "allowed-ips".to_string(),
-            peer.allowed_ips.clone(),
-        ];
-
-        if let Some(endpoint) = &peer.endpoint {
-            args.push("endpoint".to_string());
-            args.push(endpoint.clone());
-            args.push("persistent-keepalive".to_string());
-            args.push("25".to_string());
-        }
-
+        let args = peer_arguments(iface, peer);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         run_wg(&arg_refs).await?;
     }
@@ -242,11 +263,7 @@ async fn list_peer_public_keys(iface: &str) -> Result<Vec<String>> {
         anyhow::bail!("wg show peers failed iface={} stderr={}", iface, stderr);
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect())
+    Ok(parse_peer_keys(&String::from_utf8_lossy(&output.stdout)))
 }
 
 async fn interface_exists(iface: &str) -> Result<bool> {
@@ -313,4 +330,287 @@ async fn run_wg(args: &[&str]) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interface_name_is_stable_and_prefixed() {
+        let name = rg_interface_name("rg-1");
+        assert_eq!(name, rg_interface_name("rg-1"));
+        assert_ne!(name, rg_interface_name("rg-2"));
+        assert!(name.starts_with("wgrg"));
+        assert_eq!(name.len(), 12);
+        assert!(name.len() <= 15);
+    }
+
+    #[test]
+    fn peer_round_trips_through_json() {
+        let peers = vec![Peer {
+            public_key: "key".to_string(),
+            endpoint: None,
+            allowed_ips: "10.0.0.1/32".to_string(),
+        }];
+        let raw = serde_json::to_string(&peers).unwrap();
+        let parsed: Vec<Peer> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed[0].public_key, "key");
+        assert!(parsed[0].endpoint.is_none());
+        assert_eq!(parsed[0].allowed_ips, "10.0.0.1/32");
+    }
+
+    #[test]
+    fn address_is_matched_as_a_whole_field() {
+        let listing = "5: wgmgmt0    inet 10.100.0.7/32 scope global wgmgmt0";
+        assert!(has_address(listing, "10.100.0.7/32"));
+        assert!(!has_address(listing, "10.100.0.7/3"));
+        assert!(!has_address(listing, "10.100.0.8/32"));
+        assert!(!has_address("", "10.100.0.7/32"));
+    }
+
+    #[test]
+    fn host_routes_keep_only_ipv4_destinations() {
+        let listing = "10.0.0.5 scope link\n10.0.0.6/32 scope link\n10.0.1.0/24 proto kernel\ndefault via 10.0.0.1\n\n";
+        let routes = parse_host_routes(listing);
+        assert_eq!(routes.len(), 2);
+        assert!(routes.contains("10.0.0.5"));
+        assert!(routes.contains("10.0.0.6"));
+    }
+
+    #[test]
+    fn peer_keys_skip_blank_lines() {
+        assert_eq!(
+            parse_peer_keys("key-a\n  key-b  \n\n"),
+            vec!["key-a".to_string(), "key-b".to_string()]
+        );
+        assert!(parse_peer_keys("\n").is_empty());
+    }
+
+    #[test]
+    fn peers_with_endpoints_get_a_keepalive() {
+        let mut peer = Peer {
+            public_key: "key".to_string(),
+            endpoint: None,
+            allowed_ips: "10.0.0.1/32".to_string(),
+        };
+        assert_eq!(
+            peer_arguments("wg0", &peer),
+            ["set", "wg0", "peer", "key", "allowed-ips", "10.0.0.1/32"]
+        );
+        peer.endpoint = Some("192.0.2.1:51820".to_string());
+        let args = peer_arguments("wg0", &peer);
+        assert_eq!(args.len(), 10);
+        assert_eq!(
+            args[6..],
+            ["endpoint", "192.0.2.1:51820", "persistent-keepalive", "25"]
+        );
+    }
+
+    use crate::testing::FakeTools;
+    use std::collections::HashSet;
+
+    const IP_MISSING_INTERFACE: &str = r#"case "$*" in "link show"*) exit 1;; esac"#;
+    const WG_READS_KEY: &str = r#"case "$*" in *private-key*) cat > /dev/null;; esac"#;
+
+    fn peer(key: &str, endpoint: Option<&str>) -> Peer {
+        Peer {
+            public_key: key.to_string(),
+            endpoint: endpoint.map(str::to_string),
+            allowed_ips: format!("10.0.0.{}/32", key.len()),
+        }
+    }
+
+    #[tokio::test]
+    async fn management_interface_is_created_configured_and_addressed() {
+        let tools = FakeTools::install(&[("ip", IP_MISSING_INTERFACE), ("wg", WG_READS_KEY)]);
+
+        ensure_mgmt_interface("c2VjcmV0", 51820, "10.100.0.7")
+            .await
+            .unwrap();
+
+        let ip = tools.calls("ip");
+        assert!(ip.contains(&"link add dev wgmgmt0 type wireguard".to_string()));
+        assert!(ip.contains(&"address flush dev wgmgmt0".to_string()));
+        assert!(ip.contains(&"address add 10.100.0.7/32 dev wgmgmt0".to_string()));
+        assert_eq!(ip.last().unwrap(), "link set up dev wgmgmt0");
+        let wg = tools.calls("wg");
+        assert!(wg.contains(&"set wgmgmt0 private-key /dev/stdin".to_string()));
+        assert!(wg.contains(&"set wgmgmt0 listen-port 51820".to_string()));
+    }
+
+    #[tokio::test]
+    async fn existing_management_interface_keeps_a_matching_address() {
+        let tools = FakeTools::install(&[(
+            "ip",
+            r#"case "$*" in "-4 -o addr show"*) echo '5: wgmgmt0 inet 10.100.0.7/32 scope global';; esac"#,
+        )]);
+
+        ensure_mgmt_interface("c2VjcmV0", 51820, "10.100.0.7")
+            .await
+            .unwrap();
+
+        let ip = tools.calls("ip");
+        assert!(!ip.iter().any(|call| call.contains("link add")));
+        assert!(!ip.iter().any(|call| call.contains("address flush")));
+        assert!(tools.calls("wg").is_empty());
+    }
+
+    #[tokio::test]
+    async fn group_interfaces_are_created_once() {
+        let tools = FakeTools::install(&[("ip", IP_MISSING_INTERFACE), ("wg", WG_READS_KEY)]);
+
+        let name = ensure_interface("rg-1", "c2VjcmV0", 51900).await.unwrap();
+
+        assert_eq!(name, rg_interface_name("rg-1"));
+        assert!(tools
+            .calls("ip")
+            .contains(&format!("link add dev {name} type wireguard")));
+        drop(tools);
+
+        let tools = FakeTools::install(&[("ip", SUCCEEDING), ("wg", SUCCEEDING)]);
+        ensure_interface("rg-1", "c2VjcmV0", 51900).await.unwrap();
+        assert_eq!(tools.calls("ip").len(), 1);
+        assert!(tools.calls("wg").is_empty());
+    }
+
+    const SUCCEEDING: &str = "exit 0";
+
+    #[tokio::test]
+    async fn peers_are_configured_with_keepalive_only_when_reachable() {
+        let tools = FakeTools::install(&[("wg", SUCCEEDING)]);
+
+        set_peers(
+            "wg0",
+            &[peer("a", Some("192.0.2.1:51820")), peer("bb", None)],
+        )
+        .await
+        .unwrap();
+
+        let calls = tools.calls("wg");
+        assert_eq!(calls.len(), 2);
+        assert!(calls[0].ends_with("endpoint 192.0.2.1:51820 persistent-keepalive 25"));
+        assert!(!calls[1].contains("endpoint"));
+    }
+
+    #[tokio::test]
+    async fn stale_peers_are_removed_during_reconciliation() {
+        let tools = FakeTools::install(&[(
+            "wg",
+            r#"case "$*" in "show wg0 peers") printf '%s\n' keep old;; esac"#,
+        )]);
+
+        reconcile_peers("wg0", &[peer("keep", None)]).await.unwrap();
+
+        let calls = tools.calls("wg");
+        assert!(calls.contains(&"set wg0 peer old remove".to_string()));
+        assert!(!calls.contains(&"set wg0 peer keep remove".to_string()));
+        assert!(calls
+            .iter()
+            .any(|call| call.starts_with("set wg0 peer keep allowed-ips")));
+    }
+
+    #[tokio::test]
+    async fn reconciliation_fails_when_the_peer_listing_fails() {
+        let _tools = FakeTools::install(&[("wg", "echo nope >&2\nexit 1")]);
+
+        let error = reconcile_peers("wg0", &[]).await.unwrap_err().to_string();
+
+        assert!(error.contains("wg show peers failed"));
+    }
+
+    #[tokio::test]
+    async fn management_peers_get_routes_and_route_errors_are_tolerated() {
+        let tools = FakeTools::install(&[
+            ("wg", "case \"$*\" in \"show\"*) ;; esac"),
+            ("ip", "echo 'RTNETLINK: boom' >&2\nexit 2"),
+        ]);
+
+        apply_mgmt_peers(&[peer("a", None), peer("bb", None)])
+            .await
+            .unwrap();
+
+        let routes = tools.calls("ip");
+        assert_eq!(routes.len(), 2);
+        assert!(routes[0].starts_with("route add 10.0.0.1/32 dev wgmgmt0"));
+    }
+
+    #[tokio::test]
+    async fn existing_routes_are_not_an_error() {
+        {
+            let _tools =
+                FakeTools::install(&[("ip", "echo 'RTNETLINK answers: File exists' >&2\nexit 2")]);
+            set_route("wg0", "10.0.0.0/24").await.unwrap();
+        }
+        let _tools = FakeTools::install(&[("ip", "echo 'bad' >&2\nexit 2")]);
+        let error = set_route("wg0", "10.0.0.0/24")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("ip route add failed"));
+    }
+
+    #[tokio::test]
+    async fn host_routes_are_synchronised_to_the_desired_set() {
+        let tools = FakeTools::install(&[(
+            "ip",
+            r#"case "$*" in "-4 route show"*) printf '%s\n' '10.0.0.5 scope link' '10.0.0.6/32 scope link' 'default via 10.0.0.1';; esac"#,
+        )]);
+        let desired: HashSet<String> = ["10.0.0.6", "10.0.0.7"].map(String::from).into();
+
+        let added = sync_host_routes("wg0", &desired).await.unwrap();
+
+        assert_eq!(added, vec!["10.0.0.7".to_string()]);
+        let calls = tools.calls("ip");
+        assert!(calls.contains(&"route del 10.0.0.5/32 dev wg0".to_string()));
+        assert!(calls.contains(&"route replace 10.0.0.7/32 dev wg0".to_string()));
+        assert!(!calls
+            .iter()
+            .any(|call| call.contains("10.0.0.6/32 dev wg0") && call.starts_with("route replace")));
+    }
+
+    #[tokio::test]
+    async fn host_route_listing_failures_are_reported() {
+        let _tools = FakeTools::install(&[("ip", "echo bad >&2\nexit 1")]);
+
+        let error = sync_host_routes("wg0", &HashSet::new())
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("ip route show failed"));
+    }
+
+    #[tokio::test]
+    async fn removing_a_missing_interface_succeeds() {
+        {
+            let tools = FakeTools::install(&[("ip", SUCCEEDING)]);
+            remove_interface("wg0").await.unwrap();
+            assert_eq!(tools.calls("ip"), vec!["link delete dev wg0".to_string()]);
+        }
+        {
+            let _tools =
+                FakeTools::install(&[("ip", "echo 'Cannot find device \"wg0\"' >&2\nexit 1")]);
+            remove_interface("wg0").await.unwrap();
+        }
+        let _tools = FakeTools::install(&[("ip", "echo denied >&2\nexit 1")]);
+        assert!(remove_interface("wg0").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn failing_commands_surface_their_arguments() {
+        let _tools = FakeTools::install(&[("ip", "exit 1"), ("wg", "exit 1")]);
+
+        assert!(run_ip(&["link", "show"])
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("ip command failed"));
+        assert!(run_wg(&["show"])
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("wg command failed"));
+        assert!(set_private_key("wg0", "key").await.is_err());
+    }
 }

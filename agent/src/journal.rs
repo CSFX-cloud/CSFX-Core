@@ -145,3 +145,102 @@ pub fn spawn(client: Arc<ApiClient>, api_key: String) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn error_priorities_map_to_error_level() {
+        let line = json!({
+            "MESSAGE": "boom",
+            "PRIORITY": "3",
+            "_SYSTEMD_UNIT": "app.service",
+            "__REALTIME_TIMESTAMP": "1700000000000000"
+        })
+        .to_string();
+        let entry = parse_line(&line).unwrap();
+        assert_eq!(entry.level, "ERROR");
+        assert_eq!(entry.unit, "app.service");
+        assert_eq!(entry.message, "boom");
+        assert_eq!(entry.timestamp_micros, Some(1_700_000_000_000_000));
+    }
+
+    #[test]
+    fn warning_priorities_fall_back_to_the_syslog_identifier() {
+        let line = json!({
+            "MESSAGE": "careful",
+            "PRIORITY": "4",
+            "SYSLOG_IDENTIFIER": "sshd"
+        })
+        .to_string();
+        let entry = parse_line(&line).unwrap();
+        assert_eq!(entry.level, "WARN");
+        assert_eq!(entry.unit, "sshd");
+        assert!(entry.timestamp_micros.is_none());
+    }
+
+    #[test]
+    fn byte_array_messages_are_decoded() {
+        let line = json!({"MESSAGE": [104, 105], "PRIORITY": "3"}).to_string();
+        assert_eq!(parse_line(&line).unwrap().message, "hi");
+        assert!(message_text(json!(5)).is_none());
+    }
+
+    #[test]
+    fn invalid_and_ignored_lines_are_dropped() {
+        assert!(parse_line("not json").is_none());
+        assert!(parse_line(&json!({"MESSAGE": "x"}).to_string()).is_none());
+        assert!(parse_line(&json!({"PRIORITY": "3"}).to_string()).is_none());
+        assert!(parse_line(&json!({"MESSAGE": "x", "PRIORITY": "high"}).to_string()).is_none());
+        let getty = json!({
+            "MESSAGE": "x",
+            "PRIORITY": "3",
+            "_SYSTEMD_UNIT": "serial-getty@ttyS0.service"
+        })
+        .to_string();
+        assert!(parse_line(&getty).is_none());
+        assert!(is_ignored("other", "serial-getty@ttyS0 failed"));
+        assert!(!is_ignored("other", "fine"));
+    }
+
+    #[tokio::test]
+    async fn shipping_pushes_batches_and_tracks_failures() {
+        use axum::{http::StatusCode, routing::post, Router};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        crate::client::install_test_crypto_provider();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = Router::new().route(
+            "/api/agents/self/logs",
+            post(move || {
+                let counter = counter.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = ApiClient::new(url, "pub".to_string(), None, None, None).unwrap();
+
+        let mut batch = Vec::new();
+        let mut failing = false;
+        ship(&client, "key", &mut batch, &mut failing).await;
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        for _ in 0..2 {
+            batch.extend(parse_line(
+                &json!({"MESSAGE": "m", "PRIORITY": "3"}).to_string(),
+            ));
+            ship(&client, "key", &mut batch, &mut failing).await;
+            assert!(batch.is_empty());
+            assert!(failing);
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+    }
+}

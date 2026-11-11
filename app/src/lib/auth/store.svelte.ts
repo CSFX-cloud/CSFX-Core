@@ -40,6 +40,11 @@ function createAuthStore() {
         localStorage.setItem(TOKEN_KEY, response.token);
     }
 
+    function setToken(token: string) {
+        state.token = token;
+        localStorage.setItem(TOKEN_KEY, token);
+    }
+
     function clearSession() {
         state.token = null;
         state.user = null;
@@ -52,6 +57,7 @@ function createAuthStore() {
         init,
         setSession,
         setUser,
+        setToken,
         clearSession,
     };
 }

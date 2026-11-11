@@ -26,6 +26,8 @@ mod spec;
 mod ssh_control;
 mod ssh_keys;
 mod system;
+#[cfg(test)]
+mod testing;
 mod update_watch;
 mod vip_sync;
 mod wg_identity;
@@ -205,6 +207,7 @@ async fn main() -> Result<()> {
     let firecracker_runtime = Arc::new(firecracker::runtime::FirecrackerRuntime::new(
         wg_identity.private_key_b64.clone(),
         Arc::clone(&rg_dns_registry),
+        firecracker::site_registry::SiteRegistry::from_gateway(&gateway_url, &api_key),
     ));
 
     let qemu_runtime = Arc::new(qemu::runtime::QemuRuntime::new(
@@ -303,10 +306,7 @@ async fn resolve_trust_anchor(
     Ok(Some(ca_pem))
 }
 
-async fn resolve_registration_token(
-    client: &client::ApiClient,
-    join_ticket: Option<&join::JoinTicket>,
-) -> Result<String> {
+fn resolve_registration_token(join_ticket: Option<&join::JoinTicket>) -> Result<String> {
     if let Some(ticket) = join_ticket {
         return Ok(ticket.token.clone());
     }
@@ -316,11 +316,7 @@ async fn resolve_registration_token(
     {
         return Ok(token);
     }
-    info!("CSFX_REGISTRATION_TOKEN not set, fetching bootstrap token from gateway");
-    client
-        .fetch_bootstrap_token()
-        .await
-        .context("Failed to fetch bootstrap token from gateway")
+    anyhow::bail!("Neither CSFX_JOIN nor CSFX_REGISTRATION_TOKEN is set")
 }
 
 async fn perform_registration(
@@ -330,7 +326,7 @@ async fn perform_registration(
     agent_pki: &pki::AgentPki,
     join_ticket: Option<&join::JoinTicket>,
 ) -> Result<(uuid::Uuid, String)> {
-    let token = resolve_registration_token(client, join_ticket).await?;
+    let token = resolve_registration_token(join_ticket)?;
 
     let info = system::collect_info();
 
@@ -401,9 +397,8 @@ async fn reconcile_tick(
     rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
     failure_count: &mut u32,
     fence_guard: &mut fence::FenceGuard,
-    current_flake_rev: &mut String,
 ) {
-    process_volumes(client, agent_id, api_key, mounted_volumes).await;
+    let assigned_volumes = process_volumes(client, agent_id, api_key, mounted_volumes).await;
     let resource_group_ids = process_workloads(
         client,
         starts,
@@ -419,6 +414,9 @@ async fn reconcile_tick(
         rg_dns_registry,
     )
     .await;
+    if let Some(volumes) = &assigned_volumes {
+        release_unassigned_volumes(mounted_volumes, volumes).await;
+    }
     rg_mesh::sync(
         client,
         api_key,
@@ -456,7 +454,7 @@ async fn reconcile_tick(
 
             info!(
                 agent_id = %agent_id,
-                desired_flake_rev = ?resp.desired_flake_rev,
+                releases = resp.worker_releases.len(),
                 "heartbeat ok"
             );
 
@@ -466,25 +464,8 @@ async fn reconcile_tick(
 
             adopt_advertised_gateway(client.gateway_url(), resp.gateway_url.as_deref());
 
-            if let Some(count) = resp.post_update_heartbeats {
-                update_watch::write_heartbeat_counter(count).await;
-            }
-
-            if let Some(rev) = resp.desired_flake_rev {
-                if rev != *current_flake_rev {
-                    info!(
-                        agent_id = %agent_id,
-                        current_flake_rev = %current_flake_rev,
-                        desired_flake_rev = %rev,
-                        "update signal received from gateway, scheduling update"
-                    );
-                }
-                let rev_clone = rev.clone();
-                let current = current_flake_rev.clone();
-                tokio::spawn(async move {
-                    update_watch::handle(agent_id, &rev_clone, &current).await;
-                });
-                *current_flake_rev = rev;
+            if !resp.worker_releases.is_empty() {
+                tokio::spawn(update_watch::handle(agent_id, resp.worker_releases));
             }
         }
         Err(e) => {
@@ -536,14 +517,13 @@ async fn run_heartbeat_loop(
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
     let mut fence_guard = fence::FenceGuard::from_env();
-    let mut current_flake_rev = String::new();
     let starts = StartTracker::default();
     let completed = Arc::clone(&starts.completed);
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
             }
             signal = assignment_signal.recv() => {
                 if signal.is_none() {
@@ -553,11 +533,11 @@ async fn run_heartbeat_loop(
                 while assignment_signal.try_recv().is_ok() {}
                 info!(agent_id = %agent_id, "assignment push received, reconciling immediately");
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
             }
             _ = completed.notified() => {
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard, &mut current_flake_rev).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal received");
@@ -603,40 +583,101 @@ async fn process_volumes(
     agent_id: uuid::Uuid,
     api_key: &str,
     mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
-) {
+) -> Option<Vec<client::AssignedVolume>> {
     let volumes = match client.fetch_assigned_volumes(agent_id, api_key).await {
         Ok(v) => v,
         Err(e) => {
             warn!(error = %e, "Failed to fetch assigned volumes");
+            return None;
+        }
+    };
+
+    map_missing_volumes(&volumes, mounted_volumes).await;
+    grow_mapped_volumes(&volumes, mounted_volumes).await;
+    Some(volumes)
+}
+
+async fn grow_mapped_volumes(
+    volumes: &[client::AssignedVolume],
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    for volume in volumes.iter().filter(|volume| volume.size_gb > 0) {
+        let Some(device) = mounted_volumes.lock().await.get(&volume.id).cloned() else {
+            continue;
+        };
+        if let Err(e) = rbd::grow_image_to(
+            &volume.pool,
+            &volume.image_name,
+            &device,
+            volume.size_gb as u64,
+        )
+        .await
+        {
+            warn!(volume_id = %volume.id, device = %device, error = %e, "Failed to grow volume image");
+        }
+    }
+}
+
+async fn map_missing_volumes(
+    volumes: &[client::AssignedVolume],
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    let missing: Vec<&client::AssignedVolume> = {
+        let mounted = mounted_volumes.lock().await;
+        volumes
+            .iter()
+            .filter(|volume| !mounted.contains_key(&volume.id))
+            .collect()
+    };
+    if missing.is_empty() {
+        return;
+    }
+
+    let existing = match rbd::list_mapped().await {
+        Ok(mapped) => mapped,
+        Err(e) => {
+            warn!(error = %e, "Failed to list mapped RBD devices");
             return;
         }
     };
 
-    release_unassigned_volumes(mounted_volumes, &volumes).await;
+    for volume in missing {
+        attach_volume_device(volume, &existing, mounted_volumes).await;
+    }
+}
 
-    for volume in volumes {
-        let already_mounted = mounted_volumes.lock().await.contains_key(&volume.id);
-        if already_mounted {
-            continue;
-        }
+async fn attach_volume_device(
+    volume: &client::AssignedVolume,
+    existing: &[rbd::MappedImage],
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    let adopted = existing
+        .iter()
+        .find(|mapped| mapped.pool == volume.pool && mapped.image == volume.image_name);
 
-        info!(volume_id = %volume.id, image = %volume.image_name, "Mapping volume");
-
-        let device = match rbd::map_device(&volume.pool, &volume.image_name).await {
-            Ok(d) => d,
+    let device = match adopted {
+        Some(mapped) => mapped.device.clone(),
+        None => match rbd::map_device(&volume.pool, &volume.image_name).await {
+            Ok(device) => device,
             Err(e) => {
                 warn!(volume_id = %volume.id, error = %e, "Failed to map RBD device");
-                continue;
+                return;
             }
-        };
+        },
+    };
 
-        mounted_volumes
-            .lock()
-            .await
-            .insert(volume.id.clone(), device.clone());
-
-        info!(volume_id = %volume.id, device = %device, "Volume mapped");
+    let label = format!("csfx-{}", volume.id.chars().take(11).collect::<String>());
+    if let Err(e) = rbd::ensure_filesystem(&device, &label).await {
+        warn!(volume_id = %volume.id, device = %device, error = %e, "Failed to prepare volume filesystem");
+        return;
     }
+
+    mounted_volumes
+        .lock()
+        .await
+        .insert(volume.id.clone(), device.clone());
+
+    info!(volume_id = %volume.id, device = %device, adopted = adopted.is_some(), "Volume mapped");
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -735,6 +776,26 @@ async fn should_restart_after_crash(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn ensure_group_dns(
+    firecracker: &firecracker::runtime::FirecrackerRuntime,
+    workloads: &[client::AssignedWorkload],
+) {
+    let groups: HashMap<&str, &str> = workloads
+        .iter()
+        .filter_map(|workload| {
+            Some((
+                workload.resource_group_id.as_deref()?,
+                workload.resource_group_cidr.as_deref()?,
+            ))
+        })
+        .collect();
+    for (resource_group_id, cidr) in groups {
+        if let Err(e) = firecracker.ensure_group_dns(resource_group_id, cidr).await {
+            warn!(resource_group_id = %resource_group_id, error = %e, "Failed to ensure resource group dns process");
+        }
+    }
+}
+
 async fn process_workloads(
     client: &Arc<client::ApiClient>,
     starts: &StartTracker,
@@ -766,6 +827,8 @@ async fn process_workloads(
         ids.dedup();
         ids
     };
+
+    ensure_group_dns(firecracker, &workloads).await;
 
     let recovered_microvms = firecracker.reconcile_once().await;
     let recovered_vms = qemu.reconcile_once().await;
@@ -890,6 +953,19 @@ async fn run_workload_start(context: WorkloadStartContext, workload: client::Ass
     context.starts.finish(&workload_id, state_changed).await;
 }
 
+async fn volumes_ready(
+    workload: &client::AssignedWorkload,
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+) -> bool {
+    let Some(mounts) = &workload.volume_mounts else {
+        return true;
+    };
+    let mounted = mounted_volumes.lock().await;
+    mounts
+        .iter()
+        .all(|mount| mounted.contains_key(&mount.volume_id))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn start_or_restart_workload(
     runtime: &dyn runtime::Runtime,
@@ -919,6 +995,15 @@ async fn start_or_restart_workload(
 
     info!(workload_id = %workload.id, image = %workload.image, "Starting workload");
 
+    if !volumes_ready(&workload, mounted_volumes).await {
+        info!(workload_id = %workload.id, "Waiting for volumes to be mounted, deferring workload");
+        workload_phases
+            .lock()
+            .await
+            .insert(workload.id.clone(), "scheduled".to_string());
+        return false;
+    }
+
     workload_phases
         .lock()
         .await
@@ -928,16 +1013,6 @@ async fn start_or_restart_workload(
         warn!(workload_id = %workload.id, error = %e, "Failed to pull image");
         workload_phases.lock().await.remove(&workload.id);
         return false;
-    }
-
-    if let Some(ref mounts) = workload.volume_mounts {
-        let locked = mounted_volumes.lock().await;
-        let all_ready = mounts.iter().all(|m| locked.contains_key(&m.volume_id));
-        drop(locked);
-        if !all_ready {
-            info!(workload_id = %workload.id, "Waiting for volumes to be mounted, deferring workload");
-            return false;
-        }
     }
 
     if let Some(max) = workload.max_restarts {
@@ -1281,6 +1356,7 @@ async fn push_workload_stats(
                 memory_usage_bytes: s.memory_usage_bytes,
                 network_rx_bytes: s.network_rx_bytes,
                 network_tx_bytes: s.network_tx_bytes,
+                volume_usage: s.volume_usage,
             }),
             Err(e) => {
                 warn!(workload_id = %workload_id, container_id = %container_id, error = %e, "Failed to collect container stats");
@@ -1294,3 +1370,760 @@ async fn push_workload_stats(
 }
 
 const MGMT_WG_PORT: u16 = 51820;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::routing::get;
+    use axum::Router;
+    use runtime::{ContainerStats, ExecSession, LogStream};
+    use spec::WorkloadSpec;
+
+    struct MockRuntime {
+        status: Option<&'static str>,
+        stopped: Mutex<Vec<String>>,
+    }
+
+    impl MockRuntime {
+        fn new(status: Option<&'static str>) -> Self {
+            Self {
+                status,
+                stopped: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl runtime::Runtime for MockRuntime {
+        async fn pull_image(&self, _image: &str) -> Result<()> {
+            Ok(())
+        }
+
+        async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
+            Ok(spec.workload_id.clone())
+        }
+
+        async fn inspect_status(&self, _workload_handle: &str) -> Result<String> {
+            self.status
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!("inspect failed"))
+        }
+
+        fn logs(&self, _workload_handle: &str) -> LogStream {
+            Box::pin(futures_util::stream::empty())
+        }
+
+        async fn exec(&self, _workload_handle: &str) -> Result<ExecSession> {
+            anyhow::bail!("unsupported")
+        }
+
+        async fn stop_workload(&self, workload_handle: &str) -> Result<()> {
+            self.stopped.lock().await.push(workload_handle.to_string());
+            Ok(())
+        }
+
+        async fn stats(&self, _workload_handle: &str) -> Result<ContainerStats> {
+            Ok(ContainerStats::default())
+        }
+    }
+
+    fn workload(id: &str, policy: &str, max_restarts: Option<i32>) -> client::AssignedWorkload {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "image": "img", "cpu_millicores": 100, "memory_bytes": 1,
+            "restart_policy": policy, "max_restarts": max_restarts, "disk_bytes": 1
+        }))
+        .unwrap()
+    }
+
+    fn shared<T: Default>() -> Arc<Mutex<T>> {
+        Arc::new(Mutex::new(T::default()))
+    }
+
+    async fn api_client() -> client::ApiClient {
+        client::install_test_crypto_provider();
+        let app = Router::new()
+            .route(
+                "/api/agents/self/volumes",
+                get(|| async {
+                    axum::Json(serde_json::json!([{
+                        "id": "v1", "pool": "p", "image_name": "i",
+                        "status": "in_use"
+                    }]))
+                }),
+            )
+            .route(
+                "/api/agents/self/workloads/stats",
+                axum::routing::post(|| async { axum::http::StatusCode::OK }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        client::ApiClient::new(url, "pub".to_string(), None, None, None).unwrap()
+    }
+
+    fn runtimes() -> (
+        firecracker::runtime::FirecrackerRuntime,
+        qemu::runtime::QemuRuntime,
+    ) {
+        client::install_test_crypto_provider();
+        let registry = Arc::new(rg_dns::RgDnsRegistry::new());
+        (
+            firecracker::runtime::FirecrackerRuntime::new("k".to_string(), registry.clone(), None),
+            qemu::runtime::QemuRuntime::new("k".to_string(), registry),
+        )
+    }
+
+    #[tokio::test]
+    async fn start_tracker_admits_one_start_per_workload() {
+        let tracker = StartTracker::default();
+        assert!(tracker.try_begin("w").await);
+        assert!(!tracker.try_begin("w").await);
+        tracker.finish("w", true).await;
+        tokio::time::timeout(Duration::from_secs(1), tracker.completed.notified())
+            .await
+            .unwrap();
+        assert!(tracker.try_begin("w").await);
+        tracker.finish("w", false).await;
+    }
+
+    #[test]
+    fn loopback_gateways_ignore_the_override() {
+        let local = "http://127.0.0.1:8000".to_string();
+        assert_eq!(effective_gateway_url(local.clone()), local);
+        adopt_advertised_gateway("http://127.0.0.1:8000", Some("https://other"));
+        adopt_advertised_gateway("https://same", Some("https://same"));
+        adopt_advertised_gateway("https://gw", None);
+    }
+
+    #[tokio::test]
+    async fn healthy_and_unreachable_containers_are_not_restarted() {
+        let counts = shared();
+        let wl = workload("w", "always", None);
+        let running = MockRuntime::new(Some("running"));
+        assert!(!should_restart_after_crash(&running, &wl, "c", &counts).await);
+        let broken = MockRuntime::new(None);
+        assert!(!should_restart_after_crash(&broken, &wl, "c", &counts).await);
+    }
+
+    #[tokio::test]
+    async fn crashed_containers_follow_the_restart_policy() {
+        let counts = shared();
+        let failed = MockRuntime::new(Some("failed"));
+
+        let never = workload("n", "never", None);
+        assert!(!should_restart_after_crash(&failed, &never, "cn", &counts).await);
+        assert_eq!(*failed.stopped.lock().await, vec!["cn".to_string()]);
+
+        let limited = workload("l", "always", Some(1));
+        assert!(should_restart_after_crash(&failed, &limited, "cl", &counts).await);
+        assert!(!should_restart_after_crash(&failed, &limited, "cl", &counts).await);
+        assert_eq!(failed.stopped.lock().await.len(), 2);
+
+        let unlimited = workload("u", "always", None);
+        assert!(should_restart_after_crash(&failed, &unlimited, "cu", &counts).await);
+        assert!(should_restart_after_crash(&failed, &unlimited, "cu", &counts).await);
+        assert_eq!(counts.lock().await["u"], 2);
+    }
+
+    #[tokio::test]
+    async fn removed_workloads_are_torn_down_on_the_matching_runtime() {
+        let firecracker = MockRuntime::new(None);
+        let qemu = MockRuntime::new(None);
+        let vm_ids: Arc<Mutex<HashSet<String>>> = shared();
+        let running: Arc<Mutex<HashMap<String, String>>> = shared();
+        let phases: Arc<Mutex<HashMap<String, String>>> = shared();
+        let counts: Arc<Mutex<HashMap<String, u32>>> = shared();
+        let dns: Arc<Mutex<HashMap<String, (String, String)>>> = shared();
+        {
+            let mut running = running.lock().await;
+            for id in ["keep", "container-gone", "vm-gone"] {
+                running.insert(id.to_string(), format!("handle-{id}"));
+            }
+        }
+        vm_ids.lock().await.insert("vm-gone".to_string());
+        dns.lock().await.insert(
+            "container-gone".to_string(),
+            ("rg".to_string(), "svc".to_string()),
+        );
+        let registry = rg_dns::RgDnsRegistry::new();
+
+        reap_stale_containers(
+            &firecracker,
+            &qemu,
+            &vm_ids,
+            &running,
+            &phases,
+            &counts,
+            &dns,
+            &registry,
+            &[workload("keep", "always", None)],
+        )
+        .await;
+
+        assert_eq!(
+            *firecracker.stopped.lock().await,
+            vec!["handle-container-gone"]
+        );
+        assert_eq!(*qemu.stopped.lock().await, vec!["handle-vm-gone"]);
+        assert_eq!(running.lock().await.len(), 1);
+        assert!(dns.lock().await.is_empty());
+        assert!(vm_ids.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn container_statuses_include_pending_phases() {
+        let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
+        let (firecracker, qemu) = runtimes();
+        let running: Arc<Mutex<HashMap<String, String>>> = shared();
+        let vm_ids: Arc<Mutex<HashSet<String>>> = shared();
+        let phases: Arc<Mutex<HashMap<String, String>>> = shared();
+        running
+            .lock()
+            .await
+            .insert("a".to_string(), "ca".to_string());
+        running
+            .lock()
+            .await
+            .insert("b".to_string(), "cb".to_string());
+        vm_ids.lock().await.insert("b".to_string());
+        phases
+            .lock()
+            .await
+            .insert("a".to_string(), "creating".to_string());
+        phases
+            .lock()
+            .await
+            .insert("pending".to_string(), "pulling".to_string());
+
+        let mut statuses =
+            build_container_statuses(&firecracker, &qemu, &running, &vm_ids, &phases).await;
+        statuses.sort_by(|left, right| left.workload_id.cmp(&right.workload_id));
+
+        assert_eq!(statuses.len(), 3);
+        assert_eq!(statuses[0].status, "failed");
+        assert_eq!(statuses[1].status, "failed");
+        assert_eq!(statuses[2].workload_id, "pending");
+        assert_eq!(statuses[2].status, "pulling");
+        assert!(statuses[2].container_id.is_empty());
+        assert!(!phases.lock().await.contains_key("a"));
+    }
+
+    #[tokio::test]
+    async fn workload_stats_are_pushed_only_when_something_runs() {
+        let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
+        let (firecracker, _) = runtimes();
+        let client = api_client().await;
+        let running: Arc<Mutex<HashMap<String, String>>> = shared();
+        push_workload_stats(&client, "k", &firecracker, &running).await;
+        running
+            .lock()
+            .await
+            .insert("w".to_string(), "c".to_string());
+        push_workload_stats(&client, "k", &firecracker, &running).await;
+    }
+
+    #[tokio::test]
+    async fn volumes_that_cannot_be_mapped_stay_unmounted() {
+        let client = api_client().await;
+        let mounted: Arc<Mutex<HashMap<String, String>>> = shared();
+        process_volumes(&client, uuid::Uuid::nil(), "k", &mounted).await;
+        assert!(mounted.lock().await.is_empty());
+
+        mounted
+            .lock()
+            .await
+            .insert("old".to_string(), "/dev/missing".to_string());
+        release_unassigned_volumes(&mounted, &[]).await;
+        assert!(mounted.lock().await.contains_key("old"));
+    }
+
+    struct ScriptedRuntime {
+        pull_fails: bool,
+        start_fails: bool,
+        stop_fails: bool,
+        network_ip: Option<Option<&'static str>>,
+        started: Mutex<Vec<WorkloadSpec>>,
+        stopped: Mutex<Vec<String>>,
+        network_queries: Mutex<Vec<String>>,
+    }
+
+    impl ScriptedRuntime {
+        fn new() -> Self {
+            Self {
+                pull_fails: false,
+                start_fails: false,
+                stop_fails: false,
+                network_ip: Some(None),
+                started: Mutex::new(Vec::new()),
+                stopped: Mutex::new(Vec::new()),
+                network_queries: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl runtime::Runtime for ScriptedRuntime {
+        async fn pull_image(&self, _image: &str) -> Result<()> {
+            if self.pull_fails {
+                anyhow::bail!("registry unreachable");
+            }
+            Ok(())
+        }
+
+        async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
+            if self.start_fails {
+                anyhow::bail!("boot failed");
+            }
+            self.started.lock().await.push(spec.clone());
+            Ok(format!("handle-{}", spec.workload_id))
+        }
+
+        async fn inspect_status(&self, _workload_handle: &str) -> Result<String> {
+            Ok("running".to_string())
+        }
+
+        fn logs(&self, _workload_handle: &str) -> LogStream {
+            Box::pin(futures_util::stream::empty())
+        }
+
+        async fn exec(&self, _workload_handle: &str) -> Result<ExecSession> {
+            anyhow::bail!("unsupported")
+        }
+
+        async fn stop_workload(&self, workload_handle: &str) -> Result<()> {
+            if self.stop_fails {
+                anyhow::bail!("stop refused");
+            }
+            self.stopped.lock().await.push(workload_handle.to_string());
+            Ok(())
+        }
+
+        async fn stats(&self, _workload_handle: &str) -> Result<ContainerStats> {
+            Ok(ContainerStats::default())
+        }
+
+        async fn service_network_ip(
+            &self,
+            _workload_handle: &str,
+            network_name: &str,
+        ) -> Result<Option<String>> {
+            self.network_queries
+                .lock()
+                .await
+                .push(network_name.to_string());
+            match self.network_ip {
+                Some(ip) => Ok(ip.map(str::to_string)),
+                None => anyhow::bail!("network lookup failed"),
+            }
+        }
+    }
+
+    struct StartState {
+        running: Arc<Mutex<HashMap<String, String>>>,
+        phases: Arc<Mutex<HashMap<String, String>>>,
+        volumes: Arc<Mutex<HashMap<String, String>>>,
+        counts: Arc<Mutex<HashMap<String, u32>>>,
+        dns: Arc<Mutex<HashMap<String, (String, String)>>>,
+        registry: rg_dns::RgDnsRegistry,
+    }
+
+    impl StartState {
+        fn new() -> Self {
+            Self {
+                running: shared(),
+                phases: shared(),
+                volumes: shared(),
+                counts: shared(),
+                dns: shared(),
+                registry: rg_dns::RgDnsRegistry::new(),
+            }
+        }
+
+        async fn start(
+            &self,
+            runtime: &ScriptedRuntime,
+            workload: client::AssignedWorkload,
+        ) -> bool {
+            start_or_restart_workload(
+                runtime,
+                workload,
+                &self.running,
+                &self.phases,
+                &self.volumes,
+                &self.counts,
+                &self.dns,
+                &self.registry,
+            )
+            .await
+        }
+
+        async fn phase(&self, id: &str) -> Option<String> {
+            self.phases.lock().await.get(id).cloned()
+        }
+    }
+
+    fn workload_with(extra: serde_json::Value) -> client::AssignedWorkload {
+        let mut base = serde_json::json!({
+            "id": "w1", "image": "img", "cpu_millicores": 200, "memory_bytes": 1024,
+            "restart_policy": "always", "disk_bytes": 4096
+        });
+        base.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
+    #[tokio::test]
+    async fn started_workloads_are_tracked_and_report_the_starting_phase() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+
+        let restarted = state
+            .start(&runtime, workload_with(serde_json::json!({})))
+            .await;
+
+        assert!(!restarted);
+        assert_eq!(state.phase("w1").await.as_deref(), Some("starting"));
+        assert_eq!(state.running.lock().await["w1"], "handle-w1");
+        let spec = runtime.started.lock().await[0].clone();
+        assert_eq!(spec.cpu_limit_millicores, 200);
+        assert_eq!(spec.memory_limit_bytes, 1024);
+        assert!(spec.vm_spec.is_none());
+    }
+
+    #[tokio::test]
+    async fn limits_never_drop_below_the_requests() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        let workload = workload_with(serde_json::json!({
+            "cpu_limit_millicores": 50, "memory_limit_bytes": 10
+        }));
+
+        state.start(&runtime, workload).await;
+
+        let spec = runtime.started.lock().await[0].clone();
+        assert_eq!(
+            (spec.cpu_limit_millicores, spec.memory_limit_bytes),
+            (200, 1024)
+        );
+    }
+
+    #[tokio::test]
+    async fn virtual_machines_receive_a_boot_disk_specification() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+
+        state
+            .start(
+                &runtime,
+                workload_with(
+                    serde_json::json!({"runtime_class": "vm", "image": "http://iso/os.iso"}),
+                ),
+            )
+            .await;
+
+        let vm = runtime.started.lock().await[0].vm_spec.clone().unwrap();
+        assert_eq!(vm.boot_disk_size_bytes, 4096);
+        assert_eq!(vm.iso_url.as_deref(), Some("http://iso/os.iso"));
+        assert!(vm.boot_disk_path.contains("w1"));
+    }
+
+    #[tokio::test]
+    async fn workloads_wait_until_their_volumes_are_mounted() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        let workload = workload_with(serde_json::json!({
+            "volume_mounts": [{"volume_id": "vol-1", "mount_path": "/data"}]
+        }));
+
+        assert!(!state.start(&runtime, workload.clone()).await);
+        assert_eq!(state.phase("w1").await.as_deref(), Some("scheduled"));
+        assert!(runtime.started.lock().await.is_empty());
+
+        state
+            .volumes
+            .lock()
+            .await
+            .insert("vol-1".to_string(), "/dev/rbd0".to_string());
+        state.start(&runtime, workload).await;
+        let spec = runtime.started.lock().await[0].clone();
+        let mounts = spec.volume_mounts.unwrap();
+        assert_eq!(mounts[0].device_path, "/dev/rbd0");
+        assert_eq!(mounts[0].mount_path, "/data");
+    }
+
+    #[tokio::test]
+    async fn image_pull_failures_clear_the_phase() {
+        let state = StartState::new();
+        let mut runtime = ScriptedRuntime::new();
+        runtime.pull_fails = true;
+
+        assert!(
+            !state
+                .start(&runtime, workload_with(serde_json::json!({})))
+                .await
+        );
+
+        assert!(state.phase("w1").await.is_none());
+        assert!(state.running.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn exhausted_restart_budgets_fail_the_workload() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        state.counts.lock().await.insert("w1".to_string(), 3);
+
+        state
+            .start(
+                &runtime,
+                workload_with(serde_json::json!({"max_restarts": 3})),
+            )
+            .await;
+
+        assert_eq!(state.phase("w1").await.as_deref(), Some("failed"));
+        assert!(runtime.started.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn start_failures_are_counted_and_marked_failed() {
+        let state = StartState::new();
+        let mut runtime = ScriptedRuntime::new();
+        runtime.start_fails = true;
+
+        for _ in 0..2 {
+            assert!(
+                !state
+                    .start(&runtime, workload_with(serde_json::json!({})))
+                    .await
+            );
+        }
+
+        assert_eq!(state.phase("w1").await.as_deref(), Some("failed"));
+        assert_eq!(state.counts.lock().await["w1"], 2);
+    }
+
+    #[tokio::test]
+    async fn requested_restarts_stop_the_old_container_first() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        state
+            .running
+            .lock()
+            .await
+            .insert("w1".to_string(), "old-handle".to_string());
+
+        let restarted = state
+            .start(
+                &runtime,
+                workload_with(serde_json::json!({"restart_requested": true})),
+            )
+            .await;
+
+        assert!(restarted);
+        assert_eq!(
+            *runtime.stopped.lock().await,
+            vec!["old-handle".to_string()]
+        );
+        assert_eq!(state.running.lock().await["w1"], "handle-w1");
+    }
+
+    #[tokio::test]
+    async fn healthy_running_workloads_are_left_alone() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+        state
+            .running
+            .lock()
+            .await
+            .insert("w1".to_string(), "handle".to_string());
+
+        assert!(
+            !state
+                .start(&runtime, workload_with(serde_json::json!({})))
+                .await
+        );
+
+        assert!(runtime.started.lock().await.is_empty());
+        assert!(runtime.stopped.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn failed_stops_abort_the_restart() {
+        let state = StartState::new();
+        let mut runtime = ScriptedRuntime::new();
+        runtime.stop_fails = true;
+        state
+            .running
+            .lock()
+            .await
+            .insert("w1".to_string(), "old-handle".to_string());
+
+        let restarted = state
+            .start(
+                &runtime,
+                workload_with(serde_json::json!({"restart_requested": true})),
+            )
+            .await;
+
+        assert!(!restarted);
+        assert_eq!(state.running.lock().await["w1"], "old-handle");
+        assert!(runtime.started.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn services_are_registered_in_dns_after_start() {
+        for network_ip in [Some(Some("10.0.0.5")), Some(None), None] {
+            let state = StartState::new();
+            let mut runtime = ScriptedRuntime::new();
+            runtime.network_ip = network_ip;
+            let workload = workload_with(serde_json::json!({
+                "resource_group_id": "rg-1", "service_name": "web"
+            }));
+
+            state.start(&runtime, workload).await;
+
+            assert_eq!(
+                state.dns.lock().await["w1"],
+                ("rg-1".to_string(), "web".to_string())
+            );
+            assert_eq!(
+                runtime.network_queries.lock().await[0],
+                spec::rg_network_name("rg-1")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn workloads_without_a_service_name_skip_dns() {
+        let state = StartState::new();
+        let runtime = ScriptedRuntime::new();
+
+        state
+            .start(
+                &runtime,
+                workload_with(serde_json::json!({"resource_group_id": "rg-1"})),
+            )
+            .await;
+
+        assert!(state.dns.lock().await.is_empty());
+        assert!(runtime.network_queries.lock().await.is_empty());
+    }
+
+    struct TickOutcome {
+        failures: u32,
+        heartbeats: usize,
+    }
+
+    async fn run_tick(
+        heartbeat: Option<serde_json::Value>,
+        guard: &mut fence::FenceGuard,
+        starting_failures: u32,
+    ) -> TickOutcome {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _tools = crate::testing::FakeTools::install(&[
+            ("wg", "exit 0"),
+            ("ip", "exit 0"),
+            ("nft", "exit 0"),
+        ]);
+        let heartbeats = Arc::new(AtomicUsize::new(0));
+        let counter = heartbeats.clone();
+        let app = Router::new()
+            .route(
+                "/api/agents/self/volumes",
+                get(|| async { axum::Json(serde_json::json!([])) }),
+            )
+            .route(
+                "/api/agents/self/workloads",
+                get(|| async { axum::Json(serde_json::json!([])) }),
+            )
+            .route(
+                "/api/agents/mesh-peers",
+                get(|| async { axum::Json(serde_json::json!([])) }),
+            )
+            .route(
+                "/api/resource-groups/agent/active-ids",
+                get(|| async { axum::Json(serde_json::json!([])) }),
+            )
+            .route(
+                "/api/registry/agents/{id}/heartbeat",
+                axum::routing::post(move || {
+                    let counter = counter.clone();
+                    let heartbeat = heartbeat.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        match heartbeat {
+                            Some(body) => Ok(axum::Json(body)),
+                            None => Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR),
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        client::install_test_crypto_provider();
+        let client =
+            Arc::new(client::ApiClient::new(url, "pub".to_string(), None, None, None).unwrap());
+        let (firecracker, qemu) = runtimes();
+        let registry = Arc::new(rg_dns::RgDnsRegistry::new());
+        let mut failures = starting_failures;
+
+        reconcile_tick(
+            &client,
+            &StartTracker::default(),
+            uuid::Uuid::new_v4(),
+            "key",
+            &Arc::new(firecracker),
+            &Arc::new(qemu),
+            &shared(),
+            &shared(),
+            &shared(),
+            &shared(),
+            &shared(),
+            &shared(),
+            &registry,
+            &mut failures,
+            guard,
+        )
+        .await;
+
+        TickOutcome {
+            failures,
+            heartbeats: heartbeats.load(Ordering::SeqCst),
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_heartbeats_reset_failures() {
+        let mut guard = fence::FenceGuard::new(0);
+
+        let outcome = run_tick(Some(serde_json::json!({})), &mut guard, 2).await;
+
+        assert_eq!(outcome.heartbeats, 1);
+        assert_eq!(outcome.failures, 0);
+    }
+
+    #[tokio::test]
+    async fn failed_heartbeats_are_counted() {
+        let mut guard = fence::FenceGuard::new(0);
+
+        let outcome = run_tick(None, &mut guard, 1).await;
+
+        assert_eq!(outcome.heartbeats, 1);
+        assert_eq!(outcome.failures, 2);
+    }
+
+    #[tokio::test]
+    async fn prolonged_isolation_fences_the_agent() {
+        let mut guard = fence::FenceGuard::new(1);
+        let long_ago = std::time::Instant::now() - Duration::from_secs(30);
+        assert!(!guard.record_failure(long_ago));
+
+        let outcome = run_tick(None, &mut guard, 0).await;
+
+        assert_eq!(outcome.failures, 1);
+        assert!(!guard.record_failure(std::time::Instant::now()));
+    }
+}

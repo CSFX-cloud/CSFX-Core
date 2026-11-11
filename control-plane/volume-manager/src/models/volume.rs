@@ -66,6 +66,11 @@ pub struct CreateVolumeRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResizeVolumeRequest {
+    pub size_gb: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachVolumeRequest {
     pub agent_id: Uuid,
     pub workload_id: Option<Uuid>,

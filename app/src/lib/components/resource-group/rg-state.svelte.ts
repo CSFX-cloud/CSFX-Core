@@ -11,6 +11,8 @@ import {
     type Volume,
     type Workload,
 } from "$lib/api/resource-groups";
+import { listRegistries, type Registry } from "$lib/api/registries";
+import { listSites, type SiteSummary } from "$lib/api/sites";
 import { listVaults, type Vault } from "$lib/api/vaults";
 import { groupHealth } from "$lib/utils/group-health";
 import { isTransientStatus } from "$lib/utils/status.js";
@@ -24,6 +26,8 @@ export class ResourceGroupState {
     buckets = $state<Bucket[]>([]);
     gateways = $state<Gateway[]>([]);
     vaults = $state<Vault[]>([]);
+    sites = $state<SiteSummary[]>([]);
+    registries = $state<Registry[]>([]);
     loading = $state(true);
     error = $state<string | null>(null);
 
@@ -38,7 +42,9 @@ export class ResourceGroupState {
     );
 
     hasTransientStatus = $derived(
-        this.workloads.some((w) => isTransientStatus(w.status)) || this.volumes.some((v) => isTransientStatus(v.status)),
+        this.workloads.some((w) => isTransientStatus(w.status)) ||
+            this.volumes.some((v) => isTransientStatus(v.status)) ||
+            this.sites.some((site) => site.latest?.status === "queued" || site.latest?.status === "building"),
     );
 
     constructor(readonly rgId: string) {}
@@ -46,13 +52,15 @@ export class ResourceGroupState {
     load = async () => {
         if (!auth.token) return;
         try {
-            [this.group, this.workloads, this.volumes, this.buckets, this.gateways, this.vaults] = await Promise.all([
+            [this.group, this.workloads, this.volumes, this.buckets, this.gateways, this.vaults, this.sites, this.registries] = await Promise.all([
                 getResourceGroup(auth.token, this.rgId),
                 listResourceGroupWorkloads(auth.token, this.rgId),
                 listResourceGroupVolumes(auth.token, this.rgId),
                 listResourceGroupBuckets(auth.token, this.rgId),
                 listGateways(auth.token, this.rgId),
                 listVaults(auth.token, this.rgId).catch((): Vault[] => []),
+                listSites(auth.token, this.rgId).catch((): SiteSummary[] => []),
+                listRegistries(auth.token, this.rgId).catch((): Registry[] => []),
             ]);
         } catch (e) {
             this.error = e instanceof Error ? e.message : "Failed to load";

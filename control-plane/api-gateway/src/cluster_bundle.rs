@@ -30,6 +30,7 @@ pub enum BundleError {
     EmptyCredential(&'static str),
 }
 
+const SITE_SECRET_VAR: &str = "CSFX_SITE_SECRET";
 const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
 const VIP_PREFIX_VAR: &str = "CSFX_VIP_PREFIX";
 const VIP_ROUTER_ID_VAR: &str = "CSFX_VIP_ROUTER_ID";
@@ -99,6 +100,8 @@ pub struct ClusterSecrets {
     pub openbao_seal_key: String,
     pub openbao_role_id: String,
     pub openbao_secret_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_secret: Option<String>,
 }
 
 impl ClusterSecrets {
@@ -125,6 +128,9 @@ impl ClusterSecrets {
             openbao_seal_key: filled_credential(credentials, CREDENTIAL_OPENBAO_SEAL_KEY)?,
             openbao_role_id: filled_credential(credentials, CREDENTIAL_OPENBAO_ROLE_ID)?,
             openbao_secret_id: filled_credential(credentials, CREDENTIAL_OPENBAO_SECRET_ID)?,
+            site_secret: std::env::var(SITE_SECRET_VAR)
+                .ok()
+                .filter(|value| !value.is_empty()),
         })
     }
 }
@@ -244,5 +250,166 @@ mod tests {
         assert_eq!(database_password("postgres://csfx@localhost/csfx"), None);
         assert_eq!(database_password("postgres://csfx:@localhost/csfx"), None);
         assert_eq!(database_password("not a url"), None);
+    }
+
+    static ENVIRONMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    const MANAGED_VARIABLES: [&str; 8] = [
+        "CREDENTIALS_DIRECTORY",
+        "DATABASE_URL",
+        "JWT_SECRET",
+        "GARAGE_ADMIN_TOKEN",
+        "OBJECT_STORAGE_ENCRYPTION_KEY",
+        SITE_SECRET_VAR,
+        VIP_ADDRESS_VAR,
+        VIP_PREFIX_VAR,
+    ];
+
+    fn credentials_directory() -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(format!("csfx-bundle-{}", std::process::id()));
+        std::fs::remove_dir_all(&directory).ok();
+        std::fs::create_dir_all(&directory).unwrap();
+        let files = [
+            (CREDENTIAL_GARAGE_ENV, "GARAGE_RPC_SECRET=rpc-secret\n"),
+            (CREDENTIAL_PATRONI_SUPERUSER, "super\n"),
+            (CREDENTIAL_PATRONI_REPLICATION, "replica\n"),
+            (CREDENTIAL_OPENBAO_SEAL_KEY, "seal\n"),
+            (CREDENTIAL_OPENBAO_ROLE_ID, "role\n"),
+            (CREDENTIAL_OPENBAO_SECRET_ID, "secret\n"),
+        ];
+        for (name, contents) in files {
+            std::fs::write(directory.join(name), contents).unwrap();
+        }
+        directory
+    }
+
+    fn set_required_environment(directory: &Path) {
+        std::env::set_var("CREDENTIALS_DIRECTORY", directory);
+        std::env::set_var("DATABASE_URL", "postgres://csfx:db-pass@localhost/csfx");
+        std::env::set_var("JWT_SECRET", "jwt");
+        std::env::set_var("GARAGE_ADMIN_TOKEN", "admin");
+        std::env::set_var("OBJECT_STORAGE_ENCRYPTION_KEY", "key");
+        std::env::remove_var(SITE_SECRET_VAR);
+    }
+
+    #[test]
+    fn cluster_secrets_are_assembled_from_environment_and_credentials() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<_> = MANAGED_VARIABLES
+            .iter()
+            .map(|name| (*name, std::env::var(name).ok()))
+            .collect();
+        let directory = credentials_directory();
+
+        for name in MANAGED_VARIABLES {
+            std::env::remove_var(name);
+        }
+        assert!(matches!(
+            ClusterSecrets::load(),
+            Err(BundleError::MissingCredentialsDirectory)
+        ));
+
+        set_required_environment(&directory);
+        std::env::remove_var("JWT_SECRET");
+        assert!(matches!(
+            ClusterSecrets::load(),
+            Err(BundleError::MissingEnvironment("JWT_SECRET"))
+        ));
+
+        set_required_environment(&directory);
+        std::env::set_var("DATABASE_URL", "postgres://csfx@localhost/csfx");
+        assert!(matches!(
+            ClusterSecrets::load(),
+            Err(BundleError::MissingDatabasePassword)
+        ));
+
+        set_required_environment(&directory);
+        let secrets = ClusterSecrets::load().unwrap();
+        assert_eq!(secrets.db_password, "db-pass");
+        assert_eq!(secrets.garage_rpc_secret, "rpc-secret");
+        assert_eq!(secrets.patroni_superuser_password, "super");
+        assert_eq!(secrets.openbao_secret_id, "secret");
+        assert!(secrets.site_secret.is_none());
+
+        std::env::set_var(SITE_SECRET_VAR, "site");
+        assert_eq!(
+            ClusterSecrets::load().unwrap().site_secret.as_deref(),
+            Some("site")
+        );
+
+        std::fs::write(directory.join(CREDENTIAL_OPENBAO_ROLE_ID), "\n").unwrap();
+        assert!(matches!(
+            ClusterSecrets::load(),
+            Err(BundleError::EmptyCredential(CREDENTIAL_OPENBAO_ROLE_ID))
+        ));
+
+        std::fs::write(directory.join(CREDENTIAL_GARAGE_ENV), "OTHER=1\n").unwrap();
+        assert!(matches!(
+            ClusterSecrets::load(),
+            Err(BundleError::MissingGarageSecret)
+        ));
+
+        std::fs::remove_file(directory.join(CREDENTIAL_PATRONI_SUPERUSER)).unwrap();
+        std::fs::write(
+            directory.join(CREDENTIAL_GARAGE_ENV),
+            "GARAGE_RPC_SECRET=x\n",
+        )
+        .unwrap();
+        assert!(matches!(
+            ClusterSecrets::load(),
+            Err(BundleError::Credential {
+                name: CREDENTIAL_PATRONI_SUPERUSER,
+                ..
+            })
+        ));
+
+        for (name, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn vip_is_read_from_the_environment() {
+        let _guard = ENVIRONMENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<_> = [VIP_ADDRESS_VAR, VIP_PREFIX_VAR, VIP_ROUTER_ID_VAR]
+            .iter()
+            .map(|name| (*name, std::env::var(name).ok()))
+            .collect();
+        std::env::remove_var(VIP_ADDRESS_VAR);
+        assert!(ClusterVip::from_env().is_none());
+        std::env::set_var(VIP_ADDRESS_VAR, "10.1.2.3");
+        std::env::set_var(VIP_PREFIX_VAR, "20");
+        std::env::remove_var(VIP_ROUTER_ID_VAR);
+        let vip = ClusterVip::from_env().unwrap();
+        assert_eq!(
+            (vip.address.as_str(), vip.prefix_length, vip.router_id),
+            ("10.1.2.3", 20, 51)
+        );
+        for (name, value) in saved {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
+    #[test]
+    fn bundle_errors_render_readable_messages() {
+        assert_eq!(
+            BundleError::MissingEnvironment("JWT_SECRET").to_string(),
+            "environment variable JWT_SECRET is not set"
+        );
+        assert_eq!(
+            BundleError::EmptyCredential("x").to_string(),
+            "credential x is empty because openbao is not bootstrapped yet"
+        );
+        assert_eq!(
+            BundleError::MissingCa.to_string(),
+            "cluster CA is not available"
+        );
     }
 }

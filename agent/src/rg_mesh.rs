@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
-use crate::client::{ApiClient, ResourceGroupMember, ResourceGroupPeer};
+use crate::client::{ApiClient, ResourceGroupMember, ResourceGroupPeer, SiteService};
 use crate::rg_dns::RgDnsRegistry;
 use crate::rg_network;
 use crate::spec::rg_wireguard_port;
@@ -44,6 +44,8 @@ async fn sync_group(
         .fetch_resource_group_members(api_key, resource_group_id)
         .await?;
 
+    let sites = fetch_site_services(client, api_key, resource_group_id).await;
+
     let iface = wireguard::rg_interface_name(resource_group_id);
     let wg_peers = build_peers(resource_group_id, agent_id, peers, &members);
     wireguard::reconcile_peers(&iface, &wg_peers).await?;
@@ -51,8 +53,25 @@ async fn sync_group(
     announce_moved_guests(resource_group_id, &added).await;
 
     dns_registry
-        .sync_services(resource_group_id, service_records(&members))
+        .sync_services(resource_group_id, service_records(&members, &sites))
         .await
+}
+
+async fn fetch_site_services(
+    client: &ApiClient,
+    api_key: &str,
+    resource_group_id: &str,
+) -> Vec<SiteService> {
+    match client
+        .fetch_resource_group_site_services(api_key, resource_group_id)
+        .await
+    {
+        Ok(sites) => sites,
+        Err(e) => {
+            warn!(resource_group_id = %resource_group_id, error = %e, "Failed to fetch site services");
+            Vec::new()
+        }
+    }
 }
 
 async fn announce_moved_guests(resource_group_id: &str, guest_ips: &[String]) {
@@ -104,10 +123,18 @@ fn remote_guest_ips(agent_id: &str, members: &[ResourceGroupMember]) -> HashSet<
         .collect()
 }
 
-fn service_records(members: &[ResourceGroupMember]) -> HashMap<String, String> {
-    members
+fn service_records(
+    members: &[ResourceGroupMember],
+    sites: &[SiteService],
+) -> HashMap<String, String> {
+    sites
         .iter()
-        .filter_map(|member| Some((member.service_name.clone()?, member.guest_ip.clone())))
+        .map(|site| (site.service_name.clone(), site.address.clone()))
+        .chain(
+            members
+                .iter()
+                .filter_map(|member| Some((member.service_name.clone()?, member.guest_ip.clone()))),
+        )
         .collect()
 }
 
@@ -175,11 +202,30 @@ mod tests {
             member("b", Some("api"), "10.0.0.4"),
             member("b", None, "10.0.0.5"),
         ];
-        let records = service_records(&members);
+        let records = service_records(&members, &[]);
 
         assert_eq!(records.len(), 2);
         assert_eq!(records["web"], "10.0.0.3");
         assert_eq!(records["api"], "10.0.0.4");
+    }
+
+    #[test]
+    fn site_services_are_published_and_never_shadow_a_member() {
+        let members = vec![member("a", Some("docs"), "10.0.0.3")];
+        let sites = vec![
+            SiteService {
+                service_name: "docs".to_string(),
+                address: "192.168.105.200".to_string(),
+            },
+            SiteService {
+                service_name: "blog".to_string(),
+                address: "192.168.105.200".to_string(),
+            },
+        ];
+        let records = service_records(&members, &sites);
+
+        assert_eq!(records["blog"], "192.168.105.200");
+        assert_eq!(records["docs"], "10.0.0.3");
     }
 
     #[test]

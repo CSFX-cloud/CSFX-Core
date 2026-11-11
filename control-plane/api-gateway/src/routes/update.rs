@@ -13,8 +13,6 @@ use crate::auth::rbac::CanManageSystem;
 use crate::AppState;
 
 const ETCD_DESIRED_VERSION_KEY: &str = "/csfx/config/desired_version";
-const ETCD_AVAILABLE_FLAKE_REV_KEY: &str = "/csfx/config/available_flake_rev";
-const ETCD_DESIRED_FLAKE_REV_KEY: &str = "/csfx/config/desired_flake_rev";
 const ETCD_BUILD_STATUS_KEY: &str = "/csfx/config/cp_build_status";
 const ETCD_RESULT_KEY: &str = "/csfx/config/last_build_result";
 const ETCD_PAUSED_KEY: &str = "/csfx/config/update_paused";
@@ -35,8 +33,6 @@ pub struct UpdateResponse {
 pub struct UpdateStatusResponse {
     pub current_version: String,
     pub desired_version: Option<String>,
-    pub available_flake_rev: Option<String>,
-    pub desired_flake_rev: Option<String>,
     pub build_status: Option<String>,
     pub last_result: Option<String>,
     pub paused: bool,
@@ -103,8 +99,6 @@ async fn update_status(
     let mut client = etcd_client().await?;
 
     let desired_version = etcd_get(&mut client, ETCD_DESIRED_VERSION_KEY).await?;
-    let available_flake_rev = etcd_get(&mut client, ETCD_AVAILABLE_FLAKE_REV_KEY).await?;
-    let desired_flake_rev = etcd_get(&mut client, ETCD_DESIRED_FLAKE_REV_KEY).await?;
     let build_status = etcd_get(&mut client, ETCD_BUILD_STATUS_KEY).await?;
     let last_result = etcd_get(&mut client, ETCD_RESULT_KEY).await?;
     let paused = etcd_get(&mut client, ETCD_PAUSED_KEY).await?.as_deref() == Some("true");
@@ -112,8 +106,6 @@ async fn update_status(
     Ok(Json(UpdateStatusResponse {
         current_version: env!("CARGO_PKG_VERSION").to_string(),
         desired_version,
-        available_flake_rev,
-        desired_flake_rev,
         build_status,
         last_result,
         paused,
@@ -133,7 +125,7 @@ async fn etcd_get(client: &mut Client, key: &str) -> Result<Option<String>, Stat
         .map(|s| s.to_string()))
 }
 
-fn is_valid_version(version: &str) -> bool {
+pub(crate) fn is_valid_version(version: &str) -> bool {
     let v = version.trim_start_matches('v');
     !v.is_empty()
         && v.chars()

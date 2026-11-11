@@ -193,6 +193,7 @@ mod tests {
             memory_usage_bytes: Some(memory_usage),
             network_rx_bytes: None,
             network_tx_bytes: None,
+            volume_usage: None,
             stats_updated_at: None,
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: None,

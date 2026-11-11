@@ -6,8 +6,11 @@ use axum::{
 };
 use uuid::Uuid;
 
-use crate::models::volume::{AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest};
+use crate::models::volume::{
+    AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest, ResizeVolumeRequest,
+};
 use crate::server::AppState;
+use crate::services::volume::ServiceError;
 
 pub async fn create_volume(
     State(state): State<AppState>,
@@ -56,11 +59,7 @@ pub async fn delete_volume(
 ) -> impl IntoResponse {
     match state.volume_service.delete_volume(id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
+        Err(e) => service_error_response(e),
     }
 }
 
@@ -71,11 +70,18 @@ pub async fn attach_volume(
 ) -> impl IntoResponse {
     match state.volume_service.attach_volume(id, req).await {
         Ok(vol) => (StatusCode::OK, Json(serde_json::json!(vol))).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        )
-            .into_response(),
+        Err(e) => service_error_response(e),
+    }
+}
+
+pub async fn resize_volume(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ResizeVolumeRequest>,
+) -> impl IntoResponse {
+    match state.volume_service.resize_volume(id, req).await {
+        Ok(vol) => (StatusCode::OK, Json(serde_json::json!(vol))).into_response(),
+        Err(e) => service_error_response(e),
     }
 }
 
@@ -120,4 +126,12 @@ pub async fn list_snapshots(
         )
             .into_response(),
     }
+}
+
+fn service_error_response(error: ServiceError) -> axum::response::Response {
+    let (status, message) = match error {
+        ServiceError::Conflict(message) => (StatusCode::CONFLICT, message),
+        ServiceError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
 }

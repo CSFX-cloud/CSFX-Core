@@ -25,3 +25,43 @@ pub enum Relation {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model() -> Model {
+        Model {
+            id: Uuid::new_v4(),
+            resource_group_id: Uuid::new_v4(),
+            name: "production".to_string(),
+            sealed: false,
+            soft_delete_days: 7,
+            created_at: chrono::NaiveDateTime::default(),
+        }
+    }
+
+    #[test]
+    fn model_round_trips_through_json() {
+        let original = model();
+        let raw = serde_json::to_string(&original).unwrap();
+        assert_eq!(serde_json::from_str::<Model>(&raw).unwrap(), original);
+    }
+
+    #[test]
+    fn active_model_conversion_preserves_fields() {
+        let original = model();
+        let active: ActiveModel = original.clone().into();
+        assert_eq!(active.name.unwrap(), original.name);
+        assert_eq!(
+            active.resource_group_id.unwrap(),
+            original.resource_group_id
+        );
+    }
+
+    #[test]
+    fn table_and_columns_are_named_after_the_schema() {
+        assert_eq!(Entity.table_name(), "vaults");
+        assert_eq!(Column::ResourceGroupId.to_string(), "resource_group_id");
+    }
+}

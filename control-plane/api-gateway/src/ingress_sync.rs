@@ -1,4 +1,4 @@
-use entity::entities::{agents, ingress_routes, workloads};
+use entity::entities::{agents, ingress_routes, site_domains, sites, workloads};
 use etcd_client::{Client, GetOptions};
 use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 use serde_json::{json, Map, Value};
@@ -11,6 +11,7 @@ use uuid::Uuid;
 const LEADER_KEY: &str = "/csfx/leaders/ingress-sync";
 const KEY_PREFIX: &str = "traefik/http/";
 const OWNED_MARKER: &str = "/csfx-";
+const SITE_EDGE_VARIABLE: &str = "CSFX_SITE_EDGE_URL";
 const REDIRECT_MIDDLEWARE: &str = "csfx-redirect-https";
 const ENTRYPOINT_WEB: &str = "web";
 const ENTRYPOINT_WEBSECURE: &str = "websecure";
@@ -149,6 +150,72 @@ pub fn diff_entries(
 }
 
 pub async fn load_targets(
+    db: &DatabaseConnection,
+    gateway_id: Uuid,
+) -> Result<Vec<RouteTarget>, DbErr> {
+    let mut targets = workload_targets(db, gateway_id).await?;
+    targets.extend(site_targets(db, gateway_id).await?);
+    Ok(targets)
+}
+
+pub fn domain_target(domain: site_domains::Model, backend: &str) -> RouteTarget {
+    RouteTarget {
+        id: domain.id,
+        hostname: domain.hostname,
+        tls: true,
+        backend: backend.to_string(),
+    }
+}
+
+pub fn site_edge_backend() -> Option<String> {
+    std::env::var(SITE_EDGE_VARIABLE)
+        .ok()
+        .filter(|value| !value.is_empty())
+}
+
+pub fn site_edge_address() -> Option<String> {
+    let backend = site_edge_backend()?;
+    let host = backend.split("://").last()?.split(['/', ':']).next()?;
+    host.parse::<std::net::Ipv4Addr>()
+        .ok()
+        .map(|address| address.to_string())
+}
+
+pub fn site_edge_port() -> Option<u16> {
+    let backend = site_edge_backend()?;
+    let authority = backend.split("://").last()?.split('/').next()?;
+    authority.rsplit_once(':')?.1.parse().ok()
+}
+
+async fn site_targets(
+    db: &DatabaseConnection,
+    gateway_id: Uuid,
+) -> Result<Vec<RouteTarget>, DbErr> {
+    let Some(backend) = site_edge_backend() else {
+        return Ok(Vec::new());
+    };
+    let site_ids: Vec<Uuid> = sites::Entity::find()
+        .filter(sites::Column::GatewayId.eq(gateway_id))
+        .filter(sites::Column::Mode.eq("static"))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|site| site.id)
+        .collect();
+    if site_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(site_domains::Entity::find()
+        .filter(site_domains::Column::SiteId.is_in(site_ids))
+        .filter(site_domains::Column::Kind.ne("internal"))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|domain| domain_target(domain, &backend))
+        .collect())
+}
+
+async fn workload_targets(
     db: &DatabaseConnection,
     gateway_id: Uuid,
 ) -> Result<Vec<RouteTarget>, DbErr> {
@@ -308,6 +375,19 @@ async fn connect() -> anyhow::Result<(LeaderLease, Client)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn edge_address_is_the_ipv4_host_of_the_edge_url() {
+        std::env::set_var("CSFX_SITE_EDGE_URL", "http://192.168.105.200:8010");
+        assert_eq!(
+            super::site_edge_address().as_deref(),
+            Some("192.168.105.200")
+        );
+        assert_eq!(super::site_edge_port(), Some(8010));
+        std::env::set_var("CSFX_SITE_EDGE_URL", "http://edge.internal:8010");
+        assert_eq!(super::site_edge_address(), None);
+        std::env::remove_var("CSFX_SITE_EDGE_URL");
+    }
+
     use super::*;
 
     const ZONE: &str = "csfx.internal";
@@ -323,6 +403,22 @@ mod tests {
 
     fn router_name() -> String {
         format!("csfx-{}", Uuid::nil())
+    }
+
+    #[test]
+    fn site_domains_route_to_the_edge_backend() {
+        let domain = site_domains::Model {
+            id: Uuid::from_u128(7),
+            site_id: Uuid::nil(),
+            hostname: "shop.csfx.dev".to_string(),
+            kind: "production".to_string(),
+            branch: None,
+            created_at: chrono::NaiveDateTime::default(),
+        };
+        let target = domain_target(domain, "http://edge:8008");
+        assert_eq!(target.hostname, "shop.csfx.dev");
+        assert_eq!(target.backend, "http://edge:8008");
+        assert!(target.tls);
     }
 
     #[test]
@@ -438,5 +534,73 @@ mod tests {
 
         assert!(!first.puts.is_empty());
         assert_eq!(second, EntryDiff::default());
+    }
+
+    fn with_site_edge<T>(value: Option<&str>, check: impl FnOnce() -> T) -> T {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var(SITE_EDGE_VARIABLE).ok();
+        match value {
+            Some(value) => std::env::set_var(SITE_EDGE_VARIABLE, value),
+            None => std::env::remove_var(SITE_EDGE_VARIABLE),
+        }
+        let result = check();
+        match saved {
+            Some(saved) => std::env::set_var(SITE_EDGE_VARIABLE, saved),
+            None => std::env::remove_var(SITE_EDGE_VARIABLE),
+        }
+        result
+    }
+
+    #[test]
+    fn site_edge_is_absent_when_unset_or_empty() {
+        for value in [None, Some("")] {
+            with_site_edge(value, || {
+                assert!(site_edge_backend().is_none());
+                assert!(site_edge_address().is_none());
+                assert!(site_edge_port().is_none());
+            });
+        }
+    }
+
+    #[test]
+    fn site_edge_exposes_address_and_port_of_an_ip_backend() {
+        with_site_edge(Some("http://10.1.2.3:8080/path"), || {
+            assert_eq!(
+                site_edge_backend().as_deref(),
+                Some("http://10.1.2.3:8080/path")
+            );
+            assert_eq!(site_edge_address().as_deref(), Some("10.1.2.3"));
+            assert_eq!(site_edge_port(), Some(8080));
+        });
+    }
+
+    #[test]
+    fn site_edge_hostnames_have_no_address_and_ports_are_optional() {
+        with_site_edge(Some("http://edge.internal:9000"), || {
+            assert!(site_edge_address().is_none());
+            assert_eq!(site_edge_port(), Some(9000));
+        });
+        with_site_edge(Some("http://10.0.0.9"), || {
+            assert_eq!(site_edge_address().as_deref(), Some("10.0.0.9"));
+            assert!(site_edge_port().is_none());
+        });
+    }
+
+    #[test]
+    fn site_domains_become_tls_routes_to_the_edge() {
+        let domain = site_domains::Model {
+            id: Uuid::new_v4(),
+            site_id: Uuid::new_v4(),
+            hostname: "app.example.test".to_string(),
+            kind: "custom".to_string(),
+            branch: None,
+            created_at: chrono::NaiveDateTime::default(),
+        };
+        let target = domain_target(domain.clone(), "http://10.0.0.9:80");
+        assert_eq!(target.id, domain.id);
+        assert_eq!(target.hostname, "app.example.test");
+        assert!(target.tls);
+        assert_eq!(target.backend, "http://10.0.0.9:80");
     }
 }
