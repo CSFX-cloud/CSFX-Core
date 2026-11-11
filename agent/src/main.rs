@@ -1473,7 +1473,6 @@ mod tests {
         qemu::runtime::QemuRuntime,
     ) {
         client::install_test_crypto_provider();
-        let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
         let registry = Arc::new(rg_dns::RgDnsRegistry::new());
         (
             firecracker::runtime::FirecrackerRuntime::new("k".to_string(), registry.clone(), None),
@@ -1580,6 +1579,7 @@ mod tests {
 
     #[tokio::test]
     async fn container_statuses_include_pending_phases() {
+        let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
         let (firecracker, qemu) = runtimes();
         let running: Arc<Mutex<HashMap<String, String>>> = shared();
         let vm_ids: Arc<Mutex<HashSet<String>>> = shared();
@@ -1617,6 +1617,7 @@ mod tests {
 
     #[tokio::test]
     async fn workload_stats_are_pushed_only_when_something_runs() {
+        let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
         let (firecracker, _) = runtimes();
         let client = api_client().await;
         let running: Arc<Mutex<HashMap<String, String>>> = shared();
