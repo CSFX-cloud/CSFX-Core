@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use uuid::Uuid;
 
+pub const TOKEN_LIFETIME_HOURS: i64 = 24;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String, // Subject (user ID)
@@ -16,7 +18,7 @@ pub struct Claims {
 impl Claims {
     pub fn new(user_id: Uuid, username: String) -> Self {
         let now = Utc::now();
-        let exp = now + Duration::hours(24); // Token expires in 24 hours
+        let exp = now + Duration::hours(TOKEN_LIFETIME_HOURS);
 
         Claims {
             sub: user_id.to_string(),
