@@ -19,6 +19,7 @@
 
     let email = $state(auth.user?.email ?? "");
     let emailSaving = $state(false);
+    let emailPassword = $state("");
 
     let gravatarEmail = $state(auth.user?.gravatar_email ?? "");
     let gravatarSaving = $state(false);
@@ -40,7 +41,8 @@
     let confirmPassword = $state("");
     let passwordSaving = $state(false);
 
-    let twoFactorStep = $state<"idle" | "enrolling" | "disabling">("idle");
+    let twoFactorStep = $state<"idle" | "authorizing" | "enrolling" | "disabling">("idle");
+    let twoFactorPassword = $state("");
     let qrCode = $state("");
     let otpValue = $state("");
     let twoFactorBusy = $state(false);
@@ -54,7 +56,8 @@
         if (!auth.token || !emailChanged) return;
         emailSaving = true;
         try {
-            await changeEmail(auth.token, email.trim());
+            await changeEmail(auth.token, email.trim(), emailPassword);
+            emailPassword = "";
             auth.setUser({ ...auth.user!, email: email.trim() });
             toast.success("Email updated");
         } catch {
@@ -83,7 +86,7 @@
         if (!auth.token || !passwordValid) return;
         passwordSaving = true;
         try {
-            await changePassword(auth.token, oldPassword, newPassword);
+            auth.setToken(await changePassword(auth.token, oldPassword, newPassword));
             oldPassword = "";
             newPassword = "";
             confirmPassword = "";
@@ -98,19 +101,26 @@
     async function toggleTwoFactor(next: boolean) {
         if (!auth.token) return;
         if (next) {
-            twoFactorBusy = true;
-            try {
-                const response = await setup2FA(auth.token);
-                qrCode = response.qr_code;
-                twoFactorStep = "enrolling";
-            } catch {
-                toast.error("Failed to start 2FA setup");
-            } finally {
-                twoFactorBusy = false;
-            }
+            twoFactorStep = "authorizing";
+            twoFactorPassword = "";
         } else {
             twoFactorStep = "disabling";
             otpValue = "";
+        }
+    }
+
+    async function startEnrollment() {
+        if (!auth.token || !twoFactorPassword) return;
+        twoFactorBusy = true;
+        try {
+            const response = await setup2FA(auth.token, twoFactorPassword);
+            qrCode = response.qr_code;
+            twoFactorStep = "enrolling";
+            twoFactorPassword = "";
+        } catch {
+            toast.error("Failed to start 2FA setup", { description: "Check your current password" });
+        } finally {
+            twoFactorBusy = false;
         }
     }
 
@@ -151,6 +161,7 @@
     function cancelTwoFactorStep() {
         twoFactorStep = "idle";
         otpValue = "";
+        twoFactorPassword = "";
         qrCode = "";
     }
 </script>
@@ -200,11 +211,17 @@
                     <label class="cx-label" for="st-mail">Email</label>
                     <div class="st-row">
                         <input class="cx-input" id="st-mail" type="email" autocomplete="email" placeholder="you@example.com" bind:value={email} />
-                        <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" style="height: 44px" disabled={!emailChanged || emailSaving} onclick={saveEmail}>
+                        <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" style="height: 44px" disabled={!emailChanged || !emailPassword || emailSaving} onclick={saveEmail}>
                             {#if emailSaving}<Spinner />{:else}Save{/if}
                         </button>
                     </div>
                 </div>
+                {#if emailChanged}
+                    <div class="cx-field">
+                        <label class="cx-label" for="st-mail-pw">Current password</label>
+                        <PasswordInput id="st-mail-pw" autocomplete="current-password" bind:value={emailPassword} />
+                    </div>
+                {/if}
             </div>
         </div>
     </section>
@@ -253,7 +270,26 @@
                 onchange={toggleTwoFactor}
             />
         </div>
-        {#if twoFactorStep === "enrolling"}
+        {#if twoFactorStep === "authorizing"}
+            <form
+                style="display: grid; gap: 16px"
+                onsubmit={(event) => {
+                    event.preventDefault();
+                    startEnrollment();
+                }}
+            >
+                <div class="cx-field">
+                    <label class="cx-label" for="st-2fa-pw">Current password</label>
+                    <PasswordInput id="st-2fa-pw" autocomplete="current-password" bind:value={twoFactorPassword} />
+                </div>
+                <div class="db-actions">
+                    <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={!twoFactorPassword || twoFactorBusy} aria-busy={twoFactorBusy}>
+                        {#if twoFactorBusy}<Spinner />{:else}Continue{/if}
+                    </button>
+                    <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={cancelTwoFactorStep}>Cancel</button>
+                </div>
+            </form>
+        {:else if twoFactorStep === "enrolling"}
             {@render otpPanel("Scan the QR code with your authenticator app, then enter the code.", "Confirm", false, confirmEnable)}
         {:else if twoFactorStep === "disabling"}
             {@render otpPanel("Enter your current code to disable two-factor authentication.", "Disable", true, confirmDisable)}

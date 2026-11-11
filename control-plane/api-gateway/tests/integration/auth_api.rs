@@ -4,6 +4,19 @@ use totp_rs::{Algorithm, Secret, TOTP};
 
 use crate::common::{harness, ADMIN_PASSWORD};
 
+fn token_issued_at(user_id: uuid::Uuid, name: &str, issued_at: i64) -> String {
+    let mut claims = api_gateway::auth::jwt::Claims::new(user_id, name.to_string());
+    claims.iat = issued_at;
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(
+            api_gateway::auth::jwt::get_jwt_secret().as_ref(),
+        ),
+    )
+    .unwrap()
+}
+
 fn current_code(secret: &str, username: &str) -> String {
     TOTP::new(
         Algorithm::SHA1,
@@ -123,10 +136,23 @@ async fn two_factor_lifecycle_gates_login() {
     let call = |method, uri: &'static str, body| {
         harness.send(method, uri, Some(token.as_str()), Some(body))
     };
+    let encrypted = harness.encrypted(ADMIN_PASSWORD).await;
 
-    let (status, setup) = harness
-        .send(Method::POST, "/api/2fa/setup", Some(&token), None)
+    for password in [String::new(), harness.encrypted("wrong-password").await] {
+        let (status, _) = call(
+            Method::POST,
+            "/api/2fa/setup",
+            json!({"password": password}),
+        )
         .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (status, setup) = call(
+        Method::POST,
+        "/api/2fa/setup",
+        json!({"password": encrypted}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let secret = setup["secret"].as_str().unwrap().to_string();
     assert!(setup["qr_code"].is_string());
@@ -141,7 +167,6 @@ async fn two_factor_lifecycle_gates_login() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    let encrypted = harness.encrypted(ADMIN_PASSWORD).await;
     let login = |code: Option<String>| {
         harness.send(
             Method::POST,
@@ -198,22 +223,25 @@ async fn enabling_two_factor_without_setup_is_rejected() {
 #[ignore = "requires postgres via DATABASE_URL"]
 async fn password_change_replaces_credentials() {
     let harness = harness().await;
-    let (_, name, token) = harness.user_with_token().await;
+    let (id, name, token) = harness.user_with_token().await;
+    let stale_token = token_issued_at(id, &name, chrono::Utc::now().timestamp() - 60);
     let old = harness.encrypted(ADMIN_PASSWORD).await;
     let new = harness.encrypted("a-brand-new-secret").await;
 
     let wrong = harness.encrypted("wrong-old-password").await;
-    let (status, _) = harness
-        .send(
-            Method::POST,
-            "/api/change-password",
-            Some(&token),
-            Some(json!({"old_password": wrong, "new_password": new})),
-        )
-        .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
+    for rejected in [wrong, String::new()] {
+        let (status, _) = harness
+            .send(
+                Method::POST,
+                "/api/change-password",
+                Some(&token),
+                Some(json!({"old_password": rejected, "new_password": new})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
 
-    let (status, _) = harness
+    let (status, changed) = harness
         .send(
             Method::POST,
             "/api/change-password",
@@ -222,6 +250,7 @@ async fn password_change_replaces_credentials() {
         )
         .await;
     assert_eq!(status, StatusCode::OK);
+    let fresh_token = changed["token"].as_str().unwrap().to_string();
 
     let login = |encrypted: String| {
         harness.send(
@@ -233,6 +262,15 @@ async fn password_change_replaces_credentials() {
     };
     assert_eq!(login(old).await.0, StatusCode::UNAUTHORIZED);
     assert_eq!(login(new).await.0, StatusCode::OK);
+
+    let (status, _) = harness
+        .send(Method::GET, "/api/profile", Some(&stale_token), None)
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = harness
+        .send(Method::GET, "/api/profile", Some(&fresh_token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -241,13 +279,26 @@ async fn email_and_gravatar_updates_are_persisted() {
     let harness = harness().await;
     let (_, _, token) = harness.user_with_token().await;
     let address = format!("{}@csfx.test", uuid::Uuid::new_v4().simple());
+    let password = harness.encrypted(ADMIN_PASSWORD).await;
+
+    for rejected in [String::new(), harness.encrypted("wrong-password").await] {
+        let (status, _) = harness
+            .send(
+                Method::POST,
+                "/api/change-email",
+                Some(&token),
+                Some(json!({"new_email": address, "password": rejected})),
+            )
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
 
     let (status, _) = harness
         .send(
             Method::POST,
             "/api/change-email",
             Some(&token),
-            Some(json!({"new_email": address})),
+            Some(json!({"new_email": address, "password": password})),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -256,7 +307,7 @@ async fn email_and_gravatar_updates_are_persisted() {
             Method::POST,
             "/api/change-email",
             Some(&token),
-            Some(json!({"new_email": address})),
+            Some(json!({"new_email": address, "password": password})),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
