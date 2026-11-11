@@ -36,6 +36,11 @@ async fn main() {
     let log_receiver = telemetry::init_tracing();
     tracing::info!("api-gateway starting");
 
+    if let Err(error) = api_gateway::auth::jwt::init_jwt_secret() {
+        tracing::error!(error = %error, "invalid gateway configuration");
+        std::process::exit(1);
+    }
+
     let db_conn = match db::establish_connection().await {
         Ok(conn) => {
             tracing::info!("database connection established");

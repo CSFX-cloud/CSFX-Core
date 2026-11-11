@@ -76,7 +76,7 @@ fn backend_url() -> &'static str {
         ] {
             std::env::set_var(name, &url);
         }
-        std::env::set_var("JWT_SECRET", "integration-test-secret");
+        std::env::set_var("JWT_SECRET", "integration-test-secret-0123456789abcdef");
         url
     })
 }

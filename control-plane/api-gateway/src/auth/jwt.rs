@@ -2,9 +2,21 @@ use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 use std::env;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 pub const TOKEN_LIFETIME_HOURS: i64 = 24;
+const MIN_JWT_SECRET_BYTES: usize = 32;
+
+static JWT_SECRET: OnceLock<String> = OnceLock::new();
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum JwtSecretError {
+    #[error("environment variable JWT_SECRET is not set")]
+    Missing,
+    #[error("environment variable JWT_SECRET must be at least {MIN_JWT_SECRET_BYTES} bytes long")]
+    TooShort,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -49,8 +61,24 @@ pub fn verify_jwt(token: &str) -> Result<TokenData<Claims>, jsonwebtoken::errors
     )
 }
 
-pub fn get_jwt_secret() -> String {
-    env::var("JWT_SECRET").unwrap_or_else(|_| "your-secret-key".to_string())
+fn parse_jwt_secret(value: Option<String>) -> Result<String, JwtSecretError> {
+    let secret = value.ok_or(JwtSecretError::Missing)?;
+    if secret.len() < MIN_JWT_SECRET_BYTES {
+        return Err(JwtSecretError::TooShort);
+    }
+    Ok(secret)
+}
+
+pub fn init_jwt_secret() -> Result<(), JwtSecretError> {
+    let secret = parse_jwt_secret(env::var("JWT_SECRET").ok())?;
+    let _ = JWT_SECRET.set(secret);
+    Ok(())
+}
+
+pub fn get_jwt_secret() -> &'static str {
+    JWT_SECRET.get_or_init(|| {
+        parse_jwt_secret(env::var("JWT_SECRET").ok()).expect("JWT_SECRET is missing or too short")
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -210,4 +238,26 @@ pub fn verify_node_metrics_ticket(
     }
 
     Ok(data.claims)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_secret_is_rejected() {
+        assert_eq!(parse_jwt_secret(None), Err(JwtSecretError::Missing));
+    }
+
+    #[test]
+    fn short_secret_is_rejected() {
+        let short = "a".repeat(MIN_JWT_SECRET_BYTES - 1);
+        assert_eq!(parse_jwt_secret(Some(short)), Err(JwtSecretError::TooShort));
+    }
+
+    #[test]
+    fn secret_of_minimum_length_is_accepted() {
+        let secret = "a".repeat(MIN_JWT_SECRET_BYTES);
+        assert_eq!(parse_jwt_secret(Some(secret.clone())), Ok(secret));
+    }
 }

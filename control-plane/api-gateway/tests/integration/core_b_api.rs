@@ -137,7 +137,7 @@ async fn database_initialisation_is_idempotent() {
 
 #[test]
 fn tickets_are_bound_to_their_purpose() {
-    std::env::set_var("JWT_SECRET", "integration-test-secret");
+    std::env::set_var("JWT_SECRET", "integration-test-secret-0123456789abcdef");
     let (workload, user) = (Uuid::new_v4(), Uuid::new_v4());
     let exec = create_exec_ticket(workload, user).unwrap();
     let vnc = create_vnc_ticket(workload, user).unwrap();
@@ -185,7 +185,7 @@ fn passwords_and_rsa_round_trip() {
 
 #[test]
 fn rate_limit_keys_prefer_user_then_agent_then_address() {
-    std::env::set_var("JWT_SECRET", "integration-test-secret");
+    std::env::set_var("JWT_SECRET", "integration-test-secret-0123456789abcdef");
     let extractor = JwtOrIpKeyExtractor::new();
     let user = Uuid::new_v4();
     let token = api_gateway::auth::jwt::create_jwt(user, "name".to_string()).unwrap();

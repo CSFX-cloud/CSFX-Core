@@ -19,7 +19,8 @@ pub enum SecretError {
 }
 
 fn cipher() -> Aes256Gcm {
-    let material = std::env::var("CSFX_SECRET_KEY").unwrap_or_else(|_| get_jwt_secret());
+    let material =
+        std::env::var("CSFX_SECRET_KEY").unwrap_or_else(|_| get_jwt_secret().to_string());
     let digest = Sha256::digest(format!("csfx-secret-store:{material}").as_bytes());
     Aes256Gcm::new_from_slice(&digest).expect("sha256 digest is a valid aes-256 key")
 }
@@ -52,6 +53,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_tamper_detection() {
+        std::env::set_var("CSFX_SECRET_KEY", "unit-test-secret-key-0123456789abcdef");
         let encoded = encrypt("client-secret").unwrap();
         assert_eq!(decrypt(&encoded).unwrap(), "client-secret");
         let mut payload = STANDARD.decode(&encoded).unwrap();
