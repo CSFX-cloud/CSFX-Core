@@ -20,10 +20,6 @@ fn case(method: Method, uri: &str, backend_path: &str, body: Option<Value>) -> C
     }
 }
 
-fn is_permission_free(uri: &str) -> bool {
-    uri.contains("/events") || uri.ends_with("/maintenance")
-}
-
 fn forwarded_cases() -> Vec<Case> {
     let id = Uuid::new_v4();
     let member = Uuid::new_v4();
@@ -150,12 +146,13 @@ async fn forwarded_routes_enforce_authentication_and_permissions() {
                 case.body.clone(),
             )
             .await;
-        let expected = if is_permission_free(&case.uri) {
-            StatusCode::OK
-        } else {
-            StatusCode::FORBIDDEN
-        };
-        assert_eq!(status, expected, "{} {}", case.method, case.uri);
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{} {}",
+            case.method,
+            case.uri
+        );
     }
 }
 

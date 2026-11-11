@@ -125,6 +125,22 @@ pub async fn create_role(db: &DatabaseConnection, org_id: Uuid) -> Uuid {
     id
 }
 
+async fn grant_permission(db: &DatabaseConnection, role_id: Uuid, name: &str) {
+    let permission = entity::Permission::find()
+        .filter(entity::permission::Column::Name.eq(name))
+        .one(db)
+        .await
+        .unwrap()
+        .expect("permission must be seeded");
+    entity::role_permission::ActiveModel {
+        role_id: Set(role_id),
+        permission_id: Set(permission.id),
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
+
 pub async fn create_user(db: &DatabaseConnection, org_id: Uuid, role_id: Uuid) -> (Uuid, String) {
     let id = Uuid::new_v4();
     let name = format!("user-{}", id.simple());
@@ -261,6 +277,13 @@ pub fn encrypt_password(public_key_pem: &str, password: &str) -> String {
 impl Harness {
     pub async fn limited_token(&self) -> String {
         let role_id = create_role(&self.db, self.org_id).await;
+        let (id, name) = create_user(&self.db, self.org_id, role_id).await;
+        create_jwt(id, name).unwrap()
+    }
+
+    pub async fn viewer_token(&self) -> String {
+        let role_id = create_role(&self.db, self.org_id).await;
+        grant_permission(&self.db, role_id, "agents.view").await;
         let (id, name) = create_user(&self.db, self.org_id, role_id).await;
         create_jwt(id, name).unwrap()
     }
