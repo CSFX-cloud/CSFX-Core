@@ -439,5 +439,28 @@
       "site-builder": 91.71,
       "volume-manager": 87.32
     }
+  },
+  {
+    "sha": "d844738",
+    "date": "2026-11-12",
+    "lines": 78.04,
+    "crates": {
+      "agent": 74.88,
+      "api-gateway": 85.66,
+      "csfx-guest-init": 20.09,
+      "csfx-migrate": 0,
+      "csfx-release-notes": 77.05,
+      "csfx-updater": 33.62,
+      "entity": 18.18,
+      "failover-controller": 78.84,
+      "migration": 60.79,
+      "object-storage": 67.86,
+      "registry": 70.26,
+      "scheduler": 81.87,
+      "sdn-controller": 63.02,
+      "shared": 59.35,
+      "site-builder": 91.71,
+      "volume-manager": 87.32
+    }
   }
 ]
