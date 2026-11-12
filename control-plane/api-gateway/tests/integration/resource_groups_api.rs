@@ -136,6 +136,12 @@ async fn resource_group_creation_validates_the_cidr() {
         ("10.1.2.0/33", StatusCode::BAD_REQUEST),
         ("10.1.2/24", StatusCode::BAD_REQUEST),
         ("10.100.5.0/24", StatusCode::CONFLICT),
+        ("0.0.0.0/0", StatusCode::BAD_REQUEST),
+        ("8.8.8.0/24", StatusCode::BAD_REQUEST),
+        ("172.32.0.0/16", StatusCode::BAD_REQUEST),
+        ("10.0.0.0/8", StatusCode::BAD_REQUEST),
+        ("192.168.0.0/15", StatusCode::BAD_REQUEST),
+        ("192.168.7.0/30", StatusCode::BAD_REQUEST),
         (cidr, StatusCode::CONFLICT),
     ] {
         let (status, body) = harness
@@ -148,6 +154,26 @@ async fn resource_group_creation_validates_the_cidr() {
         assert!(body["error"].is_string());
     }
     remove_group(&harness, id).await;
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn resource_group_creation_rejects_a_cidr_containing_a_node_address() {
+    let harness = harness().await;
+    let agent = insert_agent(&harness.db, "worker", "Online").await;
+    let lan = format!("172.20.{}", agent.id.as_bytes()[0]);
+    let mut active: entity::entities::agents::ActiveModel = agent.into();
+    active.ip_address = ActiveValue::Set(Some(format!("{lan}.5")));
+    active.update(&harness.db).await.unwrap();
+
+    let (status, body) = harness
+        .post(
+            "/api/resource-groups",
+            json!({"name": unique("rg"), "internal_cidr": format!("{lan}.0/24")}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body["error"].as_str().unwrap().contains("node"));
 }
 
 #[tokio::test]

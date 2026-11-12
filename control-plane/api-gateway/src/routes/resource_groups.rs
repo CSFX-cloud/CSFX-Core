@@ -152,6 +152,8 @@ pub async fn create_resource_group(
         )
     })?;
 
+    ensure_tenant_range(&requested, &req.internal_cidr)?;
+
     if requested.overlaps(&MGMT_TUNNEL_CIDR) {
         return Err((
             StatusCode::CONFLICT,
@@ -187,6 +189,8 @@ pub async fn create_resource_group(
             ));
         }
     }
+
+    ensure_no_node_address_inside(&state, &requested, &req.internal_cidr).await?;
 
     let now = Utc::now().naive_utc();
     let model = resource_groups::ActiveModel {
@@ -226,10 +230,76 @@ const SUGGESTED_CIDR_BASE: u32 = 0x0A650000;
 const SUGGESTED_CIDR_PREFIX: u8 = 24;
 const SUGGESTED_CIDR_MAX_SUBNETS: u32 = 256;
 
+const MIN_TENANT_PREFIX: u8 = 16;
+const MAX_TENANT_PREFIX: u8 = 29;
+
+const PRIVATE_RANGES: [Cidr; 3] = [
+    Cidr {
+        network: 0x0A000000,
+        prefix_len: 8,
+    },
+    Cidr {
+        network: 0xAC100000,
+        prefix_len: 12,
+    },
+    Cidr {
+        network: 0xC0A80000,
+        prefix_len: 16,
+    },
+];
+
 const MGMT_TUNNEL_CIDR: Cidr = Cidr {
     network: 0x0A640000,
     prefix_len: 16,
 };
+
+fn bad_cidr(error: String) -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))
+}
+
+fn ensure_tenant_range(
+    requested: &Cidr,
+    raw: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if !PRIVATE_RANGES.iter().any(|range| range.contains(requested)) {
+        return Err(bad_cidr(format!(
+            "CIDR {raw} must be inside 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16"
+        )));
+    }
+    if !(MIN_TENANT_PREFIX..=MAX_TENANT_PREFIX).contains(&requested.prefix_len) {
+        return Err(bad_cidr(format!(
+            "CIDR {raw} prefix must be between /{MIN_TENANT_PREFIX} and /{MAX_TENANT_PREFIX}"
+        )));
+    }
+    Ok(())
+}
+
+async fn ensure_no_node_address_inside(
+    state: &AppState,
+    requested: &Cidr,
+    raw: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    let agents = Agents::find().all(&state.db_conn).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to list agents for cidr check");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "database error" })),
+        )
+    })?;
+    let collides = agents
+        .iter()
+        .flat_map(|agent| [&agent.ip_address, &agent.wg_tunnel_ip])
+        .flatten()
+        .filter_map(|address| address.parse::<Ipv4Addr>().ok())
+        .any(|address| requested.contains_address(u32::from(address)));
+    if collides {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({ "error": format!("CIDR {raw} contains the address of a node") })),
+        ));
+    }
+    Ok(())
+}
 
 pub async fn suggest_cidr(
     CanViewResourceGroups(_claims): CanViewResourceGroups,
@@ -1255,6 +1325,14 @@ impl Cidr {
         } else {
             u32::MAX << (32 - self.prefix_len)
         }
+    }
+
+    fn contains(&self, other: &Cidr) -> bool {
+        other.prefix_len >= self.prefix_len && self.contains_address(other.network)
+    }
+
+    fn contains_address(&self, address: u32) -> bool {
+        (address & self.mask()) == self.network
     }
 
     fn overlaps(&self, other: &Cidr) -> bool {
