@@ -6,10 +6,8 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use entity::entities::{dns_records, ingress_routes};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
-};
+use entity::entities::dns_records;
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use uuid::Uuid;
@@ -18,7 +16,9 @@ use super::cluster::{error, internal, ApiError};
 use super::ingress::{ensure_group, validate_hostname};
 use crate::{
     auth::rbac::{CanManageResourceGroups, CanViewResourceGroups},
-    dns_sync, AppState,
+    dns_sync,
+    hostname_policy::{self, HostnameRejection},
+    AppState,
 };
 
 const DEFAULT_TTL: i32 = 30;
@@ -161,20 +161,12 @@ pub async fn create_record(
 }
 
 async fn ensure_name_free(state: &AppState, name: &str) -> Result<(), ApiError> {
-    let records = dns_records::Entity::find()
-        .filter(dns_records::Column::Name.eq(name))
-        .count(&state.db_conn)
+    hostname_policy::ensure_claimable(&state.db_conn, name)
         .await
-        .map_err(internal)?;
-    let routes = ingress_routes::Entity::find()
-        .filter(ingress_routes::Column::Hostname.eq(name))
-        .count(&state.db_conn)
-        .await
-        .map_err(internal)?;
-    if records + routes > 0 {
-        return Err(error(StatusCode::CONFLICT, "name is already in use"));
-    }
-    Ok(())
+        .map_err(|rejection| match rejection {
+            HostnameRejection::Database(e) => internal(e),
+            other => error(StatusCode::CONFLICT, other.message()),
+        })
 }
 
 pub async fn delete_record(

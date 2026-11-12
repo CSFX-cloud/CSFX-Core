@@ -52,7 +52,14 @@ async fn resource_group_routes_require_permissions() {
         (Method::GET, format!("/api/resource-groups/{id}/volumes")),
         (Method::GET, format!("/api/resource-groups/{id}/buckets")),
         (Method::GET, format!("/api/resource-groups/{id}/networks")),
-        (Method::GET, format!("/api/resource-groups/{id}/vpn-config")),
+        (
+            Method::POST,
+            format!("/api/resource-groups/{id}/vpn-config"),
+        ),
+        (
+            Method::DELETE,
+            format!("/api/resource-groups/{id}/vpn-peers/{}", Uuid::new_v4()),
+        ),
     ];
     for (method, uri) in cases {
         let body = (method != Method::GET).then(|| json!({}));
@@ -231,7 +238,7 @@ async fn unknown_resource_groups_return_not_found() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = harness
-        .get(&format!("/api/resource-groups/{id}/vpn-config"))
+        .post(&format!("/api/resource-groups/{id}/vpn-config"), json!({}))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
@@ -364,7 +371,10 @@ async fn vpn_config_requires_an_online_wireguard_agent() {
     let harness = harness().await;
     let group = insert_group(&harness.db, harness.org_id).await;
     let uri = format!("/api/resource-groups/{}/vpn-config", group.id);
-    assert_eq!(harness.get(&uri).await.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        harness.post(&uri, json!({})).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 
     let offline = insert_agent(&harness.db, "worker", "Offline").await;
     insert_workload(
@@ -372,7 +382,10 @@ async fn vpn_config_requires_an_online_wireguard_agent() {
         WorkloadSpec::new(group.id, Some(offline.id), "running"),
     )
     .await;
-    assert_eq!(harness.get(&uri).await.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        harness.post(&uri, json!({})).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 }
 
 #[tokio::test]
@@ -393,7 +406,7 @@ async fn vpn_config_allocates_distinct_peers() {
     for _ in 0..2 {
         let (status, headers, bytes) = raw(
             &harness,
-            Method::GET,
+            Method::POST,
             &uri,
             &[("authorization", &format!("Bearer {}", harness.token))],
             Vec::new(),
@@ -412,10 +425,11 @@ async fn vpn_config_allocates_distinct_peers() {
     assert!(configs[0].contains(&format!("AllowedIPs = {prefix}.0/24")));
     let peers = resource_group_vpn_peers::Entity::find()
         .filter(resource_group_vpn_peers::Column::ResourceGroupId.eq(group.id))
-        .count(&harness.db)
+        .all(&harness.db)
         .await
         .unwrap();
-    assert_eq!(peers, 2);
+    assert_eq!(peers.len(), 2);
+    assert!(peers.iter().all(|peer| peer.user_id == harness.admin_id));
 }
 
 #[tokio::test]
@@ -547,6 +561,7 @@ async fn vpn_peers_are_listed_for_agents() {
         resource_group_vpn_peers::ActiveModel {
             id: ActiveValue::Set(Uuid::new_v4()),
             resource_group_id: ActiveValue::Set(group.id),
+            user_id: ActiveValue::Set(harness.admin_id),
             client_public_key: ActiveValue::Set("client-key".to_string()),
             client_tunnel_ip: ActiveValue::Set("10.1.1.9".to_string()),
             created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
@@ -558,4 +573,102 @@ async fn vpn_peers_are_listed_for_agents() {
     let (_, peers) = keyed(&harness, Method::GET, &uri, &key, None).await;
     assert_eq!(peers[0]["client_public_key"], "client-key");
     assert_eq!(peers[0]["client_tunnel_ip"], "10.1.1.9");
+}
+
+async fn insert_owned_peer(harness: &Harness, group_id: Uuid, user_id: Uuid) -> Uuid {
+    let id = Uuid::new_v4();
+    ActiveModelTrait::insert(
+        resource_group_vpn_peers::ActiveModel {
+            id: ActiveValue::Set(id),
+            resource_group_id: ActiveValue::Set(group_id),
+            user_id: ActiveValue::Set(user_id),
+            client_public_key: ActiveValue::Set(unique("key")),
+            client_tunnel_ip: ActiveValue::Set("10.1.1.9".to_string()),
+            created_at: ActiveValue::Set(chrono::Utc::now().naive_utc()),
+        },
+        &harness.db,
+    )
+    .await
+    .unwrap();
+    id
+}
+
+async fn peers_of(harness: &Harness, user_id: Uuid) -> u64 {
+    resource_group_vpn_peers::Entity::find()
+        .filter(resource_group_vpn_peers::Column::UserId.eq(user_id))
+        .count(&harness.db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn vpn_config_is_denied_to_viewers() {
+    let harness = harness().await;
+    let group = insert_group(&harness.db, harness.org_id).await;
+    let (_, viewer) = harness
+        .token_with_permissions(&["resource_groups.view"])
+        .await;
+    let uri = format!("/api/resource-groups/{}/vpn-config", group.id);
+    let (status, _) = harness
+        .send(Method::POST, &uri, Some(&viewer), Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = harness.send(Method::GET, &uri, Some(&viewer), None).await;
+    assert_ne!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn vpn_peer_can_be_revoked() {
+    let harness = harness().await;
+    let group = insert_group(&harness.db, harness.org_id).await;
+    let peer_id = insert_owned_peer(&harness, group.id, harness.admin_id).await;
+    let uri = format!("/api/resource-groups/{}/vpn-peers/{peer_id}", group.id);
+    let (status, _) = harness.admin(Method::DELETE, &uri, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = harness.admin(Method::DELETE, &uri, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn vpn_peers_are_removed_with_their_owner() {
+    let harness = harness().await;
+    let group = insert_group(&harness.db, harness.org_id).await;
+    let (owner_id, _, _) = harness.user_with_token().await;
+    insert_owned_peer(&harness, group.id, owner_id).await;
+    assert_eq!(peers_of(&harness, owner_id).await, 1);
+    let (status, _) = harness
+        .admin(
+            Method::DELETE,
+            &format!("/api/organization/users/{owner_id}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(peers_of(&harness, owner_id).await, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn vpn_peers_are_removed_when_manage_permission_is_lost() {
+    let harness = harness().await;
+    let group = insert_group(&harness.db, harness.org_id).await;
+    let (owner_id, _) = harness
+        .token_with_permissions(&["resource_groups.manage"])
+        .await;
+    insert_owned_peer(&harness, group.id, owner_id).await;
+    let viewer_role = harness
+        .role_with_permissions(&["resource_groups.view"])
+        .await;
+    let (status, _) = harness
+        .admin(
+            Method::PUT,
+            &format!("/api/organization/users/{owner_id}/role"),
+            Some(json!({"role_id": viewer_role})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(peers_of(&harness, owner_id).await, 0);
 }

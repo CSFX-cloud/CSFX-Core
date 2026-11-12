@@ -216,7 +216,7 @@ pub fn unique(prefix: &str) -> String {
     format!("{prefix}-{}", Uuid::new_v4().simple())
 }
 
-const CIDR_SPACE: u32 = 254 * 256;
+const CIDR_SPACE: u32 = 253 * 256;
 const INSERT_ATTEMPTS: usize = 64;
 
 static NEXT_CIDR: OnceLock<AtomicU32> = OnceLock::new();
@@ -227,7 +227,9 @@ pub fn random_cidr() -> String {
         AtomicU32::new(seed % CIDR_SPACE)
     });
     let slot = counter.fetch_add(1, Ordering::Relaxed) % CIDR_SPACE;
-    format!("10.{}.{}.0/24", 1 + slot / 256, slot % 256)
+    let octet = 1 + slot / 256;
+    let octet = if octet >= 100 { octet + 1 } else { octet };
+    format!("10.{}.{}.0/24", octet, slot % 256)
 }
 
 fn group_model(org_id: Uuid) -> resource_groups::ActiveModel {

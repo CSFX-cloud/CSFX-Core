@@ -71,7 +71,7 @@ export interface SiteEnv {
 }
 
 export interface SiteDetail extends Site {
-    webhook_path: string;
+    webhook_path?: string;
     domains: SiteDomain[];
     env: SiteEnv[];
     deployments: DeploymentSummary[];

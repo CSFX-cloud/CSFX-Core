@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::get,
+    routing::{delete, get, post},
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
@@ -1127,8 +1127,8 @@ pub async fn list_resource_group_vpn_peers(
     Ok((StatusCode::OK, Json(json!(peers))))
 }
 
-pub async fn get_vpn_config(
-    CanViewResourceGroups(_claims): CanViewResourceGroups,
+pub async fn create_vpn_config(
+    CanManageResourceGroups(claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
@@ -1245,6 +1245,7 @@ pub async fn get_vpn_config(
     let peer = resource_group_vpn_peers::ActiveModel {
         id: Set(Uuid::new_v4()),
         resource_group_id: Set(id),
+        user_id: Set(claims.user_id),
         client_public_key: Set(client_public_key),
         client_tunnel_ip: Set(client_tunnel_ip.clone()),
         created_at: Set(Utc::now().naive_utc()),
@@ -1284,6 +1285,32 @@ pub async fn get_vpn_config(
         config,
     )
         .into_response())
+}
+
+pub async fn revoke_vpn_peer(
+    CanManageResourceGroups(_claims): CanManageResourceGroups,
+    State(state): State<AppState>,
+    Path((id, peer_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    let result = ResourceGroupVpnPeers::delete_many()
+        .filter(resource_group_vpn_peers::Column::Id.eq(peer_id))
+        .filter(resource_group_vpn_peers::Column::ResourceGroupId.eq(id))
+        .exec(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to revoke vpn peer");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?;
+    if result.rows_affected == 0 {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "vpn peer not found" })),
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn generate_wg_key() -> Result<String, ring::error::Unspecified> {
@@ -1408,7 +1435,11 @@ pub fn resource_groups_routes() -> Router<AppState> {
             "/resource-groups/{id}/networks",
             get(list_resource_group_networks),
         )
-        .route("/resource-groups/{id}/vpn-config", get(get_vpn_config))
+        .route("/resource-groups/{id}/vpn-config", post(create_vpn_config))
+        .route(
+            "/resource-groups/{id}/vpn-peers/{peer_id}",
+            delete(revoke_vpn_peer),
+        )
 }
 
 pub fn resource_groups_agent_routes() -> Router<AppState> {

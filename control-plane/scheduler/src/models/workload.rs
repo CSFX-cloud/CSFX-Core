@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 pub const MAX_REPLICAS: u32 = 32;
+const BUCKET_PERMISSIONS: [&str; 2] = ["read", "readwrite"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -233,9 +234,23 @@ impl CreateWorkloadRequest {
         {
             return Err(format!("replicas must be between 1 and {}", MAX_REPLICAS));
         }
+        self.validate_bucket_permissions()?;
         crate::services::port_allocator::ensure_requested_in_range(
             self.ports.as_deref().unwrap_or_default(),
         )
+    }
+
+    fn validate_bucket_permissions(&self) -> Result<(), String> {
+        let invalid = self
+            .bucket_bindings
+            .iter()
+            .flatten()
+            .filter_map(|binding| binding.permissions.as_deref())
+            .any(|permissions| !BUCKET_PERMISSIONS.contains(&permissions));
+        if invalid {
+            return Err("bucket permissions must be read or readwrite".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -370,6 +385,26 @@ mod tests {
         );
         for hostile in ["", "RUNNING", "running; drop", "ok"] {
             assert!(WorkloadStatus::parse(hostile).is_none(), "{hostile}");
+        }
+    }
+
+    #[test]
+    fn validation_limits_bucket_permissions_to_read_and_readwrite() {
+        let binding = |permissions: Option<&str>| {
+            serde_json::json!([{
+                "bucket_id": Uuid::new_v4(),
+                "permissions": permissions
+            }])
+        };
+        for allowed in [None, Some("read"), Some("readwrite")] {
+            let mut req = request();
+            req.bucket_bindings = serde_json::from_value(binding(allowed)).unwrap();
+            assert!(req.validate().is_ok());
+        }
+        for denied in ["owner", "write", ""] {
+            let mut req = request();
+            req.bucket_bindings = serde_json::from_value(binding(Some(denied))).unwrap();
+            assert!(req.validate().is_err());
         }
     }
 
