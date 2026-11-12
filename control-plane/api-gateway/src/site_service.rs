@@ -25,6 +25,8 @@ pub enum SiteError {
     Invalid(String),
     #[error("not found")]
     NotFound,
+    #[error("secret access requires the secrets.reveal permission")]
+    Forbidden,
     #[error("{0}")]
     Conflict(&'static str),
     #[error("site hosting is not configured")]
@@ -43,6 +45,7 @@ impl IntoResponse for SiteError {
             Self::Vault(error) => return VaultApiError::from(error).into_response(),
             Self::Invalid(message) => (StatusCode::BAD_REQUEST, message),
             Self::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
+            Self::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
             Self::Conflict(message) => (StatusCode::CONFLICT, message.to_string()),
             Self::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             Self::Builder(SiteBuilderError::Rejected(message)) => {

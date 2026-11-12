@@ -340,6 +340,45 @@ async fn vault_backed_variables_and_git_tokens_are_fetched() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
+async fn git_token_secrets_require_the_reveal_permission() {
+    let harness = full_harness().await;
+    let group = resource_group(&harness).await;
+    let vault_id = vault_with_secret(&harness, group, "GIT_TOKEN").await;
+    let site = create_site(&harness, group, STATIC_REPO).await;
+    let (_, manager) = harness
+        .token_with_permissions(&["resource_groups.manage"])
+        .await;
+    let token = json!({"vault_id": vault_id, "git_token_secret": "GIT_TOKEN"});
+    let detect = format!("{}/detect", sites_uri(group));
+    let create = json!({"name": site_name(), "repo_url": STATIC_REPO,
+        "vault_id": vault_id, "git_token_secret": "GIT_TOKEN"});
+    let detect_body = json!({"repo_url": STATIC_REPO,
+        "vault_id": vault_id, "git_token_secret": "GIT_TOKEN"});
+    let cases = [
+        (Method::POST, detect, detect_body),
+        (Method::POST, sites_uri(group), create),
+        (Method::PUT, site_uri(group, &site), token),
+    ];
+    for (method, target, body) in cases {
+        let (status, _) = harness
+            .send(method, &target, Some(&manager), Some(body))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{target}");
+    }
+    let clear = json!({"git_token_secret": ""});
+    let (status, _) = harness
+        .send(
+            Method::PUT,
+            &site_uri(group, &site),
+            Some(&manager),
+            Some(clear),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
 async fn domains_are_validated_and_unique() {
     let harness = full_harness().await;
     let group = resource_group(&harness).await;

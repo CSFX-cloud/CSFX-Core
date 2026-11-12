@@ -20,7 +20,11 @@ use uuid::Uuid;
 
 use super::ingress::validate_hostname;
 use crate::{
-    auth::rbac::{CanManageResourceGroups, CanViewResourceGroups},
+    auth::{
+        jwt::Claims,
+        rbac::{CanManageResourceGroups, CanViewResourceGroups},
+    },
+    rbac_service::RbacService,
     site_service::{self as service, Detected, NewDeployment, Overrides, SecretSource, SiteError},
     vault_service, AppState,
 };
@@ -219,6 +223,19 @@ pub struct DetectRequest {
     git_token_secret: Option<String>,
 }
 
+async fn require_reveal(state: &AppState, claims: &Claims) -> Result<(), SiteError> {
+    let org_id = state.default_org_id.ok_or(SiteError::Forbidden)?;
+    let allowed = RbacService::new(state.db_conn.clone())
+        .has_permission(claims.user_id, org_id, "secrets", "reveal")
+        .await
+        .unwrap_or(false);
+    if allowed {
+        Ok(())
+    } else {
+        Err(SiteError::Forbidden)
+    }
+}
+
 async fn detect_remote(
     state: &AppState,
     group_id: Uuid,
@@ -250,11 +267,14 @@ async fn detect_remote(
 }
 
 pub async fn detect_site(
-    CanManageResourceGroups(_claims): CanManageResourceGroups,
+    CanManageResourceGroups(claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Path(group_id): Path<Uuid>,
     Json(request): Json<DetectRequest>,
 ) -> ApiResult<Value> {
+    if request.git_token_secret.is_some() {
+        require_reveal(&state, &claims).await?;
+    }
     vault_service::load_group(&state, group_id).await?;
     let detected = detect_remote(&state, group_id, &request).await?;
     Ok(Json(json!({ "detection": detected.map(|found| json!({
@@ -466,11 +486,14 @@ async fn deploy_production(state: &AppState, site: &sites::Model) {
 }
 
 pub async fn create_site(
-    CanManageResourceGroups(_claims): CanManageResourceGroups,
+    CanManageResourceGroups(claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Path(group_id): Path<Uuid>,
     Json(request): Json<CreateSiteRequest>,
 ) -> Result<(StatusCode, Json<sites::Model>), SiteError> {
+    if request.source.git_token_secret.is_some() {
+        require_reveal(&state, &claims).await?;
+    }
     validate_new(&request)?;
     vault_service::load_group(&state, group_id).await?;
     if let Some(gateway_id) = request.gateway_id {
@@ -538,11 +561,18 @@ fn validate_update(request: &UpdateSiteRequest) -> Result<(), SiteError> {
 }
 
 pub async fn update_site(
-    CanManageResourceGroups(_claims): CanManageResourceGroups,
+    CanManageResourceGroups(claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Path((group_id, site_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<UpdateSiteRequest>,
 ) -> ApiResult<sites::Model> {
+    if request
+        .git_token_secret
+        .as_deref()
+        .is_some_and(|name| !name.trim().is_empty())
+    {
+        require_reveal(&state, &claims).await?;
+    }
     validate_update(&request)?;
     let site = load_site(&state, group_id, site_id).await?;
     if let Some(gateway_id) = request.gateway_id {
