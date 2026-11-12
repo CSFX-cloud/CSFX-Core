@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get},
@@ -365,13 +365,30 @@ async fn find_gateway(
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "gateway not found"))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct GatewayConfigQuery {
+    source_workload_id: Uuid,
+}
+
 pub async fn gateway_config(
     agent: AgentApiKey,
     State(state): State<AppState>,
     Path((group_id, gateway_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<GatewayConfigQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let gateway = find_gateway(&state, group_id, gateway_id).await?;
     ensure_hosted_by(&state, &gateway, &agent).await?;
+    if query.source_workload_id != gateway.workload_id {
+        tracing::warn!(
+            gateway_id = %gateway.id,
+            source_workload_id = %query.source_workload_id,
+            "rejected gateway config request from a workload that is not the gateway"
+        );
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            "only the gateway workload may fetch its configuration",
+        ));
+    }
     let targets = ingress_sync::load_targets(&state.db_conn, gateway.id)
         .await
         .map_err(internal)?;
