@@ -90,6 +90,7 @@ pub fn session_parts(
     let cookie = Cookie::build(("auth_token", token.clone()))
         .path("/")
         .http_only(true)
+        .secure(true)
         .same_site(SameSite::Strict)
         .build();
     let body = AuthResponse {
@@ -195,11 +196,7 @@ pub async fn logout_user(
     let auth_service = AuthService::new(state.db_conn.clone());
     let exp_datetime = DateTime::from_timestamp(claims.exp, 0).unwrap_or_else(Utc::now);
 
-    // Extract token from request header would be better, but for simplicity
-    // we'll use a placeholder. In a real implementation, you'd extract the actual token.
-    let token = "".to_string(); // This should be extracted from the Authorization header
-
-    match auth_service.logout_user(token, exp_datetime).await {
+    match auth_service.logout_user(claims.jti, exp_datetime).await {
         Ok(_) => Ok(Json(json!({ "message": "Logged out successfully" }))),
         Err(err) => {
             tracing::error!("Logout failed: {}", err);

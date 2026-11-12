@@ -23,6 +23,7 @@ pub struct Claims {
     pub sub: String, // Subject (user ID)
     pub exp: i64,    // Expiration time
     pub iat: i64,    // Issued at
+    pub jti: Uuid,
     pub user_id: Uuid,
     pub username: String,
 }
@@ -36,6 +37,7 @@ impl Claims {
             sub: user_id.to_string(),
             exp: exp.timestamp(),
             iat: now.timestamp(),
+            jti: Uuid::new_v4(),
             user_id,
             username,
         }
