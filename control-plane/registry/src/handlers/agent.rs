@@ -297,7 +297,7 @@ pub async fn heartbeat(
 
             if let Some(statuses) = request.container_statuses {
                 if !statuses.is_empty() {
-                    forward_container_statuses(&state, statuses).await;
+                    forward_container_statuses(&state, agent_id, statuses).await;
                 }
             }
 
@@ -400,11 +400,13 @@ async fn read_prefix(client: &mut etcd_client::Client, prefix: &str) -> HashMap<
 
 async fn forward_container_statuses(
     state: &crate::server::AppState,
+    agent_id: Uuid,
     statuses: Vec<crate::models::agent::ContainerStatus>,
 ) {
     use serde_json::json;
 
     let payload = json!({
+        "agent_id": agent_id,
         "statuses": statuses.iter().map(|s| json!({
             "workload_id": s.workload_id,
             "container_id": s.container_id,

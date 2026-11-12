@@ -8,7 +8,9 @@ use axum::{
 };
 use sea_orm::EntityTrait;
 use serde_json::{json, Value};
-use site_builder::images::{uses_site_registry, SITE_IMAGE_HOST};
+use site_builder::images::{
+    configured_registry_endpoints, mentions_site_repository, uses_site_registry, SITE_IMAGE_HOST,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -19,10 +21,17 @@ use crate::{
 const RESERVED_IMAGE_HOST_MESSAGE: &str = "this image host is reserved for web apps";
 
 fn references_site_images(body: &Value) -> bool {
-    let image = body["image"].as_str().is_some_and(uses_site_registry);
-    let compose = body["compose_yaml"]
-        .as_str()
-        .is_some_and(|yaml| yaml.to_ascii_lowercase().contains(SITE_IMAGE_HOST));
+    references_site_images_with(body, &configured_registry_endpoints())
+}
+
+fn references_site_images_with(body: &Value, endpoints: &[String]) -> bool {
+    let image = body["image"].as_str().is_some_and(|image| {
+        uses_site_registry(image) || mentions_site_repository(image, endpoints)
+    });
+    let compose = body["compose_yaml"].as_str().is_some_and(|yaml| {
+        yaml.to_ascii_lowercase().contains(SITE_IMAGE_HOST)
+            || mentions_site_repository(yaml, endpoints)
+    });
     image || compose
 }
 
@@ -389,6 +398,15 @@ mod tests {
         ));
         let compose = "services:\n  a:\n    image: Sites.CSFX.invalid/x:1\n";
         assert!(references_site_images(&json!({ "compose_yaml": compose })));
+    }
+
+    #[test]
+    fn site_repositories_on_the_registry_endpoint_are_rejected() {
+        let endpoints = vec!["10.0.0.5:5060".to_string()];
+        let site = json!({ "image": "10.0.0.5:5060/00000000-0000-0000-0000-000000000000:abc" });
+        assert!(references_site_images_with(&site, &endpoints));
+        let own = json!({ "image": "10.0.0.5:5060/rg-abc/main/app:1" });
+        assert!(!references_site_images_with(&own, &endpoints));
     }
 
     #[test]

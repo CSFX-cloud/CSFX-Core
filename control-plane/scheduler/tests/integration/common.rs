@@ -180,22 +180,15 @@ pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
     id
 }
 
-pub async fn insert_resource_group() -> Uuid {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let separator = if url.contains('?') { '&' } else { '?' };
-    let relaxed = Database::connect(&format!(
-        "{url}{separator}options=-c%20session_replication_role%3Dreplica"
-    ))
-    .await
-    .expect("database must be reachable");
-    let bytes = Uuid::new_v4().into_bytes();
-    let id = Uuid::new_v4();
+const CIDR_INSERT_ATTEMPTS: usize = 64;
+
+fn resource_group_model(cidr: String) -> entity::entities::resource_groups::ActiveModel {
     entity::entities::resource_groups::ActiveModel {
-        id: Set(id),
+        id: Set(Uuid::new_v4()),
         organization_id: Set(Uuid::new_v4()),
         name: Set(unique_name("rg")),
         description: Set(None),
-        internal_cidr: Set(format!("10.{}.{}.0/24", bytes[0], bytes[1])),
+        internal_cidr: Set(cidr),
         status: Set("active".to_string()),
         icon: Set("box".to_string()),
         color: Set("blue".to_string()),
@@ -206,10 +199,30 @@ pub async fn insert_resource_group() -> Uuid {
         created_at: Set(chrono::Utc::now().naive_utc()),
         updated_at: Set(None),
     }
-    .insert(&relaxed)
+}
+
+pub async fn insert_resource_group() -> Uuid {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let separator = if url.contains('?') { '&' } else { '?' };
+    let relaxed = Database::connect(&format!(
+        "{url}{separator}options=-c%20session_replication_role%3Dreplica"
+    ))
     .await
-    .expect("resource group must be inserted");
-    id
+    .expect("database must be reachable");
+    for _ in 0..CIDR_INSERT_ATTEMPTS {
+        let bytes = Uuid::new_v4().into_bytes();
+        let cidr = format!("10.{}.{}.0/24", bytes[0], bytes[1]);
+        match resource_group_model(cidr).insert(&relaxed).await {
+            Ok(group) => return group.id,
+            Err(error)
+                if matches!(
+                    error.sql_err(),
+                    Some(sea_orm::SqlErr::UniqueConstraintViolation(_))
+                ) => {}
+            Err(error) => panic!("resource group must be inserted: {error}"),
+        }
+    }
+    panic!("no free resource group cidr after {CIDR_INSERT_ATTEMPTS} attempts");
 }
 
 pub fn small_request(name: &str) -> CreateWorkloadRequest {

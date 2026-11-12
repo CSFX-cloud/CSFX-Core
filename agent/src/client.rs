@@ -8,6 +8,17 @@ use uuid::Uuid;
 
 use crate::runtime::VolumeUsage;
 
+#[derive(Debug)]
+pub struct GatewayConfigRejected;
+
+impl std::fmt::Display for GatewayConfigRejected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("gateway config request rejected by the control plane")
+    }
+}
+
+impl std::error::Error for GatewayConfigRejected {}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AssignedVolume {
     pub id: String,
@@ -579,6 +590,7 @@ impl ApiClient {
         api_key: &str,
         resource_group_id: &str,
         gateway_id: &str,
+        source_workload_id: &str,
     ) -> Result<serde_json::Value> {
         let url = format!(
             "{}/api/resource-groups/{}/gateways/{}/config",
@@ -588,11 +600,15 @@ impl ApiClient {
         let resp = self
             .client
             .get(&url)
+            .query(&[("source_workload_id", source_workload_id)])
             .header("X-API-Key", api_key)
             .send()
             .await
             .context("Failed to fetch ingress gateway config")?;
 
+        if resp.status() == reqwest::StatusCode::FORBIDDEN {
+            return Err(GatewayConfigRejected.into());
+        }
         if !resp.status().is_success() {
             let status = resp.status();
             anyhow::bail!(
@@ -994,7 +1010,10 @@ mod tests {
         let peers = client.fetch_resource_group_peers("k", "rg").await.unwrap();
         assert_eq!(peers[0].wg_endpoint, "1.2.3.4:5");
         assert_eq!(client.fetch_mesh_peers("k").await.unwrap().len(), 1);
-        let config = client.fetch_gateway_config("k", "rg", "gw").await.unwrap();
+        let config = client
+            .fetch_gateway_config("k", "rg", "gw", "wl")
+            .await
+            .unwrap();
         assert!(config["routes"].is_array());
         let vpn = client
             .fetch_resource_group_vpn_peers("k", "rg")
@@ -1057,7 +1076,10 @@ mod tests {
             .await
             .is_err());
         assert!(client.fetch_resource_group_peers("k", "r").await.is_err());
-        assert!(client.fetch_gateway_config("k", "r", "g").await.is_err());
+        assert!(client
+            .fetch_gateway_config("k", "r", "g", "w")
+            .await
+            .is_err());
         assert!(client.fetch_mesh_peers("k").await.is_err());
         assert!(client
             .fetch_resource_group_vpn_peers("k", "r")

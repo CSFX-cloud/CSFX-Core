@@ -1,3 +1,4 @@
+use crate::db::api_keys::hash_key;
 use chrono::{DateTime, Utc};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ pub fn is_valid_role(role: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BootstrapToken {
     pub id: Uuid,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
     pub description: Option<String>,
     pub created_by: String,
@@ -30,7 +32,7 @@ impl From<entity::bootstrap_tokens::Model> for BootstrapToken {
     fn from(model: entity::bootstrap_tokens::Model) -> Self {
         Self {
             id: model.id,
-            token: model.token,
+            token: String::new(),
             description: model.description,
             created_by: model.created_by,
             created_at: model.created_at.and_utc(),
@@ -69,7 +71,7 @@ impl BootstrapTokenManager {
 
         let model = crate::db::bootstrap_tokens::create(
             &self.db,
-            token.clone(),
+            hash_key(&token),
             description.clone(),
             created_by.clone(),
             expires_at,
@@ -87,57 +89,49 @@ impl BootstrapTokenManager {
             )
         );
 
-        Ok(model.into())
+        Ok(BootstrapToken {
+            token,
+            ..model.into()
+        })
     }
 
     pub async fn validate_and_use(&self, token_str: &str) -> Result<String, String> {
-        let model = crate::db::bootstrap_tokens::get_by_token(&self.db, token_str)
+        let token_hash = hash_key(token_str);
+        let consumed = crate::db::bootstrap_tokens::consume(&self.db, &token_hash)
             .await
-            .map_err(|e| format!("Database error: {}", e))?
-            .ok_or_else(|| "Bootstrap token not found".to_string())?;
+            .map_err(|e| format!("Database error: {}", e))?;
 
-        if model.revoked {
-            crate::log_warn!(
-                "bootstrap_token_manager",
-                &format!("Rejected revoked bootstrap token id={}", model.id)
-            );
-            return Err("Bootstrap token has been revoked".to_string());
-        }
-
-        if Utc::now().naive_utc() >= model.expires_at {
-            crate::log_warn!(
-                "bootstrap_token_manager",
-                &format!("Rejected expired bootstrap token id={}", model.id)
-            );
-            return Err("Bootstrap token has expired".to_string());
-        }
-
-        if model.use_count >= model.max_uses {
-            crate::log_warn!(
+        if let Some(consumed) = consumed {
+            crate::log_info!(
                 "bootstrap_token_manager",
                 &format!(
-                    "Rejected exhausted bootstrap token id={} use_count={} max_uses={}",
-                    model.id, model.use_count, model.max_uses
+                    "Bootstrap token used id={} use_count={}/{}",
+                    consumed.id, consumed.use_count, consumed.max_uses
                 )
             );
-            return Err("Bootstrap token use limit reached".to_string());
+            return Ok(consumed.role);
         }
+        Err(self.rejection(&token_hash).await)
+    }
 
-        crate::db::bootstrap_tokens::increment_use_count(&self.db, model.id)
-            .await
-            .map_err(|e| format!("Failed to increment use count: {}", e))?;
-
-        crate::log_info!(
+    async fn rejection(&self, token_hash: &str) -> String {
+        let model = match crate::db::bootstrap_tokens::get_by_hash(&self.db, token_hash).await {
+            Ok(Some(model)) => model,
+            Ok(None) => return "Bootstrap token not found".to_string(),
+            Err(e) => return format!("Database error: {}", e),
+        };
+        let (reason, message) = if model.revoked {
+            ("revoked", "Bootstrap token has been revoked")
+        } else if Utc::now().naive_utc() >= model.expires_at {
+            ("expired", "Bootstrap token has expired")
+        } else {
+            ("exhausted", "Bootstrap token use limit reached")
+        };
+        crate::log_warn!(
             "bootstrap_token_manager",
-            &format!(
-                "Bootstrap token used id={} use_count={}/{}",
-                model.id,
-                model.use_count + 1,
-                model.max_uses
-            )
+            &format!("Rejected {} bootstrap token id={}", reason, model.id)
         );
-
-        Ok(model.role)
+        message.to_string()
     }
 
     pub async fn revoke(&self, id: Uuid) -> Result<(), String> {

@@ -15,11 +15,16 @@ use super::{
 const LOGIN_STATE_TTL_MINUTES: i64 = 10;
 const EXCHANGE_CODE_TTL_SECONDS: i64 = 60;
 
+pub struct LoginStart {
+    pub authorization_url: String,
+    pub state: String,
+}
+
 pub async fn begin_login(
     db: &DatabaseConnection,
     provider: &identity_providers::Model,
     redirect_uri: &str,
-) -> Result<String, OidcError> {
+) -> Result<LoginStart, OidcError> {
     let endpoints = client::discover(&provider.issuer_url).await?;
     let (state, nonce, verifier) = (random_token(), random_token(), random_token());
     let now = Utc::now().naive_utc();
@@ -36,14 +41,18 @@ pub async fn begin_login(
     }
     .insert(db)
     .await?;
-    Ok(client::authorization_url(
+    let authorization_url = client::authorization_url(
         &endpoints,
         provider,
         redirect_uri,
         &state,
         &nonce,
         &sha256_base64url(&verifier),
-    ))
+    );
+    Ok(LoginStart {
+        authorization_url,
+        state,
+    })
 }
 
 async fn consume_state(

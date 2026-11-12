@@ -388,3 +388,29 @@ async fn user_details_cannot_be_changed_for_more_privileged_users() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn users_cannot_be_deleted_by_less_privileged_actors() {
+    use axum::http::Method;
+
+    let harness = harness().await;
+    let (_, actor) = harness.token_with_permissions(&["users.delete"]).await;
+    let (admin_id, _, _) = harness.user_with_token().await;
+    let (peer_id, _) = harness.token_with_permissions(&[]).await;
+    let uri = |id| format!("/api/organization/users/{}", id);
+
+    let (status, _) = harness
+        .send(Method::DELETE, &uri(admin_id), Some(&actor), None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = harness
+        .get(&format!("/api/organization/users/{}", admin_id))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = harness
+        .send(Method::DELETE, &uri(peer_id), Some(&actor), None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 pub const MAX_REPLICAS: u32 = 32;
+const MAX_SERVICE_NAME_LENGTH: usize = 63;
 const BUCKET_PERMISSIONS: [&str; 2] = ["read", "readwrite"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -34,17 +35,22 @@ impl WorkloadStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "scheduled" => WorkloadStatus::Scheduled,
-            "pulling" => WorkloadStatus::Pulling,
-            "creating" => WorkloadStatus::Creating,
-            "starting" => WorkloadStatus::Starting,
-            "running" => WorkloadStatus::Running,
-            "failed" => WorkloadStatus::Failed,
-            "stopped" => WorkloadStatus::Stopped,
-            _ => WorkloadStatus::Pending,
+            "pending" => Some(WorkloadStatus::Pending),
+            "scheduled" => Some(WorkloadStatus::Scheduled),
+            "pulling" => Some(WorkloadStatus::Pulling),
+            "creating" => Some(WorkloadStatus::Creating),
+            "starting" => Some(WorkloadStatus::Starting),
+            "running" => Some(WorkloadStatus::Running),
+            "failed" => Some(WorkloadStatus::Failed),
+            "stopped" => Some(WorkloadStatus::Stopped),
+            _ => None,
         }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        Self::parse(s).unwrap_or(WorkloadStatus::Pending)
     }
 }
 
@@ -171,6 +177,16 @@ pub struct UpdateWorkloadRequest {
     pub volume_mounts: Option<Vec<VolumeMount>>,
 }
 
+pub fn is_valid_service_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let edge = |byte: &u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
+    !bytes.is_empty()
+        && bytes.len() <= MAX_SERVICE_NAME_LENGTH
+        && bytes.first().is_some_and(edge)
+        && bytes.last().is_some_and(edge)
+        && bytes.iter().all(|byte| edge(byte) || *byte == b'-')
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWorkloadRequest {
     pub name: String,
@@ -230,6 +246,13 @@ impl CreateWorkloadRequest {
             return Err(format!("replicas must be between 1 and {}", MAX_REPLICAS));
         }
         self.validate_bucket_permissions()?;
+        if self
+            .service_name
+            .as_deref()
+            .is_some_and(|name| !is_valid_service_name(name))
+        {
+            return Err("service name must be a lowercase dns label".to_string());
+        }
         crate::services::port_allocator::ensure_requested_in_range(
             self.ports.as_deref().unwrap_or_default(),
         )
@@ -366,6 +389,21 @@ mod tests {
         ]))
         .unwrap();
         assert!(req.validate().unwrap_err().contains("22"));
+    }
+
+    #[test]
+    fn workload_status_parsing_rejects_unknown_names() {
+        assert_eq!(
+            WorkloadStatus::parse("running"),
+            Some(WorkloadStatus::Running)
+        );
+        assert_eq!(
+            WorkloadStatus::parse("pending"),
+            Some(WorkloadStatus::Pending)
+        );
+        for hostile in ["", "RUNNING", "running; drop", "ok"] {
+            assert!(WorkloadStatus::parse(hostile).is_none(), "{hostile}");
+        }
     }
 
     #[test]

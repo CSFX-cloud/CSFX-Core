@@ -92,10 +92,12 @@ async fn claim_assigned(rg_dir: &Path, workload_id: &str, assigned_ip: &str) -> 
     Ok(assigned_ip.to_string())
 }
 
-pub async fn is_claimed(resource_group_id: &str, ip: &str) -> bool {
-    tokio::fs::try_exists(registry_dir(resource_group_id).join(ip))
+pub async fn claimed_by(resource_group_id: &str, ip: &str) -> Option<String> {
+    tokio::fs::read_to_string(registry_dir(resource_group_id).join(ip))
         .await
-        .unwrap_or(false)
+        .ok()
+        .map(|workload_id| workload_id.trim().to_string())
+        .filter(|workload_id| !workload_id.is_empty())
 }
 
 pub async fn release(resource_group_id: &str, workload_id: &str) {
@@ -220,7 +222,9 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_groups_have_no_claims() {
-        assert!(!is_claimed("rg-that-does-not-exist", "10.0.0.3").await);
+        assert!(claimed_by("rg-that-does-not-exist", "10.0.0.3")
+            .await
+            .is_none());
         release("rg-that-does-not-exist", "w").await;
     }
 }

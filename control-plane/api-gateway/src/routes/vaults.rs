@@ -17,8 +17,12 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    auth::rbac::{CanManageSecrets, CanRevealSecrets, CanViewSecrets},
+    auth::{
+        jwt::Claims,
+        rbac::{CanManageSecrets, CanRevealSecrets, CanViewSecrets},
+    },
     openbao::OpenBaoError,
+    rbac_service::RbacService,
     vault_service::{self as service, VaultError},
     vault_store::{self, SecretWrite},
     AppState,
@@ -538,6 +542,29 @@ fn validate_grant(request: &GrantRequest) -> Result<(), VaultError> {
     vault_store::validate_user_principal(&request.principal).map_err(invalid)
 }
 
+async fn require_reveal_for_read_grant(
+    state: &AppState,
+    claims: &Claims,
+    capability: &str,
+) -> Result<(), VaultError> {
+    if !needs_role(capability) {
+        return Ok(());
+    }
+    let allowed = match state.default_org_id {
+        Some(org_id) => RbacService::new(state.db_conn.clone())
+            .has_permission(claims.user_id, org_id, "secrets", "reveal")
+            .await
+            .unwrap_or(false),
+        None => false,
+    };
+    if allowed {
+        return Ok(());
+    }
+    Err(VaultError::Forbidden(
+        "granting read access requires the secrets reveal permission",
+    ))
+}
+
 pub async fn create_grant(
     CanManageSecrets(claims): CanManageSecrets,
     State(state): State<AppState>,
@@ -545,6 +572,7 @@ pub async fn create_grant(
     Json(request): Json<GrantRequest>,
 ) -> ApiResult<impl IntoResponse> {
     validate_grant(&request)?;
+    require_reveal_for_read_grant(&state, &claims, &request.capability).await?;
     let vault = service::load_vault(&state, resource_group_id, vault_id).await?;
     let grant = vault_grants::ActiveModel {
         id: Set(Uuid::new_v4()),
@@ -653,7 +681,7 @@ pub async fn approve_reveal(
 }
 
 pub async fn issue_secret_id(
-    CanManageSecrets(claims): CanManageSecrets,
+    CanRevealSecrets(claims): CanRevealSecrets,
     State(state): State<AppState>,
     Path((resource_group_id, vault_id, principal)): Path<(Uuid, Uuid, String)>,
 ) -> ApiResult<impl IntoResponse> {

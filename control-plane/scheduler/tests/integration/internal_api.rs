@@ -2,19 +2,30 @@ use axum::http::{Method, StatusCode};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::common::{call, create_pending_workload, find_workload, router};
+use crate::common::{
+    call, create_pending_workload, find_workload, insert_agent, migrated_database, router,
+};
+
+async fn assigned_workload(app: &axum::Router) -> (String, Uuid) {
+    let id = create_pending_workload(app).await;
+    let agent = insert_agent(&migrated_database().await).await;
+    scheduler::db::workloads::assign(&migrated_database().await, id.parse().unwrap(), agent)
+        .await
+        .unwrap();
+    (id, agent)
+}
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
 async fn container_status_updates_are_stored() {
     let app = router().await;
-    let id = create_pending_workload(&app).await;
+    let (id, agent) = assigned_workload(&app).await;
 
     let (status, _) = call(
         &app,
         Method::POST,
         "/internal/workloads/status",
-        Some(json!({"statuses": [
+        Some(json!({"agent_id": agent, "statuses": [
             {"workload_id": id, "container_id": "abc123", "status": "running"},
             {"workload_id": Uuid::new_v4(), "container_id": "", "status": "failed"}
         ]})),
@@ -31,9 +42,9 @@ async fn container_status_updates_are_stored() {
 #[ignore = "requires postgres via DATABASE_URL"]
 async fn stats_updates_are_stored() {
     let app = router().await;
-    let id = create_pending_workload(&app).await;
+    let (id, agent) = assigned_workload(&app).await;
     let sample = |cpu: f64, memory: i64| {
-        json!({"stats": [
+        json!({"agent_id": agent, "stats": [
             {
                 "workload_id": id,
                 "cpu_usage_percent": cpu,
@@ -68,7 +79,7 @@ async fn stats_updates_are_stored() {
 #[ignore = "requires postgres via DATABASE_URL"]
 async fn restart_acknowledgement_clears_request() {
     let app = router().await;
-    let id = create_pending_workload(&app).await;
+    let (id, agent) = assigned_workload(&app).await;
     call(
         &app,
         Method::POST,
@@ -81,7 +92,7 @@ async fn restart_acknowledgement_clears_request() {
         &app,
         Method::POST,
         &format!("/internal/workloads/{}/restart-ack", id),
-        None,
+        Some(json!({"agent_id": agent})),
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -90,10 +101,86 @@ async fn restart_acknowledgement_clears_request() {
         &app,
         Method::POST,
         &format!("/internal/workloads/{}/restart-ack", Uuid::new_v4()),
-        None,
+        Some(json!({"agent_id": agent})),
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn foreign_agents_cannot_change_workloads() {
+    let app = router().await;
+    let (id, _) = assigned_workload(&app).await;
+    let intruder = insert_agent(&migrated_database().await).await;
+    call(
+        &app,
+        Method::POST,
+        &format!("/workloads/{}/restart", id),
+        None,
+    )
+    .await;
+    let before = find_workload(&app, &id).await;
+
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        "/internal/workloads/status",
+        Some(json!({"agent_id": intruder, "statuses": [
+            {"workload_id": id, "container_id": "evil", "status": "running"}
+        ]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        "/internal/workloads/stats",
+        Some(json!({"agent_id": intruder, "stats": [
+            {"workload_id": id, "cpu_usage_percent": 99.0}
+        ]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        &format!("/internal/workloads/{}/restart-ack", id),
+        Some(json!({"agent_id": intruder})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let after = find_workload(&app, &id).await;
+    assert_eq!(after["status"], before["status"]);
+    assert_eq!(after["container_id"], before["container_id"]);
+    assert_eq!(after["cpu_usage_percent"], before["cpu_usage_percent"]);
+    let stored =
+        scheduler::db::workloads::get_by_id(&migrated_database().await, id.parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(stored.restart_requested);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn unknown_statuses_are_ignored() {
+    let app = router().await;
+    let (id, agent) = assigned_workload(&app).await;
+    let before = find_workload(&app, &id).await;
+
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        "/internal/workloads/status",
+        Some(json!({"agent_id": agent, "statuses": [
+            {"workload_id": id, "container_id": "abc", "status": "definitely-not-a-status"}
+        ]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(find_workload(&app, &id).await["status"], before["status"]);
 }
 
 #[tokio::test]

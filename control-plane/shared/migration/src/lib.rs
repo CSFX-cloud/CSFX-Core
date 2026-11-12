@@ -57,6 +57,7 @@ mod m20261102_020000_add_image_registries;
 mod m20261104_000000_allow_internal_site_domains;
 mod m20261107_000000_add_workload_volume_usage;
 mod m20261112_000000_add_vpn_peer_owner;
+mod m20261113_000000_hash_bootstrap_tokens;
 mod m20261113_010000_add_agent_ssh_host_key;
 pub struct Migrator;
 
@@ -120,6 +121,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261102_020000_add_image_registries::Migration),
             Box::new(m20261104_000000_allow_internal_site_domains::Migration),
             Box::new(m20261107_000000_add_workload_volume_usage::Migration),
+            Box::new(m20261113_000000_hash_bootstrap_tokens::Migration),
             Box::new(m20261113_010000_add_agent_ssh_host_key::Migration),
             Box::new(m20261112_000000_add_vpn_peer_owner::Migration),
         ]
