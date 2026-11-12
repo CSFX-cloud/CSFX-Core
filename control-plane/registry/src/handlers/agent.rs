@@ -225,13 +225,34 @@ pub async fn heartbeat(
         }
     }
 
+    if let Some(wg_endpoint) = request.wg_endpoint.as_deref() {
+        let in_use = crate::db::agents::wg_endpoint_in_use(&state.db, agent_id, wg_endpoint)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Endpoint verification failed: {}", e),
+                    }),
+                )
+            })?;
+
+        if in_use {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse {
+                    error: "WireGuard endpoint is already in use by another agent".to_string(),
+                }),
+            ));
+        }
+    }
+
     match state
         .agent_registry
         .update_heartbeat(
             agent_id,
             request.wg_public_key.clone(),
             request.wg_endpoint.clone(),
-            request.wg_tunnel_ip.clone(),
             request.agent_version.clone(),
             request.kvm_capable,
             &state.mgmt_ipam,
