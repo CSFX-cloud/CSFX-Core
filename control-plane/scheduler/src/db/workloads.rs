@@ -232,6 +232,24 @@ pub async fn get_by_id(
     workloads::Entity::find_by_id(workload_id).one(db).await
 }
 
+pub async fn assigned_to_agent(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+    workload_ids: &[Uuid],
+) -> Result<HashSet<Uuid>, sea_orm::DbErr> {
+    if workload_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    Ok(workloads::Entity::find()
+        .filter(workloads::Column::Id.is_in(workload_ids.iter().copied()))
+        .filter(workloads::Column::AssignedAgentId.eq(agent_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|workload| workload.id)
+        .collect())
+}
+
 pub async fn update_container_status(
     db: &DatabaseConnection,
     workload_id: Uuid,

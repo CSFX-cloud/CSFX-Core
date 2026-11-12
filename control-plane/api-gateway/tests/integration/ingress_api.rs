@@ -332,8 +332,8 @@ async fn hosted_gateway(harness: &Harness) -> Hosted {
         active.update(&harness.db).await.unwrap();
     }
     let uri = format!(
-        "/api/resource-groups/{}/gateways/{}/config",
-        stack.group.id, stack.gateway.id
+        "/api/resource-groups/{}/gateways/{}/config?source_workload_id={}",
+        stack.group.id, stack.gateway.id, stack.gateway.workload_id
     );
     Hosted { stack, key, uri }
 }
@@ -352,12 +352,29 @@ async fn gateway_config_is_restricted_to_the_hosting_agent() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     let missing = format!(
-        "/api/resource-groups/{}/gateways/{}/config",
+        "/api/resource-groups/{}/gateways/{}/config?source_workload_id={}",
         hosted.stack.group.id,
-        Uuid::new_v4()
+        Uuid::new_v4(),
+        hosted.stack.gateway.workload_id
     );
     let (status, _) = keyed(&harness, Method::GET, &missing, &hosted.key, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn gateway_config_is_denied_to_other_workloads() {
+    let harness = harness().await;
+    let hosted = hosted_gateway(&harness).await;
+    let base = hosted.uri.split('?').next().unwrap().to_string();
+
+    let other = format!("{base}?source_workload_id={}", hosted.stack.workload.id);
+    let (status, body) = keyed(&harness, Method::GET, &other, &hosted.key, None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body.get("tls").is_none());
+
+    let (status, _) = keyed(&harness, Method::GET, &base, &hosted.key, None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

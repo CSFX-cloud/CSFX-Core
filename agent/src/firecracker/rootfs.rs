@@ -8,6 +8,7 @@ use oci_spec::runtime::{
     get_default_namespaces, Capabilities, Capability, LinuxBuilder, LinuxCapabilitiesBuilder,
     LinuxNamespaceType, ProcessBuilder, RootBuilder, Spec, SpecBuilder, User, UserBuilder,
 };
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -24,6 +25,7 @@ const CONTAINER_ROOTFS_DIR: &str = "rootfs";
 const ROOTFS_CACHE_DIR: &str = "/var/lib/csfx-agent/rootfs";
 const ROOTFS_SIZE_MB: u64 = 2048;
 const MAX_CONCURRENT_LAYER_DOWNLOADS: usize = 8;
+const SOURCE_KEY_BYTES: usize = 8;
 const DIGEST_CACHE_TTL: Duration = Duration::from_secs(120);
 const GUEST_INIT_BINARY_PATH: &str = "/var/lib/csfx-agent/csfx-guest-init";
 const GZIP_LAYER_MEDIA_TYPES: &[&str] = &[
@@ -62,17 +64,44 @@ fn store_digest(reference: &str, digest: &str) {
         .insert(reference.to_string(), (digest.to_string(), Instant::now()));
 }
 
+const GROUP_REPOSITORY_PREFIX: &str = "rg-";
+
+struct ResolvedImage {
+    reference: Reference,
+    use_site_credentials: bool,
+}
+
 fn resolve_reference(
     image: &str,
     mirror: Option<&str>,
     site_registry: Option<&SiteRegistry>,
-) -> Result<Reference> {
+) -> Result<ResolvedImage> {
     let reference: Reference = image.parse().context("Invalid image reference")?;
     if reference.registry() == SITE_IMAGE_HOST {
         let site_registry =
             site_registry.context("Site registry endpoint is not configured on this node")?;
-        return site_registry.resolve(&reference);
+        return Ok(ResolvedImage {
+            reference: site_registry.resolve(&reference)?,
+            use_site_credentials: true,
+        });
     }
+    if site_registry.is_some_and(|site| reference.registry() == site.endpoint()) {
+        if !reference.repository().starts_with(GROUP_REPOSITORY_PREFIX) {
+            anyhow::bail!("The site registry endpoint only serves resource group repositories");
+        }
+        return Ok(ResolvedImage {
+            reference,
+            use_site_credentials: true,
+        });
+    }
+    let reference = mirror_reference(reference, mirror)?;
+    Ok(ResolvedImage {
+        reference,
+        use_site_credentials: false,
+    })
+}
+
+fn mirror_reference(reference: Reference, mirror: Option<&str>) -> Result<Reference> {
     let Some(mirror) = mirror else {
         return Ok(reference);
     };
@@ -89,11 +118,19 @@ fn resolve_reference(
     mirrored.parse().context("Invalid mirrored image reference")
 }
 
-fn auth_for(reference: &Reference, site_registry: Option<&SiteRegistry>) -> RegistryAuth {
+fn auth_for(use_site_credentials: bool, site_registry: Option<&SiteRegistry>) -> RegistryAuth {
     match site_registry {
-        Some(site) if reference.registry() == site.endpoint() => site.auth(),
+        Some(site) if use_site_credentials => site.auth(),
         _ => RegistryAuth::Anonymous,
     }
+}
+
+fn source_key(reference: &Reference) -> String {
+    let source = format!("{}/{}", reference.registry(), reference.repository());
+    Sha256::digest(source.as_bytes())[..SOURCE_KEY_BYTES]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 pub struct RootfsBuilder {
@@ -132,6 +169,10 @@ impl RootfsBuilder {
 
     async fn resolve_digest(&self, reference: &Reference, auth: &RegistryAuth) -> Result<String> {
         if let Some(digest) = reference.digest() {
+            self.client
+                .fetch_manifest_digest(reference, auth)
+                .await
+                .context("Failed to verify access to the pinned image")?;
             return Ok(digest.to_string());
         }
         let key = reference.whole();
@@ -148,17 +189,21 @@ impl RootfsBuilder {
     }
 
     pub async fn ensure_rootfs(&self, image: &str) -> Result<PathBuf> {
-        let reference = resolve_reference(
+        let ResolvedImage {
+            reference,
+            use_site_credentials,
+        } = resolve_reference(
             image,
             self.registry_mirror.as_deref(),
             self.site_registry.as_ref(),
         )?;
-        let auth = auth_for(&reference, self.site_registry.as_ref());
+        let auth = auth_for(use_site_credentials, self.site_registry.as_ref());
         let digest = self.resolve_digest(&reference, &auth).await?;
 
         let guest_init_version = guest_init_binary_version().await?;
         let cache_key = format!(
-            "{}-{}",
+            "{}-{}-{}",
+            source_key(&reference),
             digest.trim_start_matches("sha256:"),
             guest_init_version
         );
@@ -600,7 +645,9 @@ mod tests {
 
     #[test]
     fn docker_hub_images_are_routed_through_the_mirror() {
-        let reference = resolve_reference("nginx:1.27", Some("localhost:5050"), None).unwrap();
+        let reference = resolve_reference("nginx:1.27", Some("localhost:5050"), None)
+            .unwrap()
+            .reference;
         assert_eq!(reference.registry(), "localhost:5050");
         assert_eq!(reference.repository(), "library/nginx");
         assert_eq!(reference.tag(), Some("1.27"));
@@ -610,10 +657,10 @@ mod tests {
     fn site_images_resolve_to_the_site_registry_even_with_a_mirror() {
         let site = SiteRegistry::from_gateway("https://10.0.0.5:8000", "key").unwrap();
         let image = "sites.csfx.invalid/abc:12345678";
-        let reference = resolve_reference(image, Some("localhost:5050"), Some(&site)).unwrap();
-        assert_eq!(reference.whole(), "10.0.0.5:5060/abc:12345678");
+        let resolved = resolve_reference(image, Some("localhost:5050"), Some(&site)).unwrap();
+        assert_eq!(resolved.reference.whole(), "10.0.0.5:5060/abc:12345678");
         assert!(matches!(
-            auth_for(&reference, Some(&site)),
+            auth_for(resolved.use_site_credentials, Some(&site)),
             RegistryAuth::Basic(user, _) if user == "agent"
         ));
         assert!(resolve_reference(image, None, None).is_err());
@@ -622,17 +669,48 @@ mod tests {
     #[test]
     fn credentials_are_never_sent_to_other_registries() {
         let site = SiteRegistry::from_gateway("https://10.0.0.5:8000", "key").unwrap();
-        let other: Reference = "ghcr.io/org/app:1".parse().unwrap();
+        let other = resolve_reference("ghcr.io/org/app:1", None, Some(&site)).unwrap();
         assert!(matches!(
-            auth_for(&other, Some(&site)),
+            auth_for(other.use_site_credentials, Some(&site)),
             RegistryAuth::Anonymous
         ));
     }
 
     #[test]
+    fn group_repositories_on_the_site_registry_keep_their_credentials() {
+        let site = SiteRegistry::from_gateway("https://10.0.0.5:8000", "key").unwrap();
+        let resolved =
+            resolve_reference("10.0.0.5:5060/rg-abc/main/app:1", None, Some(&site)).unwrap();
+        assert!(resolved.use_site_credentials);
+    }
+
+    #[test]
+    fn site_repositories_cannot_be_referenced_directly() {
+        let site = SiteRegistry::from_gateway("https://10.0.0.5:8000", "key").unwrap();
+        for image in [
+            "10.0.0.5:5060/00000000-0000-0000-0000-000000000000:1",
+            "10.0.0.5:5060/abc@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            assert!(resolve_reference(image, None, Some(&site)).is_err(), "{image}");
+        }
+    }
+
+    #[test]
+    fn cache_keys_differ_per_registry_and_repository() {
+        let first: Reference = "ghcr.io/org/app:1".parse().unwrap();
+        let second: Reference = "ghcr.io/other/app:1".parse().unwrap();
+        let third: Reference = "quay.io/org/app:1".parse().unwrap();
+        assert_ne!(source_key(&first), source_key(&second));
+        assert_ne!(source_key(&first), source_key(&third));
+        assert_eq!(source_key(&first), source_key(&first));
+    }
+
+    #[test]
     fn other_registries_bypass_the_mirror() {
         let image = "ghcr.io/csfx-cloud/csfx-site-builder:1";
-        let reference = resolve_reference(image, Some("localhost:5050"), None).unwrap();
+        let reference = resolve_reference(image, Some("localhost:5050"), None)
+            .unwrap()
+            .reference;
         assert_eq!(reference.registry(), "ghcr.io");
         assert_eq!(reference.whole(), image);
     }

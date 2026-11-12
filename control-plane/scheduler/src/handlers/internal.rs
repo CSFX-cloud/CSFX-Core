@@ -5,9 +5,10 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::models::workload::VolumeUsage;
+use crate::models::workload::{VolumeUsage, WorkloadStatus};
 use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +44,7 @@ pub struct ContainerStatusUpdate {
 
 #[derive(Debug, Deserialize)]
 pub struct BatchStatusRequest {
+    pub agent_id: Uuid,
     pub statuses: Vec<ContainerStatusUpdate>,
 }
 
@@ -59,14 +61,47 @@ pub struct WorkloadStatsUpdate {
 
 #[derive(Debug, Deserialize)]
 pub struct BatchStatsRequest {
+    pub agent_id: Uuid,
     pub stats: Vec<WorkloadStatsUpdate>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestartAckRequest {
+    pub agent_id: Uuid,
+}
+
+async fn owned_workloads(
+    state: &AppState,
+    agent_id: Uuid,
+    workload_ids: Vec<Uuid>,
+) -> Result<HashSet<Uuid>, sea_orm::DbErr> {
+    crate::db::workloads::assigned_to_agent(&state.db, agent_id, &workload_ids).await
+}
+
+fn log_foreign_workload(agent_id: Uuid, workload_id: Uuid, operation: &str) {
+    crate::log_warn!(
+        "internal",
+        &format!(
+            "Rejected update for workload not assigned to agent agent_id={} workload_id={} operation={}",
+            agent_id, workload_id, operation
+        )
+    );
 }
 
 pub async fn update_workload_stats(
     State(state): State<AppState>,
     Json(req): Json<BatchStatsRequest>,
 ) -> impl IntoResponse {
+    let ids = req.stats.iter().map(|update| update.workload_id).collect();
+    let owned = match owned_workloads(&state, req.agent_id, ids).await {
+        Ok(owned) => owned,
+        Err(e) => return database_failure("stats", &e),
+    };
     for update in &req.stats {
+        if !owned.contains(&update.workload_id) {
+            log_foreign_workload(req.agent_id, update.workload_id, "stats");
+            continue;
+        }
         if let Err(e) = crate::db::workloads::update_stats(
             &state.db,
             update.workload_id,
@@ -94,7 +129,17 @@ pub async fn update_workload_stats(
 pub async fn ack_workload_restart(
     State(state): State<AppState>,
     Path(workload_id): Path<Uuid>,
+    Json(req): Json<RestartAckRequest>,
 ) -> impl IntoResponse {
+    match crate::db::workloads::get_by_id(&state.db, workload_id).await {
+        Ok(Some(workload)) if workload.assigned_agent_id != Some(req.agent_id) => {
+            log_foreign_workload(req.agent_id, workload_id, "restart_ack");
+            return StatusCode::FORBIDDEN;
+        }
+        Ok(Some(_)) => {}
+        Ok(None) => return StatusCode::NOT_FOUND,
+        Err(e) => return database_failure("restart_ack", &e),
+    }
     match crate::db::workloads::clear_restart_request(&state.db, workload_id).await {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(sea_orm::DbErr::RecordNotFound(_)) => StatusCode::NOT_FOUND,
@@ -115,12 +160,35 @@ pub async fn update_container_statuses(
     State(state): State<AppState>,
     Json(req): Json<BatchStatusRequest>,
 ) -> impl IntoResponse {
+    let ids = req
+        .statuses
+        .iter()
+        .map(|update| update.workload_id)
+        .collect();
+    let owned = match owned_workloads(&state, req.agent_id, ids).await {
+        Ok(owned) => owned,
+        Err(e) => return database_failure("status", &e),
+    };
     for update in &req.statuses {
+        if !owned.contains(&update.workload_id) {
+            log_foreign_workload(req.agent_id, update.workload_id, "status");
+            continue;
+        }
+        let Some(status) = WorkloadStatus::parse(&update.status) else {
+            crate::log_warn!(
+                "internal",
+                &format!(
+                    "Rejected unknown workload status agent_id={} workload_id={}",
+                    req.agent_id, update.workload_id
+                )
+            );
+            continue;
+        };
         if let Err(e) = crate::db::workloads::update_container_status(
             &state.db,
             update.workload_id,
             &update.container_id,
-            &update.status,
+            status.as_str(),
         )
         .await
         {
@@ -143,4 +211,15 @@ pub async fn update_container_statuses(
     }
 
     StatusCode::NO_CONTENT
+}
+
+fn database_failure(operation: &str, error: &sea_orm::DbErr) -> StatusCode {
+    crate::log_warn!(
+        "internal",
+        &format!(
+            "Failed to check workload ownership operation={} err={}",
+            operation, error
+        )
+    );
+    StatusCode::INTERNAL_SERVER_ERROR
 }

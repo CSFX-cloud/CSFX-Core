@@ -34,17 +34,22 @@ impl WorkloadStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "scheduled" => WorkloadStatus::Scheduled,
-            "pulling" => WorkloadStatus::Pulling,
-            "creating" => WorkloadStatus::Creating,
-            "starting" => WorkloadStatus::Starting,
-            "running" => WorkloadStatus::Running,
-            "failed" => WorkloadStatus::Failed,
-            "stopped" => WorkloadStatus::Stopped,
-            _ => WorkloadStatus::Pending,
+            "pending" => Some(WorkloadStatus::Pending),
+            "scheduled" => Some(WorkloadStatus::Scheduled),
+            "pulling" => Some(WorkloadStatus::Pulling),
+            "creating" => Some(WorkloadStatus::Creating),
+            "starting" => Some(WorkloadStatus::Starting),
+            "running" => Some(WorkloadStatus::Running),
+            "failed" => Some(WorkloadStatus::Failed),
+            "stopped" => Some(WorkloadStatus::Stopped),
+            _ => None,
         }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        Self::parse(s).unwrap_or(WorkloadStatus::Pending)
     }
 }
 
@@ -366,6 +371,21 @@ mod tests {
         ]))
         .unwrap();
         assert!(req.validate().unwrap_err().contains("22"));
+    }
+
+    #[test]
+    fn workload_status_parsing_rejects_unknown_names() {
+        assert_eq!(
+            WorkloadStatus::parse("running"),
+            Some(WorkloadStatus::Running)
+        );
+        assert_eq!(
+            WorkloadStatus::parse("pending"),
+            Some(WorkloadStatus::Pending)
+        );
+        for hostile in ["", "RUNNING", "running; drop", "ok"] {
+            assert!(WorkloadStatus::parse(hostile).is_none(), "{hostile}");
+        }
     }
 
     #[test]

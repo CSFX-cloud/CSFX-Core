@@ -479,19 +479,32 @@ async fn ingress_config_handler(
     Path((group_id, gateway_id)): Path<(uuid::Uuid, uuid::Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let group_id = group_id.to_string();
-    if !crate::rg_ipam::is_claimed(&group_id, &addr.ip().to_string()).await {
+    let Some(source_workload_id) =
+        crate::rg_ipam::claimed_by(&group_id, &addr.ip().to_string()).await
+    else {
         warn!(source = %addr, resource_group_id = %group_id, "rejected ingress config request from unknown guest");
         return Err(StatusCode::FORBIDDEN);
-    }
+    };
 
     state
         .api_client
-        .fetch_gateway_config(&state.api_key, &group_id, &gateway_id.to_string())
+        .fetch_gateway_config(
+            &state.api_key,
+            &group_id,
+            &gateway_id.to_string(),
+            &source_workload_id,
+        )
         .await
         .map(Json)
-        .map_err(|e| {
-            warn!(error = %e, gateway_id = %gateway_id, "failed to serve ingress gateway config");
-            StatusCode::BAD_GATEWAY
+        .map_err(|e| match e.downcast_ref::<crate::client::GatewayConfigRejected>() {
+            Some(_) => {
+                warn!(source = %addr, gateway_id = %gateway_id, "gateway config denied for non-gateway workload");
+                StatusCode::FORBIDDEN
+            }
+            None => {
+                warn!(error = %e, gateway_id = %gateway_id, "failed to serve ingress gateway config");
+                StatusCode::BAD_GATEWAY
+            }
         })
 }
 
