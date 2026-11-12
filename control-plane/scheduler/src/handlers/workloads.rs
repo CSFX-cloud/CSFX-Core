@@ -10,6 +10,7 @@ use crate::{
     db,
     models::workload::{CreateWorkloadRequest, DesiredState, UpdateWorkloadRequest},
     server::AppState,
+    services::attachment_guard::{self, AttachmentError},
 };
 
 pub async fn create_workload(
@@ -22,6 +23,16 @@ pub async fn create_workload(
             Json(serde_json::json!({ "error": e })),
         )
             .into_response();
+    }
+    if let Err(error) = attachment_guard::ensure_same_resource_group(
+        &state.db,
+        req.resource_group_id,
+        req.volume_mounts.as_deref().unwrap_or_default(),
+        req.bucket_bindings.as_deref().unwrap_or_default(),
+    )
+    .await
+    {
+        return attachment_error_response(error);
     }
     match state.scheduler.schedule_replicas(req).await {
         Ok(mut responses) if responses.len() == 1 => (
@@ -101,6 +112,14 @@ async fn claim_requested_volumes(
             ))
         }
     };
+    attachment_guard::ensure_same_resource_group(
+        &state.db,
+        workload.resource_group_id,
+        mounts,
+        &[],
+    )
+    .await
+    .map_err(attachment_error_response)?;
     let Some(agent_id) = workload.assigned_agent_id else {
         return Ok(());
     };
@@ -115,6 +134,18 @@ async fn claim_requested_volumes(
             StatusCode::INTERNAL_SERVER_ERROR,
             e.to_string(),
         )),
+    }
+}
+
+fn attachment_error_response(error: AttachmentError) -> axum::response::Response {
+    match error {
+        AttachmentError::Forbidden => error_response(
+            StatusCode::FORBIDDEN,
+            "volume or bucket does not belong to the resource group".to_string(),
+        ),
+        AttachmentError::Database(e) => {
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        }
     }
 }
 

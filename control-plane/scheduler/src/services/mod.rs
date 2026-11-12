@@ -1,3 +1,4 @@
+pub mod attachment_guard;
 pub mod bucket_bindings;
 pub mod compose_parser;
 pub mod etcd;

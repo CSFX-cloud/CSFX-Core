@@ -1,3 +1,4 @@
+mod attachment_guard;
 mod common;
 mod internal_api;
 mod placement;
