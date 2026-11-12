@@ -214,12 +214,60 @@ pub async fn grow_image_to(pool: &str, image: &str, device: &str, size_gb: u64) 
     Ok(true)
 }
 
+const FILESYSTEM_TOOL_TIMEOUT: Duration = Duration::from_secs(600);
+const FILESYSTEM_SANDBOX: [&str; 22] = [
+    "DynamicUser=yes",
+    "SupplementaryGroups=disk",
+    "CapabilityBoundingSet=",
+    "NoNewPrivileges=yes",
+    "PrivateNetwork=yes",
+    "PrivateTmp=yes",
+    "ProtectSystem=strict",
+    "ProtectHome=yes",
+    "ProtectKernelTunables=yes",
+    "ProtectKernelModules=yes",
+    "ProtectKernelLogs=yes",
+    "ProtectControlGroups=yes",
+    "ProtectClock=yes",
+    "RestrictNamespaces=yes",
+    "RestrictRealtime=yes",
+    "LockPersonality=yes",
+    "MemoryDenyWriteExecute=yes",
+    "SystemCallArchitectures=native",
+    "SystemCallFilter=@system-service",
+    "DevicePolicy=closed",
+    "MemoryMax=1G",
+    "RuntimeMaxSec=600",
+];
+
+fn sandboxed(device: &str, program: &str, args: &[&str]) -> Command {
+    let mut command = Command::new("systemd-run");
+    command.args(["--quiet", "--wait", "--collect", "--pipe"]);
+    for property in FILESYSTEM_SANDBOX {
+        command.arg("-p").arg(property);
+    }
+    command
+        .arg("-p")
+        .arg(format!("DeviceAllow={device} rw"))
+        .arg("--")
+        .arg(program)
+        .args(args)
+        .kill_on_drop(true);
+    command
+}
+
+async fn run_sandboxed(device: &str, program: &str, args: &[&str]) -> Result<std::process::Output> {
+    tokio::time::timeout(
+        FILESYSTEM_TOOL_TIMEOUT,
+        sandboxed(device, program, args).output(),
+    )
+    .await
+    .with_context(|| format!("{program} timed out"))?
+    .with_context(|| format!("Failed to execute {program} in its sandbox"))
+}
+
 pub async fn grow_filesystem(device: &str) -> Result<()> {
-    let check = Command::new("e2fsck")
-        .args(["-fp", device])
-        .output()
-        .await
-        .context("Failed to execute e2fsck")?;
+    let check = run_sandboxed(device, "e2fsck", &["-fp", device]).await?;
 
     if check
         .status
@@ -230,11 +278,7 @@ pub async fn grow_filesystem(device: &str) -> Result<()> {
         return Err(anyhow!("e2fsck failed device={} {}", device, stderr));
     }
 
-    let resize = Command::new("resize2fs")
-        .arg(device)
-        .output()
-        .await
-        .context("Failed to execute resize2fs")?;
+    let resize = run_sandboxed(device, "resize2fs", &[device]).await?;
 
     if !resize.status.success() {
         let stderr = String::from_utf8_lossy(&resize.stderr);
@@ -359,9 +403,15 @@ mod tests {
         assert!(tools.calls("rbd").is_empty());
     }
 
+    const SYSTEMD_RUN: &str = "while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"";
+
     #[tokio::test]
     async fn growing_checks_then_resizes_the_filesystem() {
-        let tools = FakeTools::install(&[("e2fsck", "exit 1"), ("resize2fs", "exit 0")]);
+        let tools = FakeTools::install(&[
+            ("systemd-run", SYSTEMD_RUN),
+            ("e2fsck", "exit 1"),
+            ("resize2fs", "exit 0"),
+        ]);
 
         grow_filesystem("/dev/rbd0").await.unwrap();
 
@@ -370,8 +420,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn filesystem_tools_only_run_inside_a_sandboxed_transient_unit() {
+        let tools = FakeTools::install(&[
+            ("systemd-run", SYSTEMD_RUN),
+            ("e2fsck", "exit 0"),
+            ("resize2fs", "exit 0"),
+        ]);
+
+        grow_filesystem("/dev/rbd0").await.unwrap();
+
+        let launches = tools.calls("systemd-run");
+        assert_eq!(launches.len(), 2);
+        for launch in launches {
+            for property in [
+                "DynamicUser=yes",
+                "PrivateNetwork=yes",
+                "SystemCallFilter=@system-service",
+                "DevicePolicy=closed",
+                "DeviceAllow=/dev/rbd0 rw",
+                "CapabilityBoundingSet=",
+            ] {
+                assert!(launch.contains(property), "{property}: {launch}");
+            }
+            assert!(launch.contains(" -- e2fsck ") || launch.contains(" -- resize2fs "));
+        }
+    }
+
+    #[tokio::test]
     async fn growing_stops_when_the_check_finds_uncorrectable_errors() {
-        let tools = FakeTools::install(&[("e2fsck", "exit 4"), ("resize2fs", "exit 0")]);
+        let tools = FakeTools::install(&[
+            ("systemd-run", SYSTEMD_RUN),
+            ("e2fsck", "exit 4"),
+            ("resize2fs", "exit 0"),
+        ]);
 
         assert!(grow_filesystem("/dev/rbd0").await.is_err());
         assert!(tools.calls("resize2fs").is_empty());
