@@ -263,3 +263,40 @@ pub fn request_with_volumes(name: &str, volume_ids: &[Uuid]) -> CreateWorkloadRe
     .unwrap();
     request
 }
+
+pub async fn insert_volume_in_group(db: &DatabaseConnection, group: Option<Uuid>) -> Uuid {
+    let id = insert_volume(db, None, None).await;
+    entity::entities::volumes::ActiveModel {
+        id: Set(id),
+        resource_group_id: Set(group),
+        ..Default::default()
+    }
+    .update(db)
+    .await
+    .expect("volume must be updated");
+    id
+}
+
+pub async fn insert_bucket_in_group(db: &DatabaseConnection, group: Option<Uuid>) -> Uuid {
+    let id = Uuid::new_v4();
+    entity::entities::buckets::ActiveModel {
+        id: Set(id),
+        name: Set(unique_name("bucket")),
+        garage_bucket_id: Set(None),
+        global_alias: Set(unique_name("alias")),
+        exposure: Set("private".to_string()),
+        quota_max_size: Set(None),
+        quota_max_objects: Set(None),
+        status: Set("active".to_string()),
+        master_key_id: Set(None),
+        master_key_secret_encrypted: Set(None),
+        organization_id: Set(None),
+        resource_group_id: Set(group),
+        created_at: Set(chrono::Utc::now().naive_utc()),
+        updated_at: Set(None),
+    }
+    .insert(db)
+    .await
+    .expect("bucket must be inserted");
+    id
+}
