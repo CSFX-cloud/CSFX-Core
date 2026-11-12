@@ -232,10 +232,18 @@ impl CreateWorkloadRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortProtocol {
+    #[default]
+    Tcp,
+    Udp,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortMapping {
     pub container_port: u16,
-    pub protocol: Option<String>,
+    pub protocol: Option<PortProtocol>,
     pub rg_port: Option<u16>,
     pub node_port: Option<u16>,
 }
@@ -301,6 +309,25 @@ pub struct AgentResources {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn port_protocol_rejects_anything_but_tcp_and_udp() {
+        for hostile in [
+            "tcp; flush ruleset",
+            "tcp\ndport 1 accept",
+            "TCP",
+            "",
+            "sctp",
+        ] {
+            let json = serde_json::json!({ "container_port": 80, "protocol": hostile });
+            assert!(serde_json::from_value::<PortMapping>(json).is_err());
+        }
+        let json = serde_json::json!({ "container_port": 80 });
+        assert!(serde_json::from_value::<PortMapping>(json)
+            .unwrap()
+            .protocol
+            .is_none());
+    }
+
     use super::*;
 
     fn request() -> CreateWorkloadRequest {
