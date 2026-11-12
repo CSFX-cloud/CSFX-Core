@@ -116,7 +116,8 @@ pub struct SiteSummary {
 pub struct SiteDetail {
     #[serde(flatten)]
     site: sites::Model,
-    webhook_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    webhook_path: Option<String>,
     domains: Vec<site_domains::Model>,
     env: Vec<EnvView>,
     deployments: Vec<DeploymentSummary>,
@@ -176,7 +177,7 @@ pub async fn list_sites(
 }
 
 pub async fn get_site(
-    CanViewResourceGroups(_claims): CanViewResourceGroups,
+    CanViewResourceGroups(claims): CanViewResourceGroups,
     State(state): State<AppState>,
     Path((group_id, site_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<SiteDetail> {
@@ -204,8 +205,11 @@ pub async fn get_site(
         .into_iter()
         .map(|model| summarize(model, site.current_deployment_id))
         .collect();
+    let webhook_path = permitted(&state, &claims, "resource_groups", "manage")
+        .await
+        .then(|| format!("/hooks/sites/{}/{}", site.id, site.webhook_secret));
     Ok(Json(SiteDetail {
-        webhook_path: format!("/hooks/sites/{}/{}", site.id, site.webhook_secret),
+        webhook_path,
         domains: domains_of(&state, site.id).await?,
         env,
         deployments,
@@ -223,13 +227,18 @@ pub struct DetectRequest {
     git_token_secret: Option<String>,
 }
 
-async fn require_reveal(state: &AppState, claims: &Claims) -> Result<(), SiteError> {
-    let org_id = state.default_org_id.ok_or(SiteError::Forbidden)?;
-    let allowed = RbacService::new(state.db_conn.clone())
-        .has_permission(claims.user_id, org_id, "secrets", "reveal")
+async fn permitted(state: &AppState, claims: &Claims, resource: &str, action: &str) -> bool {
+    let Some(org_id) = state.default_org_id else {
+        return false;
+    };
+    RbacService::new(state.db_conn.clone())
+        .has_permission(claims.user_id, org_id, resource, action)
         .await
-        .unwrap_or(false);
-    if allowed {
+        .unwrap_or(false)
+}
+
+async fn require_reveal(state: &AppState, claims: &Claims) -> Result<(), SiteError> {
+    if permitted(state, claims, "secrets", "reveal").await {
         Ok(())
     } else {
         Err(SiteError::Forbidden)

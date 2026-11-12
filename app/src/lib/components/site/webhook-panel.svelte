@@ -7,9 +7,10 @@
     let { site }: { site: SiteDetail } = $props();
 
     const clipboard = createClipboard();
-    const url = $derived(`${$page.url.origin}/api${site.webhook_path}`);
+    const url = $derived(site.webhook_path ? `${$page.url.origin}/api${site.webhook_path}` : "");
 </script>
 
+{#if url}
 <section class="cx-panel" aria-labelledby="wh-title">
     <div class="cx-panel__head">
         <div>
@@ -24,3 +25,4 @@
         </button>
     </div>
 </section>
+{/if}
