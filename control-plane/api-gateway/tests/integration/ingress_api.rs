@@ -398,13 +398,16 @@ async fn gateway_config_renders_routes_and_stored_certificate() {
         backend["loadBalancer"]["servers"][0]["url"],
         "http://127.0.0.1:30001"
     );
-    assert_eq!(config["tls"]["certificates"][0]["certFile"], "cert");
+    assert_eq!(config["tls"]["certificates"][0]["certFile"], STORED_CHAIN);
 }
+
+const STORED_CHAIN: &str =
+    "-----BEGIN CERTIFICATE-----\nleaf\n-----BEGIN CERTIFICATE-----\nintermediate\n";
 
 async fn store_certificate(harness: &Harness, gateway_id: Uuid, hostname: &str) {
     let certificate = api_gateway::zone_cert::IssuedCertificate {
         sans: vec![hostname.to_string()],
-        cert_pem: "cert".to_string(),
+        cert_pem: STORED_CHAIN.to_string(),
         key_pem: "key".to_string(),
         expires_on: Utc::now().date_naive() + chrono::Duration::days(80),
     };
@@ -532,5 +535,37 @@ async fn dns_names_cannot_shadow_ingress_hostnames() {
     let uri = format!("/api/resource-groups/{}/dns-records", stack.group.id);
     let (status, body) = harness.post(&uri, record(&hostname, "A", "10.1.2.3")).await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["error"], "name is already in use");
+    assert_eq!(body["error"], "hostname is already in use");
+}
+
+async fn console_host(harness: &Harness) -> String {
+    let (_, body) = harness.get("/api/dns/zone").await;
+    body["console_host"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn platform_hostname_cannot_be_routed_or_shadowed() {
+    let harness = harness().await;
+    let stack = stack(&harness).await;
+    let console = console_host(&harness).await;
+    let ingress = format!("/api/resource-groups/{}/ingress", stack.group.id);
+    let records = format!("/api/resource-groups/{}/dns-records", stack.group.id);
+
+    for hostname in [console.clone(), format!("login.{console}")] {
+        let (status, _) = harness
+            .post(&ingress, route_request(&stack, &hostname, 8080))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{hostname}");
+        let (status, _) = harness
+            .post(&records, record(&hostname, "A", "10.1.2.3"))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{hostname}");
+    }
+    let reserved = ingress_routes::Entity::find()
+        .filter(ingress_routes::Column::ResourceGroupId.eq(stack.group.id))
+        .count(&harness.db)
+        .await
+        .unwrap();
+    assert_eq!(reserved, 0);
 }

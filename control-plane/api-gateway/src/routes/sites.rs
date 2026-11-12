@@ -24,6 +24,7 @@ use crate::{
         jwt::Claims,
         rbac::{CanManageResourceGroups, CanViewResourceGroups},
     },
+    hostname_policy::{self, HostnameRejection},
     rbac_service::RbacService,
     site_service::{self as service, Detected, NewDeployment, Overrides, SecretSource, SiteError},
     vault_service, AppState,
@@ -845,9 +846,12 @@ pub async fn add_domain(
     if count >= MAX_DOMAINS_PER_SITE {
         return Err(SiteError::Conflict("too many domains"));
     }
-    if hostname_taken(&state, &hostname).await? {
-        return Err(SiteError::Conflict("this domain is already in use"));
-    }
+    hostname_policy::ensure_claimable(&state.db_conn, &hostname)
+        .await
+        .map_err(|rejection| match rejection {
+            HostnameRejection::Database(e) => SiteError::Database(e),
+            other => SiteError::Conflict(other.message()),
+        })?;
     let domain = insert_domain(&state, site.id, hostname, "production").await?;
     reconcile_routes(&state, &site).await;
     Ok((StatusCode::CREATED, Json(domain)))

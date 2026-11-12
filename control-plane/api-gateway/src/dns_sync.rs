@@ -7,6 +7,7 @@ use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
 use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
+use crate::hostname_policy::is_platform_name;
 use crate::ingress_sync::{apply_diff, EntryDiff};
 
 const SKYDNS_ROOT: &str = "/skydns";
@@ -102,9 +103,11 @@ pub fn desired_records(
         .iter()
         .map(|gateway| (gateway.id, gateway))
         .collect();
+    let publishable =
+        |hostname: &str| in_zone(hostname, zone) && !is_platform_name(hostname, &platform.hostname);
     let mut records: BTreeMap<String, String> = manual
         .iter()
-        .filter(|record| in_zone(&record.name, zone))
+        .filter(|record| publishable(&record.name))
         .map(|record| {
             let ttl = u32::try_from(record.ttl).unwrap_or(RECORD_TTL);
             (record_key(&record.name), record_value(&record.value, ttl))
@@ -113,7 +116,7 @@ pub fn desired_records(
     records.extend(
         gateways
             .iter()
-            .filter(|gateway| in_zone(&gateway.endpoint, zone))
+            .filter(|gateway| publishable(&gateway.endpoint))
             .map(|gateway| {
                 (
                     record_key(&gateway.endpoint),
@@ -121,7 +124,7 @@ pub fn desired_records(
                 )
             }),
     );
-    for route in routes.iter().filter(|route| in_zone(&route.hostname, zone)) {
+    for route in routes.iter().filter(|route| publishable(&route.hostname)) {
         let Some(gateway) = route.gateway_id.and_then(|id| by_id.get(&id)) else {
             continue;
         };
@@ -130,10 +133,7 @@ pub fn desired_records(
             record_value(&gateway.address, RECORD_TTL),
         );
     }
-    for host in site_hosts
-        .iter()
-        .filter(|host| in_zone(&host.hostname, zone))
-    {
+    for host in site_hosts.iter().filter(|host| publishable(&host.hostname)) {
         let Some(address) = site_host_address(host, &by_id) else {
             continue;
         };
@@ -386,6 +386,29 @@ mod tests {
             endpoint: "gw.prod.csfx.internal".to_string(),
             address: "10.0.0.5".to_string(),
         }
+    }
+
+    #[test]
+    fn names_below_the_platform_hostname_are_never_published() {
+        let manual = dns_records::Model {
+            id: Uuid::nil(),
+            resource_group_id: Uuid::nil(),
+            name: "evil.console.csfx.internal".to_string(),
+            record_type: "A".to_string(),
+            value: "6.6.6.6".to_string(),
+            ttl: 30,
+            created_at: NaiveDateTime::default(),
+        };
+        let routes = [route("login.console.csfx.internal", Some(gateway().id))];
+        let records = desired_records(
+            "csfx.internal",
+            &[gateway()],
+            &routes,
+            &[],
+            &[manual],
+            &no_platform(),
+        );
+        assert!(records.keys().all(|key| !key.contains("/console/")));
     }
 
     #[test]

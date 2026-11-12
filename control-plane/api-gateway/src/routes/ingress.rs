@@ -7,9 +7,7 @@ use axum::{
 };
 use chrono::Utc;
 use entity::entities::{ingress_gateways, ingress_routes, resource_groups, workloads};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -17,6 +15,7 @@ use uuid::Uuid;
 use super::cluster::{error, internal, ApiError};
 use crate::{
     auth::rbac::{CanManageResourceGroups, CanViewResourceGroups},
+    hostname_policy::{self, HostnameRejection},
     AppState,
 };
 
@@ -214,15 +213,12 @@ async fn ensure_workload_port(
 }
 
 async fn ensure_hostname_free(state: &AppState, hostname: &str) -> Result<(), ApiError> {
-    let taken = ingress_routes::Entity::find()
-        .filter(ingress_routes::Column::Hostname.eq(hostname))
-        .count(&state.db_conn)
+    hostname_policy::ensure_claimable(&state.db_conn, hostname)
         .await
-        .map_err(internal)?;
-    if taken > 0 {
-        return Err(error(StatusCode::CONFLICT, "hostname is already routed"));
-    }
-    Ok(())
+        .map_err(|rejection| match rejection {
+            HostnameRejection::Database(e) => internal(e),
+            other => error(StatusCode::CONFLICT, other.message()),
+        })
 }
 
 pub async fn delete_ingress(

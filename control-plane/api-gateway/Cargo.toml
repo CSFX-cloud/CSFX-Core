@@ -91,3 +91,4 @@ vendored-openssl = []
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+x509-parser = { workspace = true }

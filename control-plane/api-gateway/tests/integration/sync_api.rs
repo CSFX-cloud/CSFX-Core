@@ -213,9 +213,13 @@ fn zone_certificates_are_issued_and_renewed_on_demand() {
     let (ca_cert, ca_key) = certificate_authority();
     let today = NaiveDate::from_ymd_opt(2026, 11, 6).unwrap();
     let sans = vec!["app.csfx.internal".to_string()];
+    let scope = zone_cert::NameScope {
+        zone: "csfx.internal",
+        excluded: "console.csfx.internal",
+    };
 
     assert!(zone_cert::needs_issue(None, &sans, today));
-    let issued = zone_cert::issue(&sans, &ca_cert, &ca_key, today).unwrap();
+    let issued = zone_cert::issue(&sans, &scope, &ca_cert, &ca_key, today).unwrap();
     assert!(issued.cert_pem.contains("BEGIN CERTIFICATE"));
     assert!(!zone_cert::needs_issue(Some(&issued), &sans, today));
     assert!(zone_cert::needs_issue(
@@ -233,7 +237,14 @@ fn zone_certificates_are_issued_and_renewed_on_demand() {
         section["certificates"][0]["certFile"],
         json!(issued.cert_pem)
     );
-    assert!(zone_cert::issue(&["b\u{e4}d.example".to_string()], &ca_cert, &ca_key, today).is_err());
+    assert!(zone_cert::issue(
+        &["b\u{e4}d.example".to_string()],
+        &scope,
+        &ca_cert,
+        &ca_key,
+        today
+    )
+    .is_err());
 }
 
 #[tokio::test]

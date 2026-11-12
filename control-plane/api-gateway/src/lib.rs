@@ -11,6 +11,7 @@ pub mod console_pin;
 pub mod db;
 pub mod dns_sync;
 pub mod etcd_members;
+pub mod hostname_policy;
 pub mod ingress_sync;
 pub mod init;
 pub mod metrics;
