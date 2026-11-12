@@ -3,7 +3,10 @@ use axum::{
     http::StatusCode,
     Json, Router,
 };
-use entity::{organization, role, user, Organization, Role, User};
+use entity::{
+    organization, resource_group_vpn_peers, role, user, Organization, ResourceGroupVpnPeers, Role,
+    User,
+};
 use sea_orm::{ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -585,5 +588,28 @@ async fn update_user_role(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    revoke_vpn_peers_without_access(&rbac, db, user_id, org.id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
     Ok(StatusCode::OK)
+}
+
+async fn revoke_vpn_peers_without_access(
+    rbac: &RbacService,
+    db: &sea_orm::DatabaseConnection,
+    user_id: Uuid,
+    organization_id: Uuid,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if rbac
+        .has_permission(user_id, organization_id, "resource_groups", "manage")
+        .await?
+    {
+        return Ok(());
+    }
+    ResourceGroupVpnPeers::delete_many()
+        .filter(resource_group_vpn_peers::Column::UserId.eq(user_id))
+        .exec(db)
+        .await?;
+    Ok(())
 }

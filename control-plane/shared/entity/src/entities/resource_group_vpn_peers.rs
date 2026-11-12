@@ -7,6 +7,7 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub resource_group_id: Uuid,
+    pub user_id: Uuid,
     pub client_public_key: String,
     pub client_tunnel_ip: String,
     pub created_at: chrono::NaiveDateTime,
@@ -21,6 +22,13 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     ResourceGroups,
+    #[sea_orm(
+        belongs_to = "super::user::Entity",
+        from = "Column::UserId",
+        to = "super::user::Column::Id",
+        on_delete = "Cascade"
+    )]
+    User,
 }
 
 impl Related<super::resource_groups::Entity> for Entity {
