@@ -2,11 +2,13 @@ use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
 use rcgen::{
-    BasicConstraints, CertificateParams, CertificateSigningRequestParams, DnType, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose, SigningKey, PKCS_ECDSA_P256_SHA256,
+    BasicConstraints, CertificateParams, CertificateSigningRequestParams, DnType,
+    ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose, SanType, SerialNumber,
+    SigningKey, PKCS_ECDSA_P256_SHA256,
 };
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 pub struct IssuedCertificate {
@@ -32,6 +34,31 @@ struct CaState {
 
 fn random_serial() -> i64 {
     (Uuid::new_v4().as_u128() >> 65) as i64
+}
+
+fn agent_certificate_params(
+    agent_id: Uuid,
+    serial: i64,
+    expires_at: DateTime<Utc>,
+) -> Result<CertificateParams> {
+    let identity = agent_id.to_string();
+    let mut params = CertificateParams::default();
+    params
+        .distinguished_name
+        .push(DnType::CommonName, &identity);
+    params.subject_alt_names = vec![SanType::DnsName(
+        identity
+            .try_into()
+            .map_err(|e| anyhow!("Invalid agent identity: {}", e))?,
+    )];
+    params.is_ca = IsCa::ExplicitNoCa;
+    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+    params.serial_number = Some(SerialNumber::from(serial as u64));
+    params.not_before = OffsetDateTime::now_utc();
+    params.not_after = OffsetDateTime::from_unix_timestamp(expires_at.timestamp())
+        .map_err(|e| anyhow!("Invalid certificate expiry: {}", e))?;
+    Ok(params)
 }
 
 pub struct PkiService {
@@ -152,8 +179,8 @@ impl PkiService {
 
         let issuer = self.build_issuer()?;
 
-        let cert = csr_params
-            .signed_by(&issuer)
+        let cert = agent_certificate_params(agent_id, serial, expires_at)?
+            .signed_by(&csr_params.public_key, &issuer)
             .map_err(|e| anyhow!("Failed to sign certificate: {}", e))?;
 
         let certificate_pem = cert.pem();
@@ -265,5 +292,93 @@ impl PkiService {
             payload: URL_SAFE_NO_PAD.encode(payload.as_bytes()),
             signature: URL_SAFE_NO_PAD.encode(signature),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use x509_parser::{extensions::ParsedExtension, parse_x509_certificate, pem::parse_x509_pem};
+
+    fn hostile_csr() -> String {
+        let mut params = CertificateParams::new(vec!["csfx-gateway".to_string()]).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.key_usages = vec![KeyUsagePurpose::KeyCertSign];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        params.serialize_request(&key).unwrap().pem().unwrap()
+    }
+
+    fn issue(agent_id: Uuid, ttl_hours: i64) -> (String, DateTime<Utc>) {
+        let ca = PkiService::generate_ca().unwrap();
+        let ca_key = KeyPair::from_pem(&ca.ca_key_pem).unwrap();
+        let issuer = Issuer::from_ca_cert_pem(&ca.ca_cert_pem, ca_key).unwrap();
+        let csr = CertificateSigningRequestParams::from_pem(&hostile_csr()).unwrap();
+        let expires_at = Utc::now() + chrono::Duration::hours(ttl_hours);
+        let cert = agent_certificate_params(agent_id, 42, expires_at)
+            .unwrap()
+            .signed_by(&csr.public_key, &issuer)
+            .unwrap();
+        (cert.pem(), expires_at)
+    }
+
+    #[test]
+    fn issued_certificate_ignores_csr_requested_privileges() {
+        let agent_id = Uuid::new_v4();
+        let (pem, expires_at) = issue(agent_id, 24);
+        let (_, pem) = parse_x509_pem(pem.as_bytes()).unwrap();
+        let (_, cert) = parse_x509_certificate(&pem.contents).unwrap();
+
+        assert!(!cert.is_ca());
+        assert_eq!(
+            cert.validity().not_after.timestamp(),
+            expires_at.timestamp()
+        );
+        assert!(
+            cert.validity().not_after.timestamp() - cert.validity().not_before.timestamp()
+                <= 24 * 3600 + 1
+        );
+        assert_eq!(
+            cert.subject()
+                .iter_common_name()
+                .next()
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            agent_id.to_string()
+        );
+
+        let mut sans = Vec::new();
+        let mut client_auth_only = false;
+        let mut digital_signature_only = false;
+        for extension in cert.extensions() {
+            match extension.parsed_extension() {
+                ParsedExtension::SubjectAlternativeName(san) => {
+                    sans = san
+                        .general_names
+                        .iter()
+                        .map(|name| name.to_string())
+                        .collect();
+                }
+                ParsedExtension::ExtendedKeyUsage(eku) => {
+                    client_auth_only = eku.client_auth
+                        && !eku.server_auth
+                        && !eku.any
+                        && !eku.code_signing
+                        && !eku.email_protection
+                        && !eku.time_stamping
+                        && !eku.ocsp_signing
+                        && eku.other.is_empty();
+                }
+                ParsedExtension::KeyUsage(usage) => {
+                    digital_signature_only =
+                        usage.digital_signature() && !usage.key_cert_sign() && !usage.crl_sign();
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(sans, vec![format!("DNSName({agent_id})")]);
+        assert!(client_auth_only);
+        assert!(digital_signature_only);
     }
 }
