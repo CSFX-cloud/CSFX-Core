@@ -379,6 +379,37 @@ async fn git_token_secrets_require_the_reveal_permission() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
+async fn the_webhook_path_is_only_shown_to_managers() {
+    let harness = full_harness().await;
+    let group = resource_group(&harness).await;
+    let site = create_site(&harness, group, STATIC_REPO).await;
+    let target = site_uri(group, &site);
+    let (_, viewer) = harness
+        .token_with_permissions(&["resource_groups.view"])
+        .await;
+    let (_, manager) = harness
+        .token_with_permissions(&["resource_groups.view", "resource_groups.manage"])
+        .await;
+
+    let (status, body) = harness
+        .send(Method::GET, &target, Some(&viewer), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("webhook_path").is_none());
+    assert!(!body.to_string().contains("/hooks/sites/"));
+
+    let (status, body) = harness
+        .send(Method::GET, &target, Some(&manager), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["webhook_path"]
+        .as_str()
+        .unwrap()
+        .starts_with("/hooks/sites/"));
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
 async fn domains_are_validated_and_unique() {
     let harness = full_harness().await;
     let group = resource_group(&harness).await;
