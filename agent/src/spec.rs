@@ -1,10 +1,27 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortProtocol {
+    #[default]
+    Tcp,
+    Udp,
+}
+
+impl PortProtocol {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PortProtocol::Tcp => "tcp",
+            PortProtocol::Udp => "udp",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortMapping {
     pub container_port: u16,
-    pub protocol: Option<String>,
+    pub protocol: Option<PortProtocol>,
     pub rg_port: Option<u16>,
     pub node_port: Option<u16>,
 }
@@ -134,6 +151,23 @@ pub fn rg_bridge_iface_name(resource_group_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn port_protocol_rejects_anything_but_tcp_and_udp() {
+        for hostile in [
+            "tcp; flush ruleset",
+            "tcp\ndport 1 accept",
+            "TCP",
+            "",
+            "sctp",
+        ] {
+            let json = serde_json::json!({ "container_port": 80, "protocol": hostile });
+            assert!(serde_json::from_value::<PortMapping>(json).is_err());
+        }
+        let json = serde_json::json!({ "container_port": 80, "protocol": "udp" });
+        let mapping = serde_json::from_value::<PortMapping>(json).unwrap();
+        assert_eq!(mapping.protocol, Some(PortProtocol::Udp));
+    }
 
     const MIB: i64 = 1024 * 1024;
 
