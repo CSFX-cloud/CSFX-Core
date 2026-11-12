@@ -7,6 +7,40 @@ pub fn uses_site_registry(image: &str) -> bool {
         .is_some_and(|rest| rest.starts_with('/') || rest.starts_with(':') || rest.is_empty())
 }
 
+const GROUP_NAMESPACE_PATH: &str = "/rg-";
+
+pub const REGISTRY_ENDPOINT_VARIABLES: [&str; 2] =
+    ["CSFX_SITE_REGISTRY", "CSFX_SITE_REGISTRY_ENDPOINT"];
+
+pub fn configured_registry_endpoints() -> Vec<String> {
+    REGISTRY_ENDPOINT_VARIABLES
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+pub fn mentions_site_repository(text: &str, endpoints: &[String]) -> bool {
+    let lowered = text.to_ascii_lowercase();
+    endpoints.iter().any(|endpoint| {
+        lowered.match_indices(endpoint.as_str()).any(|(start, _)| {
+            let before = lowered[..start].chars().next_back();
+            let rest = &lowered[start + endpoint.len()..];
+            let bounded_before = before.is_none_or(|c| !is_host_char(c));
+            let bounded_after = rest
+                .chars()
+                .next()
+                .is_none_or(|c| c == '/' || c == '@' || !is_host_char(c));
+            bounded_before && bounded_after && !rest.starts_with(GROUP_NAMESPACE_PATH)
+        })
+    })
+}
+
+fn is_host_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':')
+}
+
 pub fn registry_prefix(resource_group_id: uuid::Uuid, registry_name: &str) -> String {
     format!("rg-{}/{registry_name}/", resource_group_id.simple())
 }
@@ -54,6 +88,36 @@ mod tests {
         for bad in ["", "/x", "x/", "../other", "a/../b", "a//b", "UPPER", "a b"] {
             assert!(repository_path("rg-1/main/", bad).is_none(), "{bad}");
         }
+    }
+
+    #[test]
+    fn site_repositories_on_configured_endpoints_are_detected() {
+        let endpoints = vec![
+            "10.0.0.5:5060".to_string(),
+            "registry.csfx.test".to_string(),
+        ];
+        assert!(mentions_site_repository("10.0.0.5:5060/abc:1", &endpoints));
+        assert!(mentions_site_repository(
+            "  REGISTRY.CSFX.TEST/abc",
+            &endpoints
+        ));
+        assert!(mentions_site_repository(
+            "services:\n  a:\n    image: 10.0.0.5:5060/x@sha256:ab",
+            &endpoints
+        ));
+        assert!(!mentions_site_repository("110.0.0.5:5060/abc", &endpoints));
+        assert!(!mentions_site_repository("10.0.0.5:50601/abc", &endpoints));
+        assert!(!mentions_site_repository("nginx:1", &endpoints));
+        assert!(!mentions_site_repository("10.0.0.5:5060/abc", &[]));
+    }
+
+    #[test]
+    fn group_namespaces_on_configured_endpoints_stay_allowed() {
+        let endpoints = vec!["10.0.0.5:5060".to_string()];
+        assert!(!mentions_site_repository(
+            "10.0.0.5:5060/rg-abc/main/app:1",
+            &endpoints
+        ));
     }
 
     #[test]
