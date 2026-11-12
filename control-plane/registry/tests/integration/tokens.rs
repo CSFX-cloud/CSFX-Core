@@ -5,6 +5,7 @@ use registry::services::{
     bootstrap_tokens::{BootstrapTokenManager, ROLE_MASTER, ROLE_WORKER},
     tokens::TokenManager,
 };
+use sea_orm::EntityTrait;
 use uuid::Uuid;
 
 #[tokio::test]
@@ -178,4 +179,54 @@ async fn api_key_validates_until_revoked() {
         manager.validate_key(&key.key).await,
         Err("Invalid API key".to_string())
     );
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn parallel_registrations_cannot_exceed_the_use_limit() {
+    let manager = std::sync::Arc::new(BootstrapTokenManager::new(
+        common::migrated_database().await,
+    ));
+    let token = manager
+        .create(None, "tester".to_string(), 1, 1, ROLE_WORKER.to_string())
+        .await
+        .unwrap();
+
+    let attempts: Vec<_> = (0..20)
+        .map(|_| {
+            let manager = manager.clone();
+            let secret = token.token.clone();
+            tokio::spawn(async move { manager.validate_and_use(&secret).await })
+        })
+        .collect();
+    let mut successes = 0;
+    for attempt in attempts {
+        if attempt.await.unwrap().is_ok() {
+            successes += 1;
+        }
+    }
+
+    assert_eq!(successes, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn bootstrap_tokens_are_stored_hashed_and_never_listed() {
+    let db = common::migrated_database().await;
+    let manager = BootstrapTokenManager::new(db.clone());
+    let token = manager
+        .create(None, "tester".to_string(), 1, 1, ROLE_WORKER.to_string())
+        .await
+        .unwrap();
+
+    let stored = entity::bootstrap_tokens::Entity::find_by_id(token.id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(stored.token_hash, token.token);
+    assert_eq!(stored.token_hash.len(), 64);
+    let listed = manager.list().await;
+    let entry = listed.iter().find(|entry| entry.id == token.id).unwrap();
+    assert!(entry.token.is_empty());
 }
