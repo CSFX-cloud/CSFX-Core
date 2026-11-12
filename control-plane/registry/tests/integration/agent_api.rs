@@ -1,4 +1,5 @@
 use axum::http::{Method, StatusCode};
+use sea_orm::EntityTrait;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -277,4 +278,116 @@ async fn registration_rejects_invalid_tokens() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(error["error"].as_str().unwrap().contains("name mismatch"));
+}
+
+fn registration_body(token: &str, machine_id: &str, csr_pem: String) -> serde_json::Value {
+    json!({
+        "registration_token": token,
+        "name": format!("joiner-{}", Uuid::new_v4().simple()),
+        "hostname": format!("host-{}", Uuid::new_v4().simple()),
+        "os_type": "linux",
+        "os_version": "6.1",
+        "architecture": "x86_64",
+        "agent_version": "0.2.2",
+        "machine_id": machine_id,
+        "csr_pem": csr_pem,
+    })
+}
+
+struct Victim {
+    id: Uuid,
+    machine_id: String,
+    key: rcgen::KeyPair,
+    api_key: String,
+}
+
+async fn registered_master(state: &registry::server::AppState) -> Victim {
+    let machine_id = Uuid::new_v4().simple().to_string();
+    let id = common::insert_agent_with(&state.db, "master", Some(machine_id.clone())).await;
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    state
+        .pki_service
+        .issue_certificate(id, &common::csr_pem_for(&key))
+        .await
+        .unwrap();
+    let api_key = state.api_key_manager.create_key(id).await.key;
+    Victim {
+        id,
+        machine_id,
+        key,
+        api_key,
+    }
+}
+
+async fn worker_bootstrap_token(state: &registry::server::AppState) -> String {
+    state
+        .bootstrap_token_manager
+        .create(None, "test".to_string(), 1, 5, "worker".to_string())
+        .await
+        .unwrap()
+        .token
+}
+
+async fn register(app: &axum::Router, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    send(
+        app,
+        Method::POST,
+        "/agents/register",
+        Some(body),
+        &[],
+        "127.0.0.1:9000".parse().unwrap(),
+    )
+    .await
+}
+
+async fn role_of(state: &registry::server::AppState, agent_id: Uuid) -> String {
+    entity::agents::Entity::find_by_id(agent_id)
+        .one(&state.db)
+        .await
+        .unwrap()
+        .unwrap()
+        .role
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL and etcd via ETCD_ENDPOINTS"]
+async fn bootstrap_registration_with_foreign_machine_id_does_not_take_over_the_agent() {
+    let state = common::with_etcd_ipam(common::app_state(common::migrated_database().await));
+    let victim = registered_master(&state).await;
+    let token = worker_bootstrap_token(&state).await;
+    let app = registry::server::create_router(state.clone());
+
+    let body = registration_body(&token, &victim.machine_id, common::csr_pem());
+    let (status, response) = register(&app, body).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let new_id: Uuid = response["agent_id"].as_str().unwrap().parse().unwrap();
+    assert_ne!(new_id, victim.id);
+    assert_eq!(role_of(&state, victim.id).await, "master");
+    assert_eq!(
+        state.api_key_manager.validate_key(&victim.api_key).await,
+        Ok(victim.id)
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn bootstrap_registration_proving_the_certificate_key_reregisters_without_changing_the_role()
+{
+    let state = common::app_state(common::migrated_database().await);
+    let victim = registered_master(&state).await;
+    let token = worker_bootstrap_token(&state).await;
+    let app = registry::server::create_router(state.clone());
+
+    let body = registration_body(&token, &victim.machine_id, common::csr_pem_for(&victim.key));
+    let (status, response) = register(&app, body).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["agent_id"], victim.id.to_string());
+    assert_eq!(role_of(&state, victim.id).await, "master");
+    assert!(state
+        .api_key_manager
+        .validate_key(&victim.api_key)
+        .await
+        .is_err());
 }
