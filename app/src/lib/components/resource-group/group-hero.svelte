@@ -61,7 +61,7 @@
         if (!auth.token) return;
         downloadingVpn = true;
         try {
-            const response = await fetch(`/api/resource-groups/${group.id}/vpn-config`, { headers: { Authorization: `Bearer ${auth.token}` } });
+            const response = await fetch(`/api/resource-groups/${group.id}/vpn-config`, { method: "POST", headers: { Authorization: `Bearer ${auth.token}` } });
             if (!response.ok) {
                 const body = await response.json().catch(() => ({}));
                 throw new Error(body.error ?? `HTTP ${response.status}`);
