@@ -197,7 +197,11 @@ impl crate::runtime::Runtime for QemuRuntime {
         ensure_boot_disk(&vm_spec.boot_disk_path, vm_spec.boot_disk_size_bytes).await?;
 
         let iso_path = match &vm_spec.iso_url {
-            Some(iso_url) => Some(ensure_iso_cached(&spec.workload_id, iso_url).await?),
+            Some(iso_url) => {
+                let path = ensure_iso_cached(&spec.workload_id, iso_url).await?;
+                ensure_raw_image(&path).await?;
+                Some(path)
+            }
             None => None,
         };
 
@@ -475,6 +479,42 @@ async fn ensure_iso_cached(workload_id: &str, iso_url: &str) -> Result<PathBuf> 
     Ok(path)
 }
 
+fn iso_drive_args(iso_path: &Path) -> [String; 4] {
+    [
+        "-drive".to_string(),
+        format!(
+            "file={},media=cdrom,format=raw,readonly=on,if=ide",
+            iso_path.display()
+        ),
+        "-boot".to_string(),
+        "order=cd".to_string(),
+    ]
+}
+
+async fn ensure_raw_image(path: &Path) -> Result<()> {
+    let output = Command::new("qemu-img")
+        .args(["info", "--output=json"])
+        .arg(path)
+        .output()
+        .await
+        .context("Failed to execute qemu-img info")?;
+
+    if !output.status.success() {
+        anyhow::bail!("qemu-img info failed for iso {}", path.display());
+    }
+
+    let info: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("Failed to parse qemu-img info output")?;
+    match info["format"].as_str() {
+        Some("raw") => Ok(()),
+        format => anyhow::bail!(
+            "iso {} has unsupported format {}",
+            path.display(),
+            format.unwrap_or("unknown")
+        ),
+    }
+}
+
 async fn ensure_boot_disk(path: &str, size_bytes: i64) -> Result<()> {
     if tokio::fs::metadata(path).await.is_ok() {
         return Ok(());
@@ -604,10 +644,7 @@ async fn spawn_vm(
     ];
 
     if let Some(iso_path) = iso_path {
-        args.push("-cdrom".to_string());
-        args.push(iso_path.display().to_string());
-        args.push("-boot".to_string());
-        args.push("order=cd".to_string());
+        args.extend(iso_drive_args(iso_path));
     }
 
     debug!(workload_id = %workload_id, args = ?args, stage = "spawn_vm", "Launching qemu-system-x86_64");
@@ -1015,5 +1052,53 @@ mod tests {
 
         assert!(error.contains("qemu-img create failed"));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn iso_is_attached_as_a_readonly_raw_cdrom() {
+        let args = iso_drive_args(Path::new("/vm/install.iso"));
+
+        assert_eq!(args[0], "-drive");
+        assert_eq!(
+            args[1],
+            "file=/vm/install.iso,media=cdrom,format=raw,readonly=on,if=ide"
+        );
+        assert!(!args.contains(&"-cdrom".to_string()));
+    }
+
+    #[tokio::test]
+    async fn raw_isos_are_accepted() {
+        let _tools = FakeTools::install(&[("qemu-img", "echo '{\"format\": \"raw\"}'")]);
+
+        ensure_raw_image(Path::new("/vm/install.iso"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn non_raw_isos_are_rejected() {
+        for format in ["qcow2", "vmdk", "qed"] {
+            let behaviour = format!("echo '{{\"format\": \"{format}\"}}'");
+            let _tools = FakeTools::install(&[("qemu-img", behaviour.as_str())]);
+
+            let error = ensure_raw_image(Path::new("/vm/install.iso"))
+                .await
+                .unwrap_err()
+                .to_string();
+
+            assert!(error.contains(&format!("unsupported format {format}")));
+        }
+    }
+
+    #[tokio::test]
+    async fn unreadable_isos_are_rejected() {
+        let _tools = FakeTools::install(&[("qemu-img", "exit 1")]);
+
+        let error = ensure_raw_image(Path::new("/vm/install.iso"))
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("qemu-img info failed"));
     }
 }
