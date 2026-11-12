@@ -63,6 +63,7 @@ totp-rs = { version = "5.6", features = ["qr", "otpauth"] }
 # Utilities
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+time = "0.3"
 dotenvy = "0.15"
 anyhow = "1.0"
 thiserror = "2.0"
