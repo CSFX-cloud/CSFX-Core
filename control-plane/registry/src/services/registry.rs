@@ -28,6 +28,7 @@ pub struct RegisterAgentParams {
     pub agent_version: String,
     pub tags: Option<HashMap<String, String>>,
     pub allow_reregister: bool,
+    pub proven_agent_id: Option<Uuid>,
     pub role: String,
     pub machine_id: Option<String>,
 }
@@ -123,10 +124,17 @@ impl AgentRegistry {
             .as_ref()
             .and_then(|t| serde_json::to_value(t).ok());
 
-        if let (true, Some(machine_id)) = (params.allow_reregister, params.machine_id.as_deref()) {
-            if let Some(existing) = crate::db::agents::get_by_machine_id(&self.db, machine_id)
+        let machine_owner = match params.machine_id.as_deref() {
+            Some(machine_id) => crate::db::agents::get_by_machine_id(&self.db, machine_id)
                 .await
-                .map_err(|e| format!("Failed to query existing agent: {}", e))?
+                .map_err(|e| format!("Failed to query existing agent: {}", e))?,
+            None => None,
+        };
+
+        if params.allow_reregister {
+            if let Some(existing) = machine_owner
+                .as_ref()
+                .filter(|owner| params.proven_agent_id == Some(owner.id))
             {
                 let db_agent = crate::db::agents::update_registration(
                     &self.db,
@@ -137,7 +145,6 @@ impl AgentRegistry {
                     params.architecture.clone(),
                     tags_json,
                     None,
-                    params.role.clone(),
                 )
                 .await
                 .map_err(|e| format!("Failed to update existing agent: {}", e))?;
@@ -210,7 +217,7 @@ impl AgentRegistry {
             None,
             Some(wg_tunnel_ip.clone()),
             params.role.clone(),
-            params.machine_id.clone(),
+            params.machine_id.filter(|_| machine_owner.is_none()),
         )
         .await
         .map_err(|e| format!("Failed to create agent in database: {}", e))?;

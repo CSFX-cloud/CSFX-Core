@@ -75,21 +75,38 @@ pub fn app_state(db: DatabaseConnection) -> AppState {
     }
 }
 
+pub fn with_etcd_ipam(mut state: AppState) -> AppState {
+    let endpoints = std::env::var("ETCD_ENDPOINTS").expect("ETCD_ENDPOINTS must be set");
+    state.mgmt_ipam = Arc::new(MgmtIpamService::new(endpoints));
+    state
+}
+
 pub async fn router() -> Router {
     create_router(app_state(migrated_database().await))
 }
 
 pub fn csr_pem() -> String {
-    let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+    csr_pem_for(&KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap())
+}
+
+pub fn csr_pem_for(key: &KeyPair) -> String {
     CertificateParams::new(vec!["agent.csfx.test".to_string()])
         .unwrap()
-        .serialize_request(&key)
+        .serialize_request(key)
         .unwrap()
         .pem()
         .unwrap()
 }
 
 pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
+    insert_agent_with(db, "worker", None).await
+}
+
+pub async fn insert_agent_with(
+    db: &DatabaseConnection,
+    role: &str,
+    machine_id: Option<String>,
+) -> Uuid {
     let id = Uuid::new_v4();
     registry::db::agents::create(
         db,
@@ -106,8 +123,8 @@ pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
         None,
         None,
         Some("10.100.0.2".to_string()),
-        "worker".to_string(),
-        None,
+        role.to_string(),
+        machine_id,
     )
     .await
     .expect("agent must be inserted");

@@ -90,6 +90,8 @@ pub async fn register_agent(
         };
 
     let csr_pem = request.csr_pem.clone();
+    let proven_agent_id =
+        proven_agent_id(&state, request.machine_id.as_deref(), csr_pem.as_deref()).await?;
 
     let (agent, reregistered) = match state
         .agent_registry
@@ -104,6 +106,7 @@ pub async fn register_agent(
                 agent_version: request.agent_version,
                 tags: request.tags,
                 allow_reregister,
+                proven_agent_id,
                 role,
                 machine_id: request.machine_id,
             },
@@ -162,6 +165,35 @@ pub async fn register_agent(
         wg_tunnel_ip: agent.wg_tunnel_ip,
         message: "Agent successfully registered".to_string(),
     }))
+}
+
+async fn proven_agent_id(
+    state: &AppState,
+    machine_id: Option<&str>,
+    csr_pem: Option<&str>,
+) -> Result<Option<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+    let (Some(machine_id), Some(csr_pem)) = (machine_id, csr_pem) else {
+        return Ok(None);
+    };
+    let internal = |e: &dyn std::fmt::Display| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to verify agent identity: {}", e),
+            }),
+        )
+    };
+    let Some(owner) = crate::db::agents::get_by_machine_id(&state.db, machine_id)
+        .await
+        .map_err(|e| internal(&e))?
+    else {
+        return Ok(None);
+    };
+    let proven =
+        crate::services::identity_proof::csr_proves_agent_identity(&state.db, owner.id, csr_pem)
+            .await
+            .map_err(|e| internal(&e))?;
+    Ok(proven.then_some(owner.id))
 }
 
 pub async fn heartbeat(
