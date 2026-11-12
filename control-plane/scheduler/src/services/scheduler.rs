@@ -419,14 +419,14 @@ impl SchedulerService {
         agent_id: Uuid,
         ports: Option<Vec<crate::models::workload::PortMapping>>,
     ) -> Result<(), String> {
-        let Some(mut ports) = ports else {
+        let Some(ports) = ports else {
             return Ok(());
         };
-        crate::services::port_allocator::allocate_node_ports(
+        crate::services::port_allocator::validate_node_ports(
             &self.db,
             agent_id,
             workload.id,
-            &mut ports,
+            &ports,
         )
         .await?;
         let ports_json = crate::services::port_allocator::ports_to_json(&ports)?;

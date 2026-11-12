@@ -228,7 +228,9 @@ impl CreateWorkloadRequest {
         {
             return Err(format!("replicas must be between 1 and {}", MAX_REPLICAS));
         }
-        Ok(())
+        crate::services::port_allocator::ensure_requested_in_range(
+            self.ports.as_deref().unwrap_or_default(),
+        )
     }
 }
 
@@ -339,6 +341,16 @@ mod tests {
             "disk_bytes": 2048
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn validation_rejects_node_ports_outside_the_range() {
+        let mut req = request();
+        req.ports = serde_json::from_value(serde_json::json!([
+            { "container_port": 80, "node_port": 22 }
+        ]))
+        .unwrap();
+        assert!(req.validate().unwrap_err().contains("22"));
     }
 
     #[test]

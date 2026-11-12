@@ -131,6 +131,24 @@ async fn add_drop_rule(from_bridge: &str, to_bridge: &str) -> Result<()> {
     .await
 }
 
+fn ensure_node_port_in_range(node_port: u16) -> Result<()> {
+    let bound = |name: &str, default: u16| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default)
+    };
+    let (start, end) = (
+        bound("NODE_PORT_RANGE_START", 30000),
+        bound("NODE_PORT_RANGE_END", 32767),
+    );
+    anyhow::ensure!(
+        (start..=end).contains(&node_port),
+        "node port {node_port} is outside the allowed range {start}-{end}"
+    );
+    Ok(())
+}
+
 pub async fn add_node_port_dnat(
     workload_id: &str,
     protocol: PortProtocol,
@@ -138,6 +156,7 @@ pub async fn add_node_port_dnat(
     guest_ip: &str,
     container_port: u16,
 ) -> Result<()> {
+    ensure_node_port_in_range(node_port)?;
     run_nft(&[
         "add",
         "rule",
@@ -458,6 +477,19 @@ mod tests {
             .contains(&"add rule inet csfx rg_isolation iifname br1 oifname br2 drop".to_string()));
         assert!(calls
             .contains(&"add rule inet csfx rg_isolation iifname br3 oifname br1 drop".to_string()));
+    }
+
+    #[tokio::test]
+    async fn node_port_outside_range_creates_no_rule() {
+        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
+        for port in [22, 7443] {
+            assert!(
+                add_node_port_dnat("w-1", PortProtocol::Tcp, port, "10.0.0.2", 80)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(tools.calls("nft").is_empty());
     }
 
     #[tokio::test]

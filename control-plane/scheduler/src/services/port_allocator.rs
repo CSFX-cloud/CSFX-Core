@@ -52,11 +52,18 @@ async fn used_node_ports_on_agent(
     Ok(used)
 }
 
-fn pick_free_port(used: &HashSet<u16>, requested: &HashSet<u16>) -> Result<u16, String> {
+pub fn ensure_requested_in_range(ports: &[PortMapping]) -> Result<(), String> {
     let (start, end) = node_port_range();
-    (start..=end)
-        .find(|port| !used.contains(port) && !requested.contains(port))
-        .ok_or_else(|| "no free node port available in configured range".to_string())
+    match ports
+        .iter()
+        .filter_map(|mapping| mapping.node_port)
+        .find(|port| !(start..=end).contains(port))
+    {
+        Some(port) => Err(format!(
+            "node port {port} is outside the allowed range {start}-{end}"
+        )),
+        None => Ok(()),
+    }
 }
 
 fn ensure_requested_free(ports: &[PortMapping], used: &HashSet<u16>) -> Result<(), String> {
@@ -70,33 +77,16 @@ fn ensure_requested_free(ports: &[PortMapping], used: &HashSet<u16>) -> Result<(
     }
 }
 
-pub async fn allocate_node_ports(
+pub async fn validate_node_ports(
     db: &DatabaseConnection,
     agent_id: Uuid,
     workload_id: Uuid,
-    ports: &mut [PortMapping],
+    ports: &[PortMapping],
 ) -> Result<(), String> {
-    if ports.is_empty() {
-        return Ok(());
-    }
-
-    let mut used = used_node_ports_on_agent(db, agent_id, workload_id)
+    let used = used_node_ports_on_agent(db, agent_id, workload_id)
         .await
         .map_err(|e| format!("failed to query used node ports: {}", e))?;
-    ensure_requested_free(ports, &used)?;
-    let mut requested: HashSet<u16> = ports.iter().filter_map(|p| p.node_port).collect();
-
-    for mapping in ports.iter_mut() {
-        if mapping.node_port.is_some() {
-            continue;
-        }
-        let port = pick_free_port(&used, &requested)?;
-        mapping.node_port = Some(port);
-        used.insert(port);
-        requested.insert(port);
-    }
-
-    Ok(())
+    ensure_requested_free(ports, &used)
 }
 
 pub fn ports_to_json(ports: &[PortMapping]) -> Result<Value, String> {
@@ -121,6 +111,19 @@ mod tests {
         let used = HashSet::from([80]);
         let error = ensure_requested_free(&[mapping(Some(80))], &used).unwrap_err();
         assert!(error.contains("80"));
+    }
+
+    #[test]
+    fn explicit_port_outside_range_is_rejected() {
+        for port in [22, 7443, 29999, 32768] {
+            let error = ensure_requested_in_range(&[mapping(Some(port))]).unwrap_err();
+            assert!(error.contains(&port.to_string()));
+        }
+    }
+
+    #[test]
+    fn explicit_port_inside_range_is_accepted() {
+        assert!(ensure_requested_in_range(&[mapping(Some(30000)), mapping(None)]).is_ok());
     }
 
     #[test]
