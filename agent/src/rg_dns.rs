@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn};
 
 const DNS_DIR: &str = "/var/lib/csfx-agent/dns";
 const ZONE_TTL_SECS: u32 = 30;
@@ -37,6 +37,22 @@ pub fn corefile_path(resource_group_id: &str) -> PathBuf {
     PathBuf::from(DNS_DIR).join(format!("{}.Corefile", resource_group_id))
 }
 
+const MAX_SERVICE_NAME_LENGTH: usize = 63;
+
+pub fn is_valid_service_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    let edge = |byte: &u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
+    !bytes.is_empty()
+        && bytes.len() <= MAX_SERVICE_NAME_LENGTH
+        && bytes.first().is_some_and(edge)
+        && bytes.last().is_some_and(edge)
+        && bytes.iter().all(|byte| edge(byte) || *byte == b'-')
+}
+
+fn is_valid_record(service_name: &str, ip_address: &str) -> bool {
+    is_valid_service_name(service_name) && ip_address.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
 pub struct RgDnsRegistry {
     records: Mutex<HashMap<String, HashMap<String, String>>>,
 }
@@ -54,6 +70,9 @@ impl RgDnsRegistry {
         service_name: &str,
         ip_address: &str,
     ) -> Result<()> {
+        if !is_valid_record(service_name, ip_address) {
+            anyhow::bail!("Refusing dns record with an invalid service name or address");
+        }
         let mut records = self.records.lock().await;
         let rg_records = records.entry(resource_group_id.to_string()).or_default();
         rg_records.insert(service_name.to_string(), ip_address.to_string());
@@ -76,7 +95,13 @@ impl RgDnsRegistry {
             .filter(|(name, _)| is_platform_record(name))
             .map(|(name, ip)| (name.clone(), ip.clone()))
             .collect();
-        desired.extend(services);
+        desired.extend(services.into_iter().filter(|(name, ip)| {
+            let valid = is_valid_record(name, ip);
+            if !valid {
+                warn!(resource_group_id = %resource_group_id, "Skipping dns record with an invalid service name or address");
+            }
+            valid
+        }));
 
         if *rg_records == desired {
             return Ok(());
@@ -221,6 +246,39 @@ pub async fn remove_zone_files(resource_group_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_names_must_be_lowercase_dns_labels() {
+        for valid in ["web", "db-1", "s3", "csfx"] {
+            assert!(is_valid_service_name(valid), "{valid}");
+        }
+        for hostile in [
+            "",
+            "-a",
+            "a-",
+            "A",
+            "a b",
+            "a\n$INCLUDE x",
+            "$ORIGIN",
+            "a.b",
+        ] {
+            assert!(!is_valid_service_name(hostile), "{hostile:?}");
+        }
+        assert!(!is_valid_record("web", "10.0.0.1\n$INCLUDE x"));
+        assert!(is_valid_record("web", "10.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn invalid_records_never_reach_the_registry() {
+        let registry = RgDnsRegistry::new();
+        let rg = "rg-invalid-record-test";
+        assert!(registry
+            .upsert(rg, "web\n$ORIGIN x", "10.0.0.1")
+            .await
+            .is_err());
+        assert!(registry.upsert(rg, "web", "not-an-ip").await.is_err());
+        assert!(registry.records.lock().await.get(rg).is_none());
+    }
 
     #[test]
     fn zone_serial_increases_on_every_call() {

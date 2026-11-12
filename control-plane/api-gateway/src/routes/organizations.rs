@@ -535,6 +535,10 @@ async fn delete_user(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    ensure_user_manageable(db, claims.user_id, org.id, user_id)
+        .await
+        .map_err(|error| error.status())?;
+
     ensure_not_last_admin(db, org.id, user_id)
         .await
         .map_err(|error| error.status())?;

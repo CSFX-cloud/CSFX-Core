@@ -2,6 +2,8 @@ use axum::http::{header, Method, StatusCode};
 use percent_encoding::percent_decode_str;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::common::{create_role, Harness};
@@ -10,6 +12,34 @@ use crate::support_b::{
 };
 
 const ORIGIN_HEADERS: [(&str, &str); 2] = [("host", "gw.test"), ("x-forwarded-proto", "http")];
+
+static BROWSER_COOKIES: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+
+fn remember_cookie(key: &str, response: &crate::support_b::Raw, name: &str) {
+    let pair = response
+        .headers
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .filter(|value| !value.contains("Max-Age=0"))
+        .filter_map(|value| value.split(';').next())
+        .find(|pair| pair.starts_with(&format!("{name}=")));
+    if let Some(pair) = pair {
+        BROWSER_COOKIES
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), pair.to_string());
+    }
+}
+
+fn cookie_for(key: &str) -> String {
+    BROWSER_COOKIES
+        .lock()
+        .unwrap()
+        .get(key)
+        .cloned()
+        .unwrap_or_default()
+}
 
 fn slug() -> String {
     format!("idp-{}", &Uuid::new_v4().simple().to_string()[..16])
@@ -56,15 +86,36 @@ async fn begin(harness: &Harness, slug: &str) -> (String, String) {
     assert!(response.status.is_redirection());
     let target = location(&response);
     assert!(target.contains("/authorize?"), "{target}");
-    (query_param(&target, "state"), query_param(&target, "nonce"))
+    let state = query_param(&target, "state");
+    remember_cookie(&state, &response, "csfx_oidc_state");
+    (state, query_param(&target, "nonce"))
+}
+
+async fn callback_with_cookie(
+    harness: &Harness,
+    slug: &str,
+    code: &str,
+    state: &str,
+    cookie: &str,
+) -> String {
+    let encoded = code.replace('~', "%7E").replace('@', "%40");
+    let uri = format!("/api/auth/oidc/{slug}/callback?code={encoded}&state={state}");
+    let headers = [ORIGIN_HEADERS[0], ORIGIN_HEADERS[1], ("cookie", cookie)];
+    let response = raw(harness, Method::GET, &uri, &headers, None).await;
+    assert!(response.status.is_redirection());
+    let target = location(&response);
+    if target.contains("/login/callback?code=") {
+        remember_cookie(
+            &query_param(&target, "code"),
+            &response,
+            "csfx_oidc_exchange",
+        );
+    }
+    target
 }
 
 async fn callback(harness: &Harness, slug: &str, code: &str, state: &str) -> String {
-    let encoded = code.replace('~', "%7E").replace('@', "%40");
-    let uri = format!("/api/auth/oidc/{slug}/callback?code={encoded}&state={state}");
-    let response = raw(harness, Method::GET, &uri, &ORIGIN_HEADERS, None).await;
-    assert!(response.status.is_redirection());
-    location(&response)
+    callback_with_cookie(harness, slug, code, state, &cookie_for(state)).await
 }
 
 async fn login(
@@ -86,11 +137,15 @@ async fn login(
 
 async fn exchange(harness: &Harness, redirect: &str) -> (StatusCode, Value) {
     let code = query_param(redirect, "code");
+    exchange_with_cookie(harness, &code, &cookie_for(&code)).await
+}
+
+async fn exchange_with_cookie(harness: &Harness, code: &str, cookie: &str) -> (StatusCode, Value) {
     let response = raw(
         harness,
         Method::POST,
         "/api/auth/oidc/exchange",
-        &[],
+        &[("cookie", cookie)],
         Some(json!({"code": code})),
     )
     .await;
@@ -523,4 +578,38 @@ async fn identity_provider_roles_cannot_exceed_the_managers_permissions() {
         .send(Method::PUT, &uri, Some(&actor), Some(allowed))
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn single_sign_on_is_bound_to_the_browser_that_started_it() {
+    let harness = full_harness().await;
+    let role = create_role(&harness.db, harness.org_id).await;
+    let identifier = slug();
+    create_provider(&harness, provider_body(&identifier, Some(role))).await;
+
+    let (state, nonce) = begin(&harness, &identifier).await;
+    let code = idp_code(&nonce, "victim-sub", "victim", "");
+    let foreign = callback_with_cookie(&harness, &identifier, &code, &state, "").await;
+    assert!(foreign.ends_with("sso_error=invalid_state"), "{foreign}");
+    let forged = callback_with_cookie(
+        &harness,
+        &identifier,
+        &code,
+        &state,
+        "csfx_oidc_state=forged",
+    )
+    .await;
+    assert!(forged.ends_with("sso_error=invalid_state"), "{forged}");
+
+    let own = callback(&harness, &identifier, &code, &state).await;
+    assert!(own.contains("/login/callback?code="), "{own}");
+    let exchange_code = query_param(&own, "code");
+    let (status, _) = exchange_with_cookie(&harness, &exchange_code, "").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) =
+        exchange_with_cookie(&harness, &exchange_code, "csfx_oidc_exchange=forged").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, session) = exchange(&harness, &own).await;
+    assert_eq!(status, StatusCode::OK, "{session}");
 }

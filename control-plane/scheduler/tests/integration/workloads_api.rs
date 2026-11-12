@@ -171,3 +171,22 @@ async fn deleting_unknown_workload_fails() {
         .unwrap()
         .contains("Failed to delete workload"));
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn hostile_service_names_are_rejected() {
+    let app = router().await;
+    let name = unique_name("zone");
+    let mut request = unplaceable_request(&name);
+    request["service_name"] = json!("web\n$INCLUDE /var/lib/csfx-agent/dns/other.zone");
+
+    let (status, _) = call(&app, Method::POST, "/workloads", Some(request)).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, listed) = call(&app, Method::GET, "/workloads", None).await;
+    assert!(listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|workload| workload["name"] != name));
+}

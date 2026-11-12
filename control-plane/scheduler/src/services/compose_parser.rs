@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::models::compose::{ComposeServiceSpec, ComposeVolumeMount};
-use crate::models::workload::PortMapping;
+use crate::models::workload::{is_valid_service_name, PortMapping};
 
 const DEFAULT_CPU_MILLICORES: i32 = 500;
 const DEFAULT_MEMORY_BYTES: i64 = 512 * 1024 * 1024;
@@ -27,6 +27,8 @@ pub enum ComposeParseError {
     UndeclaredVolume { service: String, volume: String },
     #[error("service '{0}' has a volume mount path that is not absolute")]
     InvalidMountPath(String),
+    #[error("service name '{0}' must be a lowercase dns label")]
+    InvalidServiceName(String),
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -115,6 +117,11 @@ fn build_service_spec(
     service: RawService,
     definitions: &HashMap<String, Option<RawVolumeDefinition>>,
 ) -> Result<ComposeServiceSpec, ComposeParseError> {
+    if !is_valid_service_name(&service_name) {
+        return Err(ComposeParseError::InvalidServiceName(
+            service_name.escape_debug().to_string(),
+        ));
+    }
     if service.build.is_some() {
         return Err(ComposeParseError::UnsupportedBuildDirective(service_name));
     }
@@ -323,6 +330,20 @@ mod tests {
 
     fn parse_single(yaml: &str) -> ComposeServiceSpec {
         parse_compose(yaml).unwrap().remove(0)
+    }
+
+    #[test]
+    fn service_names_that_could_inject_zone_directives_are_rejected() {
+        for name in ["Web", "a_b", "web\\n$INCLUDE x", "$ORIGIN"] {
+            let yaml = format!("services:\n  \"{name}\":\n    image: nginx\n");
+            assert!(
+                matches!(
+                    parse_compose(&yaml),
+                    Err(ComposeParseError::InvalidServiceName(_))
+                ),
+                "{name}"
+            );
+        }
     }
 
     #[test]

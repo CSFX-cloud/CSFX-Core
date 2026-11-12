@@ -379,6 +379,10 @@ async fn vault_routes_require_permissions() {
         (Method::POST, format!("{vault}/approvals")),
         (Method::GET, format!("{vault}/audit")),
         (Method::POST, format!("{vault}/secrets/X/reveal")),
+        (
+            Method::POST,
+            format!("{vault}/principals/web.app/secret-id"),
+        ),
     ];
     for (method, uri) in cases {
         let body = Some(json!({"name": "x"}));
@@ -396,4 +400,42 @@ async fn vault_requires_configured_secret_store() {
     let group = resource_group(&harness).await;
     let (status, _) = harness.post(&base(group), json!({"name": "nostore"})).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn read_grants_and_secret_ids_require_the_reveal_permission() {
+    let harness = full_harness().await;
+    let (_, _, vault) = new_vault(&harness).await;
+    let grants = format!("{vault}/grants");
+    let read = json!({"principal": "web.app", "capability": "read_secrets", "scope": "*"});
+    assert_eq!(
+        harness.post(&grants, read.clone()).await.0,
+        StatusCode::CREATED
+    );
+    let issue = format!("{vault}/principals/web.app/secret-id");
+
+    let (_, manager) = harness.token_with_permissions(&["secrets.manage"]).await;
+    let send = |uri: &str, body: Value| {
+        let uri = uri.to_string();
+        let manager = manager.clone();
+        let harness = &harness;
+        async move {
+            harness
+                .send(Method::POST, &uri, Some(&manager), Some(body))
+                .await
+        }
+    };
+    assert_eq!(send(&grants, read.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(send(&issue, json!({})).await.0, StatusCode::FORBIDDEN);
+    let reveal = json!({"principal": "someone@csfx.test", "capability": "reveal_secrets"});
+    assert_eq!(send(&grants, reveal).await.0, StatusCode::CREATED);
+
+    let (_, revealer) = harness
+        .token_with_permissions(&["secrets.manage", "secrets.reveal"])
+        .await;
+    let (status, issued) = harness
+        .send(Method::POST, &issue, Some(&revealer), Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{issued}");
 }
