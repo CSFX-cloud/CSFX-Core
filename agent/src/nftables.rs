@@ -622,6 +622,20 @@ mod tests {
                 .unwrap()
         }
 
+        fn capture(command: &str) -> String {
+            Process::new("sh")
+                .args(["-c", command])
+                .output()
+                .map(|output| {
+                    format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    )
+                })
+                .unwrap_or_default()
+        }
+
         impl Lab {
             pub fn build() -> Self {
                 for command in SETUP {
@@ -633,6 +647,17 @@ mod tests {
                 ];
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 Lab { listeners }
+            }
+
+            pub fn diagnostics(&self, address: &str) -> String {
+                let probe = format!(
+                    "ip netns exec csfxlab-guest python3 -c \
+                     \"import socket; socket.create_connection(('{address}', 8000), 2)\" 2>&1; \
+                     nft list ruleset; iptables -S; ip -n csfxlab-guest route; ip route; \
+                     sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables \
+                     net.ipv4.conf.all.rp_filter"
+                );
+                capture(&probe)
             }
 
             pub fn guest_reaches(&self, address: &str) -> bool {
@@ -668,8 +693,9 @@ mod tests {
         run_nft(&["flush", "chain", "inet", TABLE_NAME, MGMT_GUARD_CHAIN_NAME])
             .await
             .unwrap();
-        assert!(lab.guest_reaches("10.100.0.9"));
-        assert!(lab.guest_reaches("10.201.0.2"));
+        for address in ["10.100.0.9", "10.201.0.2"] {
+            assert!(lab.guest_reaches(address), "{}", lab.diagnostics(address));
+        }
 
         ensure_table_and_chain().await.unwrap();
         isolate_bridge("csfxrglab0", &["csfxrglab1".to_string()])
