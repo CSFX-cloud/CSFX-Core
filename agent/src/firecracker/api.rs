@@ -111,7 +111,7 @@ async fn connect_with_retry(socket_path: &str) -> Result<UnixStream> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
 
     loop {
-        match UnixStream::connect(socket_path).await {
+        match super::uds::connect(std::path::Path::new(socket_path)).await {
             Ok(stream) => return Ok(stream),
             Err(e) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;

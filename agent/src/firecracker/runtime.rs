@@ -68,14 +68,33 @@ fn next_free_cid_on_host() -> u32 {
     }
 }
 
-const JAILER_ID_LEN: usize = 8;
+const LEGACY_JAILER_ID_LEN: usize = 8;
 
-fn jailer_short_id(workload_id: &str) -> String {
-    workload_id
+fn jailer_id_for(workload_id: &str) -> String {
+    workload_id.chars().filter(|c| *c != '-').collect()
+}
+
+fn legacy_jailer_id(workload_id: &str) -> String {
+    jailer_id_for(workload_id)
         .chars()
-        .filter(|c| *c != '-')
-        .take(JAILER_ID_LEN)
+        .take(LEGACY_JAILER_ID_LEN)
         .collect()
+}
+
+fn chroot_dir_for(workload_id: &str) -> PathBuf {
+    let current = PathBuf::from(JAILER_BASE_DIR).join(jailer_id_for(workload_id));
+    let legacy = PathBuf::from(JAILER_BASE_DIR).join(legacy_jailer_id(workload_id));
+    if !current.exists() && legacy.exists() {
+        return legacy;
+    }
+    current
+}
+
+fn jailer_id_in(chroot_dir: &Path) -> String {
+    chroot_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 fn jailer_chroot_base_dir(chroot_dir: &Path) -> PathBuf {
@@ -94,19 +113,15 @@ fn jailer_vm_root_dir(chroot_dir: &Path, jailer_id: &str) -> PathBuf {
         .join("root")
 }
 
-fn vsock_uds_path(chroot_dir: &Path, workload_id: &str) -> PathBuf {
-    let jailer_id = jailer_short_id(workload_id);
+fn vsock_uds_path(chroot_dir: &Path) -> PathBuf {
+    let jailer_id = jailer_id_in(chroot_dir);
     jailer_vm_root_dir(chroot_dir, &jailer_id).join(format!("{}.vsock", API_SOCKET_NAME))
 }
 
-async fn connect_guest_vsock(
-    chroot_dir: &Path,
-    workload_id: &str,
-    port: u32,
-) -> Result<UnixStream> {
-    let uds_path = vsock_uds_path(chroot_dir, workload_id);
+async fn connect_guest_vsock(chroot_dir: &Path, port: u32) -> Result<UnixStream> {
+    let uds_path = vsock_uds_path(chroot_dir);
 
-    let mut stream = UnixStream::connect(&uds_path)
+    let mut stream = super::uds::connect(&uds_path)
         .await
         .with_context(|| format!("Failed to connect to vsock uds {}", uds_path.display()))?;
 
@@ -139,18 +154,24 @@ async fn connect_guest_vsock(
 const GUEST_USAGE_PORT: u32 = 10003;
 const GUEST_USAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-async fn query_volume_usage(chroot_dir: &Path, workload_id: &str) -> Result<Vec<VolumeUsage>> {
-    let mut stream = connect_guest_vsock(chroot_dir, workload_id, GUEST_USAGE_PORT).await?;
+const GUEST_USAGE_MAX_BYTES: u64 = 64 * 1024;
+
+async fn query_volume_usage(chroot_dir: &Path) -> Result<Vec<VolumeUsage>> {
+    let stream = connect_guest_vsock(chroot_dir, GUEST_USAGE_PORT).await?;
     let mut payload = Vec::new();
-    stream
+    let mut limited = stream.take(GUEST_USAGE_MAX_BYTES + 1);
+    limited
         .read_to_end(&mut payload)
         .await
         .context("Failed to read guest volume usage")?;
+    if payload.len() as u64 > GUEST_USAGE_MAX_BYTES {
+        anyhow::bail!("Guest volume usage exceeds {} bytes", GUEST_USAGE_MAX_BYTES);
+    }
     serde_json::from_slice(&payload).context("Failed to parse guest volume usage")
 }
 
 async fn read_volume_usage(chroot_dir: &Path, workload_id: &str) -> Vec<VolumeUsage> {
-    let query = query_volume_usage(chroot_dir, workload_id);
+    let query = query_volume_usage(chroot_dir);
     match tokio::time::timeout(GUEST_USAGE_TIMEOUT, query).await {
         Ok(Ok(usage)) => usage,
         Ok(Err(e)) => {
@@ -324,7 +345,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
         let rootfs_path = rootfs_builder.ensure_rootfs(&spec.image).await?;
         debug!(workload_id = %spec.workload_id, path = ?rootfs_path, stage = "rootfs_ready", "Rootfs image ready for boot");
 
-        let jailer_id = jailer_short_id(&spec.workload_id);
+        let jailer_id = jailer_id_for(&spec.workload_id);
         let chroot_dir = PathBuf::from(JAILER_BASE_DIR).join(&jailer_id);
         tokio::fs::create_dir_all(&chroot_dir)
             .await
@@ -450,7 +471,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
             VmHandle {
                 workload_id: spec.workload_id.clone(),
                 jailer_pid,
-                cgroup_path: cgroup_path(&spec.workload_id),
+                cgroup_path: cgroup_path_for(&jailer_id),
                 metrics_path,
                 chroot_dir,
                 tap_device,
@@ -484,8 +505,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 
     fn logs(&self, workload_handle: &str) -> LogStream {
-        let jailer_id = jailer_short_id(workload_handle);
-        let chroot_dir = PathBuf::from(JAILER_BASE_DIR).join(&jailer_id);
+        let chroot_dir = chroot_dir_for(workload_handle);
 
         Box::pin(vsock_log_stream(chroot_dir, workload_handle.to_string()))
     }
@@ -502,7 +522,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
 
         let stream = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            connect_guest_vsock(&chroot_dir, workload_handle, 10002),
+            connect_guest_vsock(&chroot_dir, 10002),
         )
         .await
         .context("Timed out connecting to guest exec vsock port")??;
@@ -526,10 +546,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
         }
 
         let _ = Command::new("systemctl")
-            .args([
-                "stop",
-                &jailer_unit_name(&jailer_short_id(&handle.workload_id)),
-            ])
+            .args(["stop", &jailer_unit_name(&jailer_id_in(&handle.chroot_dir))])
             .status()
             .await;
 
@@ -628,7 +645,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
             let handle = VmHandle {
                 workload_id: workload_id.clone(),
                 jailer_pid,
-                cgroup_path: cgroup_path(&workload_id),
+                cgroup_path: cgroup_path_for(&jailer_id),
                 metrics_path,
                 chroot_dir,
                 tap_device: sidecar.tap_device,
@@ -747,7 +764,7 @@ fn vsock_log_stream(
 ) -> impl futures_util::Stream<Item = Result<axum::body::Bytes, std::io::Error>> {
     async_stream::stream! {
         info!(workload_id = %workload_id, "connecting to guest log vsock");
-        let connect_result = connect_guest_vsock(&chroot_dir, &workload_id, 10001).await;
+        let connect_result = connect_guest_vsock(&chroot_dir, 10001).await;
 
         let mut stream = match connect_result {
             Ok(s) => s,
@@ -996,8 +1013,8 @@ fn create_metrics_fifo(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cgroup_path(workload_id: &str) -> PathBuf {
-    let unit_name = jailer_unit_name(&jailer_short_id(workload_id));
+fn cgroup_path_for(jailer_id: &str) -> PathBuf {
+    let unit_name = jailer_unit_name(jailer_id);
     Path::new(CGROUP_ROOT)
         .join("system.slice")
         .join(format!("{}.service", unit_name))
@@ -1078,7 +1095,7 @@ async fn read_sidecar_metadata(chroot_dir: &Path) -> Option<VmSidecarMetadata> {
 }
 
 async fn shutdown_guest(handle: &VmHandle) -> Result<()> {
-    let jailer_id = jailer_short_id(&handle.workload_id);
+    let jailer_id = jailer_id_in(&handle.chroot_dir);
     let api_socket = jailer_vm_root_dir(&handle.chroot_dir, &jailer_id).join(API_SOCKET_NAME);
 
     FirecrackerApiClient::new(api_socket.to_string_lossy().to_string())
@@ -1588,19 +1605,46 @@ mod tests {
 
     #[test]
     fn identifiers_are_derived_from_the_workload_id() {
-        assert_eq!(jailer_short_id("1234-5678-9abc-def0"), "12345678");
+        let workload_id = "12345678-1234-5678-9abc-def012345678";
+        assert_eq!(
+            jailer_id_for(workload_id),
+            "12345678123456789abcdef012345678"
+        );
+        assert_eq!(jailer_id_for(workload_id).len(), 32);
+        assert_eq!(legacy_jailer_id(workload_id), "12345678");
         assert_eq!(jailer_unit_name("12345678"), "csfx-jailer-12345678");
         assert_eq!(guest_device_letter(0), "/dev/vdb");
         assert_eq!(guest_device_letter(2), "/dev/vdd");
-        let path = cgroup_path("1234-5678-9abc");
-        assert!(path.ends_with("system.slice/csfx-jailer-12345678.service"));
+        let path = cgroup_path_for(&jailer_id_for(workload_id));
+        assert!(path.ends_with(format!(
+            "system.slice/csfx-jailer-{}.service",
+            jailer_id_for(workload_id)
+        )));
+    }
+
+    #[test]
+    fn workloads_sharing_a_prefix_get_distinct_jails() {
+        let first = "12345678-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let second = "12345678-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        assert_eq!(legacy_jailer_id(first), legacy_jailer_id(second));
+        assert_ne!(jailer_id_for(first), jailer_id_for(second));
+    }
+
+    #[test]
+    fn chroot_dirs_are_found_by_the_full_id_and_by_the_legacy_short_id() {
+        let workload_id = "12345678-1234-5678-9abc-def012345678";
+        assert!(chroot_dir_for(workload_id).ends_with(jailer_id_for(workload_id)));
+        assert_eq!(
+            jailer_id_in(Path::new("/var/lib/csfx-agent/firecracker/abc")),
+            "abc"
+        );
     }
 
     #[test]
     fn vsock_path_lives_inside_the_jail_root() {
         let chroot = Path::new("/c");
-        let path = vsock_uds_path(chroot, "1234-5678-9abc");
-        assert!(path.starts_with("/c/jail"));
+        let path = vsock_uds_path(Path::new("/c/12345678"));
+        assert!(path.starts_with("/c/12345678/jail"));
         assert!(path.ends_with("12345678/root/firecracker.socket.vsock"));
         assert_eq!(jailer_chroot_base_dir(chroot), PathBuf::from("/c/jail"));
     }
@@ -1714,8 +1758,12 @@ mod tests {
         assert!(runtime.exec("missing").await.is_err());
     }
 
-    async fn serve_vsock(chroot: &Path, workload_id: &str, reply: &'static [u8]) {
-        let path = vsock_uds_path(chroot, workload_id);
+    async fn serve_vsock(chroot: &Path, reply: &'static [u8]) {
+        serve_vsock_bytes(chroot, reply.to_vec()).await;
+    }
+
+    async fn serve_vsock_bytes(chroot: &Path, reply: Vec<u8>) {
+        let path = vsock_uds_path(chroot);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let listener = tokio::net::UnixListener::bind(&path).unwrap();
         tokio::spawn(async move {
@@ -1723,33 +1771,59 @@ mod tests {
             let mut request = [0u8; 64];
             let read = socket.read(&mut request).await.unwrap();
             assert!(request[..read].starts_with(b"CONNECT "));
-            socket.write_all(reply).await.unwrap();
+            let _ = socket.write_all(&reply).await;
         });
+    }
+
+    #[tokio::test]
+    async fn oversized_guest_usage_replies_are_rejected_without_buffering_them() {
+        let dir = temp_dir();
+        let mut reply = b"OK 1\n".to_vec();
+        reply.extend(std::iter::repeat_n(
+            b'x',
+            2 * GUEST_USAGE_MAX_BYTES as usize,
+        ));
+        serve_vsock_bytes(&dir, reply).await;
+
+        let error = query_volume_usage(&dir).await.unwrap_err().to_string();
+
+        assert!(error.contains("exceeds"), "{error}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn guest_usage_within_the_limit_is_parsed() {
+        let dir = temp_dir();
+        serve_vsock(&dir, b"OK 1\n[]").await;
+
+        assert!(query_volume_usage(&dir).await.unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
     async fn vsock_handshake_accepts_ok_and_rejects_refusals() {
         let dir = temp_dir();
-        serve_vsock(&dir, "1234-5678-9abc", b"OK 1\npayload").await;
-        let mut stream = connect_guest_vsock(&dir, "1234-5678-9abc", 10001)
-            .await
-            .unwrap();
+        serve_vsock(&dir, b"OK 1\npayload").await;
+        let mut stream = connect_guest_vsock(&dir, 10001).await.unwrap();
         let mut rest = Vec::new();
         stream.read_to_end(&mut rest).await.unwrap();
         assert_eq!(rest, b"payload");
 
-        serve_vsock(&dir, "aaaa-bbbb-cccc", b"NO\n").await;
-        let refused = connect_guest_vsock(&dir, "aaaa-bbbb-cccc", 10001).await;
-        assert!(refused.is_err());
-        assert!(connect_guest_vsock(&dir, "zzzz", 1).await.is_err());
-        std::fs::remove_dir_all(&dir).unwrap();
+        let refusing = temp_dir();
+        serve_vsock(&refusing, b"NO\n").await;
+        assert!(connect_guest_vsock(&refusing, 10001).await.is_err());
+        let unserved = temp_dir();
+        assert!(connect_guest_vsock(&unserved, 1).await.is_err());
+        for directory in [dir, refusing, unserved] {
+            std::fs::remove_dir_all(&directory).unwrap();
+        }
     }
 
     #[tokio::test]
     async fn exec_session_opens_the_exec_vsock_port() {
         let runtime = runtime();
         let dir = temp_dir();
-        serve_vsock(&dir, "w", b"OK 2\n").await;
+        serve_vsock(&dir, b"OK 2\n").await;
         runtime
             .handles
             .lock()
@@ -1763,7 +1837,7 @@ mod tests {
     async fn log_stream_relays_guest_output_and_reports_failures() {
         use futures_util::StreamExt;
         let dir = temp_dir();
-        serve_vsock(&dir, "w", b"OK 1\nhello").await;
+        serve_vsock(&dir, b"OK 1\nhello").await;
         let stream = vsock_log_stream(dir.clone(), "w".to_string());
         futures_util::pin_mut!(stream);
         let chunk = stream.next().await.unwrap().unwrap();
