@@ -514,6 +514,7 @@ pub async fn agent_with_key(harness: &Harness, spec: AgentSpec) -> (Uuid, String
         wg_endpoint: Set(None),
         wg_tunnel_ip: Set(spec.tunnel_ip.map(str::to_string)),
         kvm_capable: Set(false),
+        ssh_host_key: Set(None),
         cordoned: Set(spec.cordoned),
         maintenance_until: Set(None),
         role: Set(spec.role.to_string()),

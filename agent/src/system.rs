@@ -201,6 +201,19 @@ pub fn collect_info() -> SystemInfo {
     }
 }
 
+const SSH_HOST_KEY_PATH: &str = "/etc/ssh/ssh_host_ed25519_key.pub";
+
+pub fn read_ssh_host_key() -> Option<String> {
+    let raw = std::fs::read_to_string(SSH_HOST_KEY_PATH).ok()?;
+    parse_ssh_host_key(&raw)
+}
+
+fn parse_ssh_host_key(raw: &str) -> Option<String> {
+    let mut fields = raw.split_whitespace();
+    let (key_type, body) = (fields.next()?, fields.next()?);
+    (key_type == "ssh-ed25519").then(|| format!("{key_type} {body}"))
+}
+
 fn read_machine_id() -> Option<String> {
     let raw = std::fs::read_to_string("/etc/machine-id").ok()?;
     let id = raw.trim();
@@ -299,5 +312,15 @@ mod tests {
         assert_eq!(info.architecture, std::env::consts::ARCH);
         assert!(info.machine_id.is_none_or(|id| !id.is_empty()));
         let _ = is_kvm_capable();
+    }
+
+    #[test]
+    fn host_keys_are_reduced_to_type_and_body() {
+        assert_eq!(
+            parse_ssh_host_key("ssh-ed25519 AAAAC3 root@node\n").as_deref(),
+            Some("ssh-ed25519 AAAAC3")
+        );
+        assert!(parse_ssh_host_key("ssh-rsa AAAA").is_none());
+        assert!(parse_ssh_host_key("").is_none());
     }
 }

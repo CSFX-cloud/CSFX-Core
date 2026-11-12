@@ -268,6 +268,7 @@ impl AgentRegistry {
         wg_endpoint: Option<String>,
         agent_version: Option<String>,
         kvm_capable: bool,
+        ssh_host_key: Option<String>,
         mgmt_ipam: &MgmtIpamService,
     ) -> Result<(), String> {
         let db_agent = crate::db::agents::update_heartbeat(
@@ -278,6 +279,7 @@ impl AgentRegistry {
             wg_endpoint,
             agent_version,
             kvm_capable,
+            ssh_host_key,
         )
         .await
         .map_err(|e| format!("Failed to update heartbeat: {}", e))?;

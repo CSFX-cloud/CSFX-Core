@@ -137,6 +137,8 @@ pub struct HeartbeatRequest {
     pub agent_version: Option<String>,
     #[serde(default)]
     pub kvm_capable: bool,
+    #[serde(default)]
+    pub ssh_host_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

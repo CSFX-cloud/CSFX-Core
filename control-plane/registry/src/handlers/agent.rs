@@ -287,6 +287,7 @@ pub async fn heartbeat(
             request.wg_endpoint.clone(),
             request.agent_version.clone(),
             request.kvm_capable,
+            accepted_host_key(request.ssh_host_key.as_deref()),
             &state.mgmt_ipam,
         )
         .await
@@ -323,6 +324,17 @@ pub async fn heartbeat(
             }),
         )),
     }
+}
+
+fn accepted_host_key(raw: Option<&str>) -> Option<String> {
+    let key = crate::services::ssh_host_key::normalize(raw?);
+    if key.is_none() {
+        crate::log_warn!(
+            "agent_handler",
+            "Ignoring malformed ssh host key in heartbeat"
+        );
+    }
+    key
 }
 
 fn advertised_gateway_url(vip_address: Option<&str>) -> Option<String> {
