@@ -52,7 +52,7 @@ async fn used_node_ports_on_agent(
     Ok(used)
 }
 
-fn ensure_requested_in_range(ports: &[PortMapping]) -> Result<(), String> {
+pub fn ensure_requested_in_range(ports: &[PortMapping]) -> Result<(), String> {
     let (start, end) = node_port_range();
     match ports
         .iter()
@@ -83,7 +83,6 @@ pub async fn validate_node_ports(
     workload_id: Uuid,
     ports: &[PortMapping],
 ) -> Result<(), String> {
-    ensure_requested_in_range(ports)?;
     let used = used_node_ports_on_agent(db, agent_id, workload_id)
         .await
         .map_err(|e| format!("failed to query used node ports: {}", e))?;
