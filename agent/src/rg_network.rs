@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tracing::info;
@@ -18,10 +19,16 @@ pub async fn ensure_bridge(
 ) -> Result<String> {
     let iface = rg_bridge_iface_name(resource_group_id);
 
+    let tenant_range = cidr.map(ensure_tenant_range).transpose()?;
+
     write_registry_entry(resource_group_id).await?;
 
     if interface_exists(&iface).await? {
         return Ok(iface);
+    }
+
+    if let Some(range) = tenant_range {
+        ensure_range_is_unrouted(range).await?;
     }
 
     run_ip(&["link", "add", "name", &iface, "type", "bridge"]).await?;
@@ -73,6 +80,78 @@ pub async fn ensure_bridge(
     info!(resource_group_id = %resource_group_id, iface = %iface, "Resource group bridge ready");
 
     Ok(iface)
+}
+
+const PRIVATE_RANGES: [(u32, u8); 3] = [(0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16)];
+const MIN_TENANT_PREFIX: u8 = 16;
+const MAX_TENANT_PREFIX: u8 = 29;
+
+fn parse_cidr(cidr: &str) -> Result<(u32, u8)> {
+    let (address, prefix) = cidr.split_once('/').context("cidr has no prefix")?;
+    let address: Ipv4Addr = address.parse().context("cidr address is invalid")?;
+    let prefix: u8 = prefix.parse().context("cidr prefix is invalid")?;
+    anyhow::ensure!(prefix <= 32, "cidr prefix is out of range");
+    let address = u32::from(address);
+    anyhow::ensure!(
+        address & prefix_mask(prefix) == address,
+        "cidr has host bits set"
+    );
+    Ok((address, prefix))
+}
+
+fn prefix_mask(prefix: u8) -> u32 {
+    u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0)
+}
+
+fn overlaps(first: (u32, u8), second: (u32, u8)) -> bool {
+    let mask = prefix_mask(first.1.min(second.1));
+    first.0 & mask == second.0 & mask
+}
+
+fn ensure_tenant_range(cidr: &str) -> Result<(u32, u8)> {
+    let parsed = parse_cidr(cidr)?;
+    let private = PRIVATE_RANGES
+        .iter()
+        .any(|range| parsed.1 >= range.1 && overlaps(*range, parsed));
+    anyhow::ensure!(private, "cidr {cidr} is not inside a private range");
+    anyhow::ensure!(
+        (MIN_TENANT_PREFIX..=MAX_TENANT_PREFIX).contains(&parsed.1),
+        "cidr {cidr} prefix is outside /{MIN_TENANT_PREFIX}../{MAX_TENANT_PREFIX}"
+    );
+    Ok(parsed)
+}
+
+fn routed_destinations(listing: &str) -> Result<Vec<(u32, u8)>> {
+    let routes: Vec<serde_json::Value> =
+        serde_json::from_str(listing).context("failed to parse ip route listing")?;
+    Ok(routes
+        .iter()
+        .filter_map(|route| route["dst"].as_str())
+        .filter(|destination| *destination != "default")
+        .filter_map(|destination| {
+            let destination = if destination.contains('/') {
+                destination.to_string()
+            } else {
+                format!("{destination}/32")
+            };
+            parse_cidr(&destination).ok()
+        })
+        .collect())
+}
+
+async fn ensure_range_is_unrouted(range: (u32, u8)) -> Result<()> {
+    let output = Command::new("ip")
+        .args(["-j", "-4", "route", "show", "table", "all"])
+        .output()
+        .await
+        .context("failed to execute ip")?;
+    anyhow::ensure!(output.status.success(), "ip route listing failed");
+    let listing = String::from_utf8_lossy(&output.stdout);
+    let taken = routed_destinations(&listing)?
+        .into_iter()
+        .any(|destination| overlaps(destination, range));
+    anyhow::ensure!(!taken, "cidr collides with an existing host route");
+    Ok(())
 }
 
 async fn list_other_bridge_ifaces(exclude_resource_group_id: &str) -> Result<Vec<String>> {
@@ -213,6 +292,53 @@ mod tests {
             tools.calls("ip"),
             vec![format!("link delete {}", rg_bridge_iface_name("rg-1"))]
         );
+    }
+
+    #[test]
+    fn only_private_tenant_ranges_are_accepted() {
+        for accepted in ["10.101.0.0/24", "172.16.0.0/16", "192.168.4.0/24"] {
+            assert!(ensure_tenant_range(accepted).is_ok(), "{accepted}");
+        }
+        for rejected in [
+            "0.0.0.0/0",
+            "8.8.8.0/24",
+            "10.0.0.0/8",
+            "172.32.0.0/16",
+            "192.168.0.0/15",
+            "10.1.2.0/30",
+            "10.1.2.3/24",
+        ] {
+            assert!(ensure_tenant_range(rejected).is_err(), "{rejected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn colliding_routes_block_the_bridge_address() {
+        let routes = r#"[{"dst":"default"},{"dst":"192.168.1.0/24"},{"dst":"10.100.0.7"}]"#;
+        let behaviour = format!("echo '{routes}'");
+        let tools = FakeTools::install(&[("ip", behaviour.as_str())]);
+
+        assert!(ensure_range_is_unrouted((0xC0A80100, 24)).await.is_err());
+        assert!(ensure_range_is_unrouted((0x0A640000, 16)).await.is_err());
+        assert!(ensure_range_is_unrouted((0x0A650000, 24)).await.is_ok());
+        assert!(tools
+            .calls("ip")
+            .iter()
+            .all(|call| !call.contains("addr add")));
+    }
+
+    #[tokio::test]
+    async fn rejected_cidrs_create_no_bridge() {
+        let tools = FakeTools::install(&[("ip", "echo '[]'")]);
+        let registry = RgDnsRegistry::new();
+
+        let error = ensure_bridge("rg-1", Some("0.0.0.0/0"), &registry).await;
+
+        assert!(error.unwrap_err().to_string().contains("private range"));
+        assert!(tools
+            .calls("ip")
+            .iter()
+            .all(|call| !call.contains("link add")));
     }
 
     #[tokio::test]
