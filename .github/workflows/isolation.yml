@@ -1,0 +1,51 @@
+name: Isolation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - agent/src/nftables.rs
+      - agent/src/rg_network.rs
+      - .github/workflows/isolation.yml
+  workflow_dispatch:
+
+concurrency:
+  group: isolation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  isolation:
+    name: Guest network isolation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev libpq-dev protobuf-compiler nftables
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: isolation
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build agent tests
+        run: cargo test -p csfx-agent --bin csfx-agent --no-run
+
+      - name: Allow forwarding for the lab
+        run: sudo iptables -P FORWARD ACCEPT
+
+      - name: Run isolation lab
+        run: sudo -E env "PATH=$PATH" "HOME=$HOME" CSFX_ISOLATION_TEST=1 cargo test -p csfx-agent --bin csfx-agent isolation_holds -- --nocapture
