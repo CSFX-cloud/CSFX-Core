@@ -607,10 +607,15 @@ mod tests {
                 .unwrap_or(false)
         }
 
+        const LISTENER: &str = "import socket, sys\n\
+             server = socket.create_server((sys.argv[1], 8000))\n\
+             while True:\n\
+             \x20   server.accept()[0].close()";
+
         fn listen(namespace: &str, address: &str) -> Child {
             Process::new("ip")
                 .args(["netns", "exec", namespace])
-                .args(["python3", "-m", "http.server", "8000", "--bind", address])
+                .args(["python3", "-c", LISTENER, address])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
