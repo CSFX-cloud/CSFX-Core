@@ -69,6 +69,7 @@ struct HeartbeatRequest {
     wg_tunnel_ip: Option<String>,
     agent_version: Option<String>,
     kvm_capable: bool,
+    ssh_host_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -468,6 +469,7 @@ impl ApiClient {
                 wg_tunnel_ip,
                 agent_version: Some(env!("CARGO_PKG_VERSION").to_string()),
                 kvm_capable: crate::system::is_kvm_capable(),
+                ssh_host_key: crate::system::read_ssh_host_key(),
             });
 
         if let Some(ref cert_pem) = self.cert_pem {

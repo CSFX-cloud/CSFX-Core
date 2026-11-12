@@ -66,6 +66,7 @@ pub struct AgentResponse {
     pub cpu_overcommit_ratio: f64,
     pub memory_overcommit_ratio: f64,
     pub disk_overcommit_ratio: f64,
+    pub ssh_host_key: Option<String>,
 }
 
 impl From<agents::Model> for AgentResponse {
@@ -88,6 +89,7 @@ impl From<agents::Model> for AgentResponse {
             cpu_overcommit_ratio: model.cpu_overcommit_ratio,
             memory_overcommit_ratio: model.memory_overcommit_ratio,
             disk_overcommit_ratio: model.disk_overcommit_ratio,
+            ssh_host_key: model.ssh_host_key,
         }
     }
 }

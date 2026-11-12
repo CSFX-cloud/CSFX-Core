@@ -108,6 +108,26 @@ fn normalize_preview_url(
     ))
 }
 
+const MAX_NAME_LENGTH: usize = 63;
+
+fn validate_name(name: String) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+    let name = name.trim().to_string();
+    let valid = !name.is_empty()
+        && name.len() <= MAX_NAME_LENGTH
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
+    if valid {
+        return Ok(name);
+    }
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "name must be a dns label of letters, digits and hyphens" })),
+    ))
+}
+
 fn get_org_id(state: &AppState) -> Uuid {
     state
         .default_org_id
@@ -144,6 +164,7 @@ pub async fn create_resource_group(
     Json(req): Json<CreateResourceGroupRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let org_id = get_org_id(&state);
+    let name = validate_name(req.name)?;
 
     let requested = parse_cidr(&req.internal_cidr).ok_or_else(|| {
         (
@@ -196,7 +217,7 @@ pub async fn create_resource_group(
     let model = resource_groups::ActiveModel {
         id: Set(Uuid::new_v4()),
         organization_id: Set(org_id),
-        name: Set(req.name),
+        name: Set(name),
         description: Set(req.description),
         internal_cidr: Set(req.internal_cidr),
         status: Set("active".to_string()),
@@ -407,7 +428,7 @@ pub async fn update_resource_group(
 
     let mut active: resource_groups::ActiveModel = group.into();
     if let Some(name) = req.name {
-        active.name = Set(name);
+        active.name = Set(validate_name(name)?);
     }
     if let Some(description) = req.description {
         active.description = Set(Some(description));
@@ -1465,6 +1486,32 @@ pub fn resource_groups_agent_routes() -> Router<AppState> {
             "/resource-groups/{id}/vpn-peers",
             get(list_resource_group_vpn_peers),
         )
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::validate_name;
+
+    #[test]
+    fn names_must_be_dns_labels() {
+        for valid in ["web", "Data-Staging", "a1", " padded "] {
+            assert!(validate_name(valid.to_string()).is_ok(), "{valid}");
+        }
+        for invalid in [
+            "",
+            "-a",
+            "a-",
+            "a b",
+            "../../Library/x",
+            "a/b",
+            "a..b",
+            "a.b",
+            "a\nb",
+            &"a".repeat(64),
+        ] {
+            assert!(validate_name(invalid.to_string()).is_err(), "{invalid:?}");
+        }
+    }
 }
 
 #[cfg(test)]

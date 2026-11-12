@@ -211,6 +211,7 @@ pub async fn insert_agent(
         wg_endpoint: Set(None),
         wg_tunnel_ip: Set(None),
         kvm_capable: Set(false),
+        ssh_host_key: Set(None),
         cordoned: Set(false),
         maintenance_until: Set(maintenance_until),
         role: Set("worker".to_string()),

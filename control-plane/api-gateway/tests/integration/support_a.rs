@@ -293,6 +293,7 @@ pub async fn insert_agent(db: &DatabaseConnection, role: &str, status: &str) -> 
         wg_endpoint: Set(Some("192.0.2.10:51820".to_string())),
         wg_tunnel_ip: Set(Some("127.0.0.1".to_string())),
         kvm_capable: Set(false),
+        ssh_host_key: Set(None),
         cordoned: Set(false),
         maintenance_until: Set(None),
         role: Set(role.to_string()),

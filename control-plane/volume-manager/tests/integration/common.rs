@@ -173,6 +173,7 @@ pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
         wg_endpoint: Set(None),
         wg_tunnel_ip: Set(None),
         kvm_capable: Set(false),
+        ssh_host_key: Set(None),
         cordoned: Set(false),
         maintenance_until: Set(None),
         role: Set("worker".to_string()),

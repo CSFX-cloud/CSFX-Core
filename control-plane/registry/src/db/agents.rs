@@ -97,6 +97,7 @@ pub async fn create(
         wg_endpoint: Set(None),
         wg_tunnel_ip: Set(wg_tunnel_ip),
         kvm_capable: Set(false),
+        ssh_host_key: Set(None),
         cordoned: Set(false),
         maintenance_until: Set(None),
         role: Set(role),
@@ -139,6 +140,7 @@ pub async fn update_heartbeat(
     wg_endpoint: Option<String>,
     agent_version: Option<String>,
     kvm_capable: bool,
+    ssh_host_key: Option<String>,
 ) -> Result<agents::Model> {
     let mut agent: agents::ActiveModel = agents::Entity::find_by_id(agent_id)
         .one(db)
@@ -162,6 +164,9 @@ pub async fn update_heartbeat(
         agent.agent_version = Set(agent_version);
     }
     agent.kvm_capable = Set(kvm_capable);
+    if ssh_host_key.is_some() {
+        agent.ssh_host_key = Set(ssh_host_key);
+    }
     Ok(agent.update(db).await?)
 }
 
