@@ -1,8 +1,5 @@
 use crate::{
-    auth::{
-        jwt::{verify_jwt, Claims},
-        middleware::is_token_revoked,
-    },
+    auth::{jwt::Claims, middleware::authenticate},
     rbac_service::RbacService,
     AppState,
 };
@@ -10,7 +7,6 @@ use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
 };
-use chrono::Utc;
 use uuid::Uuid;
 
 pub struct CanViewAgents(pub Claims);
@@ -41,48 +37,8 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        extract_claims(parts, state).await.map(Self)
+        authenticate(parts, state).await.map(Self)
     }
-}
-
-async fn extract_claims(parts: &mut Parts, state: &AppState) -> Result<Claims, StatusCode> {
-    let token = parts
-        .headers
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .or_else(|| {
-            parts
-                .headers
-                .get("cookie")
-                .and_then(|c| c.to_str().ok())
-                .and_then(|cookies| {
-                    cookies.split(';').find_map(|cookie| {
-                        let mut p = cookie.trim().splitn(2, '=');
-                        if p.next()? == "token" {
-                            p.next()
-                        } else {
-                            None
-                        }
-                    })
-                })
-        })
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-
-    let claims = verify_jwt(token)
-        .map_err(|_| StatusCode::UNAUTHORIZED)?
-        .claims;
-    if claims.exp < Utc::now().timestamp() {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    let revoked = is_token_revoked(&state.db_conn, token, &claims)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if revoked {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-
-    Ok(claims)
 }
 
 fn get_default_org(state: &AppState) -> Result<Uuid, StatusCode> {
@@ -97,7 +53,7 @@ async fn check(
     resource: &str,
     action: &str,
 ) -> Result<Claims, StatusCode> {
-    let claims = extract_claims(parts, state).await?;
+    let claims = authenticate(parts, state).await?;
     let org_id = get_default_org(state)?;
     let rbac = RbacService::new(state.db_conn.clone());
     let allowed = rbac

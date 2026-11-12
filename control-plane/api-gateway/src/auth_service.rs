@@ -101,12 +101,11 @@ impl AuthService {
         Ok((token, user.two_factor_enabled, user.force_password_change))
     }
 
-    pub async fn logout_user(&self, token: String, exp: DateTime<Utc>) -> AuthResult<()> {
-        // Add token to blacklist with pre-generated UUID
+    pub async fn logout_user(&self, jti: Uuid, exp: DateTime<Utc>) -> AuthResult<()> {
         let jwt_id = Uuid::new_v4();
         let invalid_jwt = invalid_jwt::ActiveModel {
             id: ActiveValue::Set(jwt_id),
-            token: ActiveValue::Set(token),
+            token: ActiveValue::Set(jti.to_string()),
             exp: ActiveValue::Set(exp.naive_utc()),
         };
 

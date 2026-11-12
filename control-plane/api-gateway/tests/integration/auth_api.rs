@@ -339,3 +339,19 @@ async fn logout_succeeds_for_authenticated_user() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["message"], "Logged out successfully");
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn logout_revokes_the_token() {
+    let harness = harness().await;
+    let (_, _, token) = harness.user_with_token().await;
+
+    harness
+        .send(Method::POST, "/api/logout", Some(&token), None)
+        .await;
+    let (status, _) = harness
+        .send(Method::GET, "/api/validate-session", Some(&token), None)
+        .await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
