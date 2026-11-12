@@ -1,5 +1,4 @@
 use axum::http::{Method, StatusCode};
-use chrono::Utc;
 use entity::entities::{agent_metrics, agents, logs, workloads};
 use futures_util::StreamExt;
 use sea_orm::{
@@ -20,10 +19,8 @@ async fn worker(harness: &Harness) -> agents::Model {
     insert_agent(&harness.db, "worker", "Online").await
 }
 
-fn metrics_payload(agent_id: Uuid) -> Value {
+fn metrics_payload() -> Value {
     json!({
-        "agent_id": agent_id,
-        "timestamp": Utc::now().to_rfc3339(),
         "cpu_model": "test-cpu",
         "cpu_cores": 4,
         "memory_total_bytes": 1000,
@@ -97,14 +94,45 @@ async fn agents_are_listed_and_fetched_without_container_hosts() {
 async fn pushed_metrics_are_stored_and_served() {
     let harness = harness().await;
     let agent = worker(&harness).await;
+    let key = insert_api_key(&harness.db, agent.id).await;
     let (status, _) = harness
         .send(
             Method::POST,
-            "/api/agents/metrics",
+            "/api/agents/self/metrics",
             None,
-            Some(metrics_payload(agent.id)),
+            Some(metrics_payload()),
         )
         .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let other = worker(&harness).await;
+    let (status, _) = keyed(
+        &harness,
+        Method::POST,
+        "/api/agents/self/metrics",
+        &key,
+        Some(json!({ "agent_id": other.id, "timestamp": "2999-01-01T00:00:00Z", "cpu_cores": 0 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let foreign = agent_metrics::Entity::find()
+        .filter(agent_metrics::Column::AgentId.eq(other.id))
+        .count(&harness.db)
+        .await
+        .unwrap();
+    assert_eq!(foreign, 0);
+    agent_metrics::Entity::delete_many()
+        .filter(agent_metrics::Column::AgentId.eq(agent.id))
+        .exec(&harness.db)
+        .await
+        .unwrap();
+    let (status, _) = keyed(
+        &harness,
+        Method::POST,
+        "/api/agents/self/metrics",
+        &key,
+        Some(metrics_payload()),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (status, history) = harness
@@ -133,18 +161,14 @@ async fn latest_metrics_of_an_unknown_agent_are_missing() {
     let uri = format!("/api/agents/{}/metrics/latest", Uuid::new_v4());
     assert_eq!(harness.get(&uri).await.0, StatusCode::NOT_FOUND);
     let (status, _) = harness
-        .send(Method::POST, "/api/agents/metrics", None, Some(json!({})))
-        .await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    let (status, _) = harness
         .send(
             Method::POST,
-            "/api/agents/metrics",
+            "/api/agents/self/metrics",
             None,
-            Some(metrics_payload(Uuid::new_v4())),
+            Some(json!({})),
         )
         .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
