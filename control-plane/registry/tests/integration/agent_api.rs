@@ -229,6 +229,53 @@ async fn heartbeat_updates_agent_state() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
+async fn heartbeat_cannot_claim_another_agents_mesh_identity() {
+    let state = common::app_state(common::migrated_database().await);
+    let victim = common::insert_agent(&state.db).await;
+    let attacker = common::insert_agent(&state.db).await;
+    let key = state.api_key_manager.create_key(attacker).await.key;
+    let app = registry::server::create_router(state.clone());
+    let victim_endpoint = format!("198.51.100.{}:51820", victim.as_u128() % 200 + 1);
+    let uri = |id: Uuid| format!("/agents/{}/heartbeat", id);
+
+    let victim_key = state.api_key_manager.create_key(victim).await.key;
+    let (status, _) = post_as_agent(
+        &app,
+        &uri(victim),
+        &victim_key,
+        json!({"wg_endpoint": victim_endpoint}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = post_as_agent(
+        &app,
+        &uri(attacker),
+        &key,
+        json!({"wg_endpoint": victim_endpoint}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, _) = post_as_agent(
+        &app,
+        &uri(attacker),
+        &key,
+        json!({"wg_tunnel_ip": "10.100.9.9", "wg_endpoint": "203.0.113.9:51820"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let stored = entity::agents::Entity::find_by_id(attacker)
+        .one(&state.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.wg_tunnel_ip.as_deref(), Some("10.100.0.2"));
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
 async fn registration_rejects_invalid_tokens() {
     let app = common::router().await;
     let request = |token: &str, name: &str| {

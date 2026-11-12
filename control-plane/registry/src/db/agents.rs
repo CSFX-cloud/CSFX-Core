@@ -117,13 +117,26 @@ pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<agents::Model>> {
     Ok(agents::Entity::find().all(db).await?)
 }
 
+pub async fn wg_endpoint_in_use(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+    wg_endpoint: &str,
+) -> Result<bool> {
+    Ok(agents::Entity::find()
+        .filter(agents::Column::WgEndpoint.eq(wg_endpoint))
+        .filter(agents::Column::Id.ne(agent_id))
+        .filter(agents::Column::Status.eq("Online"))
+        .one(db)
+        .await?
+        .is_some())
+}
+
 pub async fn update_heartbeat(
     db: &DatabaseConnection,
     agent_id: Uuid,
     status: String,
     wg_public_key: Option<String>,
     wg_endpoint: Option<String>,
-    wg_tunnel_ip: Option<String>,
     agent_version: Option<String>,
     kvm_capable: bool,
 ) -> Result<agents::Model> {
@@ -144,9 +157,6 @@ pub async fn update_heartbeat(
             agent.ip_address = Set(Some(host.to_string()));
         }
         agent.wg_endpoint = Set(Some(wg_endpoint));
-    }
-    if wg_tunnel_ip.is_some() {
-        agent.wg_tunnel_ip = Set(wg_tunnel_ip);
     }
     if let Some(agent_version) = agent_version {
         agent.agent_version = Set(agent_version);
