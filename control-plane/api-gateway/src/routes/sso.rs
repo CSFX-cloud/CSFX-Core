@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json, Redirect},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::{AppendHeaders, IntoResponse, Json, Redirect},
     routing::{get, post},
     Router,
 };
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::users::AuthResponse;
 use crate::{
     auth::jwt::create_jwt,
-    oidc::{self, error::OidcError, flow},
+    oidc::{self, binding, error::OidcError, flow},
     AppState,
 };
 
@@ -81,11 +81,20 @@ async fn list_providers(
     ))
 }
 
+fn with_cookies(redirect: Redirect, cookies: Vec<String>) -> axum::response::Response {
+    let cookies: Vec<(header::HeaderName, HeaderValue)> = cookies
+        .iter()
+        .filter_map(|cookie| HeaderValue::from_str(cookie).ok())
+        .map(|value| (header::SET_COOKIE, value))
+        .collect();
+    (AppendHeaders(cookies), redirect).into_response()
+}
+
 async fn start(
     State(state): State<AppState>,
     Path(slug): Path<String>,
     headers: HeaderMap,
-) -> Redirect {
+) -> axum::response::Response {
     let origin = oidc::public_origin(&headers);
     let result = async {
         let provider = find_enabled_provider(&state.db_conn, &slug).await?;
@@ -94,10 +103,13 @@ async fn start(
     }
     .await;
     match result {
-        Ok(url) => Redirect::to(&url),
+        Ok(login) => with_cookies(
+            Redirect::to(&login.authorization_url),
+            vec![binding::bind_state(&origin, &login.state)],
+        ),
         Err(error) => {
             tracing::warn!(error = %error, provider = %slug, "oidc login start failed");
-            login_failure_redirect(&origin, &error)
+            login_failure_redirect(&origin, &error).into_response()
         }
     }
 }
@@ -107,6 +119,7 @@ async fn finish_callback(
     slug: &str,
     redirect_uri: &str,
     query: CallbackQuery,
+    headers: &HeaderMap,
 ) -> Result<String, OidcError> {
     if query.error.is_some() {
         return Err(OidcError::AccessDenied("provider_denied"));
@@ -114,6 +127,9 @@ async fn finish_callback(
     let (Some(code), Some(login_state)) = (query.code, query.state) else {
         return Err(OidcError::InvalidState);
     };
+    if !binding::state_is_bound(headers, &login_state) {
+        return Err(OidcError::InvalidState);
+    }
     let provider = find_enabled_provider(db, slug).await?;
     let user = flow::complete_login(db, &provider, redirect_uri, &code, &login_state).await?;
     flow::issue_exchange_code(db, user.id).await
@@ -124,22 +140,33 @@ async fn callback(
     Path(slug): Path<String>,
     Query(query): Query<CallbackQuery>,
     headers: HeaderMap,
-) -> Redirect {
+) -> axum::response::Response {
     let origin = oidc::public_origin(&headers);
     let redirect_uri = oidc::redirect_uri(&origin, &slug);
-    match finish_callback(&state.db_conn, &slug, &redirect_uri, query).await {
-        Ok(code) => Redirect::to(&format!("{origin}/login/callback?code={code}")),
+    let outcome = finish_callback(&state.db_conn, &slug, &redirect_uri, query, &headers).await;
+    let clear_state = binding::clear(&origin, binding::STATE_COOKIE);
+    match outcome {
+        Ok(code) => with_cookies(
+            Redirect::to(&format!("{origin}/login/callback?code={code}")),
+            vec![clear_state, binding::bind_exchange_code(&origin, &code)],
+        ),
         Err(error) => {
             tracing::warn!(error = %error, provider = %slug, "oidc login failed");
-            login_failure_redirect(&origin, &error)
+            with_cookies(login_failure_redirect(&origin, &error), vec![clear_state])
         }
     }
 }
 
 async fn exchange(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ExchangeRequest>,
 ) -> Result<impl IntoResponse, StatusCode> {
+    if !binding::exchange_code_is_bound(&headers, &request.code) {
+        tracing::warn!("oidc exchange code presented without its browser binding");
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let origin = oidc::public_origin(&headers);
     let user = flow::redeem_exchange_code(&state.db_conn, &request.code)
         .await
         .map_err(|error| {
@@ -150,11 +177,15 @@ async fn exchange(
         tracing::error!(error = %error, "failed to issue jwt");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
-    Ok(Json(AuthResponse {
-        token,
-        user_id: user.id.to_string(),
-        username: user.name,
-        two_factor_enabled: false,
-        force_password_change: false,
-    }))
+    let clear_exchange = binding::clear(&origin, binding::EXCHANGE_COOKIE);
+    Ok((
+        AppendHeaders([(header::SET_COOKIE, clear_exchange)]),
+        Json(AuthResponse {
+            token,
+            user_id: user.id.to_string(),
+            username: user.name,
+            two_factor_enabled: false,
+            force_password_change: false,
+        }),
+    ))
 }
