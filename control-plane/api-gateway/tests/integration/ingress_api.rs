@@ -534,3 +534,35 @@ async fn dns_names_cannot_shadow_ingress_hostnames() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"], "name is already in use");
 }
+
+async fn console_host(harness: &Harness) -> String {
+    let (_, body) = harness.get("/api/dns/zone").await;
+    body["console_host"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn platform_hostname_cannot_be_routed_or_shadowed() {
+    let harness = harness().await;
+    let stack = stack(&harness).await;
+    let console = console_host(&harness).await;
+    let ingress = format!("/api/resource-groups/{}/ingress", stack.group.id);
+    let records = format!("/api/resource-groups/{}/dns-records", stack.group.id);
+
+    for hostname in [console.clone(), format!("login.{console}")] {
+        let (status, _) = harness
+            .post(&ingress, route_request(&stack, &hostname, 8080))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{hostname}");
+        let (status, _) = harness
+            .post(&records, record(&hostname, "A", "10.1.2.3"))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{hostname}");
+    }
+    let reserved = ingress_routes::Entity::find()
+        .filter(ingress_routes::Column::ResourceGroupId.eq(stack.group.id))
+        .count(&harness.db)
+        .await
+        .unwrap();
+    assert_eq!(reserved, 0);
+}

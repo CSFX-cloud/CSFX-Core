@@ -395,6 +395,15 @@ async fn domains_are_validated_and_unique() {
             .0,
         StatusCode::CONFLICT
     );
+    let (_, zone) = harness.get("/api/dns/zone").await;
+    let console = zone["console_host"].as_str().unwrap();
+    assert_eq!(
+        harness
+            .post(&domains, json!({"hostname": format!("x.{console}")}))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
     assert_eq!(
         harness
             .post(&domains, json!({"hostname": "not a host"}))
