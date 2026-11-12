@@ -271,17 +271,20 @@ pub async fn get_self_workloads(
 }
 
 pub async fn push_self_workload_stats(
-    _agent: AgentApiKey,
+    agent: AgentApiKey,
     State(state): State<AppState>,
     body: String,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
+    let mut body_json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let payload = body_json.as_object_mut().ok_or(StatusCode::BAD_REQUEST)?;
+    payload.insert("agent_id".to_string(), serde_json::json!(agent.agent_id));
     match state
         .service_client
         .forward_to_scheduler(
             reqwest::Method::POST,
             "/internal/workloads/stats",
-            body_json,
+            Some(body_json),
             None,
         )
         .await
@@ -297,14 +300,15 @@ pub async fn push_self_workload_stats(
 }
 
 pub async fn ack_self_workload_restart(
-    _agent: AgentApiKey,
+    agent: AgentApiKey,
     State(state): State<AppState>,
     Path(workload_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let path = format!("/internal/workloads/{}/restart-ack", workload_id);
+    let body = serde_json::json!({ "agent_id": agent.agent_id });
     match state
         .service_client
-        .forward_to_scheduler(reqwest::Method::POST, &path, None, None)
+        .forward_to_scheduler(reqwest::Method::POST, &path, Some(body), None)
         .await
     {
         Ok((status, _)) => Ok(StatusCode::from_u16(status.as_u16())
