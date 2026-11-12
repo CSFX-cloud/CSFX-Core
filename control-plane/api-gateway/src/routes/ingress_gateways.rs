@@ -22,7 +22,7 @@ use crate::{
         agent::AgentApiKey,
         rbac::{CanManageResourceGroups, CanViewResourceGroups},
     },
-    dns_sync, ingress_sync, zone_cert, AppState,
+    dns_sync, hostname_policy, ingress_sync, zone_cert, AppState,
 };
 
 const GATEWAY_IMAGE: &str = "traefik:v3.5";
@@ -378,7 +378,9 @@ pub async fn gateway_config(
     let zone = dns_sync::zone_from_env();
     let resolver = acme_settings().map(|(resolver, _)| resolver);
     let mut config = ingress_sync::provider_config(&targets, &zone, resolver.as_deref());
-    let sans = ingress_sync::zone_hostnames(&targets, &zone);
+    let platform = dns_sync::platform_hostname(&zone);
+    let mut sans = ingress_sync::zone_hostnames(&targets, &zone);
+    sans.retain(|hostname| !hostname_policy::is_platform_name(hostname, &platform));
     let certificate = zone_cert::certificate_for(&state.db_conn, gateway.id, &sans)
         .await
         .map_err(internal)?;

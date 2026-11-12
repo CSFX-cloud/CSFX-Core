@@ -33,7 +33,7 @@ pub fn is_reserved(hostname: &str, platform_hostname: &str) -> bool {
     is_platform_name(hostname, platform_hostname) || is_internal_service_name(hostname)
 }
 
-fn is_platform_name(hostname: &str, platform_hostname: &str) -> bool {
+pub fn is_platform_name(hostname: &str, platform_hostname: &str) -> bool {
     hostname == platform_hostname
         || hostname
             .strip_suffix(platform_hostname)
