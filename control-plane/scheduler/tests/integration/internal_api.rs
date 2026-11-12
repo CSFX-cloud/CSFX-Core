@@ -113,6 +113,13 @@ async fn foreign_agents_cannot_change_workloads() {
     let app = router().await;
     let (id, _) = assigned_workload(&app).await;
     let intruder = insert_agent(&migrated_database().await).await;
+    call(
+        &app,
+        Method::POST,
+        &format!("/workloads/{}/restart", id),
+        None,
+    )
+    .await;
     let before = find_workload(&app, &id).await;
 
     let (status, _) = call(
@@ -135,13 +142,6 @@ async fn foreign_agents_cannot_change_workloads() {
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
-    call(
-        &app,
-        Method::POST,
-        &format!("/workloads/{}/restart", id),
-        None,
-    )
-    .await;
     let (status, _) = call(
         &app,
         Method::POST,
