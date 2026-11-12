@@ -1,9 +1,10 @@
 use axum::http::{Method, StatusCode};
-use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::common::{harness, Harness};
-use crate::support_a::{insert_agent, insert_group, insert_volume, insert_workload, WorkloadSpec};
+use crate::support_a::{
+    insert_agent, insert_api_key, insert_group, insert_volume, insert_workload, keyed, WorkloadSpec,
+};
 
 fn has_node(topology: &Value, id: &str, kind: &str) -> bool {
     topology["nodes"]
@@ -23,15 +24,19 @@ fn has_edge(topology: &Value, kind: &str, source: &str, target: &str) -> bool {
 
 async fn push_metrics(harness: &Harness, agent_id: uuid::Uuid) {
     let payload = json!({
-        "agent_id": agent_id,
-        "timestamp": Utc::now().to_rfc3339(),
         "cpu_usage_percent": 12.5,
         "memory_usage_percent": 40.0,
         "disk_usage_percent": 55.0
     });
-    let (status, _) = harness
-        .send(Method::POST, "/api/agents/metrics", None, Some(payload))
-        .await;
+    let key = insert_api_key(&harness.db, agent_id).await;
+    let (status, _) = keyed(
+        harness,
+        Method::POST,
+        "/api/agents/self/metrics",
+        &key,
+        Some(payload),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
 }
 

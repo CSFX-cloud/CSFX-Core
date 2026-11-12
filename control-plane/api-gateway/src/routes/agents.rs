@@ -19,9 +19,6 @@ use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SystemMetrics {
-    pub agent_id: Uuid,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-
     // CPU
     pub cpu_model: Option<String>,
     pub cpu_cores: Option<u32>,
@@ -100,16 +97,15 @@ fn percent_of(used: Option<u64>, total: Option<u64>) -> Option<f32> {
     Some(used? as f32 / total as f32 * 100.0)
 }
 
-/// Receive metrics from agent
 pub async fn receive_metrics(
+    agent: AgentApiKey,
     State(state): State<AppState>,
     Json(metrics): Json<SystemMetrics>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    // Store metrics in database
     let new_metrics = agent_metrics::ActiveModel {
         id: ActiveValue::Set(Uuid::new_v4()),
-        agent_id: ActiveValue::Set(metrics.agent_id),
-        timestamp: ActiveValue::Set(metrics.timestamp.naive_utc()),
+        agent_id: ActiveValue::Set(agent.agent_id),
+        timestamp: ActiveValue::Set(chrono::Utc::now().naive_utc()),
         cpu_model: ActiveValue::Set(metrics.cpu_model),
         cpu_cores: ActiveValue::Set(metrics.cpu_cores.map(|v| v as i32)),
         cpu_threads: ActiveValue::Set(metrics.cpu_threads.map(|v| v as i32)),
@@ -511,7 +507,7 @@ pub fn agents_routes() -> Router<AppState> {
 
 pub fn agents_unmetered_routes() -> Router<AppState> {
     Router::new()
-        .route("/agents/metrics", post(receive_metrics))
+        .route("/agents/self/metrics", post(receive_metrics))
         .route("/agents/self/workloads", get(get_self_workloads))
         .route(
             "/agents/self/workloads/{id}/restart-ack",
