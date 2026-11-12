@@ -613,6 +613,8 @@ async fn spawn_vm(
     let qemu_bin = qemu_bin_path();
 
     let mut args: Vec<String> = vec![
+        "-sandbox".to_string(),
+        "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny".to_string(),
         "-enable-kvm".to_string(),
         "-machine".to_string(),
         "q35".to_string(),
