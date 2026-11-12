@@ -672,3 +672,30 @@ async fn vpn_peers_are_removed_when_manage_permission_is_lost() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(peers_of(&harness, owner_id).await, 0);
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn resource_group_names_must_be_dns_labels() {
+    let harness = harness().await;
+    for name in ["../../Library/x", "a/b", "a..b", "with space"] {
+        let (status, _) = harness
+            .post(
+                "/api/resource-groups",
+                json!({"name": name, "internal_cidr": random_cidr()}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}");
+    }
+
+    let group = create_group(&harness, &random_cidr()).await;
+    let id = group["id"].as_str().unwrap();
+    let (status, _) = harness
+        .admin(
+            Method::PATCH,
+            &format!("/api/resource-groups/{id}"),
+            Some(json!({"name": "../escape"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    remove_group(&harness, id.parse().unwrap()).await;
+}
