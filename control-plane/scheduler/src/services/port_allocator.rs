@@ -59,6 +59,20 @@ fn pick_free_port(used: &HashSet<u16>, requested: &HashSet<u16>) -> Result<u16, 
         .ok_or_else(|| "no free node port available in configured range".to_string())
 }
 
+fn ensure_requested_in_range(ports: &[PortMapping]) -> Result<(), String> {
+    let (start, end) = node_port_range();
+    match ports
+        .iter()
+        .filter_map(|mapping| mapping.node_port)
+        .find(|port| !(start..=end).contains(port))
+    {
+        Some(port) => Err(format!(
+            "node port {port} is outside the allowed range {start}-{end}"
+        )),
+        None => Ok(()),
+    }
+}
+
 fn ensure_requested_free(ports: &[PortMapping], used: &HashSet<u16>) -> Result<(), String> {
     match ports
         .iter()
@@ -80,6 +94,7 @@ pub async fn allocate_node_ports(
         return Ok(());
     }
 
+    ensure_requested_in_range(ports)?;
     let mut used = used_node_ports_on_agent(db, agent_id, workload_id)
         .await
         .map_err(|e| format!("failed to query used node ports: {}", e))?;
@@ -121,6 +136,19 @@ mod tests {
         let used = HashSet::from([80]);
         let error = ensure_requested_free(&[mapping(Some(80))], &used).unwrap_err();
         assert!(error.contains("80"));
+    }
+
+    #[test]
+    fn explicit_port_outside_range_is_rejected() {
+        for port in [22, 7443, 29999, 32768] {
+            let error = ensure_requested_in_range(&[mapping(Some(port))]).unwrap_err();
+            assert!(error.contains(&port.to_string()));
+        }
+    }
+
+    #[test]
+    fn explicit_port_inside_range_is_accepted() {
+        assert!(ensure_requested_in_range(&[mapping(Some(30000)), mapping(None)]).is_ok());
     }
 
     #[test]
