@@ -15,14 +15,14 @@ async fn placement_key_exists(fixture: &Placing, workload_id: Uuid) -> bool {
     !response.kvs().is_empty()
 }
 
-fn request_with_ports(name: &str) -> CreateWorkloadRequest {
+fn request_with_ports(name: &str, node_port: u16) -> CreateWorkloadRequest {
     serde_json::from_value(json!({
         "name": name,
         "image": "nginx:latest",
         "cpu_millicores": 10,
         "memory_bytes": 1048576,
         "disk_bytes": 1048576,
-        "ports": [{"container_port": 80, "protocol": "tcp"}]
+        "ports": [{"container_port": 80, "node_port": node_port, "protocol": "tcp"}]
     }))
     .unwrap()
 }
@@ -51,12 +51,14 @@ async fn schedulable_workloads_are_assigned_and_recorded() {
 
 #[tokio::test]
 #[ignore = "requires postgres and etcd"]
-async fn node_ports_are_allocated_on_placement() {
+async fn requested_node_ports_are_kept_on_placement() {
     let fixture = placing().await;
+    let node_port =
+        30000 + u16::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..2].try_into().unwrap()) % 2768;
 
     let response = fixture
         .service
-        .schedule(request_with_ports(&unique_name("ports")))
+        .schedule(request_with_ports(&unique_name("ports"), node_port))
         .await
         .unwrap();
 
@@ -65,7 +67,7 @@ async fn node_ports_are_allocated_on_placement() {
         .unwrap()
         .unwrap();
     let ports = stored.ports.expect("ports must be stored");
-    assert!(ports[0]["node_port"].as_u64().is_some());
+    assert_eq!(ports[0]["node_port"].as_u64(), Some(u64::from(node_port)));
 }
 
 #[tokio::test]
