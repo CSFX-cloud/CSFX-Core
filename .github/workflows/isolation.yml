@@ -44,5 +44,8 @@ jobs:
       - name: Build agent tests
         run: cargo test -p csfx-agent --bin csfx-agent --no-run
 
+      - name: Allow forwarding for the lab
+        run: sudo iptables -P FORWARD ACCEPT
+
       - name: Run isolation lab
         run: sudo -E env "PATH=$PATH" "HOME=$HOME" CSFX_ISOLATION_TEST=1 cargo test -p csfx-agent --bin csfx-agent isolation_holds -- --nocapture
