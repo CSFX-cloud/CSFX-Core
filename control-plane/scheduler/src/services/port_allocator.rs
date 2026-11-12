@@ -52,13 +52,6 @@ async fn used_node_ports_on_agent(
     Ok(used)
 }
 
-fn pick_free_port(used: &HashSet<u16>, requested: &HashSet<u16>) -> Result<u16, String> {
-    let (start, end) = node_port_range();
-    (start..=end)
-        .find(|port| !used.contains(port) && !requested.contains(port))
-        .ok_or_else(|| "no free node port available in configured range".to_string())
-}
-
 fn ensure_requested_in_range(ports: &[PortMapping]) -> Result<(), String> {
     let (start, end) = node_port_range();
     match ports
@@ -84,34 +77,17 @@ fn ensure_requested_free(ports: &[PortMapping], used: &HashSet<u16>) -> Result<(
     }
 }
 
-pub async fn allocate_node_ports(
+pub async fn validate_node_ports(
     db: &DatabaseConnection,
     agent_id: Uuid,
     workload_id: Uuid,
-    ports: &mut [PortMapping],
+    ports: &[PortMapping],
 ) -> Result<(), String> {
-    if ports.is_empty() {
-        return Ok(());
-    }
-
     ensure_requested_in_range(ports)?;
-    let mut used = used_node_ports_on_agent(db, agent_id, workload_id)
+    let used = used_node_ports_on_agent(db, agent_id, workload_id)
         .await
         .map_err(|e| format!("failed to query used node ports: {}", e))?;
-    ensure_requested_free(ports, &used)?;
-    let mut requested: HashSet<u16> = ports.iter().filter_map(|p| p.node_port).collect();
-
-    for mapping in ports.iter_mut() {
-        if mapping.node_port.is_some() {
-            continue;
-        }
-        let port = pick_free_port(&used, &requested)?;
-        mapping.node_port = Some(port);
-        used.insert(port);
-        requested.insert(port);
-    }
-
-    Ok(())
+    ensure_requested_free(ports, &used)
 }
 
 pub fn ports_to_json(ports: &[PortMapping]) -> Result<Value, String> {
