@@ -1015,7 +1015,7 @@ async fn apply_port_dnat(workload_id: &str, guest_ip: &str, spec: &WorkloadSpec)
         .and_then(crate::spec::second_host_ip);
 
     for port in ports {
-        let protocol = port.protocol.as_deref().unwrap_or("tcp");
+        let protocol = port.protocol.unwrap_or_default();
 
         if let Some(node_port) = port.node_port {
             crate::nftables::add_node_port_dnat(
@@ -1777,7 +1777,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    use crate::spec::PortMapping;
+    use crate::spec::{PortMapping, PortProtocol};
     use crate::testing::FakeTools;
 
     fn spec_with_ports(ports: Option<Vec<PortMapping>>, cidr: Option<&str>) -> WorkloadSpec {
@@ -1801,13 +1801,13 @@ mod tests {
 
     fn port(
         container: u16,
-        protocol: Option<&str>,
+        protocol: Option<PortProtocol>,
         rg: Option<u16>,
         node: Option<u16>,
     ) -> PortMapping {
         PortMapping {
             container_port: container,
-            protocol: protocol.map(str::to_string),
+            protocol,
             rg_port: rg,
             node_port: node,
         }
@@ -1830,7 +1830,7 @@ mod tests {
         let spec = spec_with_ports(
             Some(vec![
                 port(80, None, None, Some(30080)),
-                port(53, Some("udp"), Some(5353), None),
+                port(53, Some(PortProtocol::Udp), Some(5353), None),
             ]),
             Some("10.20.0.0/24"),
         );
@@ -1841,6 +1841,26 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert!(calls[0].contains("tcp dport 30080 dnat to 10.20.0.5:80"));
         assert!(calls[1].contains("ip daddr 10.20.0.2 udp dport 5353 dnat to 10.20.0.5:53"));
+    }
+
+    #[tokio::test]
+    async fn nft_never_receives_script_metacharacters() {
+        let tools = FakeTools::install(&[("nft", "exit 0")]);
+        let spec = spec_with_ports(
+            Some(vec![
+                port(80, Some(PortProtocol::Tcp), Some(8080), Some(30080)),
+                port(53, Some(PortProtocol::Udp), Some(5353), Some(30053)),
+            ]),
+            Some("10.20.0.0/24"),
+        );
+
+        apply_port_dnat("w-1", "10.20.0.5", &spec).await.unwrap();
+
+        let calls = tools.calls("nft");
+        assert_eq!(calls.len(), 4);
+        for call in calls {
+            assert!(!call.contains(['{', '}', ';', '\n']));
+        }
     }
 
     #[tokio::test]

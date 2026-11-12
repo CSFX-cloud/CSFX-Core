@@ -1,3 +1,4 @@
+use crate::spec::PortProtocol;
 use anyhow::{Context, Result};
 use tokio::process::Command;
 use tracing::info;
@@ -89,7 +90,7 @@ async fn add_drop_rule(from_bridge: &str, to_bridge: &str) -> Result<()> {
 
 pub async fn add_node_port_dnat(
     workload_id: &str,
-    protocol: &str,
+    protocol: PortProtocol,
     node_port: u16,
     guest_ip: &str,
     container_port: u16,
@@ -104,7 +105,7 @@ pub async fn add_node_port_dnat(
         "daddr",
         "type",
         "local",
-        protocol,
+        protocol.as_str(),
         "dport",
         &node_port.to_string(),
         "dnat",
@@ -118,7 +119,7 @@ pub async fn add_node_port_dnat(
 
 pub async fn add_rg_port_dnat(
     workload_id: &str,
-    protocol: &str,
+    protocol: PortProtocol,
     rg_gateway_ip: &str,
     rg_port: u16,
     guest_ip: &str,
@@ -133,7 +134,7 @@ pub async fn add_rg_port_dnat(
         "ip",
         "daddr",
         rg_gateway_ip,
-        protocol,
+        protocol.as_str(),
         "dport",
         &rg_port.to_string(),
         "dnat",
@@ -401,10 +402,10 @@ mod tests {
     async fn node_port_rules_forward_to_the_guest() {
         let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
 
-        add_node_port_dnat("w-1", "tcp", 30080, "10.0.0.2", 80)
+        add_node_port_dnat("w-1", PortProtocol::Tcp, 30080, "10.0.0.2", 80)
             .await
             .unwrap();
-        add_rg_port_dnat("w-1", "udp", "10.0.0.1", 5353, "10.0.0.2", 53)
+        add_rg_port_dnat("w-1", PortProtocol::Udp, "10.0.0.1", 5353, "10.0.0.2", 53)
             .await
             .unwrap();
         dnat_bridge_port("br1", "10.0.0.1", 3900).await.unwrap();
