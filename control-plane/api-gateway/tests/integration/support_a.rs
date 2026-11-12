@@ -274,7 +274,7 @@ pub async fn insert_agent(db: &DatabaseConnection, role: &str, status: &str) -> 
         id: Set(id),
         name: Set(unique("agent")),
         hostname: Set(unique("node")),
-        ip_address: Set(Some(format!("10.9.{}.{}", octets[0], octets[1]))),
+        ip_address: Set(Some(format!("198.51.{}.{}", octets[0], octets[1]))),
         agent_version: Set("1.0.0".to_string()),
         os_type: Set("linux".to_string()),
         os_version: Set("6.1".to_string()),
