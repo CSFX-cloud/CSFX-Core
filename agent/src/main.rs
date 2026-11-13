@@ -4,7 +4,6 @@ mod client;
 mod config;
 mod disks;
 mod endpoint;
-mod fence;
 mod firecracker;
 mod join;
 mod journal;
@@ -396,7 +395,6 @@ async fn reconcile_tick(
     service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
     rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
     failure_count: &mut u32,
-    fence_guard: &mut fence::FenceGuard,
 ) {
     let assigned_volumes = process_volumes(client, agent_id, api_key, mounted_volumes).await;
     let resource_group_ids = process_workloads(
@@ -446,7 +444,6 @@ async fn reconcile_tick(
         .await
     {
         Ok(resp) => {
-            fence_guard.record_success();
             if *failure_count > 0 {
                 info!(agent_id = %agent_id, "Heartbeat recovered after {} failures", failure_count);
                 *failure_count = 0;
@@ -476,22 +473,6 @@ async fn reconcile_tick(
                 error = %e,
                 "Heartbeat failed"
             );
-            if fence_guard.record_failure(std::time::Instant::now()) {
-                warn!(agent_id = %agent_id, "Control plane unreachable, self-fencing all workloads");
-                reap_stale_containers(
-                    firecracker.as_ref(),
-                    qemu.as_ref(),
-                    vm_workload_ids,
-                    running_containers,
-                    workload_phases,
-                    restart_counts,
-                    service_dns_registry,
-                    rg_dns_registry,
-                    &[],
-                )
-                .await;
-                release_unassigned_volumes(mounted_volumes, &[]).await;
-            }
         }
     }
 }
@@ -516,14 +497,13 @@ async fn run_heartbeat_loop(
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
     let mut failure_count: u32 = 0;
-    let mut fence_guard = fence::FenceGuard::from_env();
     let starts = StartTracker::default();
     let completed = Arc::clone(&starts.completed);
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count).await;
             }
             signal = assignment_signal.recv() => {
                 if signal.is_none() {
@@ -533,11 +513,11 @@ async fn run_heartbeat_loop(
                 while assignment_signal.try_recv().is_ok() {}
                 info!(agent_id = %agent_id, "assignment push received, reconciling immediately");
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count).await;
             }
             _ = completed.notified() => {
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal received");
@@ -2017,7 +1997,6 @@ mod tests {
 
     async fn run_tick(
         heartbeat: Option<serde_json::Value>,
-        guard: &mut fence::FenceGuard,
         starting_failures: u32,
     ) -> TickOutcome {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2085,7 +2064,6 @@ mod tests {
             &shared(),
             &registry,
             &mut failures,
-            guard,
         )
         .await;
 
@@ -2097,9 +2075,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_heartbeats_reset_failures() {
-        let mut guard = fence::FenceGuard::new(0);
-
-        let outcome = run_tick(Some(serde_json::json!({})), &mut guard, 2).await;
+        let outcome = run_tick(Some(serde_json::json!({})), 2).await;
 
         assert_eq!(outcome.heartbeats, 1);
         assert_eq!(outcome.failures, 0);
@@ -2107,23 +2083,9 @@ mod tests {
 
     #[tokio::test]
     async fn failed_heartbeats_are_counted() {
-        let mut guard = fence::FenceGuard::new(0);
-
-        let outcome = run_tick(None, &mut guard, 1).await;
+        let outcome = run_tick(None, 1).await;
 
         assert_eq!(outcome.heartbeats, 1);
         assert_eq!(outcome.failures, 2);
-    }
-
-    #[tokio::test]
-    async fn prolonged_isolation_fences_the_agent() {
-        let mut guard = fence::FenceGuard::new(1);
-        let long_ago = std::time::Instant::now() - Duration::from_secs(30);
-        assert!(!guard.record_failure(long_ago));
-
-        let outcome = run_tick(None, &mut guard, 0).await;
-
-        assert_eq!(outcome.failures, 1);
-        assert!(!guard.record_failure(std::time::Instant::now()));
     }
 }
