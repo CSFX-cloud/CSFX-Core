@@ -1,24 +1,31 @@
 use anyhow::Result;
 use chrono::Utc;
 use entity::entities::{agents, volumes, workloads};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     Set,
 };
 use uuid::Uuid;
 
-pub async fn set_agent_status(db: &DatabaseConnection, agent_id: Uuid, status: &str) -> Result<()> {
-    let agent = agents::Entity::find_by_id(agent_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found agent_id={}", agent_id))?;
+pub async fn transition_agent_status(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+    from: &str,
+    to: &str,
+) -> Result<bool> {
+    let result = agents::Entity::update_many()
+        .col_expr(agents::Column::Status, Expr::value(to))
+        .col_expr(
+            agents::Column::UpdatedAt,
+            Expr::value(Utc::now().naive_utc()),
+        )
+        .filter(agents::Column::Id.eq(agent_id))
+        .filter(agents::Column::Status.eq(from))
+        .exec(db)
+        .await?;
 
-    let mut active: agents::ActiveModel = agent.into();
-    active.status = Set(status.to_string());
-    active.updated_at = Set(Some(Utc::now().naive_utc()));
-    active.update(db).await?;
-
-    Ok(())
+    Ok(result.rows_affected == 1)
 }
 
 pub async fn set_maintenance(

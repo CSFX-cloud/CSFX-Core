@@ -42,6 +42,7 @@ pub async fn create(
         cpu_limit_millicores: Set(req.cpu_limit_millicores),
         memory_limit_bytes: Set(req.memory_limit_bytes),
         spread_key: Set(req.spread_key.clone()),
+        topology_spread: Set(req.topology_spread.as_str().to_string()),
         guest_ip: Set(guest_ip),
         auto_resources: Set(req.auto_resources),
         cpu_usage_peak_percent: Set(None),
@@ -71,6 +72,7 @@ pub async fn create(
         stats_updated_at: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
+        ..Default::default()
     };
 
     model.insert(db).await
@@ -183,12 +185,25 @@ pub async fn update_spec(
         active.volume_mounts = Set(serde_json::to_value(volume_mounts).ok());
     }
 
+    active.generation = Set(workload.generation + 1);
+
     apply_auto_resources(&workload, &mut active);
     active.restart_requested = Set(true);
     active.status = Set(WorkloadStatus::Starting.as_str().to_string());
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
-    active.update(db).await
+    let applied = workloads::Entity::update_many()
+        .set(active)
+        .filter(workloads::Column::Id.eq(workload_id))
+        .filter(workloads::Column::Generation.eq(workload.generation))
+        .exec(db)
+        .await?;
+    if applied.rows_affected == 0 {
+        return Err(sea_orm::DbErr::RecordNotUpdated);
+    }
+    get_by_id(db, workload_id)
+        .await?
+        .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))
 }
 
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<WorkloadResponse>, sea_orm::DbErr> {
@@ -266,6 +281,7 @@ pub async fn update_container_status(
         active.container_id = Set(Some(container_id.to_string()));
     }
     active.status = Set(status.to_string());
+    active.observed_status = Set(Some(status.to_string()));
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
     active.update(db).await?;

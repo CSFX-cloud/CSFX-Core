@@ -143,6 +143,33 @@ fn default_runtime_class() -> RuntimeClass {
     RuntimeClass::Firecracker
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TopologySpread {
+    #[default]
+    None,
+    Soft,
+    Hard,
+}
+
+impl TopologySpread {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TopologySpread::None => "none",
+            TopologySpread::Soft => "soft",
+            TopologySpread::Hard => "hard",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "soft" => TopologySpread::Soft,
+            "hard" => TopologySpread::Hard,
+            _ => TopologySpread::None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DesiredState {
@@ -220,6 +247,8 @@ pub struct CreateWorkloadRequest {
     pub replicas: Option<u32>,
     #[serde(default)]
     pub spread_key: Option<String>,
+    #[serde(default)]
+    pub topology_spread: TopologySpread,
 }
 
 impl CreateWorkloadRequest {
@@ -344,6 +373,7 @@ pub struct AgentResources {
     pub free_memory_bytes: i64,
     pub free_disk_bytes: i64,
     pub kvm_capable: bool,
+    pub zone: String,
     pub spread_counts: HashMap<String, u32>,
 }
 

@@ -5,6 +5,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum VolumeStatus {
+    Creating,
     Available,
     Attaching,
     InUse,
@@ -16,6 +17,7 @@ pub enum VolumeStatus {
 impl VolumeStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
+            VolumeStatus::Creating => "creating",
             VolumeStatus::Available => "available",
             VolumeStatus::Attaching => "attaching",
             VolumeStatus::InUse => "in_use",
@@ -27,6 +29,7 @@ impl VolumeStatus {
 
     pub fn from_str(s: &str) -> Self {
         match s {
+            "creating" => VolumeStatus::Creating,
             "attaching" => VolumeStatus::Attaching,
             "in_use" => VolumeStatus::InUse,
             "detaching" => VolumeStatus::Detaching,

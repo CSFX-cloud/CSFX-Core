@@ -32,3 +32,4 @@ reqwest = { workspace = true, features = ["json"] }
 
 [dev-dependencies]
 migration = { path = "../migration" }
+tokio = { workspace = true, features = ["test-util"] }

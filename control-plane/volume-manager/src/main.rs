@@ -1,7 +1,10 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use shared::leader::LeaderLease;
 use volume_manager::{ceph, log_error, log_info, logger, metrics, server, services};
+
+const LEADER_KEY: &str = "/csfx/leaders/volume-manager";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -50,8 +53,18 @@ async fn main() -> anyhow::Result<()> {
     let volume_service = Arc::new(services::volume::VolumeService::new(
         db.clone(),
         etcd.clone(),
-        ceph_manager,
+        ceph_manager.clone(),
     ));
+
+    if let Some(ceph) = ceph_manager {
+        let leader = LeaderLease::connect(LEADER_KEY).await?;
+        tokio::spawn(services::reconcile::run(
+            db.clone(),
+            ceph,
+            volume_service.clone(),
+            leader,
+        ));
+    }
 
     let state = server::AppState {
         db,
