@@ -10,7 +10,9 @@ version N-1 binaries run against the schema of version N. Every migration must a
 - Remove a column or table only in the version after next, never in the version that stops using it.
 - No renames of columns or tables. Add the new name, migrate, remove the old one later.
 - No full-table `UPDATE` or `DELETE` backfills inside migrations. Backfill in batches from the service.
-- On large tables (`logs`, `workloads`, `agent_metrics`) build indexes with `CREATE INDEX CONCURRENTLY`.
+- Never create indexes on large tables (`logs`, `workloads`, `agent_metrics`) inside a migration. Add them to
+  `CONCURRENT_INDEXES` in `src/concurrent_indexes.rs`; the runner builds them with `CREATE INDEX CONCURRENTLY`
+  outside a transaction after the migrations and rebuilds an index left invalid by an aborted build.
 - Migrations must not hold a table lock on those tables for more than a few seconds.
 
 ## Running

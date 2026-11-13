@@ -38,8 +38,8 @@ fn statement_violation(statement: &str) -> Option<&'static str> {
         return Some("UPDATE or DELETE without WHERE");
     }
     let is_index = statement.contains("CREATE INDEX") || statement.contains("CREATE UNIQUE INDEX");
-    if is_index && !statement.contains("CONCURRENTLY") && targets_hot_table(statement) {
-        return Some("CREATE INDEX without CONCURRENTLY on a large table");
+    if is_index && targets_hot_table(statement) {
+        return Some("index on a large table belongs in concurrent_indexes.rs");
     }
     if statement.contains("ADD COLUMN")
         && statement.contains("NOT NULL")
@@ -73,7 +73,12 @@ fn checked_migrations() -> Vec<(String, String)> {
         .filter_map(|path| {
             let name = path.file_name()?.to_str()?.to_owned();
             let is_newer = name.starts_with('m') && name.as_str() > CUTOFF;
-            is_newer.then(|| (name, fs::read_to_string(&path).expect("file must be readable")))
+            is_newer.then(|| {
+                (
+                    name,
+                    fs::read_to_string(&path).expect("file must be readable"),
+                )
+            })
         })
         .collect();
     files.sort();
@@ -99,7 +104,6 @@ fn accepts_additive_migration() {
         execute_unprepared("ALTER TABLE agents ADD COLUMN note TEXT NULL;
         ALTER TABLE agents ADD COLUMN flag BOOLEAN NOT NULL DEFAULT false;
         UPDATE agents SET note = '' WHERE note IS NULL;
-        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_logs_x ON logs (created_at);
         CREATE INDEX idx_other_x ON other_table (id)")
         async fn down() { DROP TABLE agents; }
     "#;
@@ -137,5 +141,6 @@ fn rejects_blocking_index_on_hot_tables() {
     assert!(!violations("\"CREATE INDEX i ON logs (a)\"").is_empty());
     assert!(!violations("\"CREATE UNIQUE INDEX i ON workloads(a)\"").is_empty());
     assert!(!violations("\"CREATE INDEX i ON agent_metrics (a)\"").is_empty());
+    assert!(!violations("\"CREATE INDEX CONCURRENTLY i ON logs (a)\"").is_empty());
     assert!(violations("\"CREATE INDEX i ON logs_archive (a)\"").is_empty());
 }

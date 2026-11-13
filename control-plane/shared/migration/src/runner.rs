@@ -1,3 +1,4 @@
+use crate::concurrent_indexes::{build_concurrent_indexes, CONCURRENT_INDEXES};
 use crate::Migrator;
 use sea_orm_migration::prelude::*;
 use sea_orm_migration::sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};
@@ -30,7 +31,11 @@ pub async fn run_pending_migrations(database_url: &str) -> Result<(), DbErr> {
         .execute_unprepared(&format!("SELECT pg_advisory_lock({ADVISORY_LOCK_KEY})"))
         .await?;
     let db = Database::connect(database_url).await?;
-    let applied = apply_one_at_a_time(&db).await;
+    let applied = async {
+        apply_one_at_a_time(&db).await?;
+        build_concurrent_indexes(&db, CONCURRENT_INDEXES).await
+    }
+    .await;
     let released = lock_session
         .execute_unprepared(&format!("SELECT pg_advisory_unlock({ADVISORY_LOCK_KEY})"))
         .await;
