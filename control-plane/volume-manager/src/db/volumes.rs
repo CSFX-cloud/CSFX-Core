@@ -82,6 +82,27 @@ pub async fn set_status(
     active.update(db).await
 }
 
+pub async fn begin_delete(
+    db: &DatabaseConnection,
+    volume_id: Uuid,
+) -> Result<bool, sea_orm::DbErr> {
+    let result = volumes::Entity::update_many()
+        .col_expr(
+            volumes::Column::Status,
+            Expr::value(VolumeStatus::Deleting.as_str()),
+        )
+        .col_expr(
+            volumes::Column::UpdatedAt,
+            Expr::value(Utc::now().naive_utc()),
+        )
+        .filter(volumes::Column::Id.eq(volume_id))
+        .filter(volumes::Column::AttachedToAgent.is_null())
+        .filter(volumes::Column::Status.ne(VolumeStatus::Creating.as_str()))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected == 1)
+}
+
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<VolumeResponse>, sea_orm::DbErr> {
     let rows = volumes::Entity::find().all(db).await?;
     Ok(rows.into_iter().map(into_response).collect())

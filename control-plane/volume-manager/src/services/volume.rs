@@ -97,16 +97,15 @@ impl VolumeService {
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Volume {} not found", id))?;
 
-        if model.attached_to_agent.is_some() {
+        let claimed = db::begin_delete(&self.db, id)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !claimed {
             return Err(ServiceError::Conflict(format!(
-                "Volume {} is attached and cannot be deleted",
+                "Volume {} is attached or still being created and cannot be deleted",
                 id
             )));
         }
-
-        db::set_status(&self.db, id, VolumeStatus::Deleting)
-            .await
-            .map_err(|e| e.to_string())?;
 
         self.finish_delete(&model).await?;
         Ok(())
