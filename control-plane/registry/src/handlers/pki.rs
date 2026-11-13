@@ -41,7 +41,7 @@ pub async fn issue_certificate(
         .await
         .map_err(|e| {
             (
-                StatusCode::UNAUTHORIZED,
+                e.status(),
                 Json(ErrorResponse {
                     error: format!("Invalid API key: {}", e),
                 }),
@@ -102,7 +102,7 @@ pub async fn rotate_certificate(
         .await
         .map_err(|e| {
             (
-                StatusCode::UNAUTHORIZED,
+                e.status(),
                 Json(ErrorResponse {
                     error: format!("Invalid API key: {}", e),
                 }),
