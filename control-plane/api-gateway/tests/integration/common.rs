@@ -185,6 +185,7 @@ pub async fn harness() -> Harness {
     let token = create_jwt(admin_id, admin_name.clone()).unwrap();
     let state = AppState {
         db_conn: db.clone(),
+        agent_db: db.clone(),
         service_client: service_client::ServiceClient::new(),
         default_org_id: Some(org_id),
         agent_stream_registry: routes::agent_stream::AgentStreamRegistry::new(),

@@ -40,13 +40,13 @@ impl FromRequestParts<AppState> for AgentApiKey {
         let key_record = agent_api_keys::Entity::find()
             .filter(agent_api_keys::Column::KeyHash.eq(&key_hash))
             .filter(agent_api_keys::Column::IsActive.eq(true))
-            .one(&state.db_conn)
+            .one(&state.agent_db)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;
 
         agents::Entity::find_by_id(key_record.agent_id)
-            .one(&state.db_conn)
+            .one(&state.agent_db)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;

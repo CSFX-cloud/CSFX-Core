@@ -13,7 +13,9 @@ async fn main() {
         )
         .init();
 
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = env::var("DATABASE_DIRECT_URL")
+        .or_else(|_| env::var("DATABASE_URL"))
+        .expect("DATABASE_URL must be set");
 
     let db = match Database::connect(&database_url).await {
         Ok(conn) => conn,

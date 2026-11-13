@@ -342,6 +342,7 @@ pub fn full_state(harness: &Harness) -> AppState {
     install_ca();
     AppState {
         db_conn: harness.db.clone(),
+        agent_db: harness.db.clone(),
         service_client: service_client::ServiceClient::new(),
         default_org_id: Some(harness.org_id),
         agent_stream_registry: routes::agent_stream::AgentStreamRegistry::new(),

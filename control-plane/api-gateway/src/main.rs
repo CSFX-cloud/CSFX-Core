@@ -6,6 +6,16 @@ use std::net::SocketAddr;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+async fn connect_or_exit(name: &str, default_max_connections: u32) -> sea_orm::DbConn {
+    match shared::db::establish_pool(name, default_max_connections).await {
+        Ok(conn) => conn,
+        Err(e) => {
+            tracing::error!(error = %e, pool = name, "failed to connect to database");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn connect_openbao() -> Option<openbao::OpenBao> {
     match openbao::OpenBao::from_environment() {
         Ok(client) => {
@@ -41,17 +51,10 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let db_conn = match db::establish_connection().await {
-        Ok(conn) => {
-            tracing::info!("database connection established");
-            conn
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to connect to database");
-            std::process::exit(1);
-        }
-    };
-    shared::spawn_log_writer(log_receiver, db_conn.clone());
+    let db_conn = connect_or_exit("", db::USER_DEFAULT_MAX_CONNECTIONS).await;
+    let agent_db = connect_or_exit("agent", db::AGENT_DEFAULT_MAX_CONNECTIONS).await;
+    let log_db = connect_or_exit("log", db::LOG_DEFAULT_MAX_CONNECTIONS).await;
+    shared::spawn_log_writer(log_receiver, log_db);
 
     let default_org_id = match init::initialize_database(&db_conn).await {
         Ok(id) => id,
@@ -63,6 +66,7 @@ async fn main() {
 
     let state = AppState {
         db_conn: db_conn.clone(),
+        agent_db,
         service_client: service_client::ServiceClient::new(),
         default_org_id: Some(default_org_id),
         agent_stream_registry: routes::agent_stream::AgentStreamRegistry::new(),
