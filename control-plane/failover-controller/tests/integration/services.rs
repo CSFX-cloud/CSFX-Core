@@ -16,7 +16,7 @@ async fn failover_detaches_reschedules_and_records_event() {
     let agent = insert_agent(&db, "Offline", Some(1000), None).await;
     let workload = insert_workload(&db, agent.id, WorkloadSpec::default()).await;
     failover_service(db.clone())
-        .handle_failover(agent.id)
+        .handle_failover(agent.id, || true)
         .await
         .unwrap();
 
@@ -44,7 +44,7 @@ async fn failover_fails_when_detach_is_rejected() {
         },
     );
     let error = failover_service(db.clone())
-        .handle_failover(agent.id)
+        .handle_failover(agent.id, || true)
         .await
         .unwrap_err();
     assert!(error
@@ -70,7 +70,7 @@ async fn failover_fails_when_reschedule_is_rejected() {
         },
     );
     let error = failover_service(db.clone())
-        .handle_failover(agent.id)
+        .handle_failover(agent.id, || true)
         .await
         .unwrap_err();
     assert!(error

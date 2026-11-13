@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use reqwest::Client;
 use sea_orm::DatabaseConnection;
@@ -26,7 +26,11 @@ impl FailoverService {
         }
     }
 
-    pub async fn handle_failover(&self, agent_id: Uuid) -> Result<()> {
+    pub async fn handle_failover(
+        &self,
+        agent_id: Uuid,
+        is_leader: impl Fn() -> bool,
+    ) -> Result<()> {
         let started_at = Utc::now();
 
         crate::log_info!(
@@ -36,7 +40,9 @@ impl FailoverService {
 
         let workload_ids = self.get_agent_workload_ids(agent_id).await?;
 
+        ensure_leader(&is_leader, agent_id)?;
         self.force_detach_volumes(agent_id).await?;
+        ensure_leader(&is_leader, agent_id)?;
         self.reschedule_workloads(agent_id, &workload_ids).await?;
 
         let duration_ms = (Utc::now() - started_at).num_milliseconds();
@@ -146,4 +152,11 @@ impl FailoverService {
 
         Ok(())
     }
+}
+
+fn ensure_leader(is_leader: &impl Fn() -> bool, agent_id: Uuid) -> Result<()> {
+    if !is_leader() {
+        bail!("leadership lost during failover agent_id={}", agent_id);
+    }
+    Ok(())
 }

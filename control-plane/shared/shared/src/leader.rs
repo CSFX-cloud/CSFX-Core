@@ -9,12 +9,14 @@ use uuid::Uuid;
 
 const DEFAULT_ETCD_ENDPOINTS: &str = "http://localhost:2379";
 const LEASE_TTL_SECONDS: i64 = 10;
-const RENEW_INTERVAL: Duration = Duration::from_secs(3);
-const RENEW_TIMEOUT: Duration = Duration::from_secs(3);
+const RENEW_INTERVAL: Duration = Duration::from_secs(2);
+const RENEW_TIMEOUT: Duration = Duration::from_secs(2);
 const LEADER_VALIDITY: Duration = Duration::from_secs(6);
 const CAMPAIGN_INTERVAL: Duration = Duration::from_secs(5);
 
 const _: () = assert!(LEADER_VALIDITY.as_secs() < LEASE_TTL_SECONDS as u64);
+const _: () =
+    assert!(RENEW_INTERVAL.as_secs() + RENEW_TIMEOUT.as_secs() < LEADER_VALIDITY.as_secs());
 
 #[derive(Clone)]
 struct LeaderClock {

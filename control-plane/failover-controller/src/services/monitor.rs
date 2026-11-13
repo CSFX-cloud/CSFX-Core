@@ -266,7 +266,7 @@ async fn handle_offline(
         if agent.status != "Offline" && !mark_offline(db, &agent).await {
             continue;
         }
-        start_failover(db, failover, in_flight, permits, agent.id).await;
+        start_failover(db, leader, failover, in_flight, permits, agent.id).await;
     }
 }
 
@@ -292,6 +292,7 @@ async fn mark_offline(db: &DatabaseConnection, agent: &agents::Model) -> bool {
 
 async fn start_failover(
     db: &DatabaseConnection,
+    leader: &LeaderLease,
     failover: &Arc<FailoverService>,
     in_flight: &InFlight,
     permits: &Permits,
@@ -324,9 +325,13 @@ async fn start_failover(
     let failover = failover.clone();
     let in_flight = in_flight.clone();
     let permits = permits.clone();
+    let leader = leader.clone();
     tokio::spawn(async move {
         let _permit = permits.acquire_owned().await;
-        if let Err(e) = failover.handle_failover(agent_id).await {
+        if let Err(e) = failover
+            .handle_failover(agent_id, || leader.is_leader())
+            .await
+        {
             crate::log_error!(
                 "monitor",
                 &format!("Failover failed agent_id={} err={}", agent_id, e)
