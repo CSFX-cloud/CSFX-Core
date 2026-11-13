@@ -229,6 +229,7 @@ pub async fn create_resource_group(
         preview_url: Set(None),
         created_at: Set(now),
         updated_at: Set(None),
+        ..Default::default()
     };
 
     let inserted = model.insert(&state.db_conn).await.map_err(|e| {

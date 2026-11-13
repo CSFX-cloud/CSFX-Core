@@ -18,6 +18,10 @@ pub struct Model {
     pub resource_group_id: Option<Uuid>,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: Option<chrono::NaiveDateTime>,
+    pub site_id: String,
+    pub zone: String,
+    pub generation: i64,
+    pub observed_generation: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

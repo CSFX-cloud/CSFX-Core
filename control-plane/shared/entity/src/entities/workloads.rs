@@ -43,6 +43,12 @@ pub struct Model {
     pub stats_updated_at: Option<DateTime>,
     pub created_at: DateTime,
     pub updated_at: Option<DateTime>,
+    pub site_id: String,
+    pub zone: String,
+    pub generation: i64,
+    pub observed_generation: i64,
+    pub observed_status: Option<String>,
+    pub topology_spread: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

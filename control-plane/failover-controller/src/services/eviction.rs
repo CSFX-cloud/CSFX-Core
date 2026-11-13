@@ -197,6 +197,12 @@ mod tests {
             stats_updated_at: None,
             created_at: chrono::Utc::now().naive_utc(),
             updated_at: None,
+            site_id: "default".to_string(),
+            zone: "default".to_string(),
+            generation: 1,
+            observed_generation: 0,
+            observed_status: None,
+            topology_spread: "none".to_string(),
         }
     }
 

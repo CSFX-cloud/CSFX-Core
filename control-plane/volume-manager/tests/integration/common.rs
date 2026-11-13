@@ -181,6 +181,7 @@ pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
         cpu_overcommit_ratio: Set(1.0),
         memory_overcommit_ratio: Set(1.0),
         disk_overcommit_ratio: Set(1.0),
+        ..Default::default()
     }
     .insert(db)
     .await

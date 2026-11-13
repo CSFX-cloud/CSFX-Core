@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::models::agent::{AgentStatistics, AgentStatus, PreRegisteredAgent, RegisteredAgent};
-use crate::services::mgmt_ipam::MgmtIpamService;
+use crate::services::mgmt_ipam::{MgmtIpamService, DEFAULT_SITE};
 
 pub struct PreRegisterParams {
     pub agent_id: Uuid,
@@ -160,9 +160,12 @@ impl AgentRegistry {
                 let wg_tunnel_ip = match db_agent.wg_tunnel_ip {
                     Some(ip) => Some(ip),
                     None => {
-                        let ip = mgmt_ipam.allocate(db_agent.id).await.map_err(|e| {
-                            format!("Failed to allocate management tunnel IP: {}", e)
-                        })?;
+                        let ip = mgmt_ipam
+                            .allocate(db_agent.id, &db_agent.site_id)
+                            .await
+                            .map_err(|e| {
+                                format!("Failed to allocate management tunnel IP: {}", e)
+                            })?;
                         crate::db::agents::set_wg_tunnel_ip(&self.db, db_agent.id, &ip)
                             .await
                             .map_err(|e| {
@@ -195,7 +198,7 @@ impl AgentRegistry {
         }
 
         let wg_tunnel_ip = mgmt_ipam
-            .allocate(params.agent_id)
+            .allocate(params.agent_id, DEFAULT_SITE)
             .await
             .map_err(|e| format!("Failed to allocate management tunnel IP: {}", e))?;
 
@@ -286,7 +289,7 @@ impl AgentRegistry {
 
         if db_agent.wg_tunnel_ip.is_none() {
             let ip = mgmt_ipam
-                .allocate(agent_id)
+                .allocate(agent_id, &db_agent.site_id)
                 .await
                 .map_err(|e| format!("Failed to backfill management tunnel IP: {}", e))?;
             crate::db::agents::set_wg_tunnel_ip(&self.db, agent_id, &ip)
