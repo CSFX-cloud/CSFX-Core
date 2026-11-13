@@ -31,18 +31,27 @@ async fn stale_agents_split_into_degraded_and_offline() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn set_agent_status_updates_and_rejects_unknown() {
+async fn transition_agent_status_is_conditional() {
     let _guard = STALE_LOCK.lock().await;
     let db = database().await;
     let agent = insert_agent(&db, "Online", Some(1000), None).await;
-    agents::set_agent_status(&db, agent.id, "Offline")
-        .await
-        .unwrap();
+    assert!(
+        !agents::transition_agent_status(&db, agent.id, "Degraded", "Offline")
+            .await
+            .unwrap()
+    );
+    assert!(
+        agents::transition_agent_status(&db, agent.id, "Online", "Offline")
+            .await
+            .unwrap()
+    );
     let (_, offline) = agents::get_stale_agents(&db, 50, 300).await.unwrap();
     assert!(offline.iter().any(|candidate| candidate.id == agent.id));
-    assert!(agents::set_agent_status(&db, Uuid::new_v4(), "Online")
-        .await
-        .is_err());
+    assert!(
+        !agents::transition_agent_status(&db, Uuid::new_v4(), "Online", "Offline")
+            .await
+            .unwrap()
+    );
     let (silent, fleet) = agents::count_silent_and_fleet(&db, 50).await.unwrap();
     assert!(fleet >= 1 && silent <= fleet);
 }
