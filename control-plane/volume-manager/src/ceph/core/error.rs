@@ -5,6 +5,16 @@ pub enum CephError {
     #[error("Command execution failed: {0}")]
     CommandFailed(String),
 
+    #[error("{program} command failed code={code:?}: {stderr}")]
+    CommandExit {
+        program: String,
+        code: Option<i32>,
+        stderr: String,
+    },
+
+    #[error("{program} command timed out after_secs={seconds}")]
+    CommandTimeout { program: String, seconds: u64 },
+
     #[error("Parse error: {0}")]
     ParseError(String),
 

@@ -38,7 +38,7 @@ esac
 const FAKE_RBD: &str = r#"#!/bin/sh
 case "$*" in
 *failcmd*) echo "boom" >&2; exit 1;;
-*" info "*missing*) echo "absent" >&2; exit 1;;
+*" info "*missing*) echo "rbd: error opening image: (2) No such file or directory" >&2; exit 2;;
 *" create "*failcreate*) echo "no space" >&2; exit 1;;
 *" rm "*failrm*) echo "busy" >&2; exit 1;;
 *" snap create "*failsnap*) echo "snap" >&2; exit 1;;

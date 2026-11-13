@@ -11,6 +11,7 @@ use crate::common::{ceph_manager, install_fake_ceph};
 #[test]
 fn volume_status_round_trips_through_strings() {
     for status in [
+        VolumeStatus::Creating,
         VolumeStatus::Available,
         VolumeStatus::Attaching,
         VolumeStatus::InUse,

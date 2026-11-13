@@ -11,23 +11,38 @@ use crate::models::volume::{
     CreateVolumeRequest, SnapshotResponse, SnapshotStatus, VolumeResponse, VolumeStatus,
 };
 
+pub const DEFAULT_POOL: &str = "csfx-volumes";
+const IMAGE_PREFIX: &str = "csfx-vol-";
+const UUID_LEN: usize = 36;
+
+pub fn generate_image_name(name: &str) -> String {
+    format!("{}{}-{}", IMAGE_PREFIX, name, Uuid::new_v4())
+}
+
+pub fn is_managed_image_name(image: &str) -> bool {
+    let Some(rest) = image.strip_prefix(IMAGE_PREFIX) else {
+        return false;
+    };
+    let Some(split) = rest.len().checked_sub(UUID_LEN + 1) else {
+        return false;
+    };
+    rest.get(split..)
+        .is_some_and(|tail| tail.starts_with('-') && Uuid::parse_str(&tail[1..]).is_ok())
+}
+
 pub async fn create(
     db: &DatabaseConnection,
     req: &CreateVolumeRequest,
 ) -> Result<volumes::Model, sea_orm::DbErr> {
-    let pool = req
-        .pool
-        .clone()
-        .unwrap_or_else(|| "csfx-volumes".to_string());
-    let image_name = format!("{}-{}", req.name, Uuid::new_v4());
+    let pool = req.pool.clone().unwrap_or_else(|| DEFAULT_POOL.to_string());
 
     let model = volumes::ActiveModel {
         id: Set(Uuid::new_v4()),
         name: Set(req.name.clone()),
         size_gb: Set(req.size_gb),
         pool: Set(pool),
-        image_name: Set(image_name),
-        status: Set(VolumeStatus::Available.as_str().to_string()),
+        image_name: Set(generate_image_name(&req.name)),
+        status: Set(VolumeStatus::Creating.as_str().to_string()),
         attached_to_agent: Set(None),
         attached_to_workload: Set(None),
         mapped_device: Set(None),
@@ -45,6 +60,26 @@ pub async fn get_by_id(
     id: Uuid,
 ) -> Result<Option<volumes::Model>, sea_orm::DbErr> {
     volumes::Entity::find_by_id(id).one(db).await
+}
+
+pub async fn list_models(db: &DatabaseConnection) -> Result<Vec<volumes::Model>, sea_orm::DbErr> {
+    volumes::Entity::find().all(db).await
+}
+
+pub async fn set_status(
+    db: &DatabaseConnection,
+    volume_id: Uuid,
+    status: VolumeStatus,
+) -> Result<volumes::Model, sea_orm::DbErr> {
+    let volume = volumes::Entity::find_by_id(volume_id)
+        .one(db)
+        .await?
+        .ok_or(sea_orm::DbErr::RecordNotFound(volume_id.to_string()))?;
+
+    let mut active: volumes::ActiveModel = volume.into();
+    active.status = Set(status.as_str().to_string());
+    active.updated_at = Set(Some(Utc::now().naive_utc()));
+    active.update(db).await
 }
 
 pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<VolumeResponse>, sea_orm::DbErr> {
@@ -73,6 +108,10 @@ pub async fn attach(
             Expr::value(Utc::now().naive_utc()),
         )
         .filter(volumes::Column::Id.eq(volume_id))
+        .filter(volumes::Column::Status.is_in([
+            VolumeStatus::Available.as_str(),
+            VolumeStatus::InUse.as_str(),
+        ]))
         .filter(
             Condition::any()
                 .add(volumes::Column::AttachedToAgent.is_null())
@@ -154,6 +193,27 @@ pub async fn create_snapshot(
     model.insert(db).await
 }
 
+pub async fn get_snapshot(
+    db: &DatabaseConnection,
+    volume_id: Uuid,
+    snapshot_id: Uuid,
+) -> Result<Option<volume_snapshots::Model>, sea_orm::DbErr> {
+    volume_snapshots::Entity::find_by_id(snapshot_id)
+        .filter(volume_snapshots::Column::VolumeId.eq(volume_id))
+        .one(db)
+        .await
+}
+
+pub async fn delete_snapshot(
+    db: &DatabaseConnection,
+    snapshot_id: Uuid,
+) -> Result<(), sea_orm::DbErr> {
+    volume_snapshots::Entity::delete_by_id(snapshot_id)
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn list_snapshots(
     db: &DatabaseConnection,
     volume_id: Uuid,
@@ -190,5 +250,31 @@ fn into_snapshot_response(m: volume_snapshots::Model) -> SnapshotResponse {
         name: m.name,
         status: SnapshotStatus::Available,
         created_at: m.created_at.and_utc(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_names_are_managed() {
+        assert!(is_managed_image_name(&generate_image_name("data")));
+    }
+
+    #[test]
+    fn foreign_names_are_not_managed() {
+        assert!(!is_managed_image_name("postgres-data"));
+        assert!(!is_managed_image_name("csfx-vol-"));
+        assert!(!is_managed_image_name(&format!(
+            "csfx-vol-{}",
+            Uuid::new_v4()
+        )));
+        assert!(!is_managed_image_name("csfx-vol-not-a-uuid"));
+        assert!(!is_managed_image_name(&format!("web-{}", Uuid::new_v4())));
+        assert!(!is_managed_image_name(&format!(
+            "csfx-vol-{}-extra",
+            Uuid::new_v4()
+        )));
     }
 }

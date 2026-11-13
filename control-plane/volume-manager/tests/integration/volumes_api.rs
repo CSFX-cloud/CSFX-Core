@@ -244,7 +244,7 @@ async fn ceph_backed_volume_lifecycle() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn ceph_create_failure_rolls_back_database_row() {
+async fn ceph_create_failure_marks_row_as_error() {
     let app = router(true).await;
     let name = unique("failcreate");
     let (status, body) = call(
@@ -257,11 +257,13 @@ async fn ceph_create_failure_rolls_back_database_row() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(body["error"].as_str().unwrap().contains("create RBD image"));
     let (_, listed) = call(&app, Method::GET, "/volumes", None).await;
-    assert!(!listed
+    let failed = listed
         .as_array()
         .unwrap()
         .iter()
-        .any(|item| item["name"] == name));
+        .find(|item| item["name"] == name)
+        .expect("failed volume must stay visible");
+    assert_eq!(failed["status"], "error");
 }
 
 #[tokio::test]
