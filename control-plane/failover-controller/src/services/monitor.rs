@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::db::agents as agent_db;
 use crate::db::events;
+use crate::services::database_health::DatabaseHealth;
 use crate::services::eviction::{EvictionService, Pressure};
 use crate::services::failover::FailoverService;
 use crate::services::{hardware_alerts, status_alerts};
@@ -21,7 +22,6 @@ const PRESSURE_RULES: [(&str, Pressure); 2] = [
 const POLL_INTERVAL_SECS: u64 = 15;
 const SOFT_THRESHOLD_SECS: i64 = 50;
 const HARD_THRESHOLD_SECS: i64 = 300;
-const RECOVERY_GRACE: Duration = Duration::from_secs(180);
 
 type InFlight = Arc<Mutex<HashSet<Uuid>>>;
 
@@ -30,7 +30,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
     let eviction = EvictionService::new(db.clone());
     let in_flight = InFlight::default();
     let mut tick = interval(Duration::from_secs(POLL_INTERVAL_SECS));
-    let mut last_database_failure: Option<Instant> = None;
+    let mut database_health = DatabaseHealth::default();
 
     loop {
         tick.tick().await;
@@ -46,7 +46,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
             match agent_db::get_stale_agents(&db, SOFT_THRESHOLD_SECS, HARD_THRESHOLD_SECS).await {
                 Ok(result) => result,
                 Err(e) => {
-                    last_database_failure = Some(Instant::now());
+                    database_health.record_failure();
                     crate::log_error!(
                         "monitor",
                         &format!("Failed to query stale agents err={}", e)
@@ -55,8 +55,9 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
                 }
             };
 
+        database_health.record_success(Instant::now());
         mark_degraded(&db, degraded).await;
-        if !offline.is_empty() && recovering(last_database_failure, Instant::now()) {
+        if !offline.is_empty() && !database_health.settled(Instant::now()) {
             crate::log_warn!(
                 "monitor",
                 &format!(
@@ -170,10 +171,6 @@ async fn mark_degraded(db: &DatabaseConnection, degraded: Vec<agents::Model>) {
     }
 }
 
-fn recovering(last_failure: Option<Instant>, now: Instant) -> bool {
-    last_failure.is_some_and(|failed| now.duration_since(failed) < RECOVERY_GRACE)
-}
-
 async fn fleet_staleness(db: &DatabaseConnection) -> Option<(u64, u64)> {
     match agent_db::count_silent_and_fleet(db, SOFT_THRESHOLD_SECS).await {
         Ok(counts) => Some(counts),
@@ -281,8 +278,7 @@ async fn start_failover(
 
 #[cfg(test)]
 mod tests {
-    use super::{recovering, silent_minority, RECOVERY_GRACE};
-    use tokio::time::Instant;
+    use super::silent_minority;
 
     #[test]
     fn single_host_loss_triggers_failover() {
@@ -297,13 +293,5 @@ mod tests {
         assert!(!silent_minority(2, 2));
         assert!(!silent_minority(1, 1));
         assert!(!silent_minority(1, 0));
-    }
-
-    #[test]
-    fn failover_waits_for_agents_to_heartbeat_after_a_database_outage() {
-        let failed = Instant::now();
-        assert!(!recovering(None, failed));
-        assert!(recovering(Some(failed), failed + RECOVERY_GRACE / 2));
-        assert!(!recovering(Some(failed), failed + RECOVERY_GRACE));
     }
 }
