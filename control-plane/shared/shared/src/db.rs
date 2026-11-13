@@ -53,32 +53,16 @@ fn variable_prefix(name: &str) -> String {
 }
 
 fn env_or<T: FromStr>(name: &str, default: T) -> Result<T, DbErr> {
-    match env::var(name) {
-        Ok(raw) => raw
-            .parse()
-            .map_err(|_| DbErr::Custom(format!("{name} has invalid value {raw}"))),
-        Err(_) => Ok(default),
-    }
+    crate::env::parsed(name, default).map_err(DbErr::Custom)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{env_or, variable_prefix};
+    use super::variable_prefix;
 
     #[test]
     fn pool_names_select_their_own_variables() {
         assert_eq!(variable_prefix(""), "CSFX_DB");
         assert_eq!(variable_prefix("agent"), "CSFX_DB_AGENT");
-    }
-
-    #[test]
-    fn unset_variable_uses_default() {
-        assert_eq!(env_or("CSFX_DB_TEST_UNSET", 7u32).unwrap(), 7);
-    }
-
-    #[test]
-    fn invalid_value_is_rejected() {
-        unsafe { std::env::set_var("CSFX_DB_TEST_INVALID", "many") };
-        assert!(env_or("CSFX_DB_TEST_INVALID", 7u32).is_err());
     }
 }

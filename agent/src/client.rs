@@ -19,7 +19,7 @@ impl std::fmt::Display for GatewayConfigRejected {
 
 impl std::error::Error for GatewayConfigRejected {}
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct AssignedVolume {
     pub id: String,
     pub pool: String,
@@ -110,13 +110,13 @@ pub struct HeartbeatResponse {
     pub gateway_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct VolumeMount {
     pub volume_id: String,
     pub mount_path: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct AssignedWorkload {
     pub id: String,
     pub image: String,

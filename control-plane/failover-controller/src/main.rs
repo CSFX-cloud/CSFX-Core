@@ -45,6 +45,21 @@ async fn main() -> anyhow::Result<()> {
 
     let leader = shared::leader::LeaderLease::connect(LEADER_KEY).await?;
 
+    let retention = services::retention::Policy::from_env().unwrap_or_else(|e| {
+        log_error!(
+            "main",
+            &format!("Invalid retention configuration err={}", e)
+        );
+        std::process::exit(1);
+    });
+
+    log_info!("main", "Starting retention loop");
+    tokio::spawn(services::retention::run(
+        db.clone(),
+        leader.clone(),
+        retention,
+    ));
+
     log_info!("main", "Starting health monitor loop");
     tokio::spawn(services::monitor::run(db, leader));
 
