@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::db::agents as agent_db;
 use crate::db::events;
-use crate::services::database_health::DatabaseHealth;
+use crate::services::database_health::{DatabaseHealth, RECOVERY_GRACE};
 use crate::services::eviction::{EvictionService, Pressure};
 use crate::services::failover::FailoverService;
 use crate::services::{hardware_alerts, status_alerts};
@@ -24,6 +24,22 @@ const SOFT_THRESHOLD_SECS: i64 = 50;
 const HARD_THRESHOLD_SECS: i64 = 300;
 const MAX_PARALLEL_FAILOVERS: usize = 4;
 
+fn recovery_grace() -> Duration {
+    let Ok(raw) = std::env::var("CSFX_FAILOVER_GRACE_SECS") else {
+        return RECOVERY_GRACE;
+    };
+    match raw.parse() {
+        Ok(secs) => Duration::from_secs(secs),
+        Err(_) => {
+            crate::log_warn!(
+                "monitor",
+                &format!("Invalid CSFX_FAILOVER_GRACE_SECS value={}", raw)
+            );
+            RECOVERY_GRACE
+        }
+    }
+}
+
 type InFlight = Arc<Mutex<HashSet<Uuid>>>;
 type Permits = Arc<Semaphore>;
 
@@ -33,7 +49,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
     let in_flight = InFlight::default();
     let mut tick = interval(Duration::from_secs(POLL_INTERVAL_SECS));
     let permits = Permits::new(Semaphore::new(MAX_PARALLEL_FAILOVERS));
-    let mut database_health = DatabaseHealth::default();
+    let mut database_health = DatabaseHealth::new(recovery_grace());
     database_health.record_interruption();
 
     loop {

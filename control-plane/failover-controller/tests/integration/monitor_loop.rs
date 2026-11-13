@@ -8,8 +8,8 @@ use shared::leader::LeaderLease;
 use uuid::Uuid;
 
 use crate::common::{
-    database, insert_agent, insert_metric, insert_workload, mock_url, recorded_calls, WorkloadSpec,
-    STALE_LOCK,
+    database, insert_agent, insert_metric, insert_workload, mock_url, recorded_calls, retire_fleet,
+    WorkloadSpec, STALE_LOCK,
 };
 
 async fn elected_leader() -> LeaderLease {
@@ -50,7 +50,9 @@ async fn settled(db: &DatabaseConnection, offline: Uuid, pressured: Uuid) -> boo
 async fn monitor_degrades_fails_over_and_relieves_pressure() {
     let _guard = STALE_LOCK.lock().await;
     mock_url();
+    unsafe { std::env::set_var("CSFX_FAILOVER_GRACE_SECS", "0") };
     let db = database().await;
+    retire_fleet(&db).await;
     let stale = insert_agent(&db, "Online", Some(100), None).await;
     let healthy = insert_agent(&db, "Online", Some(0), None).await;
     let dead = insert_agent(&db, "Degraded", Some(1000), None).await;
