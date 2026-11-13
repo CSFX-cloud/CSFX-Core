@@ -31,6 +31,7 @@ pub mod site_service;
 pub mod system_collector;
 pub mod telemetry;
 pub mod tls;
+pub mod ttl_cache;
 pub mod utils;
 pub mod vault_service;
 pub mod vault_store;

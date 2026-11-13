@@ -79,9 +79,31 @@ async fn allow_bucket_key(Json(body): Json<Value>) -> StatusCode {
     }
 }
 
-async fn s3_list(Path(bucket): Path<String>) -> Response {
+fn paged_listing(token: Option<&str>) -> String {
+    let (range, next) = match token {
+        None => (
+            0..1000,
+            "<NextContinuationToken>page-2</NextContinuationToken>",
+        ),
+        Some(_) => (1000..1500, ""),
+    };
+    let contents: String = range
+        .map(|index| {
+            format!("<Contents><Key>obj-{index:04}</Key><Size>1</Size><LastModified>2026-01-01T00:00:00Z</LastModified></Contents>")
+        })
+        .collect();
+    format!("<ListBucketResult>{contents}{next}</ListBucketResult>")
+}
+
+async fn s3_list(
+    Path(bucket): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
     if bucket.starts_with("s3fail") {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    if bucket.starts_with("paged") {
+        return paged_listing(query.get("continuation-token").map(String::as_str)).into_response();
     }
     let xml = "<ListBucketResult><Contents><Key>a.txt</Key><Size>12</Size><LastModified>2026-01-01T00:00:00Z</LastModified></Contents><Contents><Key></Key></Contents><CommonPrefixes><Prefix>docs/</Prefix></CommonPrefixes></ListBucketResult>";
     xml.into_response()

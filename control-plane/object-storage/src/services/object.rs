@@ -69,7 +69,7 @@ pub async fn list_objects(
             })
             .collect(),
         folders: result.common_prefixes,
-        next_continuation_token: None,
+        next_continuation_token: result.next_continuation_token,
     }))
 }
 
