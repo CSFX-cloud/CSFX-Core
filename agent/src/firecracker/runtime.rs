@@ -15,7 +15,7 @@ use crate::firecracker::rootfs::RootfsBuilder;
 use crate::firecracker::site_registry::SiteRegistry;
 use crate::rg_dns_process::RgDnsProcessSupervisor;
 use crate::runtime::{ExecSession, LogStream, VolumeUsage};
-use crate::spec::{rg_wireguard_port, WorkloadSpec};
+use crate::spec::WorkloadSpec;
 
 const JAILER_BASE_DIR: &str = "/var/lib/csfx-agent/firecracker";
 const GUEST_KERNEL_PATH: &str = "/var/lib/csfx-agent/vmlinux";
@@ -211,6 +211,7 @@ struct GuestNetwork {
 
 pub struct FirecrackerRuntime {
     wg_private_key_b64: String,
+    local_state: Arc<crate::local_state::LocalState>,
     dns_supervisor: RgDnsProcessSupervisor,
     rg_dns_registry: Arc<crate::rg_dns::RgDnsRegistry>,
     handles: Mutex<HashMap<String, VmHandle>>,
@@ -222,11 +223,13 @@ pub struct FirecrackerRuntime {
 impl FirecrackerRuntime {
     pub fn new(
         wg_private_key_b64: String,
+        local_state: Arc<crate::local_state::LocalState>,
         rg_dns_registry: Arc<crate::rg_dns::RgDnsRegistry>,
         site_registry: Option<SiteRegistry>,
     ) -> Self {
         Self {
             wg_private_key_b64,
+            local_state,
             dns_supervisor: RgDnsProcessSupervisor::new(),
             rg_dns_registry,
             handles: Mutex::new(HashMap::new()),
@@ -275,11 +278,10 @@ impl FirecrackerRuntime {
                 .await
                 .context("Failed to ensure resource group dns process")?;
 
-            let listen_port = rg_wireguard_port(resource_group_id);
-            crate::wireguard::ensure_interface(
+            crate::wireguard::ensure_rg_interface(
+                &self.local_state,
                 resource_group_id,
                 &self.wg_private_key_b64,
-                listen_port,
             )
             .await
             .context("Failed to bring up resource group WireGuard interface")?;
@@ -322,6 +324,7 @@ impl FirecrackerRuntime {
         crate::wireguard::remove_interface(&wg_iface)
             .await
             .context("Failed to remove resource group WireGuard interface")?;
+        self.local_state.release_wg_port(resource_group_id).await;
 
         Ok(())
     }
@@ -1583,6 +1586,9 @@ mod tests {
         let _tools = FakeTools::install(&[("ip", "exit 0")]);
         FirecrackerRuntime::new(
             "key".to_string(),
+            Arc::new(crate::local_state::LocalState::open(
+                std::env::temp_dir().join(format!("csfx-ls-{}.json", uuid::Uuid::new_v4())),
+            )),
             Arc::new(crate::rg_dns::RgDnsRegistry::new()),
             None,
         )

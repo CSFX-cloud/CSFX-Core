@@ -122,6 +122,9 @@ pub fn cidr_host_count(cidr: &str) -> Option<u32> {
     Some(1u32 << (32 - prefix))
 }
 
+pub const WG_PORT_START: u16 = 49152;
+pub const WG_PORT_END: u16 = 65535;
+
 pub fn rg_wireguard_port(resource_group_id: &str) -> u16 {
     const FNV_OFFSET_BASIS: u32 = 0x811c9dc5;
     const FNV_PRIME: u32 = 0x01000193;
@@ -132,7 +135,7 @@ pub fn rg_wireguard_port(resource_group_id: &str) -> u16 {
         hash = hash.wrapping_mul(FNV_PRIME);
     }
 
-    49152u16 + (hash % (65535 - 49152)) as u16
+    WG_PORT_START + (hash % (WG_PORT_END - WG_PORT_START) as u32) as u16
 }
 
 pub fn rg_bridge_iface_name(resource_group_id: &str) -> String {

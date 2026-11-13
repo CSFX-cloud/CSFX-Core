@@ -607,8 +607,8 @@ esac"#;
 
         let script = tools.stdin("nft");
         let (first, second) = (rg_bridge_iface_name("rg-1"), rg_bridge_iface_name("rg-2"));
-        assert!(script.contains(&format!("iifname \"{first}\" oifname \"{second}\" drop")));
-        assert!(script.contains(&format!("iifname \"{second}\" oifname \"{first}\" drop")));
+        assert!(script.contains(&format!("{{ \"{first}\", \"{second}\" }}")));
+        assert!(script.contains("iifname @rg_bridges oifname @rg_bridges drop"));
     }
 
     #[tokio::test]

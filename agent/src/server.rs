@@ -549,14 +549,19 @@ mod tests {
         crate::client::install_test_crypto_provider();
         let _tools = crate::testing::FakeTools::install(&[("ip", "exit 0")]);
         let registry = Arc::new(RgDnsRegistry::new());
+        let local_state = Arc::new(crate::local_state::LocalState::open(
+            std::env::temp_dir().join(format!("csfx-ls-{}.json", uuid::Uuid::new_v4())),
+        ));
         ServerState {
             firecracker: Arc::new(crate::firecracker::runtime::FirecrackerRuntime::new(
                 "key".to_string(),
+                local_state.clone(),
                 registry.clone(),
                 None,
             )),
             qemu: Arc::new(crate::qemu::runtime::QemuRuntime::new(
                 "key".to_string(),
+                local_state,
                 registry,
             )),
             running_containers: Arc::new(Mutex::new(HashMap::new())),
