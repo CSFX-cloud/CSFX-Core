@@ -1,6 +1,7 @@
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
 use entity::entities::{ingress_gateways, workloads};
 use sea_orm::{ColumnTrait, DbErr, EntityTrait, QueryFilter};
+use serde_json::Value;
 use shared::leader::LeaderLease;
 use std::time::Duration;
 use tokio::time::{interval, sleep};
@@ -15,6 +16,7 @@ const LEADER_KEY: &str = "/csfx/leaders/gateway-reconciler";
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 const CONNECT_RETRY: Duration = Duration::from_secs(10);
 const PENDING_GRACE_SECONDS: i64 = 300;
+const PROVIDER_ENDPOINT_VAR: &str = "TRAEFIK_PROVIDERS_HTTP_ENDPOINT";
 
 #[derive(Debug, PartialEq)]
 pub enum Action {
@@ -44,12 +46,23 @@ async fn find_orphan(
     state: &AppState,
     gateway: &ingress_gateways::Model,
 ) -> Result<Option<Uuid>, DbErr> {
-    let workload = workloads::Entity::find()
+    let candidates = workloads::Entity::find()
         .filter(workloads::Column::ResourceGroupId.eq(gateway.resource_group_id))
         .filter(workloads::Column::Name.eq(format!("gateway-{}", gateway.name)))
-        .one(&state.db_conn)
+        .all(&state.db_conn)
         .await?;
-    Ok(workload.map(|workload| workload.id))
+    Ok(candidates
+        .into_iter()
+        .find(|workload| serves_gateway(workload.env_vars.as_ref(), gateway))
+        .map(|workload| workload.id))
+}
+
+fn serves_gateway(env_vars: Option<&Value>, gateway: &ingress_gateways::Model) -> bool {
+    let suffix = format!("/{}/{}", gateway.resource_group_id, gateway.id);
+    env_vars
+        .and_then(|env| env.get(PROVIDER_ENDPOINT_VAR))
+        .and_then(Value::as_str)
+        .is_some_and(|endpoint| endpoint.ends_with(&suffix))
 }
 
 async fn teardown(state: &AppState, gateway: &ingress_gateways::Model) -> anyhow::Result<()> {
@@ -163,6 +176,33 @@ mod tests {
     #[test]
     fn deleting_rows_are_torn_down_immediately() {
         assert_eq!(decide("deleting", at(0), None, at(1)), Action::Teardown);
+    }
+
+    fn gateway() -> ingress_gateways::Model {
+        ingress_gateways::Model {
+            id: Uuid::from_u128(2),
+            resource_group_id: Uuid::from_u128(1),
+            workload_id: None,
+            name: "edge".into(),
+            http_port: 80,
+            https_port: 443,
+            status: STATUS_PENDING.into(),
+            created_at: at(0),
+        }
+    }
+
+    #[test]
+    fn only_workloads_pointing_at_the_gateway_are_adopted() {
+        let gateway = gateway();
+        let own = serde_json::json!({ PROVIDER_ENDPOINT_VAR: format!(
+            "http://x:7443/ingress-config/{}/{}",
+            gateway.resource_group_id, gateway.id
+        ) });
+        let foreign =
+            serde_json::json!({ PROVIDER_ENDPOINT_VAR: "http://x:7443/ingress-config/a/b" });
+        assert!(serves_gateway(Some(&own), &gateway));
+        assert!(!serves_gateway(Some(&foreign), &gateway));
+        assert!(!serves_gateway(None, &gateway));
     }
 
     #[test]
