@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use etcd_client::{Client, Compare, CompareOp, GetOptions, Txn, TxnOp};
+use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp};
 use std::net::Ipv4Addr;
 use uuid::Uuid;
 
@@ -63,20 +63,21 @@ async fn site_base(client: &mut Client, site_id: &str) -> Result<Ipv4Addr> {
     if site_id == DEFAULT_SITE {
         return Ok(block_base(DEFAULT_SITE_OCTET));
     }
-    let existing = client
-        .get(MGMT_SITE_PREFIX, Some(GetOptions::new().with_prefix()))
-        .await
-        .context("etcd get failed")?;
-    for entry in existing.kvs() {
-        if entry.value() == site_id.as_bytes() {
-            return octet_from_key(entry.key_str()?).map(block_base);
-        }
-    }
+    let site_key = format!("{}site/{}", MGMT_SITE_PREFIX, site_id);
     for octet in FIRST_SITE_OCTET..=u8::MAX {
-        let key = format!("{}{}", MGMT_SITE_PREFIX, octet);
+        if let Some(assigned) = assigned_octet(client, &site_key).await? {
+            return Ok(block_base(assigned));
+        }
+        let block_key = format!("{}block/{}", MGMT_SITE_PREFIX, octet);
         let claim = Txn::new()
-            .when([Compare::create_revision(key.as_str(), CompareOp::Equal, 0)])
-            .and_then([TxnOp::put(key.as_str(), site_id, None)]);
+            .when([
+                Compare::create_revision(site_key.as_str(), CompareOp::Equal, 0),
+                Compare::create_revision(block_key.as_str(), CompareOp::Equal, 0),
+            ])
+            .and_then([
+                TxnOp::put(site_key.as_str(), octet.to_string(), None),
+                TxnOp::put(block_key.as_str(), site_id, None),
+            ]);
         if client
             .txn(claim)
             .await
@@ -89,10 +90,20 @@ async fn site_base(client: &mut Client, site_id: &str) -> Result<Ipv4Addr> {
     anyhow::bail!("management site block pool exhausted")
 }
 
-fn octet_from_key(key: &str) -> Result<u8> {
-    key.strip_prefix(MGMT_SITE_PREFIX)
-        .and_then(|octet| octet.parse().ok())
-        .context("malformed management site key")
+async fn assigned_octet(client: &mut Client, site_key: &str) -> Result<Option<u8>> {
+    let response = client
+        .get(site_key, None)
+        .await
+        .context("etcd get failed")?;
+    response
+        .kvs()
+        .first()
+        .map(|entry| parse_octet(entry.value_str()?))
+        .transpose()
+}
+
+fn parse_octet(value: &str) -> Result<u8> {
+    value.parse().context("malformed management site octet")
 }
 
 fn block_base(octet: u8) -> Ipv4Addr {
@@ -114,9 +125,25 @@ mod tests {
     }
 
     #[test]
-    fn site_key_round_trips_to_its_octet() {
-        let key = format!("{}{}", MGMT_SITE_PREFIX, 102);
-        assert_eq!(octet_from_key(&key).unwrap(), 102);
-        assert!(octet_from_key("/other/102").is_err());
+    fn site_octet_parses_and_rejects_garbage() {
+        assert_eq!(parse_octet("102").unwrap(), 102);
+        assert!(parse_octet("256").is_err());
+        assert!(parse_octet("").is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires etcd via ETCD_ENDPOINTS"]
+    async fn concurrent_agents_of_a_new_site_share_one_block() {
+        let endpoints = std::env::var("ETCD_ENDPOINTS").expect("ETCD_ENDPOINTS must be set");
+        let service = MgmtIpamService::new(endpoints);
+        let site = format!("site-{}", Uuid::new_v4());
+        let (first, second) = tokio::join!(
+            service.allocate(Uuid::new_v4(), &site),
+            service.allocate(Uuid::new_v4(), &site)
+        );
+        let block = |ip: String| ip.parse::<Ipv4Addr>().unwrap().octets()[1];
+        let first = block(first.unwrap());
+        assert_ne!(first, DEFAULT_SITE_OCTET);
+        assert_eq!(first, block(second.unwrap()));
     }
 }
