@@ -179,17 +179,6 @@ impl AuthService {
         Ok(key_pair.public_key)
     }
 
-    #[allow(dead_code)]
-    pub async fn cleanup_expired_tokens(&self) -> AuthResult<()> {
-        let now = Utc::now().naive_utc();
-        InvalidJwt::delete_many()
-            .filter(invalid_jwt::Column::Exp.lt(now))
-            .exec(&self.db)
-            .await?;
-
-        Ok(())
-    }
-
     // 2FA Methods
     pub async fn generate_2fa_secret(
         &self,
