@@ -1,5 +1,7 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+use tokio::sync::Mutex;
 use tracing::warn;
 
 use crate::client::{ApiClient, ResourceGroupMember, ResourceGroupPeer, SiteService};
@@ -8,6 +10,8 @@ use crate::rg_dns::RgDnsRegistry;
 use crate::rg_network;
 use crate::spec::rg_wireguard_port;
 use crate::wireguard::{self, Peer};
+
+static REPORTED_PORTS: LazyLock<Mutex<HashMap<String, u16>>> = LazyLock::new(Mutex::default);
 
 pub async fn sync(
     client: &ApiClient,
@@ -42,11 +46,22 @@ async fn report_wg_port(
     let Some(port) = local_state.assigned_wg_port(resource_group_id).await else {
         return;
     };
-    if let Err(e) = client
+    if REPORTED_PORTS.lock().await.get(resource_group_id) == Some(&port) {
+        return;
+    }
+    match client
         .report_resource_group_wg_port(api_key, resource_group_id, port)
         .await
     {
-        warn!(resource_group_id = %resource_group_id, port, error = %e, "Failed to report wireguard port");
+        Ok(()) => {
+            REPORTED_PORTS
+                .lock()
+                .await
+                .insert(resource_group_id.to_string(), port);
+        }
+        Err(e) => {
+            warn!(resource_group_id = %resource_group_id, port, error = %e, "Failed to report wireguard port");
+        }
     }
 }
 
