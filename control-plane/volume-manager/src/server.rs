@@ -50,6 +50,10 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/volumes/{id}/snapshots", get(volumes::list_snapshots))
         .route(
+            "/volumes/{id}/snapshots/{snapshot_id}",
+            axum::routing::delete(volumes::delete_snapshot),
+        )
+        .route(
             "/internal/agents/{id}/detach-all",
             axum::routing::post(internal::detach_all_for_agent),
         )

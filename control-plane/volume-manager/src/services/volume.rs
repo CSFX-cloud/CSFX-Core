@@ -7,11 +7,12 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::ceph::ops::CephManager;
+use crate::ceph::storage::rbd::is_not_found;
 use crate::ceph::storage::types::CephVolume;
 use crate::db::volumes as db;
 use crate::models::volume::{
     AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest, ResizeVolumeRequest,
-    SnapshotResponse, VolumeResponse,
+    SnapshotResponse, VolumeResponse, VolumeStatus,
 };
 
 pub enum ServiceError {
@@ -51,22 +52,31 @@ impl VolumeService {
             .await
             .map_err(|e| e.to_string())?;
 
-        if let Some(ceph) = &self.ceph {
-            let volume = CephVolume {
-                name: model.image_name.clone(),
-                pool: model.pool.clone(),
-                size_mb: (model.size_gb as u64) * 1024,
-                features: IMAGE_FEATURES.iter().map(|f| f.to_string()).collect(),
-            };
+        let Some(ceph) = &self.ceph else {
+            return self.mark(model.id, VolumeStatus::Available).await;
+        };
 
-            if let Err(e) = ceph.rbd_manager.create_image(&volume).await {
-                db::delete(&self.db, model.id)
-                    .await
-                    .map_err(|rollback| format!("{:#}; rollback failed: {}", e, rollback))?;
-                return Err(format!("{:#}", e));
-            }
+        let volume = CephVolume {
+            name: model.image_name.clone(),
+            pool: model.pool.clone(),
+            size_mb: (model.size_gb as u64) * 1024,
+            features: IMAGE_FEATURES.iter().map(|f| f.to_string()).collect(),
+        };
+
+        if let Err(e) = ceph.rbd_manager.create_image(&volume).await {
+            db::set_status(&self.db, model.id, VolumeStatus::Error)
+                .await
+                .map_err(|mark| format!("{:#}; marking error failed: {}", e, mark))?;
+            return Err(format!("{:#}", e));
         }
 
+        self.mark(model.id, VolumeStatus::Available).await
+    }
+
+    async fn mark(&self, id: Uuid, status: VolumeStatus) -> Result<VolumeResponse, String> {
+        let model = db::set_status(&self.db, id, status)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(db::into_response(model))
     }
 
@@ -87,13 +97,21 @@ impl VolumeService {
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("Volume {} not found", id))?;
 
-        if model.attached_to_agent.is_some() {
+        let claimed = db::begin_delete(&self.db, id)
+            .await
+            .map_err(|e| e.to_string())?;
+        if !claimed {
             return Err(ServiceError::Conflict(format!(
-                "Volume {} is attached and cannot be deleted",
+                "Volume {} is attached or still being created and cannot be deleted",
                 id
             )));
         }
 
+        self.finish_delete(&model).await?;
+        Ok(())
+    }
+
+    pub async fn finish_delete(&self, model: &volumes::Model) -> Result<(), String> {
         if let Some(ceph) = &self.ceph {
             let rbd = &ceph.rbd_manager;
             let exists = rbd
@@ -101,13 +119,18 @@ impl VolumeService {
                 .await
                 .map_err(|e| format!("{:#}", e))?;
             if exists {
+                rbd.purge_snapshots(&model.pool, &model.image_name)
+                    .await
+                    .map_err(|e| format!("{:#}", e))?;
                 rbd.delete_image(&model.pool, &model.image_name)
                     .await
                     .map_err(|e| format!("{:#}", e))?;
             }
         }
 
-        Ok(db::delete(&self.db, id).await.map_err(|e| e.to_string())?)
+        db::delete(&self.db, model.id)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn resize_volume(
@@ -160,7 +183,10 @@ impl VolumeService {
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| {
-                ServiceError::Conflict(format!("Volume {} is attached to another agent", volume_id))
+                ServiceError::Conflict(format!(
+                    "Volume {} is attached to another agent or not ready",
+                    volume_id
+                ))
             })?;
 
         Ok(db::into_response(updated))
@@ -207,6 +233,33 @@ impl VolumeService {
             status: crate::models::volume::SnapshotStatus::Available,
             created_at: snap.created_at.and_utc(),
         })
+    }
+
+    pub async fn delete_snapshot(&self, volume_id: Uuid, snapshot_id: Uuid) -> Result<(), String> {
+        let model = db::get_by_id(&self.db, volume_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Volume {} not found", volume_id))?;
+        let snapshot = db::get_snapshot(&self.db, volume_id, snapshot_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Snapshot {} not found", snapshot_id))?;
+
+        if let Some(ceph) = &self.ceph {
+            let removed = ceph
+                .rbd_manager
+                .delete_snapshot(&model.pool, &model.image_name, &snapshot.name)
+                .await;
+            if let Err(e) = removed {
+                if !is_not_found(&e) {
+                    return Err(format!("{:#}", e));
+                }
+            }
+        }
+
+        db::delete_snapshot(&self.db, snapshot_id)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn list_snapshots(&self, volume_id: Uuid) -> Result<Vec<SnapshotResponse>, String> {

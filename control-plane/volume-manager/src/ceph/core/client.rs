@@ -1,8 +1,16 @@
 use super::config::CephConfig;
+use super::error::CephError;
 use crate::ceph::storage::types::*;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
+use std::time::Duration;
 use tokio::process::Command as AsyncCommand;
+use tokio::sync::Semaphore;
+
+const CLI_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_CONCURRENT_CLI_CALLS: usize = 8;
+
+static CLI_PERMITS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_CLI_CALLS);
 
 #[derive(Clone)]
 pub struct CephClient {
@@ -42,18 +50,33 @@ impl CephClient {
             command.arg("--format").arg("json");
         }
 
-        let output = command
-            .output()
+        command.kill_on_drop(true);
+
+        let _permit = CLI_PERMITS
+            .acquire()
             .await
+            .context("Ceph CLI semaphore closed")?;
+
+        let output = tokio::time::timeout(CLI_TIMEOUT, command.output())
+            .await
+            .map_err(|_| CephError::CommandTimeout {
+                program: program.to_string(),
+                seconds: CLI_TIMEOUT.as_secs(),
+            })?
             .with_context(|| format!("Failed to execute {} command", program))?;
 
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             crate::log_error!(
                 "ceph_client",
                 &format!("{} command failed: {}", program, stderr)
             );
-            return Err(anyhow!("{} command failed: {}", program, stderr));
+            return Err(CephError::CommandExit {
+                program: program.to_string(),
+                code: output.status.code(),
+                stderr,
+            }
+            .into());
         }
 
         Ok(String::from_utf8(output.stdout)?)
