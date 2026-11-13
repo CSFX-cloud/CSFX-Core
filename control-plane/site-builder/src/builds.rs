@@ -1,12 +1,12 @@
 use crate::config::Config;
 use crate::detect::Mode;
 use crate::error::ServiceError;
-use crate::job::{builder_request, stored_reference, BuildJob};
+use crate::job::{builder_name, builder_request, stored_reference, BuildJob};
 use crate::prune::{self, Candidate};
 use crate::registry::client::RegistryClient;
 use crate::scheduler::SchedulerClient;
 use chrono::Utc;
-use entity::{site_deployments, SiteArtifacts, SiteDeployments};
+use entity::{site_deployments, workloads, SiteArtifacts, SiteDeployments, Sites};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     Set, Statement,
@@ -147,7 +147,10 @@ impl Builds {
             return Ok(());
         }
         self.append_log(id, &format!("[ERROR] {message}\n")).await?;
-        let builder = deployment.workload_id;
+        let builder = match deployment.workload_id {
+            Some(workload_id) => Some(workload_id),
+            None => self.unrecorded_builder(&deployment).await?,
+        };
         let started = deployment.created_at;
         let mut active: site_deployments::ActiveModel = deployment.into();
         active.status = Set("failed".to_string());
@@ -160,6 +163,21 @@ impl Builds {
         self.release_builder(builder).await;
         tracing::warn!(deployment = %id, reason = %message, "build failed");
         Ok(())
+    }
+
+    async fn unrecorded_builder(
+        &self,
+        deployment: &site_deployments::Model,
+    ) -> Result<Option<Uuid>, ServiceError> {
+        let Some(site) = Sites::find_by_id(deployment.site_id).one(&self.db).await? else {
+            return Ok(None);
+        };
+        let builder = workloads::Entity::find()
+            .filter(workloads::Column::ResourceGroupId.eq(site.resource_group_id))
+            .filter(workloads::Column::Name.eq(builder_name(&site.name, deployment.id)))
+            .one(&self.db)
+            .await?;
+        Ok(builder.map(|workload| workload.id))
     }
 
     pub async fn release_builder(&self, workload_id: Option<Uuid>) {
