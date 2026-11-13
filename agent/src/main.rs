@@ -117,12 +117,12 @@ impl StartTracker {
             .retain(|id, _| assigned.contains(id.as_str()));
     }
 
-    async fn finish(&self, workload_id: &str, state_changed: bool, started: bool) {
+    async fn finish(&self, workload_id: &str, state_changed: bool, failed: bool) {
         self.in_flight.lock().await.remove(workload_id);
-        if started {
-            self.retries.lock().await.remove(workload_id);
-        } else {
+        if failed {
             self.record_failure(workload_id, Instant::now()).await;
+        } else {
+            self.retries.lock().await.remove(workload_id);
         }
         if state_changed {
             self.completed.notify_one();
@@ -575,7 +575,7 @@ fn next_tick_delay(period: Duration, failure_count: u32) -> Duration {
     if failure_count == 0 {
         return period;
     }
-    backoff::full_jitter(period, HEARTBEAT_BACKOFF_CAP.max(period), failure_count - 1)
+    backoff::equal_jitter(period, HEARTBEAT_BACKOFF_CAP.max(period), failure_count)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1068,6 +1068,7 @@ async fn run_workload_start(context: WorkloadStartContext, workload: client::Ass
         .await
         .get(&workload_id)
         .cloned();
+    let deferred = !volumes_ready(&workload, &context.mounted_volumes).await;
 
     let restart_fulfilled = start_or_restart_workload(
         runtime,
@@ -1101,7 +1102,7 @@ async fn run_workload_start(context: WorkloadStartContext, workload: client::Ass
         restart_fulfilled || (handle_after.is_some() && handle_after != handle_before);
     context
         .starts
-        .finish(&workload_id, state_changed, handle_after.is_some())
+        .finish(&workload_id, state_changed, handle_after.is_none() && !deferred)
         .await;
 }
 
@@ -1636,12 +1637,12 @@ mod tests {
         let tracker = StartTracker::default();
         assert!(tracker.try_begin("w").await);
         assert!(!tracker.try_begin("w").await);
-        tracker.finish("w", true, true).await;
+        tracker.finish("w", true, false).await;
         tokio::time::timeout(Duration::from_secs(1), tracker.completed.notified())
             .await
             .unwrap();
         assert!(tracker.try_begin("w").await);
-        tracker.finish("w", false, true).await;
+        tracker.finish("w", false, false).await;
     }
 
     #[tokio::test]
@@ -1688,7 +1689,7 @@ mod tests {
             tracker.in_flight.lock().await.remove("w");
         }
         assert!(tracker.try_begin_at("other", origin).await);
-        tracker.finish("w", false, true).await;
+        tracker.finish("w", false, false).await;
         assert!(tracker.try_begin_at("w", origin).await);
     }
 
@@ -1697,7 +1698,8 @@ mod tests {
         let period = Duration::from_secs(30);
         assert_eq!(next_tick_delay(period, 0), period);
         for failures in 1..50 {
-            assert!(next_tick_delay(period, failures) <= HEARTBEAT_BACKOFF_CAP);
+            let delay = next_tick_delay(period, failures);
+            assert!(delay >= period && delay <= HEARTBEAT_BACKOFF_CAP);
         }
     }
 
