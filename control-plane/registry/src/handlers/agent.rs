@@ -12,7 +12,7 @@ use crate::{
         SignedRelease,
     },
     server::AppState,
-    services::registry::RegisterAgentParams,
+    services::{bootstrap_tokens::ROLE_WORKER, registry::RegisterAgentParams, worker_rollout},
 };
 
 const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
@@ -292,7 +292,7 @@ pub async fn heartbeat(
         )
         .await
     {
-        Ok(_) => {
+        Ok(role) => {
             forward_metrics(&state, agent_id, &request).await;
 
             if let Some(statuses) = request.container_statuses {
@@ -301,7 +301,13 @@ pub async fn heartbeat(
                 }
             }
 
-            let worker_releases = read_worker_releases(&state.etcd_endpoints).await;
+            let worker_releases = read_worker_releases(
+                &state.etcd_endpoints,
+                agent_id,
+                &role,
+                request.release_version.as_deref().unwrap_or_default(),
+            )
+            .await;
 
             tracing::info!(
                 agent_id = %agent_id,
@@ -353,7 +359,12 @@ async fn read_ssh_enabled(state: &AppState) -> bool {
     }
 }
 
-async fn read_worker_releases(etcd_endpoints: &str) -> HashMap<String, SignedRelease> {
+async fn read_worker_releases(
+    etcd_endpoints: &str,
+    agent_id: Uuid,
+    role: &str,
+    release_version: &str,
+) -> HashMap<String, SignedRelease> {
     let mut client = match etcd_client::Client::connect([etcd_endpoints], None).await {
         Ok(client) => client,
         Err(error) => {
@@ -361,6 +372,12 @@ async fn read_worker_releases(etcd_endpoints: &str) -> HashMap<String, SignedRel
             return HashMap::new();
         }
     };
+    if role == ROLE_WORKER {
+        report_release(&mut client, agent_id, release_version).await;
+        if !rollout_admits(&mut client, agent_id).await {
+            return HashMap::new();
+        }
+    }
     let manifests = read_prefix(&mut client, WORKER_MANIFEST_PREFIX).await;
     let mut signatures = read_prefix(&mut client, WORKER_SIGNATURE_PREFIX).await;
     manifests
@@ -377,6 +394,31 @@ async fn read_worker_releases(etcd_endpoints: &str) -> HashMap<String, SignedRel
             })
         })
         .collect()
+}
+
+async fn report_release(client: &mut etcd_client::Client, agent_id: Uuid, release_version: &str) {
+    let seen = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let value = worker_rollout::fleet_value(seen, release_version);
+    if let Err(error) = client
+        .put(worker_rollout::fleet_key(agent_id), value, None)
+        .await
+    {
+        tracing::warn!(error = %error, agent_id = %agent_id, "failed to report worker release");
+    }
+}
+
+async fn rollout_admits(client: &mut etcd_client::Client, agent_id: Uuid) -> bool {
+    let response = match client.get(worker_rollout::HOSTS_KEY, None).await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to read rollout host list, withholding release");
+            return false;
+        }
+    };
+    let hosts = response.kvs().first().and_then(|kv| kv.value_str().ok());
+    worker_rollout::admits(hosts, agent_id)
 }
 
 async fn read_prefix(client: &mut etcd_client::Client, prefix: &str) -> HashMap<String, String> {

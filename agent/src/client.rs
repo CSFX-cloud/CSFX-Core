@@ -3,6 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::runtime::VolumeUsage;
@@ -72,6 +73,7 @@ struct HeartbeatRequest {
     wg_endpoint: Option<String>,
     wg_tunnel_ip: Option<String>,
     agent_version: Option<String>,
+    release_version: Option<String>,
     kvm_capable: bool,
     ssh_host_key: Option<String>,
 }
@@ -147,6 +149,21 @@ pub struct AssignedWorkload {
     pub guest_ip: Option<String>,
 }
 
+fn readable_workload(item: serde_json::Value) -> Option<AssignedWorkload> {
+    let workload_id = item
+        .get("id")
+        .and_then(|id| id.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    match serde_json::from_value(item) {
+        Ok(workload) => Some(workload),
+        Err(error) => {
+            warn!(workload_id = %workload_id, error = %error, "skipping unreadable workload");
+            None
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ResourceGroupPeer {
     pub agent_id: String,
@@ -179,8 +196,15 @@ pub(crate) fn install_test_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+pub const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_HEADER: &str = "X-Csfx-Agent-Protocol";
+
 pub(crate) fn build_http_client(ca_pem: Option<&str>) -> Result<Client> {
-    let builder = Client::builder().timeout(std::time::Duration::from_secs(30));
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(PROTOCOL_HEADER, PROTOCOL_VERSION.into());
+    let builder = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .default_headers(headers);
     let builder = match ca_pem {
         Some(pem) => builder.tls_certs_only([
             reqwest::Certificate::from_pem(pem.as_bytes()).context("Invalid cluster CA")?
@@ -477,6 +501,7 @@ impl ApiClient {
                 wg_endpoint: self.wg_endpoint.clone(),
                 wg_tunnel_ip,
                 agent_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                release_version: crate::update_watch::applied_version().await,
                 kvm_capable: crate::system::is_kvm_capable(),
                 ssh_host_key: crate::system::read_ssh_host_key(),
             });
@@ -734,9 +759,11 @@ impl ApiClient {
             );
         }
 
-        resp.json::<Vec<AssignedWorkload>>()
+        let items = resp
+            .json::<Vec<serde_json::Value>>()
             .await
-            .context("Failed to parse workloads response")
+            .context("Failed to parse workloads response")?;
+        Ok(items.into_iter().filter_map(readable_workload).collect())
     }
 
     pub async fn push_workload_stats(
@@ -1048,6 +1075,52 @@ mod tests {
         assert_eq!(volumes[0].id, "1");
         assert_eq!(volumes[1].id, "2");
         client.ack_workload_restart("k", "w1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn newer_control_plane_workload_list_keeps_readable_entries() {
+        let mut extended = workload();
+        extended["id"] = json!("w-extended");
+        extended["new_field"] = json!({"nested": true});
+        extended["ports"][0]["new_port_field"] = json!(1);
+        let mut unknown_protocol = workload();
+        unknown_protocol["id"] = json!("w-unknown-protocol");
+        unknown_protocol["ports"][0]["protocol"] = json!("sctp");
+        let mut broken = workload();
+        broken["id"] = json!("w-broken");
+        broken["cpu_millicores"] = json!("many");
+        let body = json!([extended, unknown_protocol, broken, workload(), 7]);
+        let client = serve(Router::new().route(
+            "/api/agents/self/workloads",
+            get(move || {
+                let body = body.clone();
+                async move { Json(body) }
+            }),
+        ))
+        .await;
+        let ids: Vec<String> = client
+            .fetch_assigned_workloads("k")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|workload| workload.id)
+            .collect();
+        assert_eq!(ids, vec!["w-extended", "w1"]);
+    }
+
+    #[tokio::test]
+    async fn requests_carry_the_protocol_version() {
+        let client = serve(Router::new().route(
+            "/api/agents/self/workloads",
+            get(|headers: HeaderMap| async move {
+                match headers.get(PROTOCOL_HEADER) {
+                    Some(value) if value == "1" => (StatusCode::OK, Json(json!([workload()]))),
+                    _ => (StatusCode::UPGRADE_REQUIRED, Json(json!([]))),
+                }
+            }),
+        ))
+        .await;
+        assert_eq!(client.fetch_assigned_workloads("k").await.unwrap().len(), 1);
     }
 
     #[tokio::test]

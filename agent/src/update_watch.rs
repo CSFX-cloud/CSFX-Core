@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::fs;
 use tracing::{info, warn};
@@ -11,6 +12,33 @@ const UPDATE_DIR: &str = "/var/lib/csfx/update";
 const MANIFEST_FILE: &str = "manifest.json";
 const SIGNATURE_FILE: &str = "manifest.json.sig";
 const MAX_JITTER_SECS: u64 = 300;
+const APPLIED_FILE: &str = "/var/lib/csfx-updater/applied.json";
+
+static STAGING_PENDING: AtomicBool = AtomicBool::new(false);
+
+struct StagingClaim;
+
+impl StagingClaim {
+    fn acquire() -> Option<Self> {
+        (!STAGING_PENDING.swap(true, Ordering::AcqRel)).then_some(Self)
+    }
+}
+
+impl Drop for StagingClaim {
+    fn drop(&mut self) {
+        STAGING_PENDING.store(false, Ordering::Release);
+    }
+}
+
+pub async fn applied_version() -> Option<String> {
+    let raw = fs::read(APPLIED_FILE).await.ok()?;
+    parse_applied_version(&raw)
+}
+
+fn parse_applied_version(raw: &[u8]) -> Option<String> {
+    let manifest: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    manifest.get("version")?.as_str().map(str::to_string)
+}
 
 pub async fn handle(agent_id: Uuid, releases: HashMap<String, SignedRelease>) {
     let Some(release) = releases.get(&host_arch()) else {
@@ -20,6 +48,10 @@ pub async fn handle(agent_id: Uuid, releases: HashMap<String, SignedRelease>) {
     if is_staged(directory, release).await {
         return;
     }
+
+    let Some(_claim) = StagingClaim::acquire() else {
+        return;
+    };
 
     let jitter = jitter_delay(agent_id);
     info!(
@@ -80,6 +112,25 @@ mod tests {
         assert_eq!(jitter_delay(id), jitter_delay(id));
         assert!(jitter_delay(id) < MAX_JITTER_SECS);
         assert_eq!(jitter_delay(Uuid::nil()), 0);
+    }
+
+    #[test]
+    fn only_one_staging_claim_exists_at_a_time() {
+        let first = StagingClaim::acquire();
+        assert!(first.is_some());
+        assert!(StagingClaim::acquire().is_none());
+        drop(first);
+        assert!(StagingClaim::acquire().is_some());
+    }
+
+    #[test]
+    fn applied_version_is_read_from_the_manifest() {
+        assert_eq!(
+            parse_applied_version(br#"{"version":"0.3.0","arch":"x"}"#).as_deref(),
+            Some("0.3.0")
+        );
+        assert_eq!(parse_applied_version(b"{}"), None);
+        assert_eq!(parse_applied_version(b"garbage"), None);
     }
 
     #[tokio::test]

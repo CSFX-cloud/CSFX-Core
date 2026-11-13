@@ -5,7 +5,7 @@ use crate::apply::{self, Outcome};
 use crate::config::Config;
 use crate::etcd::{self, Client};
 use crate::manifest::{self, Manifest};
-use crate::{channel, nix, state};
+use crate::{channel, nix, state, waves};
 
 const LOCK_TTL_SECS: i64 = 300;
 const ARCHES: [&str; 2] = ["x86_64-linux", "aarch64-linux"];
@@ -128,6 +128,7 @@ async fn release_to_workers(etcd: &mut Client, version: &str) -> Result<()> {
     {
         return Ok(());
     }
+    waves::begin(etcd, version).await?;
     for arch in ARCHES {
         let raw = etcd
             .get(&format!("{}{arch}", etcd::MANIFEST_PREFIX))
@@ -255,9 +256,22 @@ async fn resume(cfg: &Config, etcd: &mut Client, node: &str) -> Result<()> {
     recorded
 }
 
+async fn drive_rollout(cfg: &Config, etcd: &mut Client, node: &str) -> Result<()> {
+    let Some(lock) = etcd
+        .acquire_lock(etcd::ROLLOUT_LOCK_KEY, node, LOCK_TTL_SECS)
+        .await?
+    else {
+        return Ok(());
+    };
+    let result = waves::advance(cfg, etcd).await;
+    lock.release().await?;
+    result
+}
+
 pub async fn run_cycle(cfg: &Config) -> Result<()> {
     let node = node_name()?;
     let mut etcd = Client::connect(cfg).await?;
+    drive_rollout(cfg, &mut etcd, &node).await?;
     if state::load_pending(&cfg.state_dir)?.is_some() {
         return resume(cfg, &mut etcd, &node).await;
     }
@@ -283,7 +297,9 @@ pub async fn run_cycle(cfg: &Config) -> Result<()> {
     if forced {
         etcd.delete(etcd::FORCE_UPDATE_KEY).await?;
     }
-    let result = update_under_lock(cfg, &mut etcd, &node, &desired, forced).await;
+    let result = lock
+        .run_while_held(update_under_lock(cfg, &mut etcd, &node, &desired, forced))
+        .await;
     lock.release().await?;
     result
 }
