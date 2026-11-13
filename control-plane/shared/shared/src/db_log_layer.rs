@@ -1,5 +1,7 @@
 use serde_json::{Map, Value};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::sync::mpsc::{channel, error::TrySendError, Receiver, Sender};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::Context;
@@ -148,15 +150,55 @@ fn level_as_str(level: &Level) -> &'static str {
     }
 }
 
+pub const LOG_CHANNEL_CAPACITY: usize = 10_000;
+pub const AUDIT_CHANNEL_CAPACITY: usize = 10_000;
+
+pub struct LogReceiver {
+    pub(crate) records: Receiver<LogRecord>,
+    pub(crate) audit: Receiver<LogRecord>,
+    pub(crate) dropped: Arc<AtomicU64>,
+}
+
+struct LogSink {
+    records: Sender<LogRecord>,
+    audit: Sender<LogRecord>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl LogSink {
+    fn submit(&self, record: LogRecord) {
+        let sender = if record.kind == KIND_USER {
+            &self.audit
+        } else {
+            &self.records
+        };
+        if let Err(TrySendError::Full(_)) = sender.try_send(record) {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
 pub struct DbLogLayer {
     service: &'static str,
-    sender: UnboundedSender<LogRecord>,
+    sink: LogSink,
 }
 
 impl DbLogLayer {
-    pub fn new(service: &'static str) -> (Self, UnboundedReceiver<LogRecord>) {
-        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-        (Self { service, sender }, receiver)
+    pub fn new(service: &'static str) -> (Self, LogReceiver) {
+        let (records_sender, records) = channel(LOG_CHANNEL_CAPACITY);
+        let (audit_sender, audit) = channel(AUDIT_CHANNEL_CAPACITY);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let sink = LogSink {
+            records: records_sender,
+            audit: audit_sender,
+            dropped: Arc::clone(&dropped),
+        };
+        let receiver = LogReceiver {
+            records,
+            audit,
+            dropped,
+        };
+        (Self { service, sink }, receiver)
     }
 }
 
@@ -241,7 +283,7 @@ impl<S: Subscriber> Layer<S> for DbLogLayer {
             return;
         }
 
-        let _ = self.sender.send(build_record(self.service, event, visitor));
+        self.sink.submit(build_record(self.service, event, visitor));
     }
 }
 
@@ -259,4 +301,55 @@ macro_rules! audit {
             $action
         )
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(kind: &'static str) -> LogRecord {
+        LogRecord {
+            service: "test",
+            level: "INFO",
+            classification: "system",
+            kind,
+            message: "entry".to_string(),
+            agent_id: None,
+            workload_id: None,
+            organization_id: None,
+            actor_user_id: None,
+            action: None,
+            target_type: None,
+            target_id: None,
+            fields: Map::new(),
+        }
+    }
+
+    fn drain(receiver: &mut Receiver<LogRecord>) -> usize {
+        std::iter::from_fn(|| receiver.try_recv().ok()).count()
+    }
+
+    #[test]
+    fn overflow_without_consumer_stays_bounded_and_counts_drops() {
+        let (layer, mut receiver) = DbLogLayer::new("test");
+        let extra = 500;
+        for _ in 0..LOG_CHANNEL_CAPACITY + extra {
+            layer.sink.submit(record(KIND_SYSTEM));
+        }
+
+        assert_eq!(receiver.dropped.load(Ordering::Relaxed), extra as u64);
+        assert_eq!(drain(&mut receiver.records), LOG_CHANNEL_CAPACITY);
+    }
+
+    #[test]
+    fn audit_records_are_not_starved_by_log_floods() {
+        let (layer, mut receiver) = DbLogLayer::new("test");
+        for _ in 0..LOG_CHANNEL_CAPACITY + 1 {
+            layer.sink.submit(record(KIND_SYSTEM));
+        }
+        layer.sink.submit(record(KIND_USER));
+
+        assert_eq!(drain(&mut receiver.audit), 1);
+        assert_eq!(receiver.dropped.load(Ordering::Relaxed), 1);
+    }
 }

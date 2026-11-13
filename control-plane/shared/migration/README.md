@@ -24,4 +24,6 @@ are applied one at a time, each in its own transaction.
 ## CI check
 
 `tests/compatibility.rs` scans every migration file newer than the cutoff constant (only the
-`up` part) and fails on forbidden patterns. Existing migrations are not checked.
+`up` part) and fails on forbidden patterns. Existing migrations are not checked. Put rollback SQL in
+`fn down` or in a constant named `DOWN` declared after the `up` statements; everything from there on is
+skipped.

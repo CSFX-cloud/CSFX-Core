@@ -1,6 +1,11 @@
+use api_gateway::prune::{prune_audit, prune_logs};
 use axum::http::{Method, StatusCode};
 use chrono::{Duration, SecondsFormat, Utc};
-use serde_json::Value;
+use entity::entities::{audit_log, logs};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
+};
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::common::{harness, Harness};
@@ -200,4 +205,142 @@ async fn export_returns_cef_lines() {
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert_eq!(text.lines().count(), 3);
     assert!(text.lines().all(|line| line.starts_with("CEF:")));
+}
+
+fn audit_row(service: &str, age: Duration) -> audit_log::ActiveModel {
+    let seen_at = (Utc::now() - age).fixed_offset();
+    audit_log::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        service: Set(service.to_string()),
+        level: Set("INFO".to_string()),
+        classification: Set("audit".to_string()),
+        message: Set("workloads.create".to_string()),
+        agent_id: Set(None),
+        workload_id: Set(None),
+        organization_id: Set(None),
+        created_at: Set(seen_at),
+        kind: Set("user".to_string()),
+        actor_user_id: Set(None),
+        action: Set(Some("workloads.create".to_string())),
+        target_type: Set(Some("workloads".to_string())),
+        target_id: Set(None),
+        fields: Set(json!({})),
+        occurrences: Set(1),
+        last_seen_at: Set(seen_at),
+    }
+}
+
+fn log_row(service: &str, age: Duration) -> logs::ActiveModel {
+    let seen_at = (Utc::now() - age).fixed_offset();
+    logs::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        service: Set(service.to_string()),
+        level: Set("INFO".to_string()),
+        classification: Set("system".to_string()),
+        message: Set("old entry".to_string()),
+        agent_id: Set(None),
+        workload_id: Set(None),
+        organization_id: Set(None),
+        created_at: Set(seen_at),
+        kind: Set("system".to_string()),
+        actor_user_id: Set(None),
+        action: Set(None),
+        target_type: Set(None),
+        target_id: Set(None),
+        fields: Set(json!({})),
+        occurrences: Set(1),
+        last_seen_at: Set(seen_at),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn keyset_cursor_pages_through_all_rows_without_total() {
+    let harness = harness().await;
+    let service = unique("keyset");
+    for minute in 0..5 {
+        let mut row = log_row(&service, Duration::minutes(minute / 2));
+        row.message = Set(format!("entry {minute}"));
+        row.insert(&harness.db).await.unwrap();
+    }
+    let base = format!("/api/logs?service={service}&limit=2");
+
+    let mut seen = Vec::new();
+    let mut cursor = String::new();
+    loop {
+        let (status, page) = harness.get(&format!("{base}&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(page["total"].is_null());
+        seen.extend(
+            entries(&page)
+                .iter()
+                .map(|e| e["id"].as_str().unwrap().to_string()),
+        );
+        if !page["has_more"].as_bool().unwrap() {
+            assert!(page["next_cursor"].is_null());
+            break;
+        }
+        cursor = page["next_cursor"].as_str().unwrap().to_string();
+    }
+
+    let mut unique_ids = seen.clone();
+    unique_ids.sort();
+    unique_ids.dedup();
+    assert_eq!(seen.len(), 5);
+    assert_eq!(unique_ids.len(), 5);
+
+    let (status, _) = harness.get(&format!("{base}&cursor=garbage")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn user_kind_reads_from_the_audit_table() {
+    let harness = harness().await;
+    let service = unique("audit-read");
+    audit_row(&service, Duration::minutes(1))
+        .insert(&harness.db)
+        .await
+        .unwrap();
+
+    let (_, audit) = harness
+        .get(&format!("/api/logs?service={service}&kind=user"))
+        .await;
+    assert_eq!(audit["total"], 1);
+    assert_eq!(entries(&audit)[0]["kind"], "user");
+    let (_, system) = harness
+        .get(&format!("/api/logs?service={service}&kind=system"))
+        .await;
+    assert_eq!(system["total"], 0);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn audit_retention_is_independent_from_log_prune() {
+    let harness = harness().await;
+    let service = unique("retention");
+    let age = Duration::days(400);
+    audit_row(&service, age).insert(&harness.db).await.unwrap();
+    log_row(&service, age).insert(&harness.db).await.unwrap();
+    let audit_count = || {
+        audit_log::Entity::find()
+            .filter(audit_log::Column::Service.eq(service.clone()))
+            .count(&harness.db)
+    };
+    let log_count = || {
+        logs::Entity::find()
+            .filter(logs::Column::Service.eq(service.clone()))
+            .count(&harness.db)
+    };
+
+    prune_logs(&harness.db, Utc::now() - Duration::days(30))
+        .await
+        .unwrap();
+    assert_eq!(log_count().await.unwrap(), 0);
+    assert_eq!(audit_count().await.unwrap(), 1);
+
+    prune_audit(&harness.db, Utc::now() - Duration::days(365))
+        .await
+        .unwrap();
+    assert_eq!(audit_count().await.unwrap(), 0);
 }

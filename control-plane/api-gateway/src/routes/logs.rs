@@ -7,8 +7,9 @@ use axum::{
 };
 use entity::{entities::logs, Logs};
 use sea_orm::{
-    sea_query::Expr, ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect,
+    prelude::DateTimeWithTimeZone,
+    sea_query::{Alias, Expr},
+    ColumnTrait, EntityTrait, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,6 +17,9 @@ use uuid::Uuid;
 
 use crate::{auth::rbac::CanViewLogs, cef::format_cef, AppState};
 
+const KIND_USER: &str = "user";
+const LOGS_TABLE: &str = "logs";
+const AUDIT_TABLE: &str = "audit_log";
 const DEFAULT_LIMIT: u64 = 100;
 const MAX_LIMIT: u64 = 500;
 const EXPORT_LIMIT: u64 = 10_000;
@@ -40,6 +44,7 @@ pub struct LogsQuery {
     pub q: Option<String>,
     pub limit: Option<u64>,
     pub offset: Option<u64>,
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,8 +64,9 @@ impl From<logs::Model> for LogEntryResponse {
 #[derive(Debug, Serialize)]
 pub struct LogsResponse {
     pub entries: Vec<LogEntryResponse>,
-    pub total: u64,
+    pub total: Option<u64>,
     pub has_more: bool,
+    pub next_cursor: Option<String>,
 }
 
 fn csv_values(raw: &str) -> Vec<String> {
@@ -71,7 +77,8 @@ fn csv_values(raw: &str) -> Vec<String> {
         .collect()
 }
 
-fn apply_filters(mut query: sea_orm::Select<Logs>, params: &LogsQuery) -> sea_orm::Select<Logs> {
+fn apply_filters(params: &LogsQuery) -> sea_orm::Select<Logs> {
+    let mut query = source(params);
     if let Some(service) = &params.service {
         query = query.filter(logs::Column::Service.is_in(csv_values(service)));
     }
@@ -117,53 +124,116 @@ fn apply_filters(mut query: sea_orm::Select<Logs>, params: &LogsQuery) -> sea_or
     query
 }
 
+fn source(params: &LogsQuery) -> sea_orm::Select<Logs> {
+    let mut query = Logs::find();
+    if params.kind.as_deref() == Some(KIND_USER) {
+        QuerySelect::query(&mut query)
+            .from_clear()
+            .from_as(Alias::new(AUDIT_TABLE), Alias::new(LOGS_TABLE));
+    }
+    query
+}
+
+fn encode_cursor(entry: &logs::Model) -> String {
+    format!("{}_{}", entry.last_seen_at.timestamp_micros(), entry.id)
+}
+
+fn decode_cursor(cursor: &str) -> Option<(DateTimeWithTimeZone, Uuid)> {
+    let (micros, id) = cursor.split_once('_')?;
+    let seen_at = chrono::DateTime::from_timestamp_micros(micros.parse().ok()?)?;
+    Some((seen_at.fixed_offset(), Uuid::parse_str(id).ok()?))
+}
+
+fn database_error(error: sea_orm::DbErr) -> (StatusCode, Json<serde_json::Value>) {
+    tracing::error!(error = %error, "failed to list logs");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "database error" })),
+    )
+}
+
+fn page_response(entries: Vec<logs::Model>, total: Option<u64>, has_more: bool) -> LogsResponse {
+    let next_cursor = entries.last().filter(|_| has_more).map(encode_cursor);
+    LogsResponse {
+        entries: entries.into_iter().map(Into::into).collect(),
+        total,
+        has_more,
+        next_cursor,
+    }
+}
+
+async fn offset_page(
+    state: &AppState,
+    params: &LogsQuery,
+    limit: u64,
+) -> Result<LogsResponse, (StatusCode, Json<serde_json::Value>)> {
+    let offset = params.offset.unwrap_or(0);
+    let base_query = apply_filters(params);
+    let total = base_query
+        .clone()
+        .count(&state.db_conn)
+        .await
+        .map_err(database_error)?;
+    let entries = base_query
+        .order_by_desc(logs::Column::LastSeenAt)
+        .order_by_desc(logs::Column::Id)
+        .offset(offset)
+        .limit(limit)
+        .all(&state.db_conn)
+        .await
+        .map_err(database_error)?;
+    let has_more = offset + (entries.len() as u64) < total;
+    Ok(page_response(entries, Some(total), has_more))
+}
+
+async fn keyset_page(
+    state: &AppState,
+    params: &LogsQuery,
+    cursor: &str,
+    limit: u64,
+) -> Result<LogsResponse, (StatusCode, Json<serde_json::Value>)> {
+    let mut query = apply_filters(params);
+    if !cursor.is_empty() {
+        let (seen_at, id) = decode_cursor(cursor).ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "invalid cursor" })),
+            )
+        })?;
+        query = query.filter(
+            Expr::tuple([
+                Expr::col(logs::Column::LastSeenAt).into(),
+                Expr::col(logs::Column::Id).into(),
+            ])
+            .lt(Expr::tuple([
+                Expr::val(seen_at).into(),
+                Expr::val(id).into(),
+            ])),
+        );
+    }
+    let mut entries = query
+        .order_by_desc(logs::Column::LastSeenAt)
+        .order_by_desc(logs::Column::Id)
+        .limit(limit + 1)
+        .all(&state.db_conn)
+        .await
+        .map_err(database_error)?;
+    let has_more = entries.len() as u64 > limit;
+    entries.truncate(limit as usize);
+    Ok(page_response(entries, None, has_more))
+}
+
 pub async fn list_logs(
     CanViewLogs(_claims): CanViewLogs,
     State(state): State<AppState>,
     Query(params): Query<LogsQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
-    let offset = params.offset.unwrap_or(0);
-
-    let base_query = apply_filters(Logs::find(), &params);
-
-    let total = base_query
-        .clone()
-        .count(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to count logs");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    let entries = base_query
-        .order_by(logs::Column::LastSeenAt, Order::Desc)
-        .offset(offset)
-        .limit(limit)
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list logs");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    let has_more = offset + (entries.len() as u64) < total;
-    let entries: Vec<LogEntryResponse> = entries.into_iter().map(Into::into).collect();
-
-    Ok((
-        StatusCode::OK,
-        Json(json!(LogsResponse {
-            entries,
-            total,
-            has_more,
-        })),
-    ))
+    let response = match params.cursor.as_deref() {
+        Some(cursor) => keyset_page(&state, &params, cursor, limit).await?,
+        None => offset_page(&state, &params, limit).await?,
+    };
+    Ok((StatusCode::OK, Json(json!(response))))
 }
 
 #[derive(Debug, Serialize)]
@@ -194,7 +264,7 @@ async fn count_by(
     params: &LogsQuery,
     column: logs::Column,
 ) -> Result<Vec<FacetCount>, (StatusCode, Json<serde_json::Value>)> {
-    let rows: Vec<(Option<String>, i64)> = apply_filters(Logs::find(), params)
+    let rows: Vec<(Option<String>, i64)> = apply_filters(params)
         .select_only()
         .column(column)
         .column_as(logs::Column::Id.count(), "count")
@@ -216,21 +286,32 @@ async fn count_by(
         .collect())
 }
 
+async fn kind_counts(
+    state: &AppState,
+    params: &LogsQuery,
+) -> Result<Vec<FacetCount>, (StatusCode, Json<serde_json::Value>)> {
+    let unscoped = LogsQuery {
+        kind: None,
+        ..params.clone()
+    };
+    let audit = LogsQuery {
+        kind: Some(KIND_USER.to_string()),
+        ..params.clone()
+    };
+    let mut counts = count_by(state, &unscoped, logs::Column::Kind).await?;
+    counts.retain(|facet| facet.value != KIND_USER);
+    counts.extend(count_by(state, &audit, logs::Column::Kind).await?);
+    counts.sort_by_key(|facet| std::cmp::Reverse(facet.count));
+    Ok(counts)
+}
+
 pub async fn logs_facets(
     CanViewLogs(_claims): CanViewLogs,
     State(state): State<AppState>,
     Query(params): Query<LogsQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let facets = LogsFacets {
-        kinds: count_by(
-            &state,
-            &LogsQuery {
-                kind: None,
-                ..params.clone()
-            },
-            logs::Column::Kind,
-        )
-        .await?,
+        kinds: kind_counts(&state, &params).await?,
         classifications: count_by(
             &state,
             &LogsQuery {
@@ -314,7 +395,7 @@ pub async fn logs_trend(
         bucket_seconds
     ));
 
-    let rows: Vec<(i64, i64)> = apply_filters(Logs::find(), &filtered)
+    let rows: Vec<(i64, i64)> = apply_filters(&filtered)
         .select_only()
         .expr_as(bucket.clone(), "bucket")
         .column_as(logs::Column::Id.count(), "count")
@@ -335,7 +416,7 @@ pub async fn export_logs(
     State(state): State<AppState>,
     Query(params): Query<LogsQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let entries = apply_filters(Logs::find(), &params)
+    let entries = apply_filters(&params)
         .order_by(logs::Column::LastSeenAt, Order::Desc)
         .limit(EXPORT_LIMIT)
         .all(&state.db_conn)
