@@ -150,7 +150,9 @@ pub struct AssignedWorkload {
     pub guest_ip: Option<String>,
 }
 
-fn readable_ports<'de, D>(deserializer: D) -> Result<Option<Vec<crate::spec::PortMapping>>, D::Error>
+fn readable_ports<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<crate::spec::PortMapping>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -174,7 +176,10 @@ fn parse_workloads(items: Vec<serde_json::Value>) -> Result<Vec<AssignedWorkload
     let mut workloads = Vec::with_capacity(items.len());
     let mut unreadable = Vec::new();
     for item in items {
-        let workload_id = item.get("id").and_then(|id| id.as_str()).map(str::to_string);
+        let workload_id = item
+            .get("id")
+            .and_then(|id| id.as_str())
+            .map(str::to_string);
         match serde_json::from_value(item) {
             Ok(workload) => workloads.push(workload),
             Err(error) => {
@@ -185,7 +190,10 @@ fn parse_workloads(items: Vec<serde_json::Value>) -> Result<Vec<AssignedWorkload
         }
     }
     if !unreadable.is_empty() {
-        anyhow::bail!("unreadable workloads in assignment ids={}", unreadable.join(","));
+        anyhow::bail!(
+            "unreadable workloads in assignment ids={}",
+            unreadable.join(",")
+        );
     }
     Ok(workloads)
 }
@@ -1129,7 +1137,10 @@ mod tests {
         broken["cpu_millicores"] = json!("many");
         let client = serve_workloads(json!([workload(), broken, 7])).await;
         let error = client.fetch_assigned_workloads("k").await.unwrap_err();
-        assert!(error.to_string().contains("ids=w-broken,unknown"), "{error}");
+        assert!(
+            error.to_string().contains("ids=w-broken,unknown"),
+            "{error}"
+        );
     }
 
     async fn serve_workloads(body: serde_json::Value) -> ApiClient {
