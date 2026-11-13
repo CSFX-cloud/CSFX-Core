@@ -1,7 +1,9 @@
 use crate::spec::PortProtocol;
 use anyhow::{Context, Result};
+use std::process::Stdio;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tracing::info;
+use tracing::debug;
 
 const TABLE_NAME: &str = "csfx";
 const CHAIN_NAME: &str = "rg_isolation";
@@ -10,125 +12,116 @@ const NAT_CHAIN_NAME: &str = "node_port_dnat";
 const SNAT_CHAIN_NAME: &str = "node_port_snat";
 const MGMT_GUARD_CHAIN_NAME: &str = "guest_mgmt_guard";
 const GUEST_BRIDGE_PATTERN: &str = "csfxrg*";
-const MGMT_INTERFACE: &str = "wgmgmt0";
-const MGMT_MESH_CIDR: &str = "10.100.0.0/16";
-const MGMT_GUARD_SELECTORS: [&[&str]; 2] = [
-    &["oifname", MGMT_INTERFACE],
-    &["ip", "daddr", MGMT_MESH_CIDR],
-];
+const MGMT_GUARD_SELECTORS: [&str; 2] = ["oifname \"wgmgmt0\"", "ip daddr 10.100.0.0/16"];
 
-pub async fn ensure_table_and_chain() -> Result<()> {
-    run_nft(&["add", "table", "inet", TABLE_NAME]).await?;
+pub struct BridgeRules {
+    pub name: String,
+    pub mesh_iface: Option<String>,
+}
 
-    run_nft(&[
-        "add",
-        "chain",
-        "inet",
-        TABLE_NAME,
-        CHAIN_NAME,
-        "{ type filter hook forward priority 0 ; policy accept ; }",
-    ])
-    .await?;
-
-    info!(
-        table = TABLE_NAME,
-        chain = CHAIN_NAME,
-        "nftables RG isolation chain ready"
-    );
-
-    guard_management_mesh().await?;
-
-    run_nft(&["add", "table", "ip", NAT_TABLE_NAME]).await?;
-
-    run_nft(&[
-        "add",
-        "chain",
-        "ip",
-        NAT_TABLE_NAME,
-        NAT_CHAIN_NAME,
-        "{ type nat hook prerouting priority -100 ; policy accept ; }",
-    ])
-    .await?;
-
-    run_nft(&[
-        "add",
-        "chain",
-        "ip",
-        NAT_TABLE_NAME,
-        SNAT_CHAIN_NAME,
-        "{ type nat hook postrouting priority 100 ; policy accept ; }",
-    ])
-    .await?;
-
-    info!(
-        table = NAT_TABLE_NAME,
-        chains = "node_port_dnat,node_port_snat",
-        "nftables node port nat chains ready"
-    );
-
+pub async fn apply_bridge_rules(bridges: &[BridgeRules]) -> Result<()> {
+    apply_script(&ruleset(bridges)).await?;
+    debug!(bridges = bridges.len(), "nftables bridge rules applied");
     Ok(())
 }
 
-async fn guard_management_mesh() -> Result<()> {
-    run_nft(&[
-        "add",
-        "chain",
-        "inet",
-        TABLE_NAME,
-        MGMT_GUARD_CHAIN_NAME,
-        "{ type filter hook forward priority -10 ; policy accept ; }",
-    ])
-    .await?;
-    run_nft(&["flush", "chain", "inet", TABLE_NAME, MGMT_GUARD_CHAIN_NAME]).await?;
-    for selector in MGMT_GUARD_SELECTORS {
-        let mut rule = vec![
-            "add",
-            "rule",
-            "inet",
-            TABLE_NAME,
-            MGMT_GUARD_CHAIN_NAME,
-            "iifname",
-            GUEST_BRIDGE_PATTERN,
-        ];
-        rule.extend_from_slice(selector);
-        rule.push("drop");
-        run_nft(&rule).await?;
-    }
-
-    info!(
-        chain = MGMT_GUARD_CHAIN_NAME,
-        "nftables management mesh guard ready"
-    );
-    Ok(())
+fn ruleset(bridges: &[BridgeRules]) -> String {
+    let mut lines = vec![
+        format!("add table inet {TABLE_NAME}"),
+        format!("add table ip {NAT_TABLE_NAME}"),
+        format!(
+            "add chain ip {NAT_TABLE_NAME} {NAT_CHAIN_NAME} {{ type nat hook prerouting priority -100 ; policy accept ; }}"
+        ),
+    ];
+    lines.extend(isolation_rules(bridges));
+    lines.extend(guard_rules());
+    lines.extend(snat_rules(bridges));
+    lines.join("\n")
 }
 
-pub async fn isolate_bridge(bridge_name: &str, other_bridges: &[String]) -> Result<()> {
-    for other in other_bridges {
-        if other == bridge_name {
-            continue;
+fn isolation_rules(bridges: &[BridgeRules]) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "add chain inet {TABLE_NAME} {CHAIN_NAME} {{ type filter hook forward priority 0 ; policy accept ; }}"
+        ),
+        format!("flush chain inet {TABLE_NAME} {CHAIN_NAME}"),
+    ];
+    for from in bridges {
+        for to in bridges.iter().filter(|to| to.name != from.name) {
+            lines.push(format!(
+                "add rule inet {TABLE_NAME} {CHAIN_NAME} iifname \"{}\" oifname \"{}\" drop",
+                from.name, to.name
+            ));
         }
-
-        add_drop_rule(bridge_name, other).await?;
-        add_drop_rule(other, bridge_name).await?;
     }
-
-    Ok(())
+    lines
 }
 
-async fn add_drop_rule(from_bridge: &str, to_bridge: &str) -> Result<()> {
-    run_nft(&[
-        "add",
-        "rule",
-        "inet",
-        TABLE_NAME,
-        CHAIN_NAME,
-        "iifname",
-        from_bridge,
-        "oifname",
-        to_bridge,
-        "drop",
-    ])
-    .await
+fn guard_rules() -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "add chain inet {TABLE_NAME} {MGMT_GUARD_CHAIN_NAME} {{ type filter hook forward priority -10 ; policy accept ; }}"
+        ),
+        format!("flush chain inet {TABLE_NAME} {MGMT_GUARD_CHAIN_NAME}"),
+    ];
+    for selector in MGMT_GUARD_SELECTORS {
+        lines.push(format!(
+            "add rule inet {TABLE_NAME} {MGMT_GUARD_CHAIN_NAME} iifname \"{GUEST_BRIDGE_PATTERN}\" {selector} drop"
+        ));
+    }
+    lines
+}
+
+fn snat_rules(bridges: &[BridgeRules]) -> Vec<String> {
+    let mut lines = vec![
+        format!(
+            "add chain ip {NAT_TABLE_NAME} {SNAT_CHAIN_NAME} {{ type nat hook postrouting priority 100 ; policy accept ; }}"
+        ),
+        format!("flush chain ip {NAT_TABLE_NAME} {SNAT_CHAIN_NAME}"),
+    ];
+    for bridge in bridges {
+        if let Some(wg_iface) = &bridge.mesh_iface {
+            lines.push(format!(
+                "add rule ip {NAT_TABLE_NAME} {SNAT_CHAIN_NAME} iifname \"{}\" oifname \"{wg_iface}\" accept comment \"{}\"",
+                bridge.name,
+                mesh_comment(&bridge.name)
+            ));
+        }
+    }
+    for bridge in bridges {
+        let comment = snat_comment(&bridge.name);
+        lines.push(format!(
+            "add rule ip {NAT_TABLE_NAME} {SNAT_CHAIN_NAME} iifname \"{0}\" ct status dnat masquerade comment \"{comment}\"",
+            bridge.name
+        ));
+        lines.push(format!(
+            "add rule ip {NAT_TABLE_NAME} {SNAT_CHAIN_NAME} iifname \"{0}\" oifname != \"{0}\" masquerade comment \"{comment}\"",
+            bridge.name
+        ));
+    }
+    lines
+}
+
+async fn apply_script(script: &str) -> Result<()> {
+    let mut child = Command::new("nft")
+        .args(["-f", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to execute nft")?;
+    let mut stdin = child.stdin.take().context("nft stdin is unavailable")?;
+    let written = stdin.write_all(script.as_bytes()).await;
+    drop(stdin);
+    let output = child
+        .wait_with_output()
+        .await
+        .context("failed to wait for nft")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("nft ruleset failed stderr={}", stderr);
+    }
+    written.context("failed to send ruleset to nft")
 }
 
 fn ensure_node_port_in_range(node_port: u16) -> Result<()> {
@@ -227,69 +220,13 @@ pub async fn dnat_bridge_port(bridge_name: &str, rg_gateway_ip: &str, port: u16)
         "to",
         &format!("127.0.0.1:{}", port),
         "comment",
-        &format!("\"{}-s3\"", bridge_name),
-    ])
-    .await
-}
-
-pub async fn allow_mesh_forwarding(bridge_name: &str, wg_iface: &str) -> Result<()> {
-    let comment = format!("\"{}\"", mesh_comment(bridge_name));
-    delete_rules_containing("ip", NAT_TABLE_NAME, SNAT_CHAIN_NAME, &comment).await?;
-    run_nft(&[
-        "insert",
-        "rule",
-        "ip",
-        NAT_TABLE_NAME,
-        SNAT_CHAIN_NAME,
-        "iifname",
-        bridge_name,
-        "oifname",
-        wg_iface,
-        "accept",
-        "comment",
-        &comment,
+        &bridge_dnat_comment(bridge_name),
     ])
     .await
 }
 
 fn mesh_comment(bridge_name: &str) -> String {
     format!("{bridge_name}-mesh")
-}
-
-pub async fn masquerade_bridge_traffic(bridge_name: &str) -> Result<()> {
-    let comment = format!("\"{}\"", snat_comment(bridge_name));
-    run_nft(&[
-        "add",
-        "rule",
-        "ip",
-        NAT_TABLE_NAME,
-        SNAT_CHAIN_NAME,
-        "iifname",
-        bridge_name,
-        "ct",
-        "status",
-        "dnat",
-        "masquerade",
-        "comment",
-        &comment,
-    ])
-    .await?;
-    run_nft(&[
-        "add",
-        "rule",
-        "ip",
-        NAT_TABLE_NAME,
-        SNAT_CHAIN_NAME,
-        "iifname",
-        bridge_name,
-        "oifname",
-        "!=",
-        bridge_name,
-        "masquerade",
-        "comment",
-        &comment,
-    ])
-    .await
 }
 
 fn snat_comment(bridge_name: &str) -> String {
@@ -306,22 +243,36 @@ pub async fn remove_node_port_rules(workload_id: &str) -> Result<()> {
     .await
 }
 
-pub async fn remove_bridge_rules(bridge_name: &str) -> Result<()> {
-    delete_rules_containing("inet", TABLE_NAME, CHAIN_NAME, bridge_name).await?;
+pub async fn ensure_bridge_dnat(bridge_name: &str, rg_gateway_ip: &str, port: u16) -> Result<()> {
+    let comment = bridge_dnat_comment(bridge_name);
+    let listing = list_chain("ip", NAT_TABLE_NAME, NAT_CHAIN_NAME).await?;
+    if listing.contains(&comment) {
+        return Ok(());
+    }
+    dnat_bridge_port(bridge_name, rg_gateway_ip, port).await
+}
+
+pub async fn remove_bridge_dnat(bridge_name: &str) -> Result<()> {
     delete_rules_containing(
         "ip",
         NAT_TABLE_NAME,
-        SNAT_CHAIN_NAME,
-        &format!("\"{}\"", snat_comment(bridge_name)),
-    )
-    .await?;
-    delete_rules_containing(
-        "ip",
-        NAT_TABLE_NAME,
-        SNAT_CHAIN_NAME,
-        &format!("\"{}\"", mesh_comment(bridge_name)),
+        NAT_CHAIN_NAME,
+        &bridge_dnat_comment(bridge_name),
     )
     .await
+}
+
+fn bridge_dnat_comment(bridge_name: &str) -> String {
+    format!("\"{bridge_name}-s3\"")
+}
+
+async fn list_chain(family: &str, table: &str, chain: &str) -> Result<String> {
+    let output = Command::new("nft")
+        .args(["-a", "list", "chain", family, table, chain])
+        .output()
+        .await
+        .context("failed to list nftables rules")?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 async fn delete_rules_containing(
@@ -330,13 +281,7 @@ async fn delete_rules_containing(
     chain: &str,
     needle: &str,
 ) -> Result<()> {
-    let output = Command::new("nft")
-        .args(["-a", "list", "chain", family, table, chain])
-        .output()
-        .await
-        .context("failed to list nftables rules")?;
-
-    let listing = String::from_utf8_lossy(&output.stdout);
+    let listing = list_chain(family, table, chain).await?;
     for handle in rule_handles(&listing, needle) {
         run_nft(&[
             "delete",
@@ -404,52 +349,11 @@ mod tests {
         assert!(rule_handles("rule comment \"w-1\"", "w-1").is_empty());
     }
 
-    #[tokio::test]
-    async fn bridges_are_never_isolated_from_themselves() {
-        isolate_bridge("csfxrg1", &["csfxrg1".to_string()])
-            .await
-            .unwrap();
-        isolate_bridge("csfxrg1", &[]).await.unwrap();
-    }
-
     use crate::testing::FakeTools;
 
     const SUCCEEDING: &str = "exit 0";
+    const LISTING_WITH_S3: &str = r#"case "$*" in *"list chain"*) printf '%s\n' 'iifname "br1" ip daddr 10.0.0.1 tcp dport 3900 dnat to 127.0.0.1:3900 comment "br1-s3" # handle 21';; esac"#;
     const LISTING: &str = r#"case "$*" in *"list chain"*) printf '%s\n' 'iifname "br1" oifname "br2" drop # handle 4' 'iifname "br1" accept comment "br1-mesh" # handle 9' 'masquerade comment "br1-snat" # handle 11' 'dnat to 10.0.0.2:80 comment "w-1" # handle 15';; esac"#;
-
-    #[tokio::test]
-    async fn base_tables_and_chains_are_created_in_order() {
-        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
-
-        ensure_table_and_chain().await.unwrap();
-
-        let calls = tools.calls("nft");
-        assert_eq!(calls.len(), 9);
-        assert_eq!(calls[0], "add table inet csfx");
-        assert!(calls[1].starts_with("add chain inet csfx rg_isolation"));
-        assert!(calls[2].starts_with("add chain inet csfx guest_mgmt_guard"));
-        assert_eq!(calls[3], "flush chain inet csfx guest_mgmt_guard");
-        assert_eq!(calls[6], "add table ip csfx_nat");
-        assert!(calls[7].contains("node_port_dnat"));
-        assert!(calls[8].contains("node_port_snat"));
-    }
-
-    #[tokio::test]
-    async fn guests_are_blocked_from_the_management_mesh() {
-        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
-
-        ensure_table_and_chain().await.unwrap();
-
-        let calls = tools.calls("nft");
-        assert_eq!(
-            calls[4],
-            "add rule inet csfx guest_mgmt_guard iifname csfxrg* oifname wgmgmt0 drop"
-        );
-        assert_eq!(
-            calls[5],
-            "add rule inet csfx guest_mgmt_guard iifname csfxrg* ip daddr 10.100.0.0/16 drop"
-        );
-    }
 
     #[tokio::test]
     async fn existing_objects_are_not_an_error_but_other_failures_are() {
@@ -463,20 +367,158 @@ mod tests {
         assert!(error.contains("syntax error"));
     }
 
-    #[tokio::test]
-    async fn isolation_adds_a_drop_rule_in_both_directions() {
-        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
+    fn bridge(name: &str, mesh_iface: Option<&str>) -> BridgeRules {
+        BridgeRules {
+            name: name.to_string(),
+            mesh_iface: mesh_iface.map(str::to_string),
+        }
+    }
 
-        isolate_bridge("br1", &["br2".to_string(), "br3".to_string()])
+    const CAPTURING: &str = "cat >> \"$0.stdin\"";
+
+    #[test]
+    fn isolation_drops_traffic_between_every_pair_of_bridges() {
+        let rules = isolation_rules(&[
+            bridge("br1", None),
+            bridge("br2", None),
+            bridge("br3", None),
+        ]);
+
+        let drops: Vec<_> = rules.iter().filter(|rule| rule.contains(" drop")).collect();
+        assert_eq!(drops.len(), 6);
+        assert!(rules.contains(
+            &"add rule inet csfx rg_isolation iifname \"br1\" oifname \"br2\" drop".to_string()
+        ));
+        assert!(rules.contains(
+            &"add rule inet csfx rg_isolation iifname \"br3\" oifname \"br1\" drop".to_string()
+        ));
+        assert!(!rules
+            .iter()
+            .any(|rule| rule.contains("iifname \"br1\" oifname \"br1\"")));
+    }
+
+    #[test]
+    fn a_single_bridge_needs_no_isolation_rules_but_keeps_the_chain() {
+        let rules = isolation_rules(&[bridge("br1", None)]);
+
+        assert_eq!(rules.len(), 2);
+        assert!(rules[1].starts_with("flush chain inet csfx rg_isolation"));
+    }
+
+    #[test]
+    fn guests_are_blocked_from_the_management_mesh() {
+        let rules = guard_rules();
+
+        assert!(rules.contains(
+            &"add rule inet csfx guest_mgmt_guard iifname \"csfxrg*\" oifname \"wgmgmt0\" drop"
+                .to_string()
+        ));
+        assert!(rules.contains(
+            &"add rule inet csfx guest_mgmt_guard iifname \"csfxrg*\" ip daddr 10.100.0.0/16 drop"
+                .to_string()
+        ));
+    }
+
+    #[test]
+    fn mesh_exemptions_come_before_the_masquerade_rules() {
+        let rules = snat_rules(&[bridge("br1", Some("wg1")), bridge("br2", None)]);
+
+        let mesh = rules
+            .iter()
+            .position(|rule| rule.contains("accept comment"))
+            .unwrap();
+        let first_masquerade = rules
+            .iter()
+            .position(|rule| rule.contains("masquerade"))
+            .unwrap();
+        assert!(mesh < first_masquerade);
+        assert_eq!(
+            rules
+                .iter()
+                .filter(|rule| rule.contains("accept comment"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            rules
+                .iter()
+                .filter(|rule| rule.contains("masquerade"))
+                .count(),
+            4
+        );
+        assert!(rules
+            .iter()
+            .any(|rule| rule.contains("ct status dnat masquerade comment \"br1-snat\"")));
+        assert!(rules
+            .iter()
+            .any(|rule| rule.contains("oifname != \"br2\" masquerade comment \"br2-snat\"")));
+    }
+
+    #[test]
+    fn every_chain_is_flushed_before_it_is_rebuilt() {
+        let script = ruleset(&[]);
+
+        for chain in [
+            "flush chain inet csfx rg_isolation",
+            "flush chain inet csfx guest_mgmt_guard",
+            "flush chain ip csfx_nat node_port_snat",
+        ] {
+            assert!(script.contains(chain), "{chain}");
+        }
+        assert!(!script.contains("flush chain ip csfx_nat node_port_dnat"));
+    }
+
+    #[tokio::test]
+    async fn the_ruleset_is_applied_as_one_transaction() {
+        let tools = FakeTools::install(&[("nft", CAPTURING)]);
+
+        apply_bridge_rules(&[bridge("br1", None), bridge("br2", None)])
             .await
             .unwrap();
 
+        assert_eq!(tools.calls("nft"), vec!["-f -".to_string()]);
+        let script = tools.stdin("nft");
+        assert!(script.contains("add table inet csfx"));
+        assert!(script.contains("iifname \"br2\" oifname \"br1\" drop"));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_ruleset_is_reported_with_the_nft_message() {
+        let _tools =
+            FakeTools::install(&[("nft", "cat > /dev/null\necho 'syntax error' >&2\nexit 1")]);
+
+        let error = apply_bridge_rules(&[bridge("br1", None)])
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("nft ruleset failed"));
+        assert!(error.contains("syntax error"));
+    }
+
+    #[tokio::test]
+    async fn the_bridge_dnat_rule_is_only_added_when_missing() {
+        {
+            let tools = FakeTools::install(&[("nft", LISTING_WITH_S3)]);
+            ensure_bridge_dnat("br1", "10.0.0.1", 3900).await.unwrap();
+            assert_eq!(tools.calls("nft").len(), 1);
+        }
+        let tools = FakeTools::install(&[("nft", LISTING)]);
+        ensure_bridge_dnat("br1", "10.0.0.1", 3900).await.unwrap();
         let calls = tools.calls("nft");
-        assert_eq!(calls.len(), 4);
-        assert!(calls
-            .contains(&"add rule inet csfx rg_isolation iifname br1 oifname br2 drop".to_string()));
-        assert!(calls
-            .contains(&"add rule inet csfx rg_isolation iifname br3 oifname br1 drop".to_string()));
+        assert_eq!(calls.len(), 2);
+        assert!(calls[1].starts_with("add rule ip csfx_nat node_port_dnat iifname br1"));
+    }
+
+    #[tokio::test]
+    async fn the_bridge_dnat_rule_is_removed_by_handle() {
+        let tools = FakeTools::install(&[("nft", LISTING_WITH_S3)]);
+
+        remove_bridge_dnat("br1").await.unwrap();
+
+        assert!(tools
+            .calls("nft")
+            .contains(&"delete rule ip csfx_nat node_port_dnat handle 21".to_string()));
     }
 
     #[tokio::test]
@@ -513,34 +555,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn masquerade_covers_dnat_and_outbound_traffic() {
-        let tools = FakeTools::install(&[("nft", SUCCEEDING)]);
-
-        masquerade_bridge_traffic("br1").await.unwrap();
-
-        let calls = tools.calls("nft");
-        assert_eq!(calls.len(), 2);
-        assert!(calls[0].contains("ct status dnat masquerade"));
-        assert!(calls[1].contains("oifname != br1 masquerade"));
-        assert!(calls
-            .iter()
-            .all(|call| call.ends_with("comment \"br1-snat\"")));
-    }
-
-    #[tokio::test]
-    async fn mesh_forwarding_replaces_the_previous_rule() {
-        let tools = FakeTools::install(&[("nft", LISTING)]);
-
-        allow_mesh_forwarding("br1", "wg0").await.unwrap();
-
-        let calls = tools.calls("nft");
-        assert!(calls[0].starts_with("-a list chain ip csfx_nat node_port_snat"));
-        assert_eq!(calls[1], "delete rule ip csfx_nat node_port_snat handle 9");
-        assert!(calls[2]
-            .starts_with("insert rule ip csfx_nat node_port_snat iifname br1 oifname wg0 accept"));
-    }
-
-    #[tokio::test]
     async fn workload_rules_are_removed_by_handle() {
         let tools = FakeTools::install(&[("nft", LISTING)]);
 
@@ -549,23 +563,6 @@ mod tests {
         let calls = tools.calls("nft");
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[1], "delete rule ip csfx_nat node_port_dnat handle 15");
-    }
-
-    #[tokio::test]
-    async fn bridge_removal_clears_isolation_snat_and_mesh_rules() {
-        let tools = FakeTools::install(&[("nft", LISTING)]);
-
-        remove_bridge_rules("br1").await.unwrap();
-
-        let deletes: Vec<_> = tools
-            .calls("nft")
-            .into_iter()
-            .filter(|call| call.starts_with("delete rule"))
-            .collect();
-        assert!(deletes.contains(&"delete rule inet csfx rg_isolation handle 4".to_string()));
-        assert!(deletes.contains(&"delete rule inet csfx rg_isolation handle 9".to_string()));
-        assert!(deletes.contains(&"delete rule ip csfx_nat node_port_snat handle 11".to_string()));
-        assert!(deletes.contains(&"delete rule ip csfx_nat node_port_snat handle 9".to_string()));
     }
 
     #[tokio::test]
@@ -720,9 +717,10 @@ mod tests {
             return;
         }
         let lab = lab::Lab::build();
-        ensure_table_and_chain().await.unwrap();
-        masquerade_bridge_traffic("csfxrglab0").await.unwrap();
+        let lone = [bridge("csfxrglab0", None)];
+        let both = [bridge("csfxrglab0", None), bridge("csfxrglab1", None)];
 
+        apply_bridge_rules(&lone).await.unwrap();
         run_nft(&["flush", "chain", "inet", TABLE_NAME, MGMT_GUARD_CHAIN_NAME])
             .await
             .unwrap();
@@ -730,10 +728,21 @@ mod tests {
             assert!(lab.guest_reaches(address), "{}", lab.diagnostics(address));
         }
 
-        ensure_table_and_chain().await.unwrap();
-        isolate_bridge("csfxrglab0", &["csfxrglab1".to_string()])
+        apply_bridge_rules(&both).await.unwrap();
+        assert!(!lab.guest_reaches("10.100.0.9"));
+        assert!(!lab.guest_reaches("10.201.0.2"));
+
+        run_nft(&["delete", "table", "inet", TABLE_NAME])
             .await
             .unwrap();
+        run_nft(&["delete", "table", "ip", NAT_TABLE_NAME])
+            .await
+            .unwrap();
+        for address in ["10.100.0.9", "10.201.0.2"] {
+            assert!(lab.guest_reaches(address), "{}", lab.diagnostics(address));
+        }
+
+        apply_bridge_rules(&both).await.unwrap();
         assert!(!lab.guest_reaches("10.100.0.9"));
         assert!(!lab.guest_reaches("10.201.0.2"));
     }

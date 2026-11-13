@@ -46,6 +46,10 @@ impl FakeTools {
         }
     }
 
+    pub fn stdin(&self, tool: &str) -> String {
+        std::fs::read_to_string(self.directory.join(format!("{tool}.stdin"))).unwrap_or_default()
+    }
+
     pub fn calls(&self, tool: &str) -> Vec<String> {
         std::fs::read_to_string(self.directory.join(format!("{tool}.log")))
             .unwrap_or_default()

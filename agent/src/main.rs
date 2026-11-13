@@ -200,10 +200,6 @@ async fn main() -> Result<()> {
         warn!("No management tunnel IP available, VPN peering disabled for this agent");
     }
 
-    if let Err(e) = nftables::ensure_table_and_chain().await {
-        warn!(error = %e, "Failed to initialize nftables resource group isolation");
-    }
-
     let rg_dns_registry = Arc::new(rg_dns::RgDnsRegistry::new());
     let local_state = Arc::new(local_state::LocalState::open(local_state::STATE_FILE));
 
@@ -423,6 +419,9 @@ async fn reconcile_tick(
     .await;
     if let Some(volumes) = &assigned_volumes {
         release_unassigned_volumes(mounted_volumes, volumes).await;
+    }
+    if let Err(e) = rg_network::reconcile_bridges().await {
+        error!(error = %e, "Failed to reconcile resource group bridges");
     }
     rg_mesh::sync(
         client,
@@ -810,6 +809,16 @@ async fn ensure_group_dns(
     }
 }
 
+fn assigned_ranges(workloads: &[client::AssignedWorkload]) -> Vec<(String, String)> {
+    let mut ranges: Vec<(String, String)> = workloads
+        .iter()
+        .filter_map(|w| Some((w.resource_group_id.clone()?, w.resource_group_cidr.clone()?)))
+        .collect();
+    ranges.sort_unstable();
+    ranges.dedup();
+    ranges
+}
+
 async fn desired_workloads(
     client: &client::ApiClient,
     api_key: &str,
@@ -902,6 +911,7 @@ async fn process_workloads(
     };
 
     ensure_group_dns(firecracker, &workloads).await;
+    rg_network::record_cidrs(&assigned_ranges(&workloads)).await;
 
     adopt_running(
         firecracker,
@@ -2186,6 +2196,25 @@ mod tests {
 
         assert_eq!(outcome.failures, 1);
         assert!(!guard.record_isolation(long_ago + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn assigned_ranges_are_unique_and_skip_groups_without_a_range() {
+        let mut first = workload("w1", "always", None);
+        first.resource_group_id = Some("rg-1".to_string());
+        first.resource_group_cidr = Some("10.101.0.0/24".to_string());
+        let mut second = first.clone();
+        second.id = "w2".to_string();
+        let mut without_range = workload("w3", "always", None);
+        without_range.resource_group_id = Some("rg-2".to_string());
+
+        let ranges =
+            assigned_ranges(&[first, second, without_range, workload("w4", "always", None)]);
+
+        assert_eq!(
+            ranges,
+            vec![("rg-1".to_string(), "10.101.0.0/24".to_string())]
+        );
     }
 
     fn workload_json(id: &str) -> serde_json::Value {
