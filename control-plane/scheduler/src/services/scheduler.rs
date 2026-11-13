@@ -501,8 +501,10 @@ impl SchedulerService {
 
     pub async fn list_workloads(
         &self,
+        after: Option<Uuid>,
+        params: &shared::pagination::PageParams,
     ) -> Result<Vec<crate::models::workload::WorkloadResponse>, String> {
-        crate::db::workloads::get_all(&self.db)
+        crate::db::workloads::get_page(&self.db, after, params)
             .await
             .map_err(|e| format!("Failed to list workloads: {}", e))
     }

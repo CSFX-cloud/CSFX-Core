@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Path, Query, RawQuery, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
@@ -11,6 +11,8 @@ use serde_json::json;
 
 use crate::{
     auth::rbac::{CanManageBuckets, CanViewBuckets},
+    routes::paged_proxy::{proxy_list, with_query},
+    service_client::ListTarget,
     AppState,
 };
 
@@ -77,16 +79,10 @@ pub async fn list_buckets(
     CanViewBuckets(_claims): CanViewBuckets,
     State(state): State<AppState>,
     headers: HeaderMap,
+    RawQuery(query): RawQuery,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_object_storage(
-        &state,
-        reqwest::Method::GET,
-        "/buckets",
-        None,
-        Some(header_map),
-    )
-    .await
+    let path = with_query("/buckets", query);
+    proxy_list(&state, ListTarget::ObjectStorage, &path, &headers).await
 }
 
 pub async fn get_bucket(

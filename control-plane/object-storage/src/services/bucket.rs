@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use entity::entities::buckets;
 use sea_orm::DatabaseConnection;
+use shared::pagination::PageParams;
 use uuid::Uuid;
 
 use crate::{
@@ -148,8 +149,10 @@ pub async fn list_buckets(
     db_conn: &DatabaseConnection,
     resource_group_id: Option<Uuid>,
     organization_id: Option<Uuid>,
+    after: Option<Uuid>,
+    params: &PageParams,
 ) -> Result<Vec<BucketResponse>> {
-    let rows = db::list(db_conn, resource_group_id, organization_id).await?;
+    let rows = db::list(db_conn, resource_group_id, organization_id, after, params).await?;
     Ok(rows.into_iter().map(db::into_response).collect())
 }
 

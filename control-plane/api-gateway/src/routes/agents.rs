@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json},
     routing::{get, post, put},
@@ -10,6 +10,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
+use shared::pagination::{cursor_headers, keyset_by_id, split_page, PageParams};
 use shared::workload_status::ACTIVE_STATUSES;
 use uuid::Uuid;
 
@@ -153,22 +154,25 @@ fn is_container_id(hostname: &str) -> bool {
 pub async fn list_agents(
     State(state): State<AppState>,
     _perm: CanViewAgents,
+    Query(page): Query<PageParams>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let agents = agents::Entity::find()
-        .order_by_desc(agents::Column::RegisteredAt)
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to fetch agents: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let after = page.cursor_id().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let query = match page.limit() {
+        Some(_) => keyset_by_id(agents::Entity::find(), agents::Column::Id, after, &page),
+        None => agents::Entity::find().order_by_desc(agents::Column::RegisteredAt),
+    };
+    let agents = query.all(&state.db_conn).await.map_err(|e| {
+        tracing::error!("Failed to fetch agents: {}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
 
+    let (agents, next) = split_page(agents, &page, |a| a.id.to_string());
     let response: Vec<AgentResponse> = agents
         .into_iter()
         .filter(|a| !is_container_id(&a.hostname))
         .map(Into::into)
         .collect();
-    Ok(Json(response))
+    Ok((cursor_headers(next), Json(response)))
 }
 
 /// Get agent by ID

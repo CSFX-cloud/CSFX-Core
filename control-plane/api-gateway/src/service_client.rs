@@ -2,6 +2,20 @@ use anyhow::{Context, Result};
 use reqwest::{Client, StatusCode};
 use std::time::Duration;
 
+#[derive(Clone, Copy)]
+pub enum ListTarget {
+    Scheduler,
+    VolumeManager,
+    FailoverController,
+    ObjectStorage,
+}
+
+pub struct ListReply {
+    pub status: StatusCode,
+    pub body: Option<serde_json::Value>,
+    pub next_cursor: Option<String>,
+}
+
 /// HTTP Client for internal service-to-service communication
 #[derive(Clone)]
 pub struct ServiceClient {
@@ -48,6 +62,49 @@ impl ServiceClient {
             sdn_controller_url,
             object_storage_url,
         }
+    }
+
+    pub async fn forward_list(
+        &self,
+        target: ListTarget,
+        path_and_query: &str,
+        headers: Vec<(String, String)>,
+    ) -> Result<ListReply> {
+        let base = match target {
+            ListTarget::Scheduler => &self.scheduler_url,
+            ListTarget::VolumeManager => &self.volume_manager_url,
+            ListTarget::FailoverController => &self.failover_controller_url,
+            ListTarget::ObjectStorage => &self.object_storage_url,
+        };
+        let mut request = self.client.get(format!("{}{}", base, path_and_query));
+        for (key, value) in headers {
+            let key_lower = key.to_lowercase();
+            if key_lower == "content-length" || key_lower == "host" || key_lower == "content-type" {
+                continue;
+            }
+            request = request.header(key, value);
+        }
+        let response = request
+            .send()
+            .await
+            .context("Failed to send list request to service")?;
+        let status = response.status();
+        let next_cursor = response
+            .headers()
+            .get(shared::pagination::NEXT_CURSOR_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = response
+            .text()
+            .await
+            .ok()
+            .filter(|text| !text.is_empty())
+            .and_then(|text| serde_json::from_str(&text).ok());
+        Ok(ListReply {
+            status,
+            body,
+            next_cursor,
+        })
     }
 
     /// Forward a request to the registry service

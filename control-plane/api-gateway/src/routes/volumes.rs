@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, RawQuery, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{delete, get, post},
@@ -10,6 +10,8 @@ use serde_json::json;
 
 use crate::{
     auth::rbac::{CanManageVolumes, CanViewVolumes},
+    routes::paged_proxy::{proxy_list, with_query},
+    service_client::ListTarget,
     AppState,
 };
 
@@ -76,16 +78,10 @@ pub async fn list_volumes(
     CanViewVolumes(_claims): CanViewVolumes,
     State(state): State<AppState>,
     headers: HeaderMap,
+    RawQuery(query): RawQuery,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::GET,
-        "/volumes",
-        None,
-        Some(header_map),
-    )
-    .await
+    let path = with_query("/volumes", query);
+    proxy_list(&state, ListTarget::VolumeManager, &path, &headers).await
 }
 
 pub async fn get_volume(

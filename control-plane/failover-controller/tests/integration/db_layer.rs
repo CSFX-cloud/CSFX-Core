@@ -99,6 +99,13 @@ async fn open_events_are_found_until_resolved() {
         .await
         .unwrap()
         .is_none());
-    let recent = events::get_recent(&db, 100).await.unwrap();
-    assert!(recent.len() <= 100);
+    let filter = events::EventFilter {
+        status: Some("resolved".to_string()),
+        agent_id: Some(agent.id),
+        after: None,
+        limit: 100,
+    };
+    let resolved = events::list(&db, filter).await.unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].id, event.id);
 }

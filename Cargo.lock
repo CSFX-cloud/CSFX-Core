@@ -5222,6 +5222,7 @@ dependencies = [
  "dotenvy",
  "entity",
  "etcd-client",
+ "http",
  "migration",
  "reqwest",
  "sea-orm",

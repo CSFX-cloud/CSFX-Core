@@ -5,6 +5,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
     ModelTrait, QueryFilter,
 };
+use shared::pagination::{keyset_by_id, PageParams};
 use uuid::Uuid;
 
 use crate::models::volume::{
@@ -104,8 +105,15 @@ pub async fn begin_delete(
     Ok(result.rows_affected == 1)
 }
 
-pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<VolumeResponse>, sea_orm::DbErr> {
-    let rows = volumes::Entity::find().all(db).await?;
+pub async fn get_page(
+    db: &DatabaseConnection,
+    after: Option<Uuid>,
+    params: &PageParams,
+) -> Result<Vec<VolumeResponse>, sea_orm::DbErr> {
+    let query = volumes::Entity::find();
+    let rows = keyset_by_id(query, volumes::Column::Id, after, params)
+        .all(db)
+        .await?;
     Ok(rows.into_iter().map(into_response).collect())
 }
 

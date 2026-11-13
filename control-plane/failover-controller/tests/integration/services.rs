@@ -248,7 +248,13 @@ async fn status_alerts_follow_agent_status() {
         .await
         .unwrap()
         .is_none());
-    let recent = events::get_recent(&db, 100).await.unwrap();
+    let filter = events::EventFilter {
+        status: None,
+        agent_id: Some(agent.id),
+        after: None,
+        limit: 100,
+    };
+    let recent = events::list(&db, filter).await.unwrap();
     assert!(recent.iter().any(|event| event.agent_id == Some(agent.id)
         && event.event_type == "online"
         && event.status == "resolved"));

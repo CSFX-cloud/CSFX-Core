@@ -1,9 +1,10 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use shared::pagination::{cursor_headers, split_page, PageParams};
 use uuid::Uuid;
 
 use crate::{
@@ -49,9 +50,22 @@ pub async fn create_workload(
     }
 }
 
-pub async fn list_workloads(State(state): State<AppState>) -> impl IntoResponse {
-    match state.scheduler.list_workloads().await {
-        Ok(workloads) => (StatusCode::OK, Json(serde_json::json!(workloads))).into_response(),
+pub async fn list_workloads(
+    State(state): State<AppState>,
+    Query(page): Query<PageParams>,
+) -> impl IntoResponse {
+    let Ok(after) = page.cursor_id() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid cursor" })),
+        )
+            .into_response();
+    };
+    match state.scheduler.list_workloads(after, &page).await {
+        Ok(workloads) => {
+            let (workloads, next) = split_page(workloads, &page, |w| w.id.to_string());
+            (StatusCode::OK, cursor_headers(next), Json(workloads)).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),

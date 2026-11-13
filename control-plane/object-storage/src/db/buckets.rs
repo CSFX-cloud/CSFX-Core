@@ -4,6 +4,7 @@ use entity::entities::buckets;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
 };
+use shared::pagination::{keyset_by_id, PageParams};
 use uuid::Uuid;
 
 use crate::models::{BucketResponse, CreateBucketRequest, UpdateBucketRequest};
@@ -116,6 +117,8 @@ pub async fn list(
     db: &DatabaseConnection,
     resource_group_id: Option<Uuid>,
     organization_id: Option<Uuid>,
+    after: Option<Uuid>,
+    params: &PageParams,
 ) -> Result<Vec<buckets::Model>> {
     let mut query = buckets::Entity::find();
 
@@ -127,7 +130,10 @@ pub async fn list(
         query = query.filter(buckets::Column::OrganizationId.eq(org_id));
     }
 
-    query.all(db).await.context("failed to list buckets")
+    keyset_by_id(query, buckets::Column::Id, after, params)
+        .all(db)
+        .await
+        .context("failed to list buckets")
 }
 
 pub async fn update(

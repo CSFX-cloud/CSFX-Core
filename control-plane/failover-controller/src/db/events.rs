@@ -1,9 +1,9 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use entity::entities::failover_events;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder, QuerySelect, Set,
 };
 use uuid::Uuid;
 
@@ -96,11 +96,68 @@ pub async fn resolve(db: &DatabaseConnection, event_id: Uuid) -> Result<()> {
     Ok(())
 }
 
-pub async fn get_recent(db: &DatabaseConnection, limit: u64) -> Result<Vec<FailoverEvent>> {
-    let rows: Vec<failover_events::Model> = failover_events::Entity::find()
+pub struct EventFilter {
+    pub status: Option<String>,
+    pub agent_id: Option<Uuid>,
+    pub after: Option<EventCursor>,
+    pub limit: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EventCursor {
+    created_at: NaiveDateTime,
+    id: Uuid,
+}
+
+impl EventCursor {
+    pub fn of(event: &FailoverEvent) -> Self {
+        Self {
+            created_at: event.created_at.naive_utc(),
+            id: event.id,
+        }
+    }
+
+    pub fn encode(&self) -> String {
+        format!(
+            "{}.{}",
+            self.created_at.and_utc().timestamp_micros(),
+            self.id
+        )
+    }
+
+    pub fn decode(raw: &str) -> Option<Self> {
+        let (micros, id) = raw.split_once('.')?;
+        Some(Self {
+            created_at: DateTime::from_timestamp_micros(micros.parse().ok()?)?.naive_utc(),
+            id: Uuid::parse_str(id).ok()?,
+        })
+    }
+}
+
+pub async fn list(db: &DatabaseConnection, filter: EventFilter) -> Result<Vec<FailoverEvent>> {
+    let mut query = failover_events::Entity::find();
+    if let Some(status) = filter.status {
+        query = query.filter(failover_events::Column::Status.eq(status));
+    }
+    if let Some(agent_id) = filter.agent_id {
+        query = query.filter(failover_events::Column::AgentId.eq(agent_id));
+    }
+    if let Some(after) = filter.after {
+        query = query.filter(
+            Condition::any()
+                .add(failover_events::Column::CreatedAt.lt(after.created_at))
+                .add(
+                    Condition::all()
+                        .add(failover_events::Column::CreatedAt.eq(after.created_at))
+                        .add(failover_events::Column::Id.lt(after.id)),
+                ),
+        );
+    }
+    let rows = query
         .order_by_desc(failover_events::Column::CreatedAt)
-        .paginate(db, limit)
-        .fetch_page(0)
+        .order_by_desc(failover_events::Column::Id)
+        .limit(filter.limit)
+        .all(db)
         .await?;
 
     Ok(rows.into_iter().map(into_event).collect())
