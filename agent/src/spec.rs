@@ -18,7 +18,7 @@ impl PortProtocol {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PortMapping {
     pub container_port: u16,
     pub protocol: Option<PortProtocol>,

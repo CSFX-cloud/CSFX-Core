@@ -9,6 +9,7 @@ mod firecracker;
 mod isolation;
 mod join;
 mod journal;
+mod local_state;
 mod master_join;
 mod mgmt_up;
 mod nftables;
@@ -204,6 +205,7 @@ async fn main() -> Result<()> {
     }
 
     let rg_dns_registry = Arc::new(rg_dns::RgDnsRegistry::new());
+    let local_state = Arc::new(local_state::LocalState::open(local_state::STATE_FILE));
 
     let firecracker_runtime = Arc::new(firecracker::runtime::FirecrackerRuntime::new(
         wg_identity.private_key_b64.clone(),
@@ -270,6 +272,7 @@ async fn main() -> Result<()> {
         restart_counts,
         service_dns_registry,
         rg_dns_registry,
+        local_state,
         assignment_signal,
     )
     .await;
@@ -396,10 +399,12 @@ async fn reconcile_tick(
     restart_counts: &Arc<Mutex<HashMap<String, u32>>>,
     service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
     rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
+    local_state: &Arc<local_state::LocalState>,
     failure_count: &mut u32,
     fence_guard: &mut fence::FenceGuard,
 ) {
-    let assigned_volumes = process_volumes(client, agent_id, api_key, mounted_volumes).await;
+    let assigned_volumes =
+        process_volumes(client, agent_id, api_key, mounted_volumes, local_state).await;
     let resource_group_ids = process_workloads(
         client,
         starts,
@@ -413,6 +418,7 @@ async fn reconcile_tick(
         restart_counts,
         service_dns_registry,
         rg_dns_registry,
+        local_state,
     )
     .await;
     if let Some(volumes) = &assigned_volumes {
@@ -492,6 +498,7 @@ async fn reconcile_tick(
                 )
                 .await;
                 release_unassigned_volumes(mounted_volumes, &[]).await;
+                local_state.clear().await;
             }
         }
     }
@@ -513,6 +520,7 @@ async fn run_heartbeat_loop(
     restart_counts: Arc<Mutex<HashMap<String, u32>>>,
     service_dns_registry: Arc<Mutex<HashMap<String, (String, String)>>>,
     rg_dns_registry: Arc<rg_dns::RgDnsRegistry>,
+    local_state: Arc<local_state::LocalState>,
     mut assignment_signal: tokio::sync::mpsc::UnboundedReceiver<()>,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
@@ -524,7 +532,7 @@ async fn run_heartbeat_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &local_state, &mut failure_count, &mut fence_guard).await;
             }
             signal = assignment_signal.recv() => {
                 if signal.is_none() {
@@ -534,11 +542,11 @@ async fn run_heartbeat_loop(
                 while assignment_signal.try_recv().is_ok() {}
                 info!(agent_id = %agent_id, "assignment push received, reconciling immediately");
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &local_state, &mut failure_count, &mut fence_guard).await;
             }
             _ = completed.notified() => {
                 interval.reset();
-                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &mut failure_count, &mut fence_guard).await;
+                reconcile_tick(&client, &starts, agent_id, api_key, &firecracker, &qemu, &running_containers, &vm_workload_ids, &workload_phases, &mounted_volumes, &restart_counts, &service_dns_registry, &rg_dns_registry, &local_state, &mut failure_count, &mut fence_guard).await;
             }
             _ = tokio::signal::ctrl_c() => {
                 info!("Shutdown signal received");
@@ -584,15 +592,20 @@ async fn process_volumes(
     agent_id: uuid::Uuid,
     api_key: &str,
     mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+    local_state: &local_state::LocalState,
 ) -> Option<Vec<client::AssignedVolume>> {
     let volumes = match client.fetch_assigned_volumes(agent_id, api_key).await {
         Ok(v) => v,
         Err(e) => {
             warn!(error = %e, "Failed to fetch assigned volumes");
+            if let Some(cached) = local_state.volumes().await {
+                map_missing_volumes(&cached, mounted_volumes).await;
+            }
             return None;
         }
     };
 
+    local_state.confirm_volumes(&volumes).await;
     map_missing_volumes(&volumes, mounted_volumes).await;
     grow_mapped_volumes(&volumes, mounted_volumes).await;
     Some(volumes)
@@ -797,40 +810,39 @@ async fn ensure_group_dns(
     }
 }
 
-async fn process_workloads(
-    client: &Arc<client::ApiClient>,
-    starts: &StartTracker,
+async fn desired_workloads(
+    client: &client::ApiClient,
     api_key: &str,
+    local_state: &local_state::LocalState,
+) -> Option<Vec<client::AssignedWorkload>> {
+    let error = match client.fetch_assigned_workloads(api_key).await {
+        Ok(workloads) => {
+            local_state.confirm_workloads(&workloads).await;
+            return Some(workloads);
+        }
+        Err(e) => e,
+    };
+    warn!(error = %error, "Failed to fetch assigned workloads");
+    if isolation::isolated_from_peers().await {
+        warn!("Control plane and all mesh peers unreachable, not acting on local workload state");
+        return None;
+    }
+    let workloads = local_state.workloads().await?;
+    info!(
+        generation = local_state.generation().await,
+        workloads = workloads.len(),
+        "Reconciling from local workload state"
+    );
+    Some(workloads)
+}
+
+async fn adopt_running(
     firecracker: &Arc<firecracker::runtime::FirecrackerRuntime>,
     qemu: &Arc<qemu::runtime::QemuRuntime>,
     running_containers: &Arc<Mutex<HashMap<String, String>>>,
-    vm_workload_ids: &Arc<Mutex<std::collections::HashSet<String>>>,
-    workload_phases: &Arc<Mutex<HashMap<String, String>>>,
-    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
-    restart_counts: &Arc<Mutex<HashMap<String, u32>>>,
-    service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
-    rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
-) -> Vec<String> {
-    let workloads = match client.fetch_assigned_workloads(api_key).await {
-        Ok(w) => w,
-        Err(e) => {
-            warn!(error = %e, "Failed to fetch assigned workloads");
-            return Vec::new();
-        }
-    };
-
-    let resource_group_ids: Vec<String> = {
-        let mut ids: Vec<String> = workloads
-            .iter()
-            .filter_map(|w| w.resource_group_id.clone())
-            .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
-    };
-
-    ensure_group_dns(firecracker, &workloads).await;
-
+    vm_workload_ids: &Arc<Mutex<HashSet<String>>>,
+    workloads: &[client::AssignedWorkload],
+) {
     let recovered_microvms = firecracker.reconcile_once().await;
     let recovered_vms = qemu.reconcile_once().await;
 
@@ -849,12 +861,56 @@ async fn process_workloads(
         );
     }
 
-    if !recovered_microvms.is_empty() || !recovered_vms.is_empty() {
-        let mut containers = running_containers.lock().await;
-        for (workload_id, handle) in recovered_microvms.into_iter().chain(recovered_vms) {
-            containers.insert(workload_id, handle);
-        }
+    if recovered_microvms.is_empty() && recovered_vms.is_empty() {
+        return;
     }
+    let mut containers = running_containers.lock().await;
+    for (workload_id, handle) in recovered_microvms.into_iter().chain(recovered_vms) {
+        containers.insert(workload_id, handle);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_workloads(
+    client: &Arc<client::ApiClient>,
+    starts: &StartTracker,
+    api_key: &str,
+    firecracker: &Arc<firecracker::runtime::FirecrackerRuntime>,
+    qemu: &Arc<qemu::runtime::QemuRuntime>,
+    running_containers: &Arc<Mutex<HashMap<String, String>>>,
+    vm_workload_ids: &Arc<Mutex<std::collections::HashSet<String>>>,
+    workload_phases: &Arc<Mutex<HashMap<String, String>>>,
+    mounted_volumes: &Arc<Mutex<HashMap<String, String>>>,
+    restart_counts: &Arc<Mutex<HashMap<String, u32>>>,
+    service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
+    rg_dns_registry: &Arc<rg_dns::RgDnsRegistry>,
+    local_state: &local_state::LocalState,
+) -> Vec<String> {
+    let Some(workloads) = desired_workloads(client, api_key, local_state).await else {
+        adopt_running(firecracker, qemu, running_containers, vm_workload_ids, &[]).await;
+        return Vec::new();
+    };
+
+    let resource_group_ids: Vec<String> = {
+        let mut ids: Vec<String> = workloads
+            .iter()
+            .filter_map(|w| w.resource_group_id.clone())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    };
+
+    ensure_group_dns(firecracker, &workloads).await;
+
+    adopt_running(
+        firecracker,
+        qemu,
+        running_containers,
+        vm_workload_ids,
+        &workloads,
+    )
+    .await;
 
     reap_stale_containers(
         firecracker.as_ref(),
@@ -1436,6 +1492,12 @@ mod tests {
         .unwrap()
     }
 
+    fn local_state() -> local_state::LocalState {
+        let dir = std::env::temp_dir().join(format!("csfx-agent-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        local_state::LocalState::open(dir.join("desired-state.json"))
+    }
+
     fn shared<T: Default>() -> Arc<Mutex<T>> {
         Arc::new(Mutex::new(T::default()))
     }
@@ -1627,7 +1689,7 @@ mod tests {
     async fn volumes_that_cannot_be_mapped_stay_unmounted() {
         let client = api_client().await;
         let mounted: Arc<Mutex<HashMap<String, String>>> = shared();
-        process_volumes(&client, uuid::Uuid::nil(), "k", &mounted).await;
+        process_volumes(&client, uuid::Uuid::nil(), "k", &mounted, &local_state()).await;
         assert!(mounted.lock().await.is_empty());
 
         mounted
@@ -2085,6 +2147,7 @@ mod tests {
             &shared(),
             &shared(),
             &registry,
+            &Arc::new(local_state()),
             &mut failures,
             guard,
         )
@@ -2123,5 +2186,90 @@ mod tests {
 
         assert_eq!(outcome.failures, 1);
         assert!(!guard.record_isolation(long_ago + Duration::from_secs(1)));
+    }
+
+    fn workload_json(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "image": "img", "cpu_millicores": 100, "memory_bytes": 1,
+            "env_vars": null, "ports": null, "volume_mounts": null, "service_name": null,
+            "restart_policy": "always", "max_restarts": null, "resource_group_id": null,
+            "resource_group_cidr": null, "runtime_class": "microvm", "disk_bytes": 0
+        })
+    }
+
+    async fn serving_client(workloads: serde_json::Value) -> client::ApiClient {
+        client::install_test_crypto_provider();
+        let app = Router::new().route(
+            "/api/agents/self/workloads",
+            get(move || {
+                let workloads = workloads.clone();
+                async move { axum::Json(workloads) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        client::ApiClient::new(url, "pub".to_string(), None, None, None).unwrap()
+    }
+
+    fn unreachable_client() -> client::ApiClient {
+        client::install_test_crypto_provider();
+        client::ApiClient::new(
+            "http://127.0.0.1:1".to_string(),
+            "pub".to_string(),
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn fetched_workloads_are_written_to_local_state() {
+        let state = local_state();
+        let client = serving_client(serde_json::json!([workload_json("w1")])).await;
+
+        let workloads = desired_workloads(&client, "k", &state).await.unwrap();
+
+        assert_eq!(workloads.len(), 1);
+        assert_eq!(state.workloads().await.unwrap()[0].id, "w1");
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_control_plane_falls_back_to_local_state() {
+        let state = local_state();
+        state
+            .confirm_workloads(&[workload("w1", "always", None)])
+            .await;
+
+        let workloads = desired_workloads(&unreachable_client(), "k", &state)
+            .await
+            .unwrap();
+
+        assert_eq!(workloads.len(), 1);
+        assert_eq!(workloads[0].id, "w1");
+    }
+
+    #[tokio::test]
+    async fn without_local_state_an_unreachable_control_plane_yields_nothing() {
+        let state = local_state();
+
+        assert!(desired_workloads(&unreachable_client(), "k", &state)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn an_empty_confirmed_list_replaces_the_local_state() {
+        let state = local_state();
+        state
+            .confirm_workloads(&[workload("w1", "always", None)])
+            .await;
+        let client = serving_client(serde_json::json!([])).await;
+
+        let workloads = desired_workloads(&client, "k", &state).await.unwrap();
+
+        assert!(workloads.is_empty());
+        assert!(state.workloads().await.unwrap().is_empty());
     }
 }
