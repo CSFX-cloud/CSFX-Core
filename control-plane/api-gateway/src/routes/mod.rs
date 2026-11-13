@@ -5,7 +5,6 @@ use axum::body::Body;
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use axum::http::{HeaderName, Method};
 use axum::http::{HeaderValue, Request, Response};
-use axum::routing::get;
 use axum::Router;
 use std::sync::Arc;
 use std::time::Duration;
