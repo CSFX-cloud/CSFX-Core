@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     let state = server::AppState::new(db, garage, s3_client, secret_box);
     let app = server::create_router(state);
 
-    shared::observability::serve_metrics("127.0.0.1:9006").await?;
+    shared::observability::serve_metrics("127.0.0.1:9006").await;
 
     let port = std::env::var("OBJECT_STORAGE_PORT")
         .ok()

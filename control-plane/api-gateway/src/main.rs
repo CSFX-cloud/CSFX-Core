@@ -57,10 +57,7 @@ async fn main() {
     shared::observability::spawn_pool_gauges("default", db_conn.clone());
     shared::observability::spawn_pool_gauges("agent", agent_db.clone());
     shared::observability::spawn_pool_gauges("log", log_db);
-    if let Err(error) = shared::observability::serve_metrics("127.0.0.1:9000").await {
-        tracing::error!(error = %error, "failed to start metrics server");
-        std::process::exit(1);
-    }
+    shared::observability::serve_metrics("127.0.0.1:9000").await;
 
     let default_org_id = match init::initialize_database(&db_conn).await {
         Ok(id) => id,

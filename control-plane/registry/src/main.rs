@@ -112,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
     let app = server::create_router(state);
 
     shared::observability::spawn_pool_gauges("default", db_conn.clone());
-    shared::observability::serve_metrics("127.0.0.1:9001").await?;
+    shared::observability::serve_metrics("127.0.0.1:9001").await;
 
     let port = std::env::var("REGISTRY_PORT")
         .ok()

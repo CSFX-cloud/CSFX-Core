@@ -1,4 +1,5 @@
 use axum::extract::{MatchedPath, Request};
+use axum::http::Method;
 use axum::middleware::Next;
 use axum::response::Response;
 use prometheus::{register_counter_vec, register_histogram_vec, CounterVec, HistogramVec};
@@ -6,6 +7,7 @@ use std::sync::LazyLock;
 use std::time::Instant;
 
 const UNMATCHED_ROUTE: &str = "unmatched";
+const OTHER_METHOD: &str = "other";
 const LABELS: [&str; 3] = ["method", "path", "status"];
 
 static REQUESTS_TOTAL: LazyLock<CounterVec> = LazyLock::new(|| {
@@ -27,8 +29,21 @@ pub fn register() {
     LazyLock::force(&REQUEST_DURATION_SECONDS);
 }
 
+fn method_label(method: &Method) -> &'static str {
+    match *method {
+        Method::GET => "GET",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::PATCH => "PATCH",
+        Method::DELETE => "DELETE",
+        Method::HEAD => "HEAD",
+        Method::OPTIONS => "OPTIONS",
+        _ => OTHER_METHOD,
+    }
+}
+
 pub async fn record(request: Request, next: Next) -> Response {
-    let method = request.method().clone();
+    let method = method_label(request.method());
     let matched = request.extensions().get::<MatchedPath>().cloned();
     let route = matched
         .as_ref()
@@ -38,7 +53,7 @@ pub async fn record(request: Request, next: Next) -> Response {
     let response = next.run(request).await;
 
     let status = response.status();
-    let labels = [method.as_str(), route, status.as_str()];
+    let labels = [method, route, status.as_str()];
     REQUESTS_TOTAL.with_label_values(&labels).inc();
     REQUEST_DURATION_SECONDS
         .with_label_values(&labels)

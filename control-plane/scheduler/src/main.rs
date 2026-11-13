@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => log_error!("main", &format!("Guest ip backfill failed err={}", e)),
     }
 
-    shared::observability::serve_metrics("127.0.0.1:9002").await?;
+    shared::observability::serve_metrics("127.0.0.1:9002").await;
 
     let port = std::env::var("SCHEDULER_PORT")
         .ok()

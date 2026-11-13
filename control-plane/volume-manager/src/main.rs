@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = server::create_router(state);
 
-    shared::observability::serve_metrics("127.0.0.1:9003").await?;
+    shared::observability::serve_metrics("127.0.0.1:9003").await;
 
     let port = std::env::var("VOLUME_MANAGER_PORT")
         .ok()

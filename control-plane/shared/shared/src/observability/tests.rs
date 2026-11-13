@@ -83,6 +83,24 @@ async fn unknown_paths_share_one_route_label() {
 }
 
 #[tokio::test]
+async fn unknown_methods_share_one_method_label() {
+    let app = app();
+    let labels = r#"method="other",path="/probe/{id}",status="405""#;
+    let before = sample("csfx_http_requests_total", labels);
+
+    for method in ["FOO", "BAR"] {
+        let request = Request::builder()
+            .method(method)
+            .uri("/probe/one")
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(request).await.unwrap();
+    }
+
+    assert_eq!(sample("csfx_http_requests_total", labels) - before, 2.0);
+}
+
+#[tokio::test]
 async fn request_id_is_generated_and_visible_to_the_handler() {
     let (_, header, body) = send(&app(), "/probe/one", None).await;
 

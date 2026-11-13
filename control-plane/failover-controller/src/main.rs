@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     let app = server::create_router(state);
 
     shared::observability::spawn_pool_gauges("default", db.clone());
-    shared::observability::serve_metrics("127.0.0.1:9004").await?;
+    shared::observability::serve_metrics("127.0.0.1:9004").await;
 
     let port = std::env::var("FAILOVER_CONTROLLER_PORT")
         .ok()
