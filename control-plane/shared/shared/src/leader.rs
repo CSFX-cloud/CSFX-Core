@@ -1,24 +1,57 @@
 use anyhow::{bail, Context, Result};
 use etcd_client::{Client, Compare, CompareOp, PutOptions, Txn, TxnOp};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::{sleep, timeout};
+use tokio::time::{sleep, timeout, Instant};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 const DEFAULT_ETCD_ENDPOINTS: &str = "http://localhost:2379";
 const LEASE_TTL_SECONDS: i64 = 10;
 const RENEW_INTERVAL: Duration = Duration::from_secs(3);
-const RENEW_TIMEOUT: Duration = Duration::from_secs(LEASE_TTL_SECONDS as u64);
+const RENEW_TIMEOUT: Duration = Duration::from_secs(3);
+const LEADER_VALIDITY: Duration = Duration::from_secs(6);
 const CAMPAIGN_INTERVAL: Duration = Duration::from_secs(5);
+
+const _: () = assert!(LEADER_VALIDITY.as_secs() < LEASE_TTL_SECONDS as u64);
+
+#[derive(Clone)]
+struct LeaderClock {
+    origin: Instant,
+    valid_until_ms: Arc<AtomicU64>,
+}
+
+impl LeaderClock {
+    fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+            valid_until_ms: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn extend_from(&self, renewal_started: Instant) {
+        let valid_until = renewal_started + LEADER_VALIDITY - self.origin;
+        self.valid_until_ms
+            .store(valid_until.as_millis() as u64, Ordering::SeqCst);
+    }
+
+    fn revoke(&self) {
+        self.valid_until_ms.store(0, Ordering::SeqCst);
+    }
+
+    fn is_valid(&self) -> bool {
+        let valid_until = self.valid_until_ms.load(Ordering::SeqCst);
+        valid_until != 0 && (self.origin.elapsed().as_millis() as u64) < valid_until
+    }
+}
 
 #[derive(Clone)]
 pub struct LeaderLease {
     etcd: Client,
     key: String,
     node_id: String,
-    is_leader: Arc<AtomicBool>,
+    clock: LeaderClock,
 }
 
 impl LeaderLease {
@@ -27,7 +60,7 @@ impl LeaderLease {
             etcd,
             key: key.into(),
             node_id: node_id.into(),
-            is_leader: Arc::new(AtomicBool::new(false)),
+            clock: LeaderClock::new(),
         }
     }
 
@@ -41,7 +74,7 @@ impl LeaderLease {
     }
 
     pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::SeqCst)
+        self.clock.is_valid()
     }
 
     pub fn spawn(self) -> Self {
@@ -51,8 +84,9 @@ impl LeaderLease {
 
     async fn run(mut self) {
         loop {
+            let started = Instant::now();
             match self.campaign().await {
-                Ok(Some(lease_id)) => self.lead(lease_id).await,
+                Ok(Some(lease_id)) => self.lead(lease_id, started).await,
                 Ok(None) => {}
                 Err(e) => error!(key = %self.key, error = %e, "leader campaign failed"),
             }
@@ -60,13 +94,13 @@ impl LeaderLease {
         }
     }
 
-    async fn lead(&mut self, lease_id: i64) {
-        self.is_leader.store(true, Ordering::SeqCst);
+    async fn lead(&mut self, lease_id: i64, acquired_at: Instant) {
+        self.clock.extend_from(acquired_at);
         info!(key = %self.key, node_id = %self.node_id, "leadership acquired");
         if let Err(e) = self.hold(lease_id).await {
             warn!(key = %self.key, node_id = %self.node_id, error = %e, "leadership lost");
         }
-        self.is_leader.store(false, Ordering::SeqCst);
+        self.clock.revoke();
     }
 
     async fn campaign(&mut self) -> Result<Option<i64>> {
@@ -112,6 +146,7 @@ impl LeaderLease {
             .context("failed to open keep-alive stream")?;
         loop {
             sleep(RENEW_INTERVAL).await;
+            let renewal_started = Instant::now();
             let renewed = timeout(RENEW_TIMEOUT, async {
                 keeper.keep_alive().await?;
                 stream.message().await
@@ -119,9 +154,38 @@ impl LeaderLease {
             .await
             .context("lease renewal timed out")??;
             match renewed {
-                Some(response) if response.ttl() > 0 => {}
+                Some(response) if response.ttl() > 0 => self.clock.extend_from(renewal_started),
                 _ => bail!("lease expired"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn leadership_lapses_before_lease_ttl_when_renewal_hangs() {
+        let clock = LeaderClock::new();
+        assert!(!clock.is_valid());
+        clock.extend_from(Instant::now());
+        assert!(clock.is_valid());
+
+        sleep(RENEW_INTERVAL).await;
+        clock.extend_from(Instant::now());
+        sleep(LEADER_VALIDITY - Duration::from_millis(1)).await;
+        assert!(clock.is_valid());
+
+        sleep(Duration::from_millis(1)).await;
+        assert!(!clock.is_valid());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn revoke_clears_leadership_immediately() {
+        let clock = LeaderClock::new();
+        clock.extend_from(Instant::now());
+        clock.revoke();
+        assert!(!clock.is_valid());
     }
 }

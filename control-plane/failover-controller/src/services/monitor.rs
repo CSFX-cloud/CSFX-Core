@@ -61,7 +61,10 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
         }
 
         check_hardware_alerts(&db).await;
-        relieve_pressure(&db, &eviction).await;
+        if !leader.is_leader() {
+            continue;
+        }
+        relieve_pressure(&db, &eviction, &leader).await;
 
         let (degraded, offline) =
             match agent_db::get_stale_agents(&db, SOFT_THRESHOLD_SECS, HARD_THRESHOLD_SECS).await {
@@ -77,7 +80,10 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
             };
 
         database_health.record_success(Instant::now());
-        mark_degraded(&db, degraded).await;
+        if !leader.is_leader() {
+            continue;
+        }
+        mark_degraded(&db, &leader, degraded).await;
         if !offline.is_empty() && !database_health.settled(Instant::now()) {
             crate::log_warn!(
                 "monitor",
@@ -87,7 +93,10 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
                 )
             );
         } else {
-            handle_offline(&db, &failover, &in_flight, &permits, offline).await;
+            handle_offline(&db, &leader, &failover, &in_flight, &permits, offline).await;
+        }
+        if !leader.is_leader() {
+            continue;
         }
         check_status_alerts(&db).await;
     }
@@ -109,7 +118,11 @@ async fn check_hardware_alerts(db: &DatabaseConnection) {
     }
 }
 
-async fn relieve_pressure(db: &DatabaseConnection, eviction: &EvictionService) {
+async fn relieve_pressure(
+    db: &DatabaseConnection,
+    eviction: &EvictionService,
+    leader: &LeaderLease,
+) {
     let agents = match agent_db::get_agents_for_alerting(db).await {
         Ok(agents) => agents,
         Err(e) => {
@@ -122,6 +135,9 @@ async fn relieve_pressure(db: &DatabaseConnection, eviction: &EvictionService) {
     };
 
     for agent in agents.iter().filter(|agent| agent.status == "Online") {
+        if !leader.is_leader() {
+            return;
+        }
         for (event_type, pressure) in PRESSURE_RULES {
             if !has_open_event(db, agent.id, event_type).await {
                 continue;
@@ -169,17 +185,28 @@ async fn check_status_alerts(db: &DatabaseConnection) {
     }
 }
 
-async fn mark_degraded(db: &DatabaseConnection, degraded: Vec<agents::Model>) {
+async fn mark_degraded(
+    db: &DatabaseConnection,
+    leader: &LeaderLease,
+    degraded: Vec<agents::Model>,
+) {
     for agent in degraded {
-        if let Err(e) = agent_db::set_agent_status(db, agent.id, "Degraded").await {
-            crate::log_error!(
-                "monitor",
-                &format!(
-                    "Failed to mark agent degraded agent_id={} err={}",
-                    agent.id, e
-                )
-            );
-            continue;
+        if !leader.is_leader() {
+            return;
+        }
+        match agent_db::transition_agent_status(db, agent.id, &agent.status, "Degraded").await {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                crate::log_error!(
+                    "monitor",
+                    &format!(
+                        "Failed to mark agent degraded agent_id={} err={}",
+                        agent.id, e
+                    )
+                );
+                continue;
+            }
         }
 
         crate::log_warn!(
@@ -208,6 +235,7 @@ fn silent_minority(silent: u64, fleet: u64) -> bool {
 
 async fn handle_offline(
     db: &DatabaseConnection,
+    leader: &LeaderLease,
     failover: &Arc<FailoverService>,
     in_flight: &InFlight,
     permits: &Permits,
@@ -232,6 +260,9 @@ async fn handle_offline(
     }
 
     for agent in offline {
+        if !leader.is_leader() {
+            return;
+        }
         if agent.status != "Offline" && !mark_offline(db, &agent).await {
             continue;
         }
@@ -240,15 +271,19 @@ async fn handle_offline(
 }
 
 async fn mark_offline(db: &DatabaseConnection, agent: &agents::Model) -> bool {
-    if let Err(e) = agent_db::set_agent_status(db, agent.id, "Offline").await {
-        crate::log_error!(
-            "monitor",
-            &format!(
-                "Failed to mark agent offline agent_id={} err={}",
-                agent.id, e
-            )
-        );
-        return false;
+    match agent_db::transition_agent_status(db, agent.id, &agent.status, "Offline").await {
+        Ok(true) => {}
+        Ok(false) => return false,
+        Err(e) => {
+            crate::log_error!(
+                "monitor",
+                &format!(
+                    "Failed to mark agent offline agent_id={} err={}",
+                    agent.id, e
+                )
+            );
+            return false;
+        }
     }
 
     crate::log_warn!("monitor", &format!("Agent offline agent_id={}", agent.id));
