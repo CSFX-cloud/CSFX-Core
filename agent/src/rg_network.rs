@@ -61,6 +61,22 @@ async fn ensure_bridge_in(
     Ok(iface)
 }
 
+pub async fn record_cidrs(groups: &[(String, String)]) {
+    record_cidrs_in(Path::new(RG_REGISTRY_DIR), groups).await;
+}
+
+async fn record_cidrs_in(registry_dir: &Path, groups: &[(String, String)]) {
+    for (resource_group_id, cidr) in groups {
+        let path = registry_entry_path(registry_dir, resource_group_id);
+        if tokio::fs::read_to_string(&path).await.ok().as_deref() == Some(cidr.as_str()) {
+            continue;
+        }
+        if let Err(e) = write_registry_entry(registry_dir, resource_group_id, Some(cidr)).await {
+            warn!(resource_group_id = %resource_group_id, error = %e, "Failed to record resource group range");
+        }
+    }
+}
+
 async fn register_gateway_records(
     resource_group_id: &str,
     gateway: &str,
@@ -632,5 +648,28 @@ esac"#;
             .stdin("nft")
             .contains(&format!("iifname \"{iface}\" ct status dnat masquerade")));
         assert_eq!(std::fs::read_to_string(dir.join("rg-1")).unwrap(), CIDR);
+    }
+
+    #[tokio::test]
+    async fn assigned_ranges_are_recorded_once_and_corrected_when_they_change() {
+        let dir = registry_dir();
+        write_entry(&dir, "rg-1", "");
+        let groups = vec![
+            ("rg-1".to_string(), CIDR.to_string()),
+            ("rg-2".to_string(), "10.102.0.0/24".to_string()),
+        ];
+
+        record_cidrs_in(&dir, &groups).await;
+
+        assert_eq!(std::fs::read_to_string(dir.join("rg-1")).unwrap(), CIDR);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("rg-2")).unwrap(),
+            "10.102.0.0/24"
+        );
+        record_cidrs_in(&dir, &[("rg-1".to_string(), "10.103.0.0/24".to_string())]).await;
+        assert_eq!(
+            std::fs::read_to_string(dir.join("rg-1")).unwrap(),
+            "10.103.0.0/24"
+        );
     }
 }

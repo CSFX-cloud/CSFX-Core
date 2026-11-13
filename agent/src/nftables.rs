@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tracing::info;
+use tracing::debug;
 
 const TABLE_NAME: &str = "csfx";
 const CHAIN_NAME: &str = "rg_isolation";
@@ -21,7 +21,7 @@ pub struct BridgeRules {
 
 pub async fn apply_bridge_rules(bridges: &[BridgeRules]) -> Result<()> {
     apply_script(&ruleset(bridges)).await?;
-    info!(bridges = bridges.len(), "nftables bridge rules applied");
+    debug!(bridges = bridges.len(), "nftables bridge rules applied");
     Ok(())
 }
 
