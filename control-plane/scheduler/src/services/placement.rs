@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::models::workload::AgentResources;
+use crate::models::workload::{AgentResources, TopologySpread};
 
 const SPREAD_PENALTY: f64 = 30.0;
 const PREFERRED_BONUS: f64 = 10.0;
 const BALANCE_WEIGHT: f64 = 0.5;
+const ZONE_PENALTY: f64 = 20.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
@@ -28,16 +29,38 @@ pub struct Demand<'a> {
     pub disk_bytes: i64,
     pub requires_kvm: bool,
     pub spread_key: Option<&'a str>,
+    pub topology_spread: TopologySpread,
     pub preferred_agents: Option<&'a HashSet<Uuid>>,
 }
 
 pub fn pick(demand: &Demand, agents: &[AgentResources], strategy: Strategy) -> Option<Uuid> {
-    agents
+    let candidates: Vec<&AgentResources> =
+        agents.iter().filter(|agent| fits(demand, agent)).collect();
+    let lightest_zone = candidates
         .iter()
-        .filter(|agent| fits(demand, agent))
-        .map(|agent| (agent.agent_id, score(demand, agent, strategy)))
+        .map(|agent| zone_replicas(demand, agents, &agent.zone))
+        .min()
+        .unwrap_or(0);
+    candidates
+        .into_iter()
+        .filter(|agent| {
+            demand.topology_spread != TopologySpread::Hard
+                || zone_replicas(demand, agents, &agent.zone) == lightest_zone
+        })
+        .map(|agent| (agent.agent_id, score(demand, agents, agent, strategy)))
         .max_by(|left, right| left.1.total_cmp(&right.1))
         .map(|(agent_id, _)| agent_id)
+}
+
+fn zone_replicas(demand: &Demand, agents: &[AgentResources], zone: &str) -> u32 {
+    let Some(key) = demand.spread_key else {
+        return 0;
+    };
+    agents
+        .iter()
+        .filter(|agent| agent.zone == zone)
+        .filter_map(|agent| agent.spread_counts.get(key))
+        .sum()
 }
 
 pub fn commit(agents: &mut [AgentResources], agent_id: Uuid, demand: &Demand) {
@@ -66,7 +89,12 @@ fn utilization(allocatable: f64, free_after: f64) -> f64 {
     1.0 - free_after / allocatable
 }
 
-fn score(demand: &Demand, agent: &AgentResources, strategy: Strategy) -> f64 {
+fn score(
+    demand: &Demand,
+    agents: &[AgentResources],
+    agent: &AgentResources,
+    strategy: Strategy,
+) -> f64 {
     let cpu = utilization(
         agent.allocatable_cpu_millicores as f64,
         (agent.free_cpu_millicores - demand.cpu_millicores) as f64,
@@ -90,7 +118,15 @@ fn score(demand: &Demand, agent: &AgentResources, strategy: Strategy) -> f64 {
         .preferred_agents
         .is_some_and(|agents| agents.contains(&agent.agent_id));
 
-    packing * (1.0 - BALANCE_WEIGHT) + balance * BALANCE_WEIGHT - colocated * SPREAD_PENALTY
+    let zone_penalty = if demand.topology_spread == TopologySpread::Soft {
+        zone_replicas(demand, agents, &agent.zone) as f64 * ZONE_PENALTY
+    } else {
+        0.0
+    };
+
+    packing * (1.0 - BALANCE_WEIGHT) + balance * BALANCE_WEIGHT
+        - colocated * SPREAD_PENALTY
+        - zone_penalty
         + if preferred { PREFERRED_BONUS } else { 0.0 }
 }
 
@@ -110,6 +146,7 @@ mod tests {
             free_memory_bytes: free_memory_gib * GIB,
             free_disk_bytes: 100 * GIB,
             kvm_capable,
+            zone: "default".to_string(),
             spread_counts: HashMap::new(),
         }
     }
@@ -121,6 +158,7 @@ mod tests {
             disk_bytes: GIB,
             requires_kvm: true,
             spread_key,
+            topology_spread: TopologySpread::None,
             preferred_agents: None,
         }
     }
@@ -180,6 +218,70 @@ mod tests {
         assert_eq!(
             pick(&demand, &agents, Strategy::Spread),
             Some(agents[1].agent_id)
+        );
+    }
+
+    fn zoned(zone: &str) -> AgentResources {
+        AgentResources {
+            zone: zone.to_string(),
+            ..agent(7000, 14, true)
+        }
+    }
+
+    fn spread_demand(topology_spread: TopologySpread) -> Demand<'static> {
+        Demand {
+            topology_spread,
+            ..demand(Some("web"))
+        }
+    }
+
+    #[test]
+    fn hard_topology_places_replicas_in_distinct_zones() {
+        let mut agents = vec![zoned("a"), zoned("a"), zoned("b")];
+        let demand = spread_demand(TopologySpread::Hard);
+        let first = agents[0].agent_id;
+        commit(&mut agents, first, &demand);
+        assert_eq!(
+            pick(&demand, &agents, Strategy::Spread),
+            Some(agents[2].agent_id)
+        );
+    }
+
+    #[test]
+    fn hard_topology_falls_back_when_no_other_zone_has_capacity() {
+        let mut agents = vec![zoned("a"), zoned("a"), zoned("b")];
+        agents[2].free_cpu_millicores = 0;
+        let demand = spread_demand(TopologySpread::Hard);
+        let first = agents[0].agent_id;
+        commit(&mut agents, first, &demand);
+        assert_eq!(
+            pick(&demand, &agents, Strategy::Spread),
+            Some(agents[1].agent_id)
+        );
+    }
+
+    #[test]
+    fn soft_topology_prefers_empty_zone_without_excluding_others() {
+        let mut agents = vec![zoned("a"), zoned("b")];
+        let demand = spread_demand(TopologySpread::Soft);
+        let first = agents[0].agent_id;
+        commit(&mut agents, first, &demand);
+        assert_eq!(
+            pick(&demand, &agents, Strategy::Spread),
+            Some(agents[1].agent_id)
+        );
+        agents[1].free_cpu_millicores = 0;
+        assert_eq!(pick(&demand, &agents, Strategy::Spread), Some(first));
+    }
+
+    #[test]
+    fn none_topology_ignores_zones() {
+        let mut agents = vec![zoned("a"), zoned("b")];
+        agents[1].free_cpu_millicores = 1500;
+        let demand = spread_demand(TopologySpread::None);
+        assert_eq!(
+            pick(&demand, &agents, Strategy::Spread),
+            Some(agents[0].agent_id)
         );
     }
 }

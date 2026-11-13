@@ -33,6 +33,8 @@ pub struct Model {
     pub cpu_overcommit_ratio: f64,
     pub memory_overcommit_ratio: f64,
     pub disk_overcommit_ratio: f64,
+    pub site_id: String,
+    pub zone: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

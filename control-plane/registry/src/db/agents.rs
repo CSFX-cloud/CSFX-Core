@@ -105,6 +105,7 @@ pub async fn create(
         cpu_overcommit_ratio: NotSet,
         memory_overcommit_ratio: NotSet,
         disk_overcommit_ratio: NotSet,
+        ..Default::default()
     };
 
     Ok(model.insert(db).await?)

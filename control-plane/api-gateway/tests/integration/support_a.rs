@@ -248,6 +248,7 @@ fn group_model(org_id: Uuid) -> resource_groups::ActiveModel {
         preview_url: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
+        ..Default::default()
     }
 }
 
@@ -301,6 +302,7 @@ pub async fn insert_agent(db: &DatabaseConnection, role: &str, status: &str) -> 
         cpu_overcommit_ratio: Set(1.0),
         memory_overcommit_ratio: Set(1.0),
         disk_overcommit_ratio: Set(1.0),
+        ..Default::default()
     }
     .insert(db)
     .await
@@ -399,6 +401,7 @@ pub async fn insert_workload(db: &DatabaseConnection, spec: WorkloadSpec) -> wor
         stats_updated_at: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
+        ..Default::default()
     }
     .insert(db)
     .await
@@ -468,6 +471,7 @@ pub async fn insert_volume(
         resource_group_id: Set(None),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
+        ..Default::default()
     }
     .insert(db)
     .await

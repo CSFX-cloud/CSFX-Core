@@ -523,6 +523,7 @@ pub async fn agent_with_key(harness: &Harness, spec: AgentSpec) -> (Uuid, String
         cpu_overcommit_ratio: Set(1.0),
         memory_overcommit_ratio: Set(1.0),
         disk_overcommit_ratio: Set(1.0),
+        ..Default::default()
     }
     .insert(&harness.db)
     .await

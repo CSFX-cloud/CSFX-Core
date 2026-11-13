@@ -169,6 +169,11 @@ pub async fn update_workload(
             (StatusCode::OK, Json(serde_json::json!(model))).into_response()
         }
         Err(sea_orm::DbErr::RecordNotFound(_)) => StatusCode::NOT_FOUND.into_response(),
+        Err(sea_orm::DbErr::RecordNotUpdated) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "workload was modified concurrently" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),

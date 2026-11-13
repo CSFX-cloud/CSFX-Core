@@ -35,6 +35,7 @@ pub async fn create(
         resource_group_id: Set(req.resource_group_id),
         created_at: Set(Utc::now().naive_utc()),
         updated_at: Set(None),
+        ..Default::default()
     };
 
     model.insert(db).await
@@ -112,10 +113,23 @@ pub async fn resize(
     volume: volumes::Model,
     size_gb: i32,
 ) -> Result<volumes::Model, sea_orm::DbErr> {
-    let mut active: volumes::ActiveModel = volume.into();
+    let mut active: volumes::ActiveModel = volume.clone().into();
     active.size_gb = Set(size_gb);
+    active.generation = Set(volume.generation + 1);
     active.updated_at = Set(Some(Utc::now().naive_utc()));
-    active.update(db).await
+    let applied = volumes::Entity::update_many()
+        .set(active)
+        .filter(volumes::Column::Id.eq(volume.id))
+        .filter(volumes::Column::Generation.eq(volume.generation))
+        .exec(db)
+        .await?;
+    if applied.rows_affected == 0 {
+        return Err(sea_orm::DbErr::RecordNotUpdated);
+    }
+    volumes::Entity::find_by_id(volume.id)
+        .one(db)
+        .await?
+        .ok_or(sea_orm::DbErr::RecordNotFound(volume.id.to_string()))
 }
 
 pub async fn get_attached_to_agent(

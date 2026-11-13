@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::models::compose::{ComposeServiceSpec, CreateStackRequest, CreateStackResponse};
 use crate::models::workload::{
-    AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, RuntimeClass,
+    AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, RuntimeClass, TopologySpread,
     UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
 };
 use crate::services::compose_parser::{self, ComposeParseError};
@@ -680,6 +680,7 @@ fn demand_for<'a>(
         disk_bytes: workload.disk_bytes,
         requires_kvm: RuntimeClass::from_str(&workload.runtime_class).requires_kvm(),
         spread_key: workload.spread_key.as_deref(),
+        topology_spread: TopologySpread::from_str(&workload.topology_spread),
         preferred_agents,
     }
 }
@@ -734,6 +735,7 @@ fn stack_service_request(
         auto_resources: false,
         replicas: None,
         spread_key: Some(stack_id.to_string()),
+        topology_spread: TopologySpread::None,
     }
 }
 

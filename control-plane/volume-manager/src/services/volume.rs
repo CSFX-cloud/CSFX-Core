@@ -136,7 +136,13 @@ impl VolumeService {
 
         let updated = db::resize(&self.db, model, req.size_gb)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| match e {
+                sea_orm::DbErr::RecordNotUpdated => ServiceError::Conflict(format!(
+                    "Volume {} was modified concurrently",
+                    volume_id
+                )),
+                other => ServiceError::Internal(other.to_string()),
+            })?;
         Ok(db::into_response(updated))
     }
 

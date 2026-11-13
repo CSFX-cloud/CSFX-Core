@@ -18,6 +18,8 @@ pub struct Model {
     pub icon_image: Option<Vec<u8>>,
     pub icon_image_mime: Option<String>,
     pub preview_url: Option<String>,
+    pub site_id: String,
+    pub zone: String,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: Option<chrono::NaiveDateTime>,
 }
