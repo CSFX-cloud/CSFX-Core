@@ -1,11 +1,8 @@
 use entity::{
-    key, organization, permission, role, role_permission, Key, Organization, Permission, Role,
-    RolePermission,
+    organization, permission, role, role_permission, Organization, Permission, Role, RolePermission,
 };
 use sea_orm::{ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use uuid::Uuid;
-
-use crate::auth::crypto::RsaKeyPair;
 
 pub async fn initialize_database(
     db: &DatabaseConnection,
@@ -13,26 +10,9 @@ pub async fn initialize_database(
     tracing::info!("Initializing database with default data...");
 
     // 1. Create RSA key pair if not exists
-    let key_exists = Key::find()
-        .filter(key::Column::Name.eq("main"))
-        .one(db)
-        .await?
-        .is_some();
-
-    if !key_exists {
-        tracing::info!("Creating RSA key pair...");
-        let key_pair = RsaKeyPair::generate()?;
-        let key_id = Uuid::new_v4();
-        let new_key = key::ActiveModel {
-            id: ActiveValue::Set(key_id),
-            name: ActiveValue::Set("main".to_string()),
-            private_key: ActiveValue::Set(key_pair.private_key),
-        };
-        Key::insert(new_key).exec_without_returning(db).await?;
-        tracing::info!("RSA key pair created successfully");
-    } else {
-        tracing::info!("RSA key pair already exists");
-    }
+    crate::auth_service::AuthService::new(db.clone())
+        .get_or_create_rsa_key("main")
+        .await?;
 
     // 2. Create default organization
     let default_org_exists = Organization::find()

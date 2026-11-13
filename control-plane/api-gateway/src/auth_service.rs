@@ -1,9 +1,11 @@
 use chrono::{DateTime, Duration, Utc};
 use entity::{invalid_jwt, key, user, user_ssh_keys, InvalidJwt, Key, User, UserSshKeys};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
-    TransactionTrait,
+    sea_query::OnConflict, ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, DbErr,
+    EntityTrait, QueryFilter, Set, TransactionTrait,
 };
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, RwLock};
 use thiserror::Error;
 use totp_rs::{Algorithm, Secret, TOTP};
 use tracing::warn;
@@ -47,6 +49,20 @@ pub fn session_cutoff_token(user_id: Uuid, cutoff: i64) -> String {
     format!("{SESSION_CUTOFF_PREFIX}{user_id}:{cutoff}")
 }
 
+static KEY_CACHE: LazyLock<RwLock<HashMap<String, Arc<RsaKeyPair>>>> =
+    LazyLock::new(Default::default);
+
+fn cached_key(key_name: &str) -> Option<Arc<RsaKeyPair>> {
+    KEY_CACHE.read().ok()?.get(key_name).cloned()
+}
+
+fn cache_key(key_name: &str, key_pair: Arc<RsaKeyPair>) -> Arc<RsaKeyPair> {
+    match KEY_CACHE.write() {
+        Ok(mut cache) => Arc::clone(cache.entry(key_name.to_string()).or_insert(key_pair)),
+        Err(_) => key_pair,
+    }
+}
+
 #[derive(Clone)]
 pub struct AuthService {
     db: DatabaseConnection,
@@ -78,9 +94,9 @@ impl AuthService {
         let rsa_key = self.get_or_create_rsa_key("main").await?;
 
         // Decrypt the password
-        let password = decrypt_password(&encrypted_password, &rsa_key.private_key)?;
+        let password = decrypt_password(&encrypted_password, &rsa_key).await?;
 
-        if !verify_password(&password, &user.salt, &user.password)? {
+        if !verify_password(&password, &user.salt, &user.password).await? {
             warn!(username = %username, "failed login attempt");
             return Err(AuthError::InvalidCredentials);
         }
@@ -140,43 +156,55 @@ impl AuthService {
             .ok_or(AuthError::UserNotFound)
     }
 
-    pub async fn get_or_create_rsa_key(&self, key_name: &str) -> AuthResult<RsaKeyPair> {
-        // Try to find existing key
-        if let Some(existing_key) = Key::find()
+    pub async fn get_or_create_rsa_key(&self, key_name: &str) -> AuthResult<Arc<RsaKeyPair>> {
+        if let Some(cached) = cached_key(key_name) {
+            return Ok(cached);
+        }
+        let stored = match self.find_key(key_name).await? {
+            Some(stored) => stored,
+            None => self.insert_new_key(key_name).await?,
+        };
+        let key_pair = Arc::new(RsaKeyPair::from_private_key(&stored.private_key)?);
+        Ok(cache_key(key_name, key_pair))
+    }
+
+    async fn find_key(&self, key_name: &str) -> AuthResult<Option<key::Model>> {
+        Ok(Key::find()
             .filter(key::Column::Name.eq(key_name))
             .one(&self.db)
-            .await?
-        {
-            return Ok(RsaKeyPair::from_private_key(&existing_key.private_key)?);
-        }
+            .await?)
+    }
 
-        // Generate new key pair
-        let key_pair = RsaKeyPair::generate()?;
-
-        // Save to database with pre-generated UUID
-        let key_id = Uuid::new_v4();
+    async fn insert_new_key(&self, key_name: &str) -> AuthResult<key::Model> {
+        let key_pair = RsaKeyPair::generate().await?;
         let new_key = key::ActiveModel {
-            id: ActiveValue::Set(key_id),
+            id: ActiveValue::Set(Uuid::new_v4()),
             name: ActiveValue::Set(key_name.to_string()),
-            private_key: ActiveValue::Set(key_pair.private_key.clone()),
+            private_key: ActiveValue::Set(key_pair.private_key),
         };
-
-        // Insert without retrieving last_insert_id (which doesn't work with UUID PKs in SQLite)
         Key::insert(new_key)
+            .on_conflict(
+                OnConflict::column(key::Column::Name)
+                    .do_nothing()
+                    .to_owned(),
+            )
             .exec_without_returning(&self.db)
             .await?;
-
-        Ok(key_pair)
+        self.find_key(key_name)
+            .await?
+            .ok_or(AuthError::DatabaseError(DbErr::RecordNotFound(
+                key_name.to_string(),
+            )))
     }
 
     pub async fn decrypt_client_password(&self, encrypted_password: &str) -> AuthResult<String> {
         let rsa_key = self.get_or_create_rsa_key("main").await?;
-        Ok(decrypt_password(encrypted_password, &rsa_key.private_key)?)
+        Ok(decrypt_password(encrypted_password, &rsa_key).await?)
     }
 
     pub async fn get_public_key(&self, key_name: &str) -> AuthResult<String> {
         let key_pair = self.get_or_create_rsa_key(key_name).await?;
-        Ok(key_pair.public_key)
+        Ok(key_pair.public_key.clone())
     }
 
     // 2FA Methods
@@ -285,8 +313,8 @@ impl AuthService {
             return Err(AuthError::InvalidCredentials);
         }
         let rsa_key = self.get_or_create_rsa_key("main").await?;
-        let password = decrypt_password(encrypted_password, &rsa_key.private_key)?;
-        if !verify_password(&password, &user.salt, &user.password)? {
+        let password = decrypt_password(encrypted_password, &rsa_key).await?;
+        if !verify_password(&password, &user.salt, &user.password).await? {
             return Err(AuthError::InvalidCredentials);
         }
         Ok(())
@@ -321,8 +349,8 @@ impl AuthService {
 
         // Hash new password with new salt
         let new_salt = generate_salt();
-        let new_password = decrypt_password(&new_encrypted_password, &rsa_key.private_key)?;
-        let hashed_password = hash_password(&new_password, &new_salt)?;
+        let new_password = decrypt_password(&new_encrypted_password, &rsa_key).await?;
+        let hashed_password = hash_password(&new_password, &new_salt).await?;
 
         let username = user.name.clone();
         let mut user_active: user::ActiveModel = user.into();

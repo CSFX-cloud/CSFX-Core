@@ -110,7 +110,7 @@ async fn console_pin_init() -> Result<(), RecoveryError> {
         .into_iter()
         .find(|candidate| candidate.name == email || candidate.email.as_deref() == Some(&email))
         .ok_or(RecoveryError::NotAdmin)?;
-    if !verify_password(&password, &admin.salt, &admin.password)? {
+    if !verify_password(&password, &admin.salt, &admin.password).await? {
         return Err(RecoveryError::NotAdmin);
     }
     println!("recovery_key={}", console_pin::provision(&new_pin)?);
@@ -142,7 +142,7 @@ async fn reset_admin(email: Option<&str>) -> Result<(), RecoveryError> {
     let temp_password = generate_temp_password();
     let salt = generate_salt();
     let mut active: user::ActiveModel = target.into();
-    active.password = ActiveValue::Set(hash_password(&temp_password, &salt)?);
+    active.password = ActiveValue::Set(hash_password(&temp_password, &salt).await?);
     active.salt = ActiveValue::Set(salt);
     active.force_password_change = ActiveValue::Set(true);
     active.two_factor_enabled = ActiveValue::Set(false);

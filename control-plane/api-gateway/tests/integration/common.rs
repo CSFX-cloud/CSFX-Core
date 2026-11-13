@@ -148,7 +148,7 @@ pub async fn create_user(db: &DatabaseConnection, org_id: Uuid, role_id: Uuid) -
     entity::user::ActiveModel {
         id: Set(id),
         name: Set(name.clone()),
-        password: Set(hash_password(ADMIN_PASSWORD, &salt).unwrap()),
+        password: Set(hash_password(ADMIN_PASSWORD, &salt).await.unwrap()),
         salt: Set(salt),
         email: Set(Some(format!("{}@csfx.test", name))),
         gravatar_email: Set(None),

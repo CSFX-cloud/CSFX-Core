@@ -211,7 +211,7 @@ async fn insert_admin(
     let admin = user::ActiveModel {
         id: ActiveValue::Set(admin_id),
         name: ActiveValue::Set(email.to_string()),
-        password: ActiveValue::Set(hash_password(password, &salt)?),
+        password: ActiveValue::Set(hash_password(password, &salt).await?),
         salt: ActiveValue::Set(salt),
         email: ActiveValue::Set(Some(email.to_string())),
         gravatar_email: ActiveValue::NotSet,
@@ -280,7 +280,7 @@ async fn remove_unused_default_admin(db: &DatabaseConnection) -> Result<bool, Se
         return Ok(false);
     };
     let untouched = admin.force_password_change
-        && verify_password(LEGACY_ADMIN_PASSWORD, &admin.salt, &admin.password)?;
+        && verify_password(LEGACY_ADMIN_PASSWORD, &admin.salt, &admin.password).await?;
     if !untouched {
         return Ok(false);
     }

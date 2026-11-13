@@ -154,7 +154,7 @@ pub async fn submit_setup(
     let admin_id = complete_setup(&state.db_conn, input)
         .await
         .map_err(map_setup_error)?;
-    let recovery_key = provision_console_pin(&console_pin)?;
+    let recovery_key = provision_console_pin(console_pin).await?;
     tracing::info!(target: "csfx::audit", event = "setup.completed", admin = %admin_email);
     let token = create_jwt(admin_id, admin_email).map_err(internal_error)?;
     let (cookie, session) = session_parts(token, false, false)
@@ -179,8 +179,11 @@ pub async fn submit_join(
     Ok(StatusCode::ACCEPTED)
 }
 
-fn provision_console_pin(pin: &str) -> Result<String, ApiError> {
-    console_pin::provision(pin).map_err(|err| {
+async fn provision_console_pin(pin: String) -> Result<String, ApiError> {
+    let provisioned = tokio::task::spawn_blocking(move || console_pin::provision(&pin))
+        .await
+        .map_err(internal_error)?;
+    provisioned.map_err(|err| {
         tracing::error!(error = %err, "console pin provisioning failed");
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
