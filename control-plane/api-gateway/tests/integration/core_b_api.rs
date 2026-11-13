@@ -390,25 +390,30 @@ async fn concurrent_key_creation_yields_one_row_and_one_key() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn password_verification_does_not_block_async_workers() {
+    const VERIFICATIONS: usize = 20;
     let salt = generate_salt();
-    let hashed = bcrypt::hash(format!("hunter2-hunter2{salt}"), 10).unwrap();
-    let verifications: Vec<_> = (0..20)
+    let hashed = bcrypt::hash(format!("hunter2-hunter2{salt}"), 12).unwrap();
+    let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let verifications: Vec<_> = (0..VERIFICATIONS)
         .map(|_| {
-            let (salt, hashed) = (salt.clone(), hashed.clone());
+            let (salt, hashed, completed) = (salt.clone(), hashed.clone(), completed.clone());
             tokio::spawn(async move {
-                verify_password("hunter2-hunter2", &salt, &hashed)
+                let valid = verify_password("hunter2-hunter2", &salt, &hashed)
                     .await
-                    .unwrap()
+                    .unwrap();
+                completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                valid
             })
         })
         .collect();
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
 
-    let started = std::time::Instant::now();
     tokio::spawn(async {}).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-    assert!(started.elapsed() < std::time::Duration::from_millis(50));
+    let finished_before_probe = completed.load(std::sync::atomic::Ordering::SeqCst);
 
+    assert!(
+        finished_before_probe < VERIFICATIONS / 2,
+        "async workers were blocked until {finished_before_probe} verifications finished"
+    );
     for verification in verifications {
         assert!(verification.await.unwrap());
     }
