@@ -161,14 +161,23 @@ async fn repair_address(bridge: &Bridge) -> Result<()> {
     let Some((gateway, prefix)) = bridge.gateway() else {
         return Ok(());
     };
-    run_ip(&[
-        "addr",
-        "add",
-        &format!("{gateway}/{prefix}"),
-        "dev",
-        &bridge.iface,
-    ])
-    .await
+    let address = format!("{gateway}/{prefix}");
+    if address_assigned(&bridge.iface, &address).await? {
+        return Ok(());
+    }
+    run_ip(&["addr", "add", &address, "dev", &bridge.iface]).await
+}
+
+async fn address_assigned(iface: &str, address: &str) -> Result<bool> {
+    let output = Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "dev", iface])
+        .output()
+        .await
+        .context("failed to execute ip addr show")?;
+    Ok(output.status.success()
+        && String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .any(|field| field == address))
 }
 
 const PRIVATE_RANGES: [(u32, u8); 3] = [(0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16)];
@@ -671,5 +680,24 @@ esac"#;
             std::fs::read_to_string(dir.join("rg-1")).unwrap(),
             "10.103.0.0/24"
         );
+    }
+
+    #[tokio::test]
+    async fn assigned_addresses_are_not_added_again() {
+        let dir = registry_dir();
+        write_entry(&dir, "rg-1", CIDR);
+        let gateway = second_host_ip(CIDR).unwrap();
+        let listing = format!(
+            "case \"$*\" in \"-4 -o addr show\"*) echo '5: br inet {gateway}/24 brd 10.101.0.255 scope global br';; esac"
+        );
+        let tools = FakeTools::install(&[("ip", listing.as_str()), ("nft", CAPTURING)]);
+
+        reconcile_in(&dir).await.unwrap();
+
+        assert!(tools
+            .calls("ip")
+            .iter()
+            .all(|call| !call.contains("addr add")));
+        assert!(tools.calls("ip").iter().any(|call| call.contains(" up")));
     }
 }
