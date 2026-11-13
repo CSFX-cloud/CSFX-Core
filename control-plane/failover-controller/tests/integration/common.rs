@@ -14,7 +14,10 @@ use failover_controller::services::eviction::EvictionService;
 use failover_controller::services::failover::FailoverService;
 use http_body_util::BodyExt;
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
+use sea_orm::sea_query::Expr;
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -296,4 +299,13 @@ pub async fn insert_metric(
     .insert(db)
     .await
     .expect("metric must insert");
+}
+
+pub async fn retire_fleet(db: &DatabaseConnection) {
+    agents::Entity::update_many()
+        .col_expr(agents::Column::Status, Expr::value("Retired"))
+        .filter(agents::Column::Status.is_in(["Online", "Degraded", "Offline"]))
+        .exec(db)
+        .await
+        .expect("fleet must be retirable");
 }

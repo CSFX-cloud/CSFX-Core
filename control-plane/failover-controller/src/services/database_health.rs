@@ -1,16 +1,31 @@
 use tokio::time::{Duration, Instant};
 
-const RECOVERY_GRACE: Duration = Duration::from_secs(180);
+pub const RECOVERY_GRACE: Duration = Duration::from_secs(180);
 const STALL_LIMIT: Duration = Duration::from_secs(45);
 
-#[derive(Default)]
 pub struct DatabaseHealth {
+    grace: Duration,
     stable_since: Option<Instant>,
     last_success: Option<Instant>,
     failed: bool,
 }
 
+impl Default for DatabaseHealth {
+    fn default() -> Self {
+        Self::new(RECOVERY_GRACE)
+    }
+}
+
 impl DatabaseHealth {
+    pub fn new(grace: Duration) -> Self {
+        Self {
+            grace,
+            stable_since: None,
+            last_success: None,
+            failed: false,
+        }
+    }
+
     pub fn record_interruption(&mut self) {
         self.failed = true;
         self.stable_since = None;
@@ -20,7 +35,7 @@ impl DatabaseHealth {
     pub fn record_success(&mut self, now: Instant) {
         match self.last_success {
             None if !self.failed => {
-                self.stable_since = Some(now.checked_sub(RECOVERY_GRACE).unwrap_or(now));
+                self.stable_since = Some(now.checked_sub(self.grace).unwrap_or(now));
             }
             Some(last) if now.duration_since(last) <= STALL_LIMIT => {}
             _ => self.stable_since = Some(now),
@@ -30,7 +45,7 @@ impl DatabaseHealth {
 
     pub fn settled(&self, now: Instant) -> bool {
         self.stable_since
-            .is_some_and(|since| now.duration_since(since) >= RECOVERY_GRACE)
+            .is_some_and(|since| now.duration_since(since) >= self.grace)
     }
 }
 
