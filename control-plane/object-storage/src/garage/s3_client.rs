@@ -36,6 +36,7 @@ pub struct S3Object {
 pub struct ListObjectsResult {
     pub objects: Vec<S3Object>,
     pub common_prefixes: Vec<String>,
+    pub next_continuation_token: Option<String>,
 }
 
 impl S3Client {
@@ -291,6 +292,8 @@ fn parse_list_objects_xml(body: &str) -> Result<ListObjectsResult> {
             result.common_prefixes.push(prefix);
         }
     }
+
+    result.next_continuation_token = extract_xml_tag(body, "NextContinuationToken");
 
     Ok(result)
 }

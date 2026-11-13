@@ -129,3 +129,31 @@ async fn storage_backend_failures_surface_as_bad_gateway() {
     .await;
     assert_eq!(status, StatusCode::BAD_GATEWAY);
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn listings_beyond_one_page_expose_the_continuation_token() {
+    let app = router().await;
+    let (status, bucket) =
+        create_named_bucket(&app, &format!("paged-{}", Uuid::new_v4().simple())).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let uri = format!("/buckets/{}/objects", bucket["id"].as_str().unwrap());
+
+    let mut total = 0;
+    let mut token: Option<String> = None;
+    loop {
+        let page_uri = match &token {
+            Some(value) => format!("{}?continuation_token={}", uri, value),
+            None => uri.clone(),
+        };
+        let (status, page) = call(&app, Method::GET, &page_uri, None).await;
+        assert_eq!(status, StatusCode::OK);
+        total += page["objects"].as_array().unwrap().len();
+        token = page["next_continuation_token"].as_str().map(str::to_string);
+        if token.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(total, 1500);
+}

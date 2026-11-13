@@ -81,6 +81,25 @@ pub fn create_router() -> Router<AppState> {
             .expect("invalid rate limit configuration"),
     );
 
+    let object_rate_limit_per_second: u64 = std::env::var("S3_RATE_LIMIT_PER_SECOND")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2000);
+
+    let object_burst_size: u32 = std::env::var("S3_RATE_LIMIT_BURST")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4000);
+
+    let object_governor_config = Arc::new(
+        GovernorConfigBuilder::default()
+            .key_extractor(PeerIpKeyExtractor)
+            .period(replenish_period(object_rate_limit_per_second))
+            .burst_size(object_burst_size)
+            .finish()
+            .expect("invalid object rate limit configuration"),
+    );
+
     let login_rate_limit_per_second: u64 = std::env::var("LOGIN_RATE_LIMIT_PER_SECOND")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -199,7 +218,7 @@ pub fn create_router() -> Router<AppState> {
 
     Router::new()
         .route("/metrics", get(metrics::metrics_handler))
-        .merge(s3_proxy::object_data_router())
+        .merge(s3_proxy::object_data_router().layer(GovernorLayer::new(object_governor_config)))
         .logged_nest("/api", api_router)
         .logged_nest("/api", internal_api_router)
         .fallback_service(serve_dir)
