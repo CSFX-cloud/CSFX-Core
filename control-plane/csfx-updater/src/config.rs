@@ -13,6 +13,8 @@ pub struct Config {
     pub gateway_url: Option<String>,
     pub health_check_timeout_secs: u64,
     pub health_check_retry_interval_secs: u64,
+    pub wave_bake_secs: u64,
+    pub wave_max_failure_percent: u64,
 }
 
 fn number(name: &str, default: u64) -> u64 {
@@ -54,6 +56,8 @@ impl Config {
             gateway_url: env::var("GATEWAY_URL").ok().filter(|url| !url.is_empty()),
             health_check_timeout_secs: number("HEALTH_CHECK_TIMEOUT_SECS", 120),
             health_check_retry_interval_secs: number("HEALTH_CHECK_RETRY_INTERVAL_SECS", 5),
+            wave_bake_secs: number("WAVE_BAKE_SECS", 600),
+            wave_max_failure_percent: number("WAVE_MAX_FAILURE_PERCENT", 10),
         })
     }
 }

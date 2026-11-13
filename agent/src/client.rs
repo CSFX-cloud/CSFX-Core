@@ -3,6 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::runtime::VolumeUsage;
@@ -72,6 +73,7 @@ struct HeartbeatRequest {
     wg_endpoint: Option<String>,
     wg_tunnel_ip: Option<String>,
     agent_version: Option<String>,
+    release_version: Option<String>,
     kvm_capable: bool,
     ssh_host_key: Option<String>,
 }
@@ -131,6 +133,7 @@ pub struct AssignedWorkload {
     #[serde(default)]
     pub memory_limit_bytes: Option<i64>,
     pub env_vars: Option<HashMap<String, String>>,
+    #[serde(default, deserialize_with = "readable_ports")]
     pub ports: Option<Vec<crate::spec::PortMapping>>,
     pub volume_mounts: Option<Vec<VolumeMount>>,
     pub service_name: Option<String>,
@@ -145,6 +148,54 @@ pub struct AssignedWorkload {
     pub disk_bytes: i64,
     #[serde(default)]
     pub guest_ip: Option<String>,
+}
+
+fn readable_ports<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<crate::spec::PortMapping>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(items) = Option::<Vec<serde_json::Value>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let ports = items
+        .into_iter()
+        .filter_map(|item| match serde_json::from_value(item) {
+            Ok(port) => Some(port),
+            Err(error) => {
+                warn!(error = %error, "skipping unreadable port mapping");
+                None
+            }
+        })
+        .collect();
+    Ok(Some(ports))
+}
+
+fn parse_workloads(items: Vec<serde_json::Value>) -> Result<Vec<AssignedWorkload>> {
+    let mut workloads = Vec::with_capacity(items.len());
+    let mut unreadable = Vec::new();
+    for item in items {
+        let workload_id = item
+            .get("id")
+            .and_then(|id| id.as_str())
+            .map(str::to_string);
+        match serde_json::from_value(item) {
+            Ok(workload) => workloads.push(workload),
+            Err(error) => {
+                let workload_id = workload_id.unwrap_or_else(|| "unknown".to_string());
+                warn!(workload_id = %workload_id, error = %error, "unreadable workload in assignment");
+                unreadable.push(workload_id);
+            }
+        }
+    }
+    if !unreadable.is_empty() {
+        anyhow::bail!(
+            "unreadable workloads in assignment ids={}",
+            unreadable.join(",")
+        );
+    }
+    Ok(workloads)
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -179,8 +230,15 @@ pub(crate) fn install_test_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
+pub const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_HEADER: &str = "X-Csfx-Agent-Protocol";
+
 pub(crate) fn build_http_client(ca_pem: Option<&str>) -> Result<Client> {
-    let builder = Client::builder().timeout(std::time::Duration::from_secs(30));
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(PROTOCOL_HEADER, PROTOCOL_VERSION.into());
+    let builder = Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .default_headers(headers);
     let builder = match ca_pem {
         Some(pem) => builder.tls_certs_only([
             reqwest::Certificate::from_pem(pem.as_bytes()).context("Invalid cluster CA")?
@@ -477,6 +535,7 @@ impl ApiClient {
                 wg_endpoint: self.wg_endpoint.clone(),
                 wg_tunnel_ip,
                 agent_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                release_version: crate::update_watch::applied_version().await,
                 kvm_capable: crate::system::is_kvm_capable(),
                 ssh_host_key: crate::system::read_ssh_host_key(),
             });
@@ -734,9 +793,11 @@ impl ApiClient {
             );
         }
 
-        resp.json::<Vec<AssignedWorkload>>()
+        let items = resp
+            .json::<Vec<serde_json::Value>>()
             .await
-            .context("Failed to parse workloads response")
+            .context("Failed to parse workloads response")?;
+        parse_workloads(items)
     }
 
     pub async fn push_workload_stats(
@@ -1048,6 +1109,64 @@ mod tests {
         assert_eq!(volumes[0].id, "1");
         assert_eq!(volumes[1].id, "2");
         client.ack_workload_restart("k", "w1").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn newer_control_plane_fields_and_enum_values_are_tolerated() {
+        let mut extended = workload();
+        extended["id"] = json!("w-extended");
+        extended["new_field"] = json!({"nested": true});
+        extended["ports"][0]["new_port_field"] = json!(1);
+        let mut unknown_protocol = workload();
+        unknown_protocol["id"] = json!("w-unknown-protocol");
+        unknown_protocol["ports"] = json!([
+            unknown_protocol["ports"][0].clone(),
+            {"container_port": 9, "protocol": "sctp"}
+        ]);
+        let client = serve_workloads(json!([extended, unknown_protocol])).await;
+        let workloads = client.fetch_assigned_workloads("k").await.unwrap();
+        let ids: Vec<&str> = workloads.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(ids, vec!["w-extended", "w-unknown-protocol"]);
+        assert_eq!(workloads[1].ports.as_ref().map(Vec::len), Some(1));
+    }
+
+    #[tokio::test]
+    async fn unreadable_workloads_fail_the_assignment_instead_of_being_dropped() {
+        let mut broken = workload();
+        broken["id"] = json!("w-broken");
+        broken["cpu_millicores"] = json!("many");
+        let client = serve_workloads(json!([workload(), broken, 7])).await;
+        let error = client.fetch_assigned_workloads("k").await.unwrap_err();
+        assert!(
+            error.to_string().contains("ids=w-broken,unknown"),
+            "{error}"
+        );
+    }
+
+    async fn serve_workloads(body: serde_json::Value) -> ApiClient {
+        serve(Router::new().route(
+            "/api/agents/self/workloads",
+            get(move || {
+                let body = body.clone();
+                async move { Json(body) }
+            }),
+        ))
+        .await
+    }
+
+    #[tokio::test]
+    async fn requests_carry_the_protocol_version() {
+        let client = serve(Router::new().route(
+            "/api/agents/self/workloads",
+            get(|headers: HeaderMap| async move {
+                match headers.get(PROTOCOL_HEADER) {
+                    Some(value) if value == "1" => (StatusCode::OK, Json(json!([workload()]))),
+                    _ => (StatusCode::UPGRADE_REQUIRED, Json(json!([]))),
+                }
+            }),
+        ))
+        .await;
+        assert_eq!(client.fetch_assigned_workloads("k").await.unwrap().len(), 1);
     }
 
     #[tokio::test]

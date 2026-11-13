@@ -8,6 +8,7 @@ mod nix;
 mod rollout;
 mod state;
 mod version;
+mod waves;
 
 use anyhow::{bail, Result};
 use std::path::PathBuf;

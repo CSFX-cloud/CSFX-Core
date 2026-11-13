@@ -6,3 +6,4 @@ pub mod pki;
 pub mod registry;
 pub mod ssh_host_key;
 pub mod tokens;
+pub mod worker_rollout;

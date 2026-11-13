@@ -273,7 +273,7 @@ impl AgentRegistry {
         kvm_capable: bool,
         ssh_host_key: Option<String>,
         mgmt_ipam: &MgmtIpamService,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let db_agent = crate::db::agents::update_heartbeat(
             &self.db,
             agent_id,
@@ -310,7 +310,7 @@ impl AgentRegistry {
             &format!("Heartbeat received agent={}", agent_id)
         );
 
-        Ok(())
+        Ok(db_agent.role)
     }
 
     pub async fn get_agent(&self, agent_id: Uuid) -> Option<RegisteredAgent> {
