@@ -3,7 +3,7 @@ use sea_orm::DatabaseConnection;
 use shared::leader::LeaderLease;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{interval, Duration, Instant};
 use uuid::Uuid;
 
@@ -22,20 +22,25 @@ const PRESSURE_RULES: [(&str, Pressure); 2] = [
 const POLL_INTERVAL_SECS: u64 = 15;
 const SOFT_THRESHOLD_SECS: i64 = 50;
 const HARD_THRESHOLD_SECS: i64 = 300;
+const MAX_PARALLEL_FAILOVERS: usize = 4;
 
 type InFlight = Arc<Mutex<HashSet<Uuid>>>;
+type Permits = Arc<Semaphore>;
 
 pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
     let failover = Arc::new(FailoverService::new(db.clone()));
     let eviction = EvictionService::new(db.clone());
     let in_flight = InFlight::default();
     let mut tick = interval(Duration::from_secs(POLL_INTERVAL_SECS));
+    let permits = Permits::new(Semaphore::new(MAX_PARALLEL_FAILOVERS));
     let mut database_health = DatabaseHealth::default();
+    database_health.record_interruption();
 
     loop {
         tick.tick().await;
 
         if !leader.is_leader() {
+            database_health.record_interruption();
             continue;
         }
 
@@ -46,7 +51,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
             match agent_db::get_stale_agents(&db, SOFT_THRESHOLD_SECS, HARD_THRESHOLD_SECS).await {
                 Ok(result) => result,
                 Err(e) => {
-                    database_health.record_failure();
+                    database_health.record_interruption();
                     crate::log_error!(
                         "monitor",
                         &format!("Failed to query stale agents err={}", e)
@@ -66,7 +71,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
                 )
             );
         } else {
-            handle_offline(&db, &failover, &in_flight, offline).await;
+            handle_offline(&db, &failover, &in_flight, &permits, offline).await;
         }
         check_status_alerts(&db).await;
     }
@@ -189,6 +194,7 @@ async fn handle_offline(
     db: &DatabaseConnection,
     failover: &Arc<FailoverService>,
     in_flight: &InFlight,
+    permits: &Permits,
     offline: Vec<agents::Model>,
 ) {
     if offline.is_empty() {
@@ -213,7 +219,7 @@ async fn handle_offline(
         if agent.status != "Offline" && !mark_offline(db, &agent).await {
             continue;
         }
-        start_failover(db, failover, in_flight, agent.id).await;
+        start_failover(db, failover, in_flight, permits, agent.id).await;
     }
 }
 
@@ -237,6 +243,7 @@ async fn start_failover(
     db: &DatabaseConnection,
     failover: &Arc<FailoverService>,
     in_flight: &InFlight,
+    permits: &Permits,
     agent_id: Uuid,
 ) {
     match agent_db::has_active_assignments(db, agent_id).await {
@@ -265,7 +272,9 @@ async fn start_failover(
 
     let failover = failover.clone();
     let in_flight = in_flight.clone();
+    let permits = permits.clone();
     tokio::spawn(async move {
+        let _permit = permits.acquire_owned().await;
         if let Err(e) = failover.handle_failover(agent_id).await {
             crate::log_error!(
                 "monitor",

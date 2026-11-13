@@ -11,7 +11,7 @@ pub struct DatabaseHealth {
 }
 
 impl DatabaseHealth {
-    pub fn record_failure(&mut self) {
+    pub fn record_interruption(&mut self) {
         self.failed = true;
         self.stable_since = None;
         self.last_success = None;
@@ -65,7 +65,7 @@ mod tests {
         let start = Instant::now() + RECOVERY_GRACE;
         let mut health = DatabaseHealth::default();
         health.record_success(start);
-        health.record_failure();
+        health.record_interruption();
         health.record_success(at(start, 100));
         assert!(!health.settled(at(start, 100)));
         health.record_success(at(start, 115));
@@ -87,7 +87,7 @@ mod tests {
     fn a_failure_before_any_success_defers() {
         let start = Instant::now() + RECOVERY_GRACE;
         let mut health = DatabaseHealth::default();
-        health.record_failure();
+        health.record_interruption();
         health.record_success(start);
         assert!(!health.settled(start));
     }
