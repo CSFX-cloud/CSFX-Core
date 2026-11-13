@@ -1,6 +1,7 @@
 pub mod agent_api_keys;
 pub mod agent_certificates;
 pub mod agent_metrics;
+pub mod agent_rg_wg_ports;
 pub mod agents;
 pub mod audit_log;
 pub mod bootstrap_tokens;

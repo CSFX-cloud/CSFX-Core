@@ -204,6 +204,8 @@ pub struct ResourceGroupPeer {
     pub wg_public_key: String,
     pub wg_endpoint: String,
     pub wg_tunnel_ip: String,
+    #[serde(default)]
+    pub wg_listen_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -651,6 +653,38 @@ impl ApiClient {
         resp.json::<Vec<ResourceGroupPeer>>()
             .await
             .context("Failed to parse resource group peers response")
+    }
+
+    pub async fn report_resource_group_wg_port(
+        &self,
+        api_key: &str,
+        resource_group_id: &str,
+        port: u16,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/api/resource-groups/{}/wg-port",
+            self.gateway_url, resource_group_id
+        );
+
+        let resp = self
+            .client
+            .put(&url)
+            .header("X-API-Key", api_key)
+            .json(&serde_json::json!({ "port": port }))
+            .send()
+            .await
+            .context("Failed to report resource group wireguard port")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            anyhow::bail!(
+                "Failed to report resource group wireguard port status={} {}",
+                status,
+                resp.text().await.unwrap_or_default()
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn fetch_gateway_config(

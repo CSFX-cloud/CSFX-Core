@@ -7,6 +7,7 @@ use tracing::debug;
 
 const TABLE_NAME: &str = "csfx";
 const CHAIN_NAME: &str = "rg_isolation";
+const BRIDGE_SET_NAME: &str = "rg_bridges";
 const NAT_TABLE_NAME: &str = "csfx_nat";
 const NAT_CHAIN_NAME: &str = "node_port_dnat";
 const SNAT_CHAIN_NAME: &str = "node_port_snat";
@@ -41,19 +42,32 @@ fn ruleset(bridges: &[BridgeRules]) -> String {
 
 fn isolation_rules(bridges: &[BridgeRules]) -> Vec<String> {
     let mut lines = vec![
-        format!(
-            "add chain inet {TABLE_NAME} {CHAIN_NAME} {{ type filter hook forward priority 0 ; policy accept ; }}"
-        ),
-        format!("flush chain inet {TABLE_NAME} {CHAIN_NAME}"),
+        format!("add set inet {TABLE_NAME} {BRIDGE_SET_NAME} {{ type ifname ; }}"),
+        format!("flush set inet {TABLE_NAME} {BRIDGE_SET_NAME}"),
     ];
-    for from in bridges {
-        for to in bridges.iter().filter(|to| to.name != from.name) {
-            lines.push(format!(
-                "add rule inet {TABLE_NAME} {CHAIN_NAME} iifname \"{}\" oifname \"{}\" drop",
-                from.name, to.name
-            ));
-        }
+    if !bridges.is_empty() {
+        let elements: Vec<_> = bridges
+            .iter()
+            .map(|bridge| format!("\"{}\"", bridge.name))
+            .collect();
+        lines.push(format!(
+            "add element inet {TABLE_NAME} {BRIDGE_SET_NAME} {{ {} }}",
+            elements.join(", ")
+        ));
     }
+    lines.push(format!(
+        "add chain inet {TABLE_NAME} {CHAIN_NAME} {{ type filter hook forward priority 0 ; policy accept ; }}"
+    ));
+    lines.push(format!("flush chain inet {TABLE_NAME} {CHAIN_NAME}"));
+    for bridge in bridges {
+        lines.push(format!(
+            "add rule inet {TABLE_NAME} {CHAIN_NAME} iifname \"{0}\" oifname \"{0}\" accept",
+            bridge.name
+        ));
+    }
+    lines.push(format!(
+        "add rule inet {TABLE_NAME} {CHAIN_NAME} iifname @{BRIDGE_SET_NAME} oifname @{BRIDGE_SET_NAME} drop"
+    ));
     lines
 }
 
@@ -377,32 +391,55 @@ mod tests {
     const CAPTURING: &str = "cat >> \"$0.stdin\"";
 
     #[test]
-    fn isolation_drops_traffic_between_every_pair_of_bridges() {
+    fn isolation_uses_one_drop_rule_over_a_bridge_set() {
         let rules = isolation_rules(&[
             bridge("br1", None),
             bridge("br2", None),
             bridge("br3", None),
         ]);
 
+        assert!(rules.contains(
+            &"add element inet csfx rg_bridges { \"br1\", \"br2\", \"br3\" }".to_string()
+        ));
         let drops: Vec<_> = rules.iter().filter(|rule| rule.contains(" drop")).collect();
-        assert_eq!(drops.len(), 6);
+        assert_eq!(
+            drops,
+            vec!["add rule inet csfx rg_isolation iifname @rg_bridges oifname @rg_bridges drop"]
+        );
         assert!(rules.contains(
-            &"add rule inet csfx rg_isolation iifname \"br1\" oifname \"br2\" drop".to_string()
+            &"add rule inet csfx rg_isolation iifname \"br2\" oifname \"br2\" accept".to_string()
         ));
-        assert!(rules.contains(
-            &"add rule inet csfx rg_isolation iifname \"br3\" oifname \"br1\" drop".to_string()
-        ));
-        assert!(!rules
-            .iter()
-            .any(|rule| rule.contains("iifname \"br1\" oifname \"br1\"")));
+        let last_accept = rules.iter().rposition(|rule| rule.contains("accept"));
+        assert!(last_accept < rules.iter().position(|rule| rule.contains(" drop")));
     }
 
     #[test]
-    fn a_single_bridge_needs_no_isolation_rules_but_keeps_the_chain() {
-        let rules = isolation_rules(&[bridge("br1", None)]);
+    fn isolation_rule_count_grows_linearly_with_bridges() {
+        let count = |bridges: usize| {
+            let list: Vec<_> = (0..bridges)
+                .map(|index| bridge(&format!("br{index}"), None))
+                .collect();
+            isolation_rules(&list).len()
+        };
 
-        assert_eq!(rules.len(), 2);
-        assert!(rules[1].starts_with("flush chain inet csfx rg_isolation"));
+        assert_eq!(count(200) - count(100), 100);
+        assert_eq!(count(200), 206);
+    }
+
+    #[test]
+    fn an_empty_bridge_set_is_flushed_without_elements() {
+        let rules = isolation_rules(&[]);
+
+        assert!(rules.contains(&"flush set inet csfx rg_bridges".to_string()));
+        assert!(!rules.iter().any(|rule| rule.contains("add element")));
+    }
+
+    #[test]
+    fn the_bridge_set_is_declared_before_the_rule_that_uses_it() {
+        let script = ruleset(&[bridge("br1", None)]);
+
+        let declared = script.find("add set inet csfx rg_bridges").unwrap();
+        assert!(declared < script.find("@rg_bridges").unwrap());
     }
 
     #[test]
@@ -479,7 +516,7 @@ mod tests {
         assert_eq!(tools.calls("nft"), vec!["-f -".to_string()]);
         let script = tools.stdin("nft");
         assert!(script.contains("add table inet csfx"));
-        assert!(script.contains("iifname \"br2\" oifname \"br1\" drop"));
+        assert!(script.contains("add element inet csfx rg_bridges { \"br1\", \"br2\" }"));
     }
 
     #[tokio::test]

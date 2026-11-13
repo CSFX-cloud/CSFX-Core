@@ -69,6 +69,7 @@ struct VmHandle {
 
 pub struct QemuRuntime {
     wg_private_key_b64: String,
+    local_state: Arc<crate::local_state::LocalState>,
     rg_dns_registry: Arc<crate::rg_dns::RgDnsRegistry>,
     dhcp_supervisor: RgDhcpSupervisor,
     handles: Mutex<HashMap<String, VmHandle>>,
@@ -78,10 +79,12 @@ pub struct QemuRuntime {
 impl QemuRuntime {
     pub fn new(
         wg_private_key_b64: String,
+        local_state: Arc<crate::local_state::LocalState>,
         rg_dns_registry: Arc<crate::rg_dns::RgDnsRegistry>,
     ) -> Self {
         Self {
             wg_private_key_b64,
+            local_state,
             rg_dns_registry,
             dhcp_supervisor: RgDhcpSupervisor::new(),
             handles: Mutex::new(HashMap::new()),
@@ -135,11 +138,10 @@ impl QemuRuntime {
         .context("Failed to ensure resource group bridge")?;
 
         if resource_group_cidr.is_some() {
-            let listen_port = crate::spec::rg_wireguard_port(resource_group_id);
-            crate::wireguard::ensure_interface(
+            crate::wireguard::ensure_rg_interface(
+                &self.local_state,
                 resource_group_id,
                 &self.wg_private_key_b64,
-                listen_port,
             )
             .await
             .context("Failed to bring up resource group WireGuard interface")?;
@@ -159,6 +161,7 @@ impl QemuRuntime {
         crate::wireguard::remove_interface(&wg_iface)
             .await
             .context("Failed to remove resource group WireGuard interface")?;
+        self.local_state.release_wg_port(resource_group_id).await;
 
         Ok(())
     }
@@ -752,6 +755,9 @@ mod tests {
     fn runtime() -> QemuRuntime {
         QemuRuntime::new(
             "key".to_string(),
+            Arc::new(crate::local_state::LocalState::open(
+                std::env::temp_dir().join(format!("csfx-ls-{}.json", uuid::Uuid::new_v4())),
+            )),
             Arc::new(crate::rg_dns::RgDnsRegistry::new()),
         )
     }

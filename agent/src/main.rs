@@ -273,12 +273,14 @@ async fn main() -> Result<()> {
 
     let firecracker_runtime = Arc::new(firecracker::runtime::FirecrackerRuntime::new(
         wg_identity.private_key_b64.clone(),
+        Arc::clone(&local_state),
         Arc::clone(&rg_dns_registry),
         firecracker::site_registry::SiteRegistry::from_gateway(&gateway_url, &api_key),
     ));
 
     let qemu_runtime = Arc::new(qemu::runtime::QemuRuntime::new(
         wg_identity.private_key_b64.clone(),
+        Arc::clone(&local_state),
         Arc::clone(&rg_dns_registry),
     ));
 
@@ -497,6 +499,7 @@ async fn reconcile_tick(
         agent_id,
         &resource_group_ids,
         rg_dns_registry,
+        local_state,
     )
     .await;
     sync_mgmt_peers(client, api_key, agent_id, &resource_group_ids).await;
@@ -1636,9 +1639,15 @@ mod tests {
     ) {
         client::install_test_crypto_provider();
         let registry = Arc::new(rg_dns::RgDnsRegistry::new());
+        let state = Arc::new(local_state());
         (
-            firecracker::runtime::FirecrackerRuntime::new("k".to_string(), registry.clone(), None),
-            qemu::runtime::QemuRuntime::new("k".to_string(), registry),
+            firecracker::runtime::FirecrackerRuntime::new(
+                "k".to_string(),
+                state.clone(),
+                registry.clone(),
+                None,
+            ),
+            qemu::runtime::QemuRuntime::new("k".to_string(), state, registry),
         )
     }
 

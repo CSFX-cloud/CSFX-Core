@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -15,6 +16,8 @@ struct Snapshot {
     generation: u64,
     workloads: Option<Vec<AssignedWorkload>>,
     volumes: Option<Vec<AssignedVolume>>,
+    #[serde(default)]
+    wg_ports: BTreeMap<String, u16>,
 }
 
 pub struct LocalState {
@@ -54,6 +57,41 @@ impl LocalState {
         self.snapshot.lock().await.volumes.clone()
     }
 
+    pub async fn wg_port(
+        &self,
+        resource_group_id: &str,
+        is_free: impl Fn(u16) -> bool,
+    ) -> Result<u16> {
+        let mut assigned = None;
+        self.update(|snapshot| {
+            assigned = allocate_wg_port(&snapshot.wg_ports, resource_group_id, is_free);
+            assigned.is_some_and(|port| {
+                snapshot
+                    .wg_ports
+                    .insert(resource_group_id.to_string(), port)
+                    != Some(port)
+            })
+        })
+        .await;
+        assigned.with_context(|| {
+            format!("no free wireguard port resource_group_id={resource_group_id}")
+        })
+    }
+
+    pub async fn assigned_wg_port(&self, resource_group_id: &str) -> Option<u16> {
+        self.snapshot
+            .lock()
+            .await
+            .wg_ports
+            .get(resource_group_id)
+            .copied()
+    }
+
+    pub async fn release_wg_port(&self, resource_group_id: &str) {
+        self.update(|snapshot| snapshot.wg_ports.remove(resource_group_id).is_some())
+            .await;
+    }
+
     pub async fn generation(&self) -> u64 {
         self.snapshot.lock().await.generation
     }
@@ -84,6 +122,23 @@ impl LocalState {
         }
         *snapshot = next;
     }
+}
+
+fn allocate_wg_port(
+    assigned: &BTreeMap<String, u16>,
+    resource_group_id: &str,
+    is_free: impl Fn(u16) -> bool,
+) -> Option<u16> {
+    if let Some(port) = assigned.get(resource_group_id) {
+        return Some(*port);
+    }
+    let preferred = crate::spec::rg_wireguard_port(resource_group_id);
+    let span = crate::spec::WG_PORT_END - crate::spec::WG_PORT_START;
+    (0..span)
+        .map(|offset| {
+            crate::spec::WG_PORT_START + (preferred - crate::spec::WG_PORT_START + offset) % span
+        })
+        .find(|port| !assigned.values().any(|taken| taken == port) && is_free(*port))
 }
 
 fn replace<T: PartialEq>(slot: &mut Option<T>, value: T) -> bool {
@@ -159,6 +214,46 @@ mod tests {
             "runtime_class": "microvm", "disk_bytes": 0
         }))
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn colliding_hash_ports_get_distinct_stable_ports() {
+        let path = state_path();
+        let state = LocalState::open(&path);
+        let (first, second) = colliding_groups();
+
+        let a = state.wg_port(&first, |_| true).await.unwrap();
+        let b = state.wg_port(&second, |_| true).await.unwrap();
+
+        assert_eq!(a, crate::spec::rg_wireguard_port(&first));
+        assert_ne!(a, b);
+        let reopened = LocalState::open(&path);
+        assert_eq!(reopened.wg_port(&first, |_| false).await.unwrap(), a);
+        assert_eq!(reopened.wg_port(&second, |_| false).await.unwrap(), b);
+    }
+
+    #[tokio::test]
+    async fn ports_in_use_on_the_host_are_skipped_and_releases_free_the_port() {
+        let state = LocalState::open(state_path());
+        let preferred = crate::spec::rg_wireguard_port("rg");
+
+        let port = state.wg_port("rg", |port| port != preferred).await.unwrap();
+        assert_ne!(port, preferred);
+
+        state.release_wg_port("rg").await;
+        assert_eq!(state.wg_port("rg", |_| true).await.unwrap(), preferred);
+        assert!(state.wg_port("other", |_| false).await.is_err());
+    }
+
+    fn colliding_groups() -> (String, String) {
+        let mut seen = std::collections::HashMap::new();
+        for index in 0u32.. {
+            let id = format!("rg-{index}");
+            if let Some(previous) = seen.insert(crate::spec::rg_wireguard_port(&id), id.clone()) {
+                return (previous, id);
+            }
+        }
+        unreachable!()
     }
 
     #[tokio::test]

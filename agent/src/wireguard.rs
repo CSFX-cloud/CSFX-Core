@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-use tracing::info;
+use tracing::{info, warn};
 
 const PEER_CACHE_FILE: &str = "/var/lib/csfx-agent/mgmt-peers.json";
 
@@ -85,23 +85,50 @@ pub fn rg_interface_name(resource_group_id: &str) -> String {
     format!("wgrg{:08x}", hash)
 }
 
+pub fn udp_port_is_free(port: u16) -> bool {
+    std::net::UdpSocket::bind(("0.0.0.0", port)).is_ok()
+}
+
+pub async fn ensure_rg_interface(
+    local_state: &crate::local_state::LocalState,
+    resource_group_id: &str,
+    private_key_b64: &str,
+) -> Result<String> {
+    let listen_port = local_state
+        .wg_port(resource_group_id, udp_port_is_free)
+        .await?;
+    ensure_interface(resource_group_id, private_key_b64, listen_port).await
+}
+
 pub async fn ensure_interface(
     resource_group_id: &str,
     private_key_b64: &str,
     listen_port: u16,
 ) -> Result<String> {
     let iface = rg_interface_name(resource_group_id);
+    let created = !interface_exists(&iface).await?;
 
-    if !interface_exists(&iface).await? {
+    if created {
         run_ip(&["link", "add", "dev", &iface, "type", "wireguard"]).await?;
     }
-    set_private_key(&iface, private_key_b64).await?;
-    run_wg(&["set", &iface, "listen-port", &listen_port.to_string()]).await?;
-    run_ip(&["link", "set", "up", "dev", &iface]).await?;
+    if let Err(error) = configure_interface(&iface, private_key_b64, listen_port).await {
+        if created {
+            if let Err(cleanup) = remove_interface(&iface).await {
+                warn!(iface = %iface, error = %cleanup, "Failed to remove half configured WireGuard interface");
+            }
+        }
+        return Err(error);
+    }
 
     info!(resource_group_id = %resource_group_id, iface = %iface, "WireGuard interface ready");
 
     Ok(iface)
+}
+
+async fn configure_interface(iface: &str, private_key_b64: &str, listen_port: u16) -> Result<()> {
+    set_private_key(iface, private_key_b64).await?;
+    run_wg(&["set", iface, "listen-port", &listen_port.to_string()]).await?;
+    run_ip(&["link", "set", "up", "dev", iface]).await
 }
 
 pub async fn set_route(iface: &str, cidr: &str) -> Result<()> {
@@ -466,12 +493,35 @@ mod tests {
             .contains(&format!("link add dev {name} type wireguard")));
         drop(tools);
 
-        let tools = FakeTools::install(&[("ip", SUCCEEDING), ("wg", SUCCEEDING)]);
+        let tools = FakeTools::install(&[("ip", SUCCEEDING), ("wg", WG_READS_KEY)]);
         ensure_interface("rg-1", "c2VjcmV0", 51900).await.unwrap();
         let ip = tools.calls("ip");
         assert!(!ip.iter().any(|call| call.contains("link add")));
         assert!(ip.iter().any(|call| call.contains("link set up dev")));
         assert!(!tools.calls("wg").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_rejected_listen_port_removes_the_new_interface() {
+        let tools = FakeTools::install(&[
+            ("ip", IP_MISSING_INTERFACE),
+            (
+                "wg",
+                r#"case "$*" in *private-key*) cat > /dev/null;; *listen-port*) echo 'Address already in use' >&2; exit 1;; esac"#,
+            ),
+        ]);
+
+        let error = ensure_interface("rg-1", "c2VjcmV0", 51900).await;
+
+        assert!(error.is_err());
+        let name = rg_interface_name("rg-1");
+        assert!(tools
+            .calls("ip")
+            .contains(&format!("link delete dev {name}")));
+        assert!(!tools
+            .calls("ip")
+            .iter()
+            .any(|call| call.contains("link set up")));
     }
 
     const SUCCEEDING: &str = "exit 0";

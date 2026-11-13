@@ -699,3 +699,58 @@ async fn resource_group_names_must_be_dns_labels() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     remove_group(&harness, id.parse().unwrap()).await;
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn a_reported_wireguard_port_reaches_peers_and_vpn_config() {
+    let harness = harness().await;
+    let group = insert_group(&harness.db, harness.org_id).await;
+    let agent = insert_agent(&harness.db, "worker", "Online").await;
+    let key = insert_api_key(&harness.db, agent.id).await;
+    insert_workload(
+        &harness.db,
+        WorkloadSpec::new(group.id, Some(agent.id), "running"),
+    )
+    .await;
+    let peers_uri = format!("/api/resource-groups/{}/peers", group.id);
+    let port_uri = format!("/api/resource-groups/{}/wg-port", group.id);
+
+    let (_, peers) = keyed(&harness, Method::GET, &peers_uri, &key, None).await;
+    assert!(peers[0]["wg_listen_port"].is_null());
+
+    for port in [50123, 50124] {
+        let (status, _) = keyed(
+            &harness,
+            Method::PUT,
+            &port_uri,
+            &key,
+            Some(json!({ "port": port })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+    let (status, _) = keyed(
+        &harness,
+        Method::PUT,
+        &port_uri,
+        &key,
+        Some(json!({ "port": 80 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (_, peers) = keyed(&harness, Method::GET, &peers_uri, &key, None).await;
+    assert_eq!(peers[0]["wg_listen_port"], 50124);
+
+    let (status, _, bytes) = raw(
+        &harness,
+        Method::POST,
+        &format!("/api/resource-groups/{}/vpn-config", group.id),
+        &[("authorization", &format!("Bearer {}", harness.token))],
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let config = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(config.contains("Endpoint = 192.0.2.10:50124"), "{config}");
+}
