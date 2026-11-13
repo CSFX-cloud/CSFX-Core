@@ -1322,8 +1322,6 @@ version = "0.2.2"
 dependencies = [
  "dotenvy",
  "migration",
- "sea-orm",
- "sea-orm-migration",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3050,6 +3048,8 @@ version = "0.2.2"
 dependencies = [
  "async-std",
  "sea-orm-migration",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

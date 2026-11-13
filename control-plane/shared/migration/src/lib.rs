@@ -1,5 +1,8 @@
 pub use sea_orm_migration::prelude::*;
 
+mod runner;
+pub use runner::run_pending_migrations;
+
 mod m20251026_150747_key;
 mod m20251026_150819_invalid_jwt;
 mod m20251026_150828_user;
