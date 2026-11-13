@@ -71,6 +71,7 @@ mod m20261115_020000_add_site_zone_generation;
 mod m20261116_010000_add_audit_log;
 mod m20261116_020000_unique_key_name;
 mod m20261116_030000_add_pagination_indexes;
+mod m20261116_060000_add_agent_rg_wg_ports;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -143,6 +144,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261116_010000_add_audit_log::Migration),
             Box::new(m20261116_020000_unique_key_name::Migration),
             Box::new(m20261116_030000_add_pagination_indexes::Migration),
+            Box::new(m20261116_060000_add_agent_rg_wg_ports::Migration),
         ]
     }
 }

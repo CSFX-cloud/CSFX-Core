@@ -499,6 +499,7 @@ async fn reconcile_tick(
         agent_id,
         &resource_group_ids,
         rg_dns_registry,
+        local_state,
     )
     .await;
     sync_mgmt_peers(client, api_key, agent_id, &resource_group_ids).await;

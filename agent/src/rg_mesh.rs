@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
 use crate::client::{ApiClient, ResourceGroupMember, ResourceGroupPeer, SiteService};
+use crate::local_state::LocalState;
 use crate::rg_dns::RgDnsRegistry;
 use crate::rg_network;
 use crate::spec::rg_wireguard_port;
@@ -14,8 +15,10 @@ pub async fn sync(
     agent_id: uuid::Uuid,
     resource_group_ids: &[String],
     dns_registry: &RgDnsRegistry,
+    local_state: &LocalState,
 ) {
     for resource_group_id in resource_group_ids {
+        report_wg_port(client, api_key, resource_group_id, local_state).await;
         if let Err(e) = sync_group(
             client,
             api_key,
@@ -27,6 +30,23 @@ pub async fn sync(
         {
             warn!(resource_group_id = %resource_group_id, error = %e, "Failed to sync resource group mesh");
         }
+    }
+}
+
+async fn report_wg_port(
+    client: &ApiClient,
+    api_key: &str,
+    resource_group_id: &str,
+    local_state: &LocalState,
+) {
+    let Some(port) = local_state.assigned_wg_port(resource_group_id).await else {
+        return;
+    };
+    if let Err(e) = client
+        .report_resource_group_wg_port(api_key, resource_group_id, port)
+        .await
+    {
+        warn!(resource_group_id = %resource_group_id, port, error = %e, "Failed to report wireguard port");
     }
 }
 
@@ -88,12 +108,15 @@ fn build_peers(
     peers: Vec<ResourceGroupPeer>,
     members: &[ResourceGroupMember],
 ) -> Vec<Peer> {
-    let port = rg_wireguard_port(resource_group_id);
+    let fallback_port = rg_wireguard_port(resource_group_id);
     peers
         .into_iter()
         .filter(|peer| peer.agent_id != agent_id)
         .filter_map(|peer| {
-            let endpoint = with_port(&peer.wg_endpoint, port)?;
+            let endpoint = with_port(
+                &peer.wg_endpoint,
+                peer.wg_listen_port.unwrap_or(fallback_port),
+            )?;
             let mut allowed_ips = vec![format!("{}/32", peer.wg_tunnel_ip)];
             allowed_ips.extend(
                 members
@@ -156,6 +179,7 @@ mod tests {
             wg_public_key: format!("key-{}", agent_id),
             wg_endpoint: "192.168.1.5:51820".to_string(),
             wg_tunnel_ip: tunnel_ip.to_string(),
+            wg_listen_port: None,
         }
     }
 
@@ -180,6 +204,19 @@ mod tests {
         );
         assert_eq!(
             peers[0].endpoint,
+            Some(format!("192.168.1.5:{}", rg_wireguard_port("group")))
+        );
+    }
+
+    #[test]
+    fn reported_ports_override_the_hash_port() {
+        let mut reported = peer("b", "10.100.0.3");
+        reported.wg_listen_port = Some(50321);
+        let peers = build_peers("group", "a", vec![reported, peer("c", "10.100.0.4")], &[]);
+
+        assert_eq!(peers[0].endpoint.as_deref(), Some("192.168.1.5:50321"));
+        assert_eq!(
+            peers[1].endpoint,
             Some(format!("192.168.1.5:{}", rg_wireguard_port("group")))
         );
     }

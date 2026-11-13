@@ -78,6 +78,15 @@ impl LocalState {
         })
     }
 
+    pub async fn assigned_wg_port(&self, resource_group_id: &str) -> Option<u16> {
+        self.snapshot
+            .lock()
+            .await
+            .wg_ports
+            .get(resource_group_id)
+            .copied()
+    }
+
     pub async fn release_wg_port(&self, resource_group_id: &str) {
         self.update(|snapshot| snapshot.wg_ports.remove(resource_group_id).is_some())
             .await;

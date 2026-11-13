@@ -3,26 +3,27 @@ use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chrono::Utc;
 use entity::{
     entities::{
-        agents, buckets, networks, resource_group_vpn_peers, resource_groups, sites, volumes,
-        workloads,
+        agent_rg_wg_ports, agents, buckets, networks, resource_group_vpn_peers, resource_groups,
+        sites, volumes, workloads,
     },
     Agents, Buckets, Networks, ResourceGroupVpnPeers, ResourceGroups, Sites, Volumes, Workloads,
 };
 use ring::rand::{SecureRandom, SystemRandom};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    QueryOrder,
+    sea_query::OnConflict, ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbConn, DbErr,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shared::workload_status::ACTIVE_STATUSES;
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use uuid::Uuid;
 
@@ -903,6 +904,74 @@ pub struct ResourceGroupPeer {
     pub wg_public_key: String,
     pub wg_endpoint: String,
     pub wg_tunnel_ip: String,
+    pub wg_listen_port: Option<u16>,
+}
+
+async fn reported_wg_ports(
+    db: &DbConn,
+    resource_group_id: Uuid,
+) -> Result<HashMap<Uuid, u16>, DbErr> {
+    Ok(agent_rg_wg_ports::Entity::find()
+        .filter(agent_rg_wg_ports::Column::ResourceGroupId.eq(resource_group_id))
+        .all(db)
+        .await?
+        .into_iter()
+        .filter_map(|row| Some((row.agent_id, u16::try_from(row.port).ok()?)))
+        .collect())
+}
+
+fn with_port(endpoint: &str, port: u16) -> String {
+    match endpoint.rsplit_once(':') {
+        Some((host, _)) => format!("{host}:{port}"),
+        None => endpoint.to_string(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReportWgPortRequest {
+    pub port: u16,
+}
+
+pub async fn report_resource_group_wg_port(
+    agent: crate::auth::agent::AgentApiKey,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(request): Json<ReportWgPortRequest>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    if request.port < 1024 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "port out of range" })),
+        ));
+    }
+    let row = agent_rg_wg_ports::ActiveModel {
+        agent_id: Set(agent.agent_id),
+        resource_group_id: Set(id),
+        port: Set(i32::from(request.port)),
+        updated_at: Set(Utc::now().naive_utc()),
+    };
+    agent_rg_wg_ports::Entity::insert(row)
+        .on_conflict(
+            OnConflict::columns([
+                agent_rg_wg_ports::Column::AgentId,
+                agent_rg_wg_ports::Column::ResourceGroupId,
+            ])
+            .update_columns([
+                agent_rg_wg_ports::Column::Port,
+                agent_rg_wg_ports::Column::UpdatedAt,
+            ])
+            .to_owned(),
+        )
+        .exec(&state.agent_db)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to store reported wireguard port");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn list_active_resource_group_ids(
@@ -989,6 +1058,14 @@ pub async fn list_resource_group_peers(
             )
         })?;
 
+    let ports = reported_wg_ports(&state.agent_db, id).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to load reported wireguard ports");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "database error" })),
+        )
+    })?;
+
     let peers: Vec<ResourceGroupPeer> = agent_rows
         .into_iter()
         .filter_map(|a| {
@@ -997,6 +1074,7 @@ pub async fn list_resource_group_peers(
                 wg_public_key: a.wg_public_key?,
                 wg_endpoint: a.wg_endpoint?,
                 wg_tunnel_ip: a.wg_tunnel_ip?,
+                wg_listen_port: ports.get(&a.id).copied(),
             })
         })
         .collect();
@@ -1110,6 +1188,7 @@ pub async fn list_mesh_peers(
                 wg_public_key: a.wg_public_key?,
                 wg_endpoint: a.wg_endpoint?,
                 wg_tunnel_ip: a.wg_tunnel_ip?,
+                wg_listen_port: None,
             })
         })
         .collect();
@@ -1225,7 +1304,22 @@ pub async fn create_vpn_config(
         })?;
 
     let server_pubkey = gateway_agent.wg_public_key.as_deref().unwrap_or("");
-    let endpoint = gateway_agent.wg_endpoint.as_deref().unwrap_or("");
+    let reported_port = reported_wg_ports(&state.db_conn, id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to load reported wireguard ports");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "database error" })),
+            )
+        })?
+        .get(&gateway_agent.id)
+        .copied();
+    let advertised = gateway_agent.wg_endpoint.as_deref().unwrap_or("");
+    let endpoint = match reported_port {
+        Some(port) => with_port(advertised, port),
+        None => advertised.to_string(),
+    };
 
     let client_private_key = generate_wg_key().map_err(|_| {
         (
@@ -1474,6 +1568,10 @@ pub fn resource_groups_agent_routes() -> Router<AppState> {
         .route(
             "/resource-groups/{id}/peers",
             get(list_resource_group_peers),
+        )
+        .route(
+            "/resource-groups/{id}/wg-port",
+            put(report_resource_group_wg_port),
         )
         .route(
             "/resource-groups/{id}/members",
