@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::rg_dns::RgDnsRegistry;
 use crate::spec::{rg_bridge_iface_name, second_host_ip};
@@ -17,69 +17,142 @@ pub async fn ensure_bridge(
     cidr: Option<&str>,
     rg_dns_registry: &RgDnsRegistry,
 ) -> Result<String> {
+    ensure_bridge_in(
+        Path::new(RG_REGISTRY_DIR),
+        resource_group_id,
+        cidr,
+        rg_dns_registry,
+    )
+    .await
+}
+
+async fn ensure_bridge_in(
+    registry_dir: &Path,
+    resource_group_id: &str,
+    cidr: Option<&str>,
+    rg_dns_registry: &RgDnsRegistry,
+) -> Result<String> {
     let iface = rg_bridge_iface_name(resource_group_id);
 
     let tenant_range = cidr.map(ensure_tenant_range).transpose()?;
 
-    write_registry_entry(resource_group_id).await?;
+    write_registry_entry(registry_dir, resource_group_id, cidr).await?;
 
-    if interface_exists(&iface).await? {
-        return Ok(iface);
-    }
-
+    let exists = interface_exists(&iface).await?;
     if let Some(range) = tenant_range {
-        ensure_range_is_unrouted(range).await?;
-    }
-
-    run_ip(&["link", "add", "name", &iface, "type", "bridge"]).await?;
-
-    if let Some(cidr) = cidr {
-        if let Some(gateway) = second_host_ip(cidr) {
-            let prefix = cidr.split('/').nth(1).unwrap_or("24");
-            run_ip(&[
-                "addr",
-                "add",
-                &format!("{}/{}", gateway, prefix),
-                "dev",
-                &iface,
-            ])
-            .await?;
-
-            if let Err(e) = rg_dns_registry
-                .upsert(resource_group_id, S3_SERVICE_NAME, &gateway)
-                .await
-            {
-                info!(resource_group_id = %resource_group_id, error = %e, "Failed to register s3 dns record");
-            }
-
-            if let Err(e) = rg_dns_registry
-                .upsert(resource_group_id, PLATFORM_SERVICE_NAME, &gateway)
-                .await
-            {
-                info!(resource_group_id = %resource_group_id, error = %e, "Failed to register platform dns record");
-            }
-
-            if let Err(e) = crate::nftables::dnat_bridge_port(&iface, &gateway, S3_DNAT_PORT).await
-            {
-                info!(resource_group_id = %resource_group_id, error = %e, "Failed to set up s3 dnat rule");
-            }
+        if !exists || !has_ipv4_address(&iface).await? {
+            ensure_range_is_unrouted(range).await?;
         }
     }
+    if !exists {
+        run_ip(&["link", "add", "name", &iface, "type", "bridge"]).await?;
+    }
 
-    run_ip(&["link", "set", "dev", &iface, "up"]).await?;
+    if let Some(gateway) = cidr.and_then(second_host_ip) {
+        register_gateway_records(resource_group_id, &gateway, rg_dns_registry).await;
+    }
 
-    crate::nftables::masquerade_bridge_traffic(&iface)
+    reconcile_in(registry_dir)
         .await
-        .context("Failed to apply nftables masquerade for resource group bridge")?;
-
-    let other_bridges = list_other_bridge_ifaces(resource_group_id).await?;
-    crate::nftables::isolate_bridge(&iface, &other_bridges)
-        .await
-        .context("Failed to apply nftables isolation for resource group bridge")?;
+        .context("Failed to reconcile resource group bridges")?;
 
     info!(resource_group_id = %resource_group_id, iface = %iface, "Resource group bridge ready");
 
     Ok(iface)
+}
+
+async fn register_gateway_records(
+    resource_group_id: &str,
+    gateway: &str,
+    rg_dns_registry: &RgDnsRegistry,
+) {
+    for service_name in [S3_SERVICE_NAME, PLATFORM_SERVICE_NAME] {
+        if let Err(e) = rg_dns_registry
+            .upsert(resource_group_id, service_name, gateway)
+            .await
+        {
+            info!(resource_group_id = %resource_group_id, service = service_name, error = %e, "Failed to register dns record");
+        }
+    }
+}
+
+struct Bridge {
+    resource_group_id: String,
+    iface: String,
+    cidr: Option<String>,
+}
+
+impl Bridge {
+    fn gateway(&self) -> Option<(String, String)> {
+        let cidr = self.cidr.as_deref()?;
+        let gateway = second_host_ip(cidr)?;
+        let prefix = cidr.split('/').nth(1).unwrap_or("24").to_string();
+        Some((gateway, prefix))
+    }
+
+    fn rules(&self) -> crate::nftables::BridgeRules {
+        crate::nftables::BridgeRules {
+            name: self.iface.clone(),
+            mesh_iface: self
+                .cidr
+                .as_ref()
+                .map(|_| crate::wireguard::rg_interface_name(&self.resource_group_id)),
+        }
+    }
+}
+
+pub async fn reconcile_bridges() -> Result<()> {
+    reconcile_in(Path::new(RG_REGISTRY_DIR)).await
+}
+
+async fn reconcile_in(registry_dir: &Path) -> Result<()> {
+    let bridges = list_bridges(registry_dir).await?;
+    if bridges.is_empty() {
+        return Ok(());
+    }
+
+    let mut ready = Vec::new();
+    for bridge in &bridges {
+        match repair_address(bridge).await {
+            Ok(()) => ready.push(bridge),
+            Err(e) => {
+                warn!(iface = %bridge.iface, error = %e, "Failed to repair bridge address, leaving bridge down");
+            }
+        }
+    }
+
+    let rules: Vec<_> = bridges.iter().map(Bridge::rules).collect();
+    crate::nftables::apply_bridge_rules(&rules)
+        .await
+        .context("Failed to apply nftables rules for resource group bridges")?;
+
+    for bridge in ready {
+        if let Some((gateway, _)) = bridge.gateway() {
+            if let Err(e) =
+                crate::nftables::ensure_bridge_dnat(&bridge.iface, &gateway, S3_DNAT_PORT).await
+            {
+                info!(iface = %bridge.iface, error = %e, "Failed to set up s3 dnat rule");
+            }
+        }
+        enable_proxy_arp(bridge).await?;
+        run_ip(&["link", "set", "dev", &bridge.iface, "up"]).await?;
+    }
+
+    Ok(())
+}
+
+async fn repair_address(bridge: &Bridge) -> Result<()> {
+    let Some((gateway, prefix)) = bridge.gateway() else {
+        return Ok(());
+    };
+    run_ip(&[
+        "addr",
+        "add",
+        &format!("{gateway}/{prefix}"),
+        "dev",
+        &bridge.iface,
+    ])
+    .await
 }
 
 const PRIVATE_RANGES: [(u32, u8); 3] = [(0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16)];
@@ -154,25 +227,17 @@ async fn ensure_range_is_unrouted(range: (u32, u8)) -> Result<()> {
     Ok(())
 }
 
-async fn list_other_bridge_ifaces(exclude_resource_group_id: &str) -> Result<Vec<String>> {
-    Ok(list_rg_ids()
-        .await?
-        .into_iter()
-        .filter(|id| id != exclude_resource_group_id)
-        .map(|id| rg_bridge_iface_name(&id))
-        .collect())
-}
-
-pub async fn ensure_mesh_forwarding(resource_group_id: &str, wg_iface: &str) -> Result<()> {
-    let iface = rg_bridge_iface_name(resource_group_id);
-
-    tokio::fs::write(format!("/proc/sys/net/ipv4/conf/{}/proxy_arp", iface), b"1")
-        .await
-        .with_context(|| format!("failed to enable proxy arp iface={}", iface))?;
-
-    crate::nftables::allow_mesh_forwarding(&iface, wg_iface)
-        .await
-        .context("Failed to exempt mesh traffic from masquerade")
+async fn enable_proxy_arp(bridge: &Bridge) -> Result<()> {
+    if bridge.cidr.is_none() {
+        return Ok(());
+    }
+    let path = format!("/proc/sys/net/ipv4/conf/{}/proxy_arp", bridge.iface);
+    match tokio::fs::write(&path, b"1").await {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => {
+            result.with_context(|| format!("failed to enable proxy arp iface={}", bridge.iface))
+        }
+    }
 }
 
 pub async fn announce_remote_guest(resource_group_id: &str, guest_ip: &str) -> Result<()> {
@@ -186,6 +251,10 @@ pub async fn announce_remote_guest(resource_group_id: &str, guest_ip: &str) -> R
 }
 
 pub async fn teardown_bridge(resource_group_id: &str) -> Result<()> {
+    teardown_in(Path::new(RG_REGISTRY_DIR), resource_group_id).await
+}
+
+async fn teardown_in(registry_dir: &Path, resource_group_id: &str) -> Result<()> {
     let iface = rg_bridge_iface_name(resource_group_id);
 
     let output = Command::new("ip")
@@ -201,7 +270,9 @@ pub async fn teardown_bridge(resource_group_id: &str) -> Result<()> {
         }
     }
 
-    remove_registry_entry(resource_group_id).await;
+    remove_registry_entry(registry_dir, resource_group_id).await;
+    crate::nftables::remove_bridge_dnat(&iface).await?;
+    reconcile_in(registry_dir).await?;
 
     info!(resource_group_id = %resource_group_id, iface = %iface, "Resource group bridge removed");
 
@@ -209,44 +280,81 @@ pub async fn teardown_bridge(resource_group_id: &str) -> Result<()> {
 }
 
 pub async fn list_rg_ids() -> Result<Vec<String>> {
-    let mut entries = match tokio::fs::read_dir(RG_REGISTRY_DIR).await {
+    Ok(list_bridges(Path::new(RG_REGISTRY_DIR))
+        .await?
+        .into_iter()
+        .map(|bridge| bridge.resource_group_id)
+        .collect())
+}
+
+async fn list_bridges(registry_dir: &Path) -> Result<Vec<Bridge>> {
+    let mut entries = match tokio::fs::read_dir(registry_dir).await {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).context("failed to read resource group registry directory"),
     };
 
-    let mut ids = Vec::new();
+    let mut bridges = Vec::new();
     while let Some(entry) = entries
         .next_entry()
         .await
         .context("failed to read resource group registry entry")?
     {
-        if let Some(id) = entry.file_name().to_str() {
-            if interface_exists(&rg_bridge_iface_name(id)).await? {
-                ids.push(id.to_string());
-            }
+        let Some(id) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let iface = rg_bridge_iface_name(&id);
+        if !interface_exists(&iface).await? {
+            continue;
         }
+        let cidr = tokio::fs::read_to_string(entry.path())
+            .await
+            .ok()
+            .map(|content| content.trim().to_string())
+            .filter(|content| !content.is_empty());
+        bridges.push(Bridge {
+            resource_group_id: id,
+            iface,
+            cidr,
+        });
     }
+    bridges.sort_by(|a, b| a.iface.cmp(&b.iface));
 
-    Ok(ids)
+    Ok(bridges)
 }
 
-fn registry_entry_path(resource_group_id: &str) -> PathBuf {
-    Path::new(RG_REGISTRY_DIR).join(resource_group_id)
+fn registry_entry_path(registry_dir: &Path, resource_group_id: &str) -> PathBuf {
+    registry_dir.join(resource_group_id)
 }
 
-async fn write_registry_entry(resource_group_id: &str) -> Result<()> {
-    tokio::fs::create_dir_all(RG_REGISTRY_DIR)
+async fn write_registry_entry(
+    registry_dir: &Path,
+    resource_group_id: &str,
+    cidr: Option<&str>,
+) -> Result<()> {
+    tokio::fs::create_dir_all(registry_dir)
         .await
         .context("failed to create resource group registry directory")?;
-    tokio::fs::write(registry_entry_path(resource_group_id), b"")
-        .await
-        .context("failed to write resource group registry entry")?;
+    tokio::fs::write(
+        registry_entry_path(registry_dir, resource_group_id),
+        cidr.unwrap_or_default(),
+    )
+    .await
+    .context("failed to write resource group registry entry")?;
     Ok(())
 }
 
-async fn remove_registry_entry(resource_group_id: &str) {
-    let _ = tokio::fs::remove_file(registry_entry_path(resource_group_id)).await;
+async fn remove_registry_entry(registry_dir: &Path, resource_group_id: &str) {
+    let _ = tokio::fs::remove_file(registry_entry_path(registry_dir, resource_group_id)).await;
+}
+
+async fn has_ipv4_address(iface: &str) -> Result<bool> {
+    let output = Command::new("ip")
+        .args(["-4", "-o", "addr", "show", "dev", iface])
+        .output()
+        .await
+        .context("failed to execute ip addr show")?;
+    Ok(output.status.success() && !output.stdout.is_empty())
 }
 
 async fn interface_exists(iface: &str) -> Result<bool> {
@@ -284,9 +392,9 @@ mod tests {
 
     #[tokio::test]
     async fn bridges_are_deleted_by_interface_name() {
-        let tools = FakeTools::install(&[("ip", "exit 0")]);
+        let tools = FakeTools::install(&[("ip", "exit 0"), ("nft", "exit 0")]);
 
-        teardown_bridge("rg-1").await.unwrap();
+        teardown_in(&registry_dir(), "rg-1").await.unwrap();
 
         assert_eq!(
             tools.calls("ip"),
@@ -344,12 +452,17 @@ mod tests {
     #[tokio::test]
     async fn missing_bridges_are_tolerated_on_teardown() {
         {
-            let _tools =
-                FakeTools::install(&[("ip", "echo 'Cannot find device \"x\"' >&2\nexit 1")]);
-            teardown_bridge("rg-1").await.unwrap();
+            let _tools = FakeTools::install(&[
+                ("ip", "echo 'Cannot find device \"x\"' >&2\nexit 1"),
+                ("nft", "exit 0"),
+            ]);
+            teardown_in(&registry_dir(), "rg-1").await.unwrap();
         }
         let _tools = FakeTools::install(&[("ip", "echo 'Operation not permitted' >&2\nexit 1")]);
-        let error = teardown_bridge("rg-1").await.unwrap_err().to_string();
+        let error = teardown_in(&registry_dir(), "rg-1")
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("ip link delete failed"));
     }
 
@@ -390,7 +503,134 @@ mod tests {
 
     #[test]
     fn registry_entries_live_below_the_registry_directory() {
-        let path = registry_entry_path("rg-1");
+        let path = registry_entry_path(Path::new(RG_REGISTRY_DIR), "rg-1");
         assert_eq!(path, Path::new(RG_REGISTRY_DIR).join("rg-1"));
+    }
+
+    const BRIDGE_STATE: &str = r#"case "$*" in
+"link add"*) touch "$0.created";;
+"link show"*) [ -e "$0.created" ] || exit 1;;
+"-j -4 route"*) echo '[]';;
+esac"#;
+    const ALL_BRIDGES_PRESENT: &str = r#"case "$*" in "-4 -o addr show"*) ;; esac"#;
+    const CAPTURING: &str = "cat >> \"$0.stdin\"";
+    const CIDR: &str = "10.101.0.0/24";
+
+    fn registry_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("csfx-rg-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_entry(dir: &Path, resource_group_id: &str, cidr: &str) {
+        std::fs::write(dir.join(resource_group_id), cidr).unwrap();
+    }
+
+    fn position(calls: &[String], needle: &str) -> usize {
+        calls
+            .iter()
+            .position(|call| call.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} missing in {calls:?}"))
+    }
+
+    #[tokio::test]
+    async fn a_bridge_left_half_configured_is_completed_by_the_next_reconcile() {
+        let dir = registry_dir();
+        write_entry(&dir, "rg-1", CIDR);
+        let tools = FakeTools::install(&[("ip", ALL_BRIDGES_PRESENT), ("nft", CAPTURING)]);
+
+        reconcile_in(&dir).await.unwrap();
+
+        let iface = rg_bridge_iface_name("rg-1");
+        let ip = tools.calls("ip");
+        let gateway = second_host_ip(CIDR).unwrap();
+        assert!(
+            position(&ip, &format!("addr add {gateway}/24 dev {iface}"))
+                < position(&ip, "link set dev")
+        );
+        let script = tools.stdin("nft");
+        assert!(script.contains(&format!("iifname \"{iface}\" ct status dnat masquerade")));
+        assert!(script.contains(&format!(
+            "oifname \"{}\" accept",
+            crate::wireguard::rg_interface_name("rg-1")
+        )));
+    }
+
+    #[tokio::test]
+    async fn bridges_stay_down_when_the_rules_cannot_be_applied() {
+        let dir = registry_dir();
+        write_entry(&dir, "rg-1", CIDR);
+        let tools = FakeTools::install(&[
+            ("ip", ALL_BRIDGES_PRESENT),
+            ("nft", "cat > /dev/null\necho denied >&2\nexit 1"),
+        ]);
+
+        let error = reconcile_in(&dir).await.unwrap_err();
+
+        assert!(format!("{error:#}").contains("denied"));
+        assert!(tools.calls("ip").iter().all(|call| !call.contains(" up")));
+    }
+
+    #[tokio::test]
+    async fn every_bridge_on_the_host_is_isolated_from_every_other() {
+        let dir = registry_dir();
+        write_entry(&dir, "rg-1", CIDR);
+        write_entry(&dir, "rg-2", "10.102.0.0/24");
+        let tools = FakeTools::install(&[("ip", ALL_BRIDGES_PRESENT), ("nft", CAPTURING)]);
+
+        reconcile_in(&dir).await.unwrap();
+
+        let script = tools.stdin("nft");
+        let (first, second) = (rg_bridge_iface_name("rg-1"), rg_bridge_iface_name("rg-2"));
+        assert!(script.contains(&format!("iifname \"{first}\" oifname \"{second}\" drop")));
+        assert!(script.contains(&format!("iifname \"{second}\" oifname \"{first}\" drop")));
+    }
+
+    #[tokio::test]
+    async fn legacy_entries_without_a_cidr_still_receive_rules() {
+        let dir = registry_dir();
+        write_entry(&dir, "rg-1", "");
+        let tools = FakeTools::install(&[("ip", ALL_BRIDGES_PRESENT), ("nft", CAPTURING)]);
+
+        reconcile_in(&dir).await.unwrap();
+
+        let iface = rg_bridge_iface_name("rg-1");
+        assert!(tools.stdin("nft").contains(&format!(
+            "iifname \"{iface}\" oifname != \"{iface}\" masquerade"
+        )));
+        assert!(tools
+            .calls("ip")
+            .iter()
+            .all(|call| !call.contains("addr add")));
+    }
+
+    #[tokio::test]
+    async fn entries_of_vanished_bridges_cause_no_work() {
+        let dir = registry_dir();
+        write_entry(&dir, "rg-1", CIDR);
+        let tools = FakeTools::install(&[("ip", "exit 1"), ("nft", CAPTURING)]);
+
+        reconcile_in(&dir).await.unwrap();
+
+        assert!(tools.calls("nft").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_new_bridge_gets_its_rules_before_it_comes_up() {
+        let dir = registry_dir();
+        let tools = FakeTools::install(&[("ip", BRIDGE_STATE), ("nft", CAPTURING)]);
+        let registry = RgDnsRegistry::new();
+
+        let iface = ensure_bridge_in(&dir, "rg-1", Some(CIDR), &registry)
+            .await
+            .unwrap();
+
+        let ip = tools.calls("ip");
+        assert!(position(&ip, "link add") < position(&ip, "addr add"));
+        assert!(position(&ip, "addr add") < position(&ip, "link set dev"));
+        assert!(tools
+            .stdin("nft")
+            .contains(&format!("iifname \"{iface}\" ct status dnat masquerade")));
+        assert_eq!(std::fs::read_to_string(dir.join("rg-1")).unwrap(), CIDR);
     }
 }

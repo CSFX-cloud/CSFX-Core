@@ -199,8 +199,8 @@ async fn main() -> Result<()> {
         warn!("No management tunnel IP available, VPN peering disabled for this agent");
     }
 
-    if let Err(e) = nftables::ensure_table_and_chain().await {
-        warn!(error = %e, "Failed to initialize nftables resource group isolation");
+    if let Err(e) = rg_network::reconcile_bridges().await {
+        error!(error = %e, "Failed to apply resource group isolation, bridges stay down until the next reconcile");
     }
 
     let rg_dns_registry = Arc::new(rg_dns::RgDnsRegistry::new());
@@ -417,6 +417,9 @@ async fn reconcile_tick(
     .await;
     if let Some(volumes) = &assigned_volumes {
         release_unassigned_volumes(mounted_volumes, volumes).await;
+    }
+    if let Err(e) = rg_network::reconcile_bridges().await {
+        error!(error = %e, "Failed to reconcile resource group bridges");
     }
     rg_mesh::sync(
         client,

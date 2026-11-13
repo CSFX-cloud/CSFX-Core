@@ -273,17 +273,13 @@ impl FirecrackerRuntime {
                 .context("Failed to ensure resource group dns process")?;
 
             let listen_port = rg_wireguard_port(resource_group_id);
-            let wg_iface = crate::wireguard::ensure_interface(
+            crate::wireguard::ensure_interface(
                 resource_group_id,
                 &self.wg_private_key_b64,
                 listen_port,
             )
             .await
             .context("Failed to bring up resource group WireGuard interface")?;
-
-            crate::rg_network::ensure_mesh_forwarding(resource_group_id, &wg_iface)
-                .await
-                .context("Failed to prepare resource group mesh forwarding")?;
         }
 
         Ok(iface)
@@ -318,10 +314,6 @@ impl FirecrackerRuntime {
         crate::rg_network::teardown_bridge(resource_group_id)
             .await
             .context("Failed to tear down resource group bridge")?;
-
-        crate::nftables::remove_bridge_rules(&crate::spec::rg_bridge_iface_name(resource_group_id))
-            .await
-            .context("Failed to remove nftables rules for resource group")?;
 
         let wg_iface = crate::wireguard::rg_interface_name(resource_group_id);
         crate::wireguard::remove_interface(&wg_iface)

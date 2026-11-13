@@ -136,17 +136,13 @@ impl QemuRuntime {
 
         if resource_group_cidr.is_some() {
             let listen_port = crate::spec::rg_wireguard_port(resource_group_id);
-            let wg_iface = crate::wireguard::ensure_interface(
+            crate::wireguard::ensure_interface(
                 resource_group_id,
                 &self.wg_private_key_b64,
                 listen_port,
             )
             .await
             .context("Failed to bring up resource group WireGuard interface")?;
-
-            crate::rg_network::ensure_mesh_forwarding(resource_group_id, &wg_iface)
-                .await
-                .context("Failed to prepare resource group mesh forwarding")?;
         }
 
         Ok(iface)
