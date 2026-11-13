@@ -28,7 +28,7 @@ fn build_otlp_provider() -> Option<SdkTracerProvider> {
     Some(provider)
 }
 
-pub fn init_tracing() -> tokio::sync::mpsc::UnboundedReceiver<shared::db_log_layer::LogRecord> {
+pub fn init_tracing() -> shared::db_log_layer::LogReceiver {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let fmt_layer = fmt::layer().with_target(false);
     let (db_layer, db_receiver) = shared::db_log_layer::DbLogLayer::new("api-gateway");

@@ -5,7 +5,10 @@ pub struct ConcurrentIndex {
     pub definition: &'static str,
 }
 
-pub const CONCURRENT_INDEXES: &[ConcurrentIndex] = &[];
+pub const CONCURRENT_INDEXES: &[ConcurrentIndex] = &[ConcurrentIndex {
+    name: "idx_logs_last_seen_at_id",
+    definition: "ON logs (last_seen_at, id)",
+}];
 
 async fn is_invalid(db: &DatabaseConnection, name: &str) -> Result<bool, DbErr> {
     let row = db
