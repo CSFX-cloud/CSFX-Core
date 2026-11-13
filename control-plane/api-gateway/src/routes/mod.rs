@@ -1,6 +1,5 @@
 use super::AppState;
 use crate::auth::rate_limit::JwtOrIpKeyExtractor;
-use crate::metrics;
 use crate::utils::router_ext::RouterExt;
 use axum::body::Body;
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -224,8 +223,7 @@ pub fn create_router(state: AppState) -> Router<AppState> {
 
     let serve_dir = ServeDir::new(&static_dir).not_found_service(ServeFile::new(&index_path));
 
-    Router::new()
-        .route("/metrics", get(metrics::metrics_handler))
+    let router = Router::new()
         .merge(s3_proxy::object_data_router().layer(GovernorLayer::new(object_governor_config)))
         .logged_nest("/api", api_router)
         .logged_nest("/api", internal_api_router)
@@ -271,5 +269,6 @@ pub fn create_router(state: AppState) -> Router<AppState> {
                     },
                 ),
         )
-        .layer(cors)
+        .layer(cors);
+    shared::observability::instrument(router)
 }

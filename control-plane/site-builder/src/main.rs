@@ -60,6 +60,8 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Arc::new(config::Config::from_environment()?);
     let db = shared::establish_connection().await?;
+    shared::observability::spawn_pool_gauges("default", db.clone());
+    shared::observability::serve_metrics("127.0.0.1:9007").await?;
     let scheduler = scheduler::SchedulerClient::new(&config.scheduler_url)?;
     let registry_keys = Arc::new(registry::keys::load_or_create(&db).await?);
     let registry_client = match config.registry.as_deref() {
@@ -83,7 +85,9 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         keys: registry_keys,
     };
-    let control_app = server::control_router(builds).merge(registry::router(registry_state));
+    let control_app = shared::observability::instrument(
+        server::control_router(builds).merge(registry::router(registry_state)),
+    );
     let control = listen(control_app, config.port, "control");
     let edge_state = Arc::new(edge::Edge::new(db.clone()));
     spawn_usage_flusher(edge_state.clone(), db);

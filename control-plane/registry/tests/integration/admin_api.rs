@@ -148,10 +148,10 @@ async fn agent_queries_return_inserted_agent() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn metrics_endpoint_serves_prometheus_text() {
+async fn metrics_are_not_served_on_the_public_router() {
     let app = common::router().await;
 
     let (status, _) = call(&app, Method::GET, "/metrics", None).await;
 
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

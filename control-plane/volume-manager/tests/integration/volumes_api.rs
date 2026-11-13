@@ -25,14 +25,15 @@ fn path(volume: &Value, suffix: &str) -> String {
 }
 
 #[tokio::test]
-async fn health_and_metrics_respond() {
+async fn health_is_counted_and_metrics_are_not_public() {
     let app = router(false).await;
-    volume_manager::metrics::init();
-    volume_manager::metrics::record_request("GET", "/health", 200, 0.01);
     let (status, _) = call(&app, Method::GET, "/health", None).await;
     assert_eq!(status, StatusCode::OK);
     let (status, _) = call(&app, Method::GET, "/metrics", None).await;
-    assert_eq!(status, StatusCode::OK);
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(String::from_utf8(shared::observability::render())
+        .unwrap()
+        .contains("csfx_http_requests_total"));
 }
 
 #[tokio::test]

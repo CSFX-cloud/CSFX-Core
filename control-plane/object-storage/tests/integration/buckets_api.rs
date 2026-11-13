@@ -11,7 +11,7 @@ use crate::common::{call, create_named_bucket, database, garage, new_bucket, rou
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn health_and_metrics_respond() {
+async fn health_is_counted_and_metrics_are_not_public() {
     let app = router().await;
 
     assert_eq!(
@@ -20,8 +20,11 @@ async fn health_and_metrics_respond() {
     );
     assert_eq!(
         call(&app, Method::GET, "/metrics", None).await.0,
-        StatusCode::OK
+        StatusCode::NOT_FOUND
     );
+    assert!(String::from_utf8(shared::observability::render())
+        .unwrap()
+        .contains("csfx_http_requests_total"));
 }
 
 #[tokio::test]

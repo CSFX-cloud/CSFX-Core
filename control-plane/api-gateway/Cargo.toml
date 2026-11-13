@@ -75,7 +75,6 @@ sysinfo = { workspace = true }
 reqwest = { workspace = true, features = ["stream", "form"] }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
-prometheus = { workspace = true }
 etcd-client = { workspace = true }
 tower_governor = { workspace = true }
 opentelemetry = { workspace = true }

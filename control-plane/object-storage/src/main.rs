@@ -2,7 +2,7 @@ use shared::leader::LeaderLease;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use object_storage::{crypto, garage, log_error, log_info, logger, metrics, server, services};
+use object_storage::{crypto, garage, log_error, log_info, logger, server, services};
 
 const LAYOUT_LOCK_KEY: &str = "/csfx/object-storage/layout-lock";
 
@@ -16,7 +16,6 @@ async fn main() -> anyhow::Result<()> {
 
     let log_receiver = logger::init_logger();
 
-    metrics::init();
     log_info!("main", "CSFX Object Storage starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
@@ -26,6 +25,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to database");
     log_info!("main", "Database connection established");
     shared::spawn_log_writer(log_receiver, db.clone());
+    shared::observability::spawn_pool_gauges("default", db.clone());
 
     let admin_url =
         std::env::var("GARAGE_ADMIN_URL").unwrap_or_else(|_| "http://127.0.0.1:3903".to_string());
@@ -81,6 +81,8 @@ async fn main() -> anyhow::Result<()> {
 
     let state = server::AppState::new(db, garage, s3_client, secret_box);
     let app = server::create_router(state);
+
+    shared::observability::serve_metrics("127.0.0.1:9006").await?;
 
     let port = std::env::var("OBJECT_STORAGE_PORT")
         .ok()

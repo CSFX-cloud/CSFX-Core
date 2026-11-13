@@ -29,7 +29,6 @@ etcd-client = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 ring = { workspace = true }
 rustls = { workspace = true }
-prometheus = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }

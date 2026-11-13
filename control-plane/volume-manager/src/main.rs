@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use shared::leader::LeaderLease;
-use volume_manager::{ceph, log_error, log_info, logger, metrics, server, services};
+use volume_manager::{ceph, log_error, log_info, logger, server, services};
 
 const LEADER_KEY: &str = "/csfx/leaders/volume-manager";
 
@@ -16,7 +16,6 @@ async fn main() -> anyhow::Result<()> {
 
     let log_receiver = logger::init_logger();
 
-    metrics::init();
     log_info!("main", "CSFX Volume Manager starting");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
@@ -25,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to database");
     log_info!("main", "Database connection established");
     shared::spawn_log_writer(log_receiver, db.clone());
+    shared::observability::spawn_pool_gauges("default", db.clone());
 
     let etcd_endpoints =
         std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://localhost:2379".to_string());
@@ -73,6 +73,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let app = server::create_router(state);
+
+    shared::observability::serve_metrics("127.0.0.1:9003").await?;
 
     let port = std::env::var("VOLUME_MANAGER_PORT")
         .ok()

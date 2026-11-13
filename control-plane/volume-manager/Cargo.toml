@@ -45,7 +45,6 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-prometheus = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 opentelemetry-otlp = { workspace = true }

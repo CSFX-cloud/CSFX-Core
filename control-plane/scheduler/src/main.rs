@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use scheduler::{log_error, log_info, logger, metrics, server, services};
+use scheduler::{log_error, log_info, logger, server, services};
 
 const LEADER_KEY: &str = "/csfx/leaders/scheduler";
 
@@ -41,7 +41,6 @@ async fn main() -> anyhow::Result<()> {
 
     let log_receiver = logger::init_logger();
 
-    metrics::init();
     log_info!("main", "CSFX Scheduler Service starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
@@ -51,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to connect to database");
     log_info!("main", "Database connection established");
     shared::spawn_log_writer(log_receiver, db.clone());
+    shared::observability::spawn_pool_gauges("default", db.clone());
 
     let etcd_endpoints =
         std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://localhost:2379".to_string());
@@ -87,6 +87,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(count) => log_info!("main", &format!("Backfilled guest ips count={}", count)),
         Err(e) => log_error!("main", &format!("Guest ip backfill failed err={}", e)),
     }
+
+    shared::observability::serve_metrics("127.0.0.1:9002").await?;
 
     let port = std::env::var("SCHEDULER_PORT")
         .ok()
