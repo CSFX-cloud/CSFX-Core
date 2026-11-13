@@ -1102,7 +1102,11 @@ async fn run_workload_start(context: WorkloadStartContext, workload: client::Ass
         restart_fulfilled || (handle_after.is_some() && handle_after != handle_before);
     context
         .starts
-        .finish(&workload_id, state_changed, handle_after.is_none() && !deferred)
+        .finish(
+            &workload_id,
+            state_changed,
+            handle_after.is_none() && !deferred,
+        )
         .await;
 }
 
