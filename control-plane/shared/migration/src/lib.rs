@@ -1,5 +1,10 @@
 pub use sea_orm_migration::prelude::*;
 
+mod concurrent_indexes;
+mod runner;
+pub use concurrent_indexes::{build_concurrent_indexes, ConcurrentIndex, CONCURRENT_INDEXES};
+pub use runner::run_pending_migrations;
+
 mod m20251026_150747_key;
 mod m20251026_150819_invalid_jwt;
 mod m20251026_150828_user;

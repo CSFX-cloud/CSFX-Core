@@ -1,5 +1,4 @@
-use migration::{Migrator, MigratorTrait};
-use sea_orm::Database;
+use migration::run_pending_migrations;
 use std::env;
 
 #[tokio::main]
@@ -17,17 +16,9 @@ async fn main() {
         .or_else(|_| env::var("DATABASE_URL"))
         .expect("DATABASE_URL must be set");
 
-    let db = match Database::connect(&database_url).await {
-        Ok(conn) => conn,
-        Err(e) => {
-            tracing::error!(error = %e, "failed to connect to database");
-            std::process::exit(1);
-        }
-    };
-
     tracing::info!("running pending migrations");
 
-    if let Err(e) = Migrator::up(&db, None).await {
+    if let Err(e) = run_pending_migrations(&database_url).await {
         tracing::error!(error = %e, "migration failed");
         std::process::exit(1);
     }
