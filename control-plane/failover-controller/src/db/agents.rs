@@ -90,9 +90,9 @@ pub async fn get_stale_agents(
     Ok((degraded, offline))
 }
 
-pub async fn count_online(db: &DatabaseConnection) -> Result<u64> {
+pub async fn count_fleet(db: &DatabaseConnection) -> Result<u64> {
     Ok(agents::Entity::find()
-        .filter(agents::Column::Status.eq("Online"))
+        .filter(agents::Column::Status.is_in(["Online", "Degraded", "Offline"]))
         .count(db)
         .await?)
 }

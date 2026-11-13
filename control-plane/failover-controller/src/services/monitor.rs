@@ -157,17 +157,18 @@ async fn mark_degraded(db: &DatabaseConnection, degraded: Vec<agents::Model>) {
     }
 }
 
-async fn has_healthy_agent(db: &DatabaseConnection) -> bool {
-    match agent_db::count_online(db).await {
-        Ok(count) => count > 0,
+async fn failover_permitted(db: &DatabaseConnection, stale: usize) -> bool {
+    match agent_db::count_fleet(db).await {
+        Ok(fleet) => stale_minority(stale, fleet),
         Err(e) => {
-            crate::log_error!(
-                "monitor",
-                &format!("Failed to count online agents err={}", e)
-            );
+            crate::log_error!("monitor", &format!("Failed to count fleet err={}", e));
             false
         }
     }
+}
+
+fn stale_minority(stale: usize, fleet: u64) -> bool {
+    (stale as u64).saturating_mul(2) <= fleet
 }
 
 async fn handle_offline(
@@ -180,11 +181,11 @@ async fn handle_offline(
         return;
     }
 
-    if !has_healthy_agent(db).await {
+    if !failover_permitted(db, offline.len()).await {
         crate::log_warn!(
             "monitor",
             &format!(
-                "No healthy agent, skipping failover control_plane_isolation_suspected=true stale={}",
+                "Majority of fleet stale, skipping failover control_plane_isolation_suspected=true stale={}",
                 offline.len()
             )
         );
@@ -256,4 +257,24 @@ async fn start_failover(
         }
         in_flight.lock().await.remove(&agent_id);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stale_minority;
+
+    #[test]
+    fn single_host_loss_triggers_failover() {
+        assert!(stale_minority(1, 3));
+        assert!(stale_minority(1, 2));
+        assert!(stale_minority(2, 4));
+    }
+
+    #[test]
+    fn fleet_wide_staleness_blocks_failover() {
+        assert!(!stale_minority(2, 3));
+        assert!(!stale_minority(1, 1));
+        assert!(!stale_minority(5, 5));
+        assert!(!stale_minority(1, 0));
+    }
 }
