@@ -14,7 +14,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::process::Command;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::site_registry::{SiteRegistry, SITE_IMAGE_HOST};
 
@@ -133,6 +133,45 @@ fn source_key(reference: &Reference) -> String {
         .collect()
 }
 
+fn cached_rootfs(
+    reference: &Reference,
+    guest_init_version: &str,
+    error: anyhow::Error,
+) -> Result<PathBuf> {
+    let cache_dir = Path::new(ROOTFS_CACHE_DIR);
+    let source = source_key(reference);
+    let pinned = reference.digest().map(|digest| {
+        let digest = digest.trim_start_matches("sha256:");
+        cache_dir.join(format!("{source}-{digest}-{guest_init_version}.ext4"))
+    });
+    let found = pinned
+        .filter(|path| path.exists())
+        .or_else(|| latest_cached(cache_dir, &source, guest_init_version));
+    match found {
+        Some(path) => {
+            warn!(image = %reference.whole(), path = ?path, error = %error, "Registry unreachable, using cached rootfs image");
+            Ok(path)
+        }
+        None => Err(error),
+    }
+}
+
+fn latest_cached(cache_dir: &Path, source: &str, guest_init_version: &str) -> Option<PathBuf> {
+    let prefix = format!("{source}-");
+    let suffix = format!("-{guest_init_version}.ext4");
+    std::fs::read_dir(cache_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(&prefix) && name.ends_with(&suffix)
+        })
+        .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
 pub struct RootfsBuilder {
     client: Client,
     registry_mirror: Option<String>,
@@ -198,9 +237,11 @@ impl RootfsBuilder {
             self.site_registry.as_ref(),
         )?;
         let auth = auth_for(use_site_credentials, self.site_registry.as_ref());
-        let digest = self.resolve_digest(&reference, &auth).await?;
-
         let guest_init_version = guest_init_binary_version().await?;
+        let digest = match self.resolve_digest(&reference, &auth).await {
+            Ok(digest) => digest,
+            Err(error) => return cached_rootfs(&reference, &guest_init_version, error),
+        };
         let cache_key = format!(
             "{}-{}-{}",
             source_key(&reference),
@@ -994,5 +1035,42 @@ mod tests {
         assert_eq!(cached_digest("ref-stored").as_deref(), Some("sha256:abc"));
         assert!(Arc::ptr_eq(&build_lock("k"), &build_lock("k")));
         assert!(!Arc::ptr_eq(&build_lock("k"), &build_lock("other")));
+    }
+
+    fn cache_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("csfx-rootfs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_newest_matching_rootfs_is_used_without_a_registry() {
+        let dir = cache_dir();
+        std::fs::write(dir.join("aaaa-old-v1.ext4"), b"").unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        std::fs::write(dir.join("aaaa-new-v1.ext4"), b"").unwrap();
+        std::fs::write(dir.join("bbbb-other-v1.ext4"), b"").unwrap();
+        std::fs::write(dir.join("aaaa-new-v2.ext4"), b"").unwrap();
+        std::fs::write(dir.join("aaaa-new-v1.extract"), b"").unwrap();
+
+        let found = latest_cached(&dir, "aaaa", "v1").unwrap();
+
+        assert!(found.ends_with("aaaa-new-v1.ext4"));
+    }
+
+    #[test]
+    fn nothing_is_found_for_unknown_images() {
+        assert!(latest_cached(&cache_dir(), "aaaa", "v1").is_none());
+        assert!(latest_cached(Path::new("/nonexistent-csfx"), "aaaa", "v1").is_none());
+    }
+
+    #[test]
+    fn an_unresolvable_image_without_a_cache_keeps_the_original_error() {
+        let reference: Reference = "registry.invalid/never-built:1".parse().unwrap();
+
+        let error =
+            cached_rootfs(&reference, "v-none", anyhow::anyhow!("registry down")).unwrap_err();
+
+        assert_eq!(error.to_string(), "registry down");
     }
 }
