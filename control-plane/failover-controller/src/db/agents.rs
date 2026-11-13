@@ -90,11 +90,27 @@ pub async fn get_stale_agents(
     Ok((degraded, offline))
 }
 
-pub async fn count_fleet(db: &DatabaseConnection) -> Result<u64> {
-    Ok(agents::Entity::find()
+pub async fn count_silent_and_fleet(
+    db: &DatabaseConnection,
+    soft_threshold_secs: i64,
+) -> Result<(u64, u64)> {
+    let now = Utc::now().naive_utc();
+    let cutoff = now - chrono::Duration::seconds(soft_threshold_secs);
+
+    let fleet: Vec<agents::Model> = agents::Entity::find()
         .filter(agents::Column::Status.is_in(["Online", "Degraded", "Offline"]))
-        .count(db)
-        .await?)
+        .all(db)
+        .await?
+        .into_iter()
+        .filter(|agent| agent.maintenance_until.is_none_or(|until| until <= now))
+        .collect();
+
+    let silent = fleet
+        .iter()
+        .filter(|agent| agent.last_heartbeat.is_some_and(|seen| seen < cutoff))
+        .count();
+
+    Ok((silent as u64, fleet.len() as u64))
 }
 
 pub async fn has_active_assignments(db: &DatabaseConnection, agent_id: Uuid) -> Result<bool> {

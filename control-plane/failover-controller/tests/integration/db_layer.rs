@@ -43,7 +43,8 @@ async fn set_agent_status_updates_and_rejects_unknown() {
     assert!(agents::set_agent_status(&db, Uuid::new_v4(), "Online")
         .await
         .is_err());
-    assert!(agents::count_fleet(&db).await.unwrap() >= 1);
+    let (silent, fleet) = agents::count_silent_and_fleet(&db, 50).await.unwrap();
+    assert!(fleet >= 1 && silent <= fleet);
 }
 
 #[tokio::test]
