@@ -92,11 +92,9 @@ pub async fn ensure_interface(
 ) -> Result<String> {
     let iface = rg_interface_name(resource_group_id);
 
-    if interface_exists(&iface).await? {
-        return Ok(iface);
+    if !interface_exists(&iface).await? {
+        run_ip(&["link", "add", "dev", &iface, "type", "wireguard"]).await?;
     }
-
-    run_ip(&["link", "add", "dev", &iface, "type", "wireguard"]).await?;
     set_private_key(&iface, private_key_b64).await?;
     run_wg(&["set", &iface, "listen-port", &listen_port.to_string()]).await?;
     run_ip(&["link", "set", "up", "dev", &iface]).await?;
@@ -457,7 +455,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn group_interfaces_are_created_once() {
+    async fn group_interfaces_are_created_once_and_always_fully_configured() {
         let tools = FakeTools::install(&[("ip", IP_MISSING_INTERFACE), ("wg", WG_READS_KEY)]);
 
         let name = ensure_interface("rg-1", "c2VjcmV0", 51900).await.unwrap();
@@ -470,8 +468,10 @@ mod tests {
 
         let tools = FakeTools::install(&[("ip", SUCCEEDING), ("wg", SUCCEEDING)]);
         ensure_interface("rg-1", "c2VjcmV0", 51900).await.unwrap();
-        assert_eq!(tools.calls("ip").len(), 1);
-        assert!(tools.calls("wg").is_empty());
+        let ip = tools.calls("ip");
+        assert!(!ip.iter().any(|call| call.contains("link add")));
+        assert!(ip.iter().any(|call| call.contains("link set up dev")));
+        assert!(!tools.calls("wg").is_empty());
     }
 
     const SUCCEEDING: &str = "exit 0";
