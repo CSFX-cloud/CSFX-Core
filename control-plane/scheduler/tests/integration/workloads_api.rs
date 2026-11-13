@@ -2,9 +2,39 @@ use axum::http::{Method, StatusCode};
 use serde_json::json;
 use uuid::Uuid;
 
+use std::collections::HashSet;
+
+use chrono::Utc;
+use entity::entities::workloads;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+
 use crate::common::{
-    call, create_pending_workload, find_workload, router, unique_name, unplaceable_request,
+    call, call_page, create_pending_workload, find_workload, migrated_database, router,
+    unique_name, unplaceable_request,
 };
+
+const BULK_WORKLOADS: usize = 10_000;
+const INSERT_CHUNK: usize = 1_000;
+
+fn bulk_workload(name: &str) -> workloads::ActiveModel {
+    workloads::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        name: Set(name.to_string()),
+        image: Set("nginx:latest".to_string()),
+        cpu_millicores: Set(100),
+        memory_bytes: Set(1 << 20),
+        disk_bytes: Set(1 << 20),
+        auto_resources: Set(false),
+        status: Set("pending".to_string()),
+        restart_policy: Set("always".to_string()),
+        restart_count: Set(0),
+        runtime_class: Set("firecracker".to_string()),
+        desired_state: Set("running".to_string()),
+        restart_requested: Set(false),
+        created_at: Set(Utc::now().naive_utc()),
+        ..Default::default()
+    }
+}
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
@@ -189,4 +219,50 @@ async fn hostile_service_names_are_rejected() {
         .unwrap()
         .iter()
         .all(|workload| workload["name"] != name));
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn pages_through_ten_thousand_workloads_without_gaps() {
+    let app = router().await;
+    let db = migrated_database().await;
+    let name = unique_name("bulk");
+    let rows: Vec<_> = (0..BULK_WORKLOADS).map(|_| bulk_workload(&name)).collect();
+    let expected: HashSet<String> = rows
+        .iter()
+        .map(|row| row.id.clone().unwrap().to_string())
+        .collect();
+    for chunk in rows.chunks(INSERT_CHUNK) {
+        workloads::Entity::insert_many(chunk.to_vec())
+            .exec(&db)
+            .await
+            .unwrap();
+    }
+
+    let mut seen = Vec::new();
+    let mut uri = "/workloads?limit=100000".to_string();
+    loop {
+        let (status, body, cursor) = call_page(&app, &uri).await;
+        assert_eq!(status, StatusCode::OK);
+        let page = body.as_array().unwrap();
+        assert!(page.len() <= 500);
+        seen.extend(page.iter().map(|w| w["id"].as_str().unwrap().to_string()));
+        let Some(cursor) = cursor else { break };
+        uri = format!("/workloads?limit=100000&cursor={}", cursor);
+    }
+    workloads::Entity::delete_many()
+        .filter(workloads::Column::Name.eq(name))
+        .exec(&db)
+        .await
+        .unwrap();
+
+    let mut ids: Vec<_> = seen.iter().filter(|id| expected.contains(*id)).collect();
+    assert_eq!(ids.len(), BULK_WORKLOADS);
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), BULK_WORKLOADS);
+    assert!(seen.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let (status, _, _) = call_page(&app, "/workloads?cursor=garbage").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

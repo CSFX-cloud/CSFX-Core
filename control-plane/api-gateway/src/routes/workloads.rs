@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, RawQuery, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{delete, get, patch, post},
@@ -15,6 +15,8 @@ use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageWorkloads, CanViewWorkloads},
+    routes::paged_proxy::{proxy_list, with_query},
+    service_client::ListTarget,
     AppState,
 };
 
@@ -171,16 +173,10 @@ pub async fn list_workloads(
     CanViewWorkloads(_claims): CanViewWorkloads,
     State(state): State<AppState>,
     headers: HeaderMap,
+    RawQuery(query): RawQuery,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::GET,
-        "/workloads",
-        None,
-        Some(header_map),
-    )
-    .await
+    let path = with_query("/workloads", query);
+    proxy_list(&state, ListTarget::Scheduler, &path, &headers).await
 }
 
 pub async fn delete_workload(

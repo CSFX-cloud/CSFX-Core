@@ -1,9 +1,10 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
+use shared::pagination::{cursor_headers, split_page, PageParams};
 use uuid::Uuid;
 
 use crate::models::volume::{
@@ -26,9 +27,22 @@ pub async fn create_volume(
     }
 }
 
-pub async fn list_volumes(State(state): State<AppState>) -> impl IntoResponse {
-    match state.volume_service.list_volumes().await {
-        Ok(vols) => (StatusCode::OK, Json(serde_json::json!(vols))).into_response(),
+pub async fn list_volumes(
+    State(state): State<AppState>,
+    Query(page): Query<PageParams>,
+) -> impl IntoResponse {
+    let Ok(after) = page.cursor_id() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "invalid cursor" })),
+        )
+            .into_response();
+    };
+    match state.volume_service.list_volumes(after, &page).await {
+        Ok(vols) => {
+            let (vols, next) = split_page(vols, &page, |v| v.id.to_string());
+            (StatusCode::OK, cursor_headers(next), Json(vols)).into_response()
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),

@@ -5,8 +5,10 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
+use shared::pagination::{cursor_headers, split_page, PageParams};
 use uuid::Uuid;
 
+use crate::db::events::{EventCursor, EventFilter};
 use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -15,18 +17,28 @@ pub struct ListEventsQuery {
     agent_id: Option<Uuid>,
 }
 
+const DEFAULT_EVENT_LIMIT: u64 = 100;
+
 pub async fn list_events(
     State(state): State<AppState>,
     Query(query): Query<ListEventsQuery>,
+    Query(page): Query<PageParams>,
 ) -> impl IntoResponse {
-    match crate::db::events::get_recent(&state.db, 100).await {
+    let after = match page.cursor.as_deref().map(EventCursor::decode) {
+        Some(None) => return invalid_cursor(),
+        Some(Some(cursor)) => Some(cursor),
+        None => None,
+    };
+    let filter = EventFilter {
+        status: query.status,
+        agent_id: query.agent_id,
+        after,
+        limit: page.fetch_limit().unwrap_or(DEFAULT_EVENT_LIMIT),
+    };
+    match crate::db::events::list(&state.db, filter).await {
         Ok(events) => {
-            let filtered: Vec<_> = events
-                .into_iter()
-                .filter(|e| query.status.as_deref().is_none_or(|s| e.status == s))
-                .filter(|e| query.agent_id.is_none_or(|id| e.agent_id == Some(id)))
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!(filtered))).into_response()
+            let (events, next) = split_page(events, &page, |e| EventCursor::of(e).encode());
+            (StatusCode::OK, cursor_headers(next), Json(events)).into_response()
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -34,6 +46,14 @@ pub async fn list_events(
         )
             .into_response(),
     }
+}
+
+fn invalid_cursor() -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": "invalid cursor" })),
+    )
+        .into_response()
 }
 
 pub async fn resolve_event(

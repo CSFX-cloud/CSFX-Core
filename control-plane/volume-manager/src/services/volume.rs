@@ -80,8 +80,14 @@ impl VolumeService {
         Ok(db::into_response(model))
     }
 
-    pub async fn list_volumes(&self) -> Result<Vec<VolumeResponse>, String> {
-        db::get_all(&self.db).await.map_err(|e| e.to_string())
+    pub async fn list_volumes(
+        &self,
+        after: Option<Uuid>,
+        params: &shared::pagination::PageParams,
+    ) -> Result<Vec<VolumeResponse>, String> {
+        db::get_page(&self.db, after, params)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub async fn get_volume(&self, id: Uuid) -> Result<Option<VolumeResponse>, String> {

@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageSystem, CanViewAgents},
+    routes::paged_proxy::{proxy_list, with_query},
+    service_client::ListTarget,
     AppState,
 };
 
@@ -54,15 +56,8 @@ pub async fn list_events(
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-    let path = match query {
-        Some(q) => format!("/events?{}", q),
-        None => "/events".to_string(),
-    };
-    proxy_to_failover(&state, reqwest::Method::GET, &path, None, Some(header_map)).await
+    let path = with_query("/events", query);
+    proxy_list(&state, ListTarget::FailoverController, &path, &headers).await
 }
 
 pub async fn resolve_event(

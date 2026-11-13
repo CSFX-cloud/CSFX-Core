@@ -5,6 +5,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use shared::pagination::{cursor_headers, split_page, PageParams};
 use uuid::Uuid;
 
 use crate::{
@@ -38,9 +39,27 @@ pub async fn create_bucket(
 pub async fn list_buckets(
     State(state): State<AppState>,
     Query(query): Query<ListBucketsQuery>,
+    Query(page): Query<PageParams>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    match service::list_buckets(&state.db, query.resource_group_id, query.organization_id).await {
-        Ok(buckets) => Ok(Json(json!(buckets))),
+    let after = page.cursor_id().map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        )
+    })?;
+    let listed = service::list_buckets(
+        &state.db,
+        query.resource_group_id,
+        query.organization_id,
+        after,
+        &page,
+    )
+    .await;
+    match listed {
+        Ok(buckets) => {
+            let (buckets, next) = split_page(buckets, &page, |b| b.id.to_string());
+            Ok((cursor_headers(next), Json(json!(buckets))))
+        }
         Err(e) => {
             tracing::error!(error = %e, "failed to list buckets");
             Err((

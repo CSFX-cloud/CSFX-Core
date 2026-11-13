@@ -4,7 +4,7 @@ use crate::metrics;
 use crate::utils::router_ext::RouterExt;
 use axum::body::Body;
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
-use axum::http::Method;
+use axum::http::{HeaderName, Method};
 use axum::http::{HeaderValue, Request, Response};
 use axum::routing::get;
 use axum::Router;
@@ -35,6 +35,7 @@ pub mod logs;
 pub mod masters;
 pub mod networks;
 pub mod organizations;
+pub mod paged_proxy;
 pub mod registries;
 pub mod registry;
 pub mod releases;
@@ -149,6 +150,9 @@ pub fn create_router(state: AppState) -> Router<AppState> {
             Method::OPTIONS,
         ])
         .allow_headers(vec![AUTHORIZATION, ACCEPT, CONTENT_TYPE])
+        .expose_headers([HeaderName::from_static(
+            shared::pagination::NEXT_CURSOR_HEADER,
+        )])
         .allow_credentials(true);
 
     let internal_api_router = Router::new()

@@ -182,6 +182,22 @@ pub async fn call_text(
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
+pub async fn call_page(app: &Router, uri: &str) -> (StatusCode, Value, Option<String>) {
+    let request = Request::builder().uri(uri).body(Body::empty()).unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let cursor = response
+        .headers()
+        .get("x-next-cursor")
+        .map(|value| value.to_str().unwrap().to_string());
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        cursor,
+    )
+}
+
 pub fn ago(seconds: i64) -> NaiveDateTime {
     Utc::now().naive_utc() - Duration::seconds(seconds)
 }

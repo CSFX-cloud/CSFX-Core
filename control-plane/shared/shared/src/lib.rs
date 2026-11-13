@@ -5,6 +5,7 @@ pub mod leader;
 pub mod log_writer;
 pub mod logger;
 pub mod ntfy;
+pub mod pagination;
 pub mod qos;
 pub mod ssh_access;
 pub mod workload_status;

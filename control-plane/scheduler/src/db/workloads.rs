@@ -12,6 +12,7 @@ use crate::models::workload::{
     WorkloadResponse, WorkloadStatus,
 };
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
+use shared::pagination::{keyset_by_id, PageParams};
 use shared::qos::QosClass;
 
 pub async fn create(
@@ -206,8 +207,15 @@ pub async fn update_spec(
         .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))
 }
 
-pub async fn get_all(db: &DatabaseConnection) -> Result<Vec<WorkloadResponse>, sea_orm::DbErr> {
-    let rows = workloads::Entity::find().all(db).await?;
+pub async fn get_page(
+    db: &DatabaseConnection,
+    after: Option<Uuid>,
+    params: &PageParams,
+) -> Result<Vec<WorkloadResponse>, sea_orm::DbErr> {
+    let query = workloads::Entity::find();
+    let rows = keyset_by_id(query, workloads::Column::Id, after, params)
+        .all(db)
+        .await?;
     Ok(rows.into_iter().map(into_response).collect())
 }
 
