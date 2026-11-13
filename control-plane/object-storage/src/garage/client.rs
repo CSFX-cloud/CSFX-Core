@@ -168,6 +168,27 @@ impl GarageClient {
         Ok(())
     }
 
+    pub async fn find_bucket_id(&self, global_alias: &str) -> Result<Option<String>> {
+        let response = self
+            .http
+            .get(self.url(&format!("/v2/GetBucketInfo?globalAlias={}", global_alias)))
+            .bearer_auth(&self.admin_token)
+            .send()
+            .await
+            .context("get_bucket_info request failed")?;
+
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+
+        let response = Self::check_status(response, "get_bucket_info").await?;
+        let bucket = response
+            .json::<GarageBucket>()
+            .await
+            .context("failed to parse get_bucket_info response")?;
+        Ok(Some(bucket.id))
+    }
+
     pub async fn create_key(&self, name: &str) -> Result<GarageKey> {
         let response = self
             .http

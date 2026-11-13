@@ -2,7 +2,12 @@ use axum::http::{Method, StatusCode};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::common::{call, create_named_bucket, database, new_bucket, router};
+use chrono::{Duration, Utc};
+use entity::entities::buckets;
+use object_storage::services::bucket_reaper;
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
+
+use crate::common::{call, create_named_bucket, database, garage, new_bucket, router};
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
@@ -177,4 +182,38 @@ async fn cluster_status_reports_replication_state() {
     assert_eq!(status, StatusCode::OK);
     assert!(cluster["replication_factor"].as_u64().unwrap() >= 1);
     assert!(cluster["nodes"].is_array());
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn stale_pending_buckets_are_reaped() {
+    let db = database().await;
+    let alias = format!("stale-{}", Uuid::new_v4().simple());
+    let stale = buckets::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        name: Set(alias.clone()),
+        garage_bucket_id: Set(Some(format!("gb-{}", Uuid::new_v4().simple()))),
+        global_alias: Set(alias),
+        exposure: Set("internal".to_string()),
+        quota_max_size: Set(None),
+        quota_max_objects: Set(None),
+        status: Set("pending".to_string()),
+        master_key_id: Set(Some("key".to_string())),
+        master_key_secret_encrypted: Set(None),
+        organization_id: Set(None),
+        resource_group_id: Set(None),
+        created_at: Set((Utc::now() - Duration::hours(1)).naive_utc()),
+        updated_at: Set(None),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    bucket_reaper::reap_once(&db, &garage()).await.unwrap();
+
+    assert!(buckets::Entity::find_by_id(stale.id)
+        .one(&db)
+        .await
+        .unwrap()
+        .is_none());
 }
