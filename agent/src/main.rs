@@ -1995,10 +1995,7 @@ mod tests {
         heartbeats: usize,
     }
 
-    async fn run_tick(
-        heartbeat: Option<serde_json::Value>,
-        starting_failures: u32,
-    ) -> TickOutcome {
+    async fn run_tick(heartbeat: Option<serde_json::Value>, starting_failures: u32) -> TickOutcome {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let _tools = crate::testing::FakeTools::install(&[
