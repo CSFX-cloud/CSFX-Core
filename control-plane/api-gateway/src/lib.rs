@@ -137,6 +137,7 @@ impl utoipa::Modify for SecurityAddon {
 #[derive(Clone)]
 pub struct AppState {
     pub db_conn: DbConn,
+    pub agent_db: DbConn,
     pub service_client: service_client::ServiceClient,
     pub default_org_id: Option<uuid::Uuid>,
     pub agent_stream_registry: routes::agent_stream::AgentStreamRegistry,

@@ -272,6 +272,7 @@ fn system_collector_reports_host_metrics() {
 fn state_for(harness: &Harness) -> AppState {
     AppState {
         db_conn: harness.db.clone(),
+        agent_db: harness.db.clone(),
         service_client: service_client::ServiceClient::new(),
         default_org_id: Some(harness.org_id),
         agent_stream_registry: AgentStreamRegistry::new(),

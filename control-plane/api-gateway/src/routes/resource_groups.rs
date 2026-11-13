@@ -910,7 +910,7 @@ pub async fn list_active_resource_group_ids(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let ids: Vec<Uuid> = ResourceGroups::find()
         .filter(resource_groups::Column::Status.eq("active"))
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to list active resource groups");
@@ -932,7 +932,7 @@ pub async fn list_resource_group_peers(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     ResourceGroups::find_by_id(id)
-        .one(&state.db_conn)
+        .one(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to find resource group");
@@ -952,7 +952,7 @@ pub async fn list_resource_group_peers(
         .filter(workloads::Column::ResourceGroupId.eq(id))
         .filter(workloads::Column::AssignedAgentId.is_not_null())
         .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to list resource group workloads");
@@ -978,7 +978,7 @@ pub async fn list_resource_group_peers(
         .filter(agents::Column::WgPublicKey.is_not_null())
         .filter(agents::Column::WgEndpoint.is_not_null())
         .filter(agents::Column::WgTunnelIp.is_not_null())
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to fetch peer agents");
@@ -1022,7 +1022,7 @@ pub async fn list_resource_group_members(
         .filter(workloads::Column::GuestIp.is_not_null())
         .filter(workloads::Column::DesiredState.ne("stopped"))
         .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to list resource group members");
@@ -1064,7 +1064,7 @@ pub async fn list_resource_group_site_services(
     let services: Vec<SiteService> = Sites::find()
         .filter(sites::Column::ResourceGroupId.eq(id))
         .filter(sites::Column::Mode.eq("static"))
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to list resource group sites");
@@ -1091,7 +1091,7 @@ pub async fn list_mesh_peers(
         .filter(agents::Column::WgPublicKey.is_not_null())
         .filter(agents::Column::WgEndpoint.is_not_null())
         .filter(agents::Column::WgTunnelIp.is_not_null())
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to fetch mesh peers");
@@ -1129,7 +1129,7 @@ pub async fn list_resource_group_vpn_peers(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let peers: Vec<VpnPeerInfo> = ResourceGroupVpnPeers::find()
         .filter(resource_group_vpn_peers::Column::ResourceGroupId.eq(id))
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to list resource group vpn peers");

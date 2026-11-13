@@ -136,7 +136,7 @@ pub async fn receive_metrics(
         custom_metrics: ActiveValue::Set(None),
     };
 
-    new_metrics.insert(&state.db_conn).await.map_err(|e| {
+    new_metrics.insert(&state.agent_db).await.map_err(|e| {
         tracing::error!("Failed to store metrics: {}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -242,7 +242,7 @@ pub async fn get_self_workloads(
     let rows = workloads::Entity::find()
         .filter(workloads::Column::AssignedAgentId.eq(agent.agent_id))
         .filter(workloads::Column::DesiredState.ne("stopped"))
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to fetch workloads for agent");
@@ -253,7 +253,7 @@ pub async fn get_self_workloads(
     for workload in rows {
         let resource_group_cidr = match workload.resource_group_id {
             Some(rg_id) => resource_groups::Entity::find_by_id(rg_id)
-                .one(&state.db_conn)
+                .one(&state.agent_db)
                 .await
                 .map_err(|e| {
                     tracing::error!(error = %e, "failed to fetch resource group for workload");
@@ -329,7 +329,7 @@ pub async fn get_self_volumes(
 ) -> Result<impl IntoResponse, StatusCode> {
     let rows = volumes::Entity::find()
         .filter(volumes::Column::AttachedToAgent.eq(agent.agent_id))
-        .all(&state.db_conn)
+        .all(&state.agent_db)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "failed to fetch volumes for agent");

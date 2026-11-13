@@ -81,7 +81,7 @@ pub async fn receive_agent_logs(
         .collect();
 
     logs::Entity::insert_many(models)
-        .exec(&state.db_conn)
+        .exec(&state.agent_db)
         .await
         .map_err(|error| {
             tracing::error!(error = %error, agent_id = %agent.agent_id, "failed to store agent logs");
