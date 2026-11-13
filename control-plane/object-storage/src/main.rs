@@ -2,7 +2,7 @@ use shared::leader::LeaderLease;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use object_storage::{crypto, garage, log_error, log_info, logger, metrics, server};
+use object_storage::{crypto, garage, log_error, log_info, logger, metrics, server, services};
 
 const LAYOUT_LOCK_KEY: &str = "/csfx/object-storage/layout-lock";
 
@@ -47,6 +47,11 @@ async fn main() -> anyhow::Result<()> {
     let node_id = Uuid::new_v4().to_string();
     let leader = LeaderLease::new(etcd, LAYOUT_LOCK_KEY, node_id).spawn();
 
+    tokio::spawn(services::bucket_reaper::run(
+        db.clone(),
+        garage.clone(),
+        leader.clone(),
+    ));
     tokio::spawn(garage::layout::run_reconcile_loop(
         db.clone(),
         garage.clone(),

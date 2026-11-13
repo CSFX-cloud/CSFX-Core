@@ -353,7 +353,8 @@ pub fn full_state(harness: &Harness) -> AppState {
 
 pub async fn full_harness() -> Harness {
     let mut harness = harness().await;
-    harness.app = routes::create_router().with_state(full_state(&harness));
+    let state = full_state(&harness);
+    harness.app = routes::create_router(state.clone()).with_state(state);
     harness
 }
 

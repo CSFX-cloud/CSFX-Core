@@ -102,6 +102,7 @@ fn mock_router() -> Router {
         .route("/v2/DeleteBucket", post(delete_bucket))
         .route("/v2/CreateKey", post(create_key))
         .route("/v2/DeleteKey", post(|| async { StatusCode::OK }))
+        .route("/v2/GetBucketInfo", get(|| async { StatusCode::NOT_FOUND }))
         .route("/v2/AllowBucketKey", post(allow_bucket_key))
         .route("/{bucket}", get(s3_list))
         .route("/{bucket}/{*key}", any(s3_delete))
@@ -140,6 +141,10 @@ pub async fn database() -> DatabaseConnection {
         })
         .await;
     db
+}
+
+pub fn garage() -> GarageClient {
+    GarageClient::new(mock_url().to_string(), "token".to_string())
 }
 
 pub async fn router() -> Router {

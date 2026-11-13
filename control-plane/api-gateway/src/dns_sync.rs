@@ -206,7 +206,7 @@ pub async fn load_gateway_addresses(
     Ok(gateways
         .into_iter()
         .filter_map(|gateway| {
-            let workload = workloads.get(&gateway.workload_id)?;
+            let workload = workloads.get(&gateway.workload_id?)?;
             let agent = agents.get(&workload.assigned_agent_id?)?;
             let group = groups.get(&gateway.resource_group_id)?;
             Some(GatewayAddress {
@@ -243,7 +243,10 @@ async fn running_workloads(
     db: &DatabaseConnection,
     gateways: &[ingress_gateways::Model],
 ) -> Result<HashMap<Uuid, workloads::Model>, DbErr> {
-    let ids: Vec<Uuid> = gateways.iter().map(|gateway| gateway.workload_id).collect();
+    let ids: Vec<Uuid> = gateways
+        .iter()
+        .filter_map(|gateway| gateway.workload_id)
+        .collect();
     Ok(workloads::Entity::find()
         .filter(workloads::Column::Id.is_in(ids))
         .filter(workloads::Column::Status.eq("running"))

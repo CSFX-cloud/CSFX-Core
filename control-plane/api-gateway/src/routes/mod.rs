@@ -61,7 +61,7 @@ fn replenish_period(requests_per_second: u64) -> Duration {
 }
 
 /// Creates the main application router and logs all registered routes.
-pub fn create_router() -> Router<AppState> {
+pub fn create_router(state: AppState) -> Router<AppState> {
     let rate_limit_per_second: u64 = std::env::var("RATE_LIMIT_PER_SECOND")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -175,6 +175,10 @@ pub fn create_router() -> Router<AppState> {
         .merge(settings::settings_routes())
         .merge(s3_proxy::s3_proxy_routes())
         .layer(axum::middleware::from_fn(crate::audit::audit_user_actions))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::idempotency::guard,
+        ))
         .layer(GovernorLayer::new(governor_config));
 
     let login_rate_limited_router = Router::new()

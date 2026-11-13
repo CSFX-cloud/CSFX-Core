@@ -124,7 +124,8 @@ async fn dns_reconciliation_resolves_gateway_endpoints() {
     let gateway = ingress_gateways::ActiveModel {
         id: Set(Uuid::new_v4()),
         resource_group_id: Set(group.id),
-        workload_id: Set(workload.id),
+        workload_id: Set(Some(workload.id)),
+        status: Set("active".to_string()),
         name: Set("edge".to_string()),
         http_port: Set(80),
         https_port: Set(443),

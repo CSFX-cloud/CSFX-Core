@@ -3,7 +3,7 @@ use std::time::Duration;
 use axum::http::{Method, StatusCode};
 use chrono::Utc;
 use entity::ingress_routes;
-use sea_orm::{ActiveModelTrait, Set};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, Set, Statement};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -12,6 +12,7 @@ use crate::common::{
     mock_registry, point_site_at, relaxed, routes_for, site_of, tar_gz, SECRET,
 };
 use site_builder::artifacts;
+use site_builder::job::builder_name;
 
 async fn promote(app: &axum::Router, id: Uuid, body: Option<serde_json::Value>) -> StatusCode {
     let uri = format!("/internal/deployments/{id}/promote");
@@ -282,4 +283,36 @@ async fn stale_builds_are_reaped_while_fresh_ones_survive() {
         deployment_of(&harness.db, fresh.id).await.status,
         "building"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn reaping_a_queued_build_releases_its_unrecorded_builder() {
+    let harness = harness(None, None).await;
+    let site = insert_site(&harness.db, "static", None).await;
+    let stale = insert_deployment(&harness.db, site.id, "queued", "production", "main").await;
+    let past = (Utc::now() - chrono::Duration::hours(3)).naive_utc();
+    mark(&harness.db, stale.clone(), |active| {
+        active.created_at = Set(past)
+    })
+    .await;
+    let builder = Uuid::new_v4();
+    harness
+        .db
+        .execute(Statement::from_sql_and_values(
+            harness.db.get_database_backend(),
+            "INSERT INTO workloads (id, name, image, cpu_millicores, memory_bytes, disk_bytes, resource_group_id, created_at) VALUES ($1, $2, 'builder', 1, 1, 1, $3, NOW())",
+            [
+                builder.into(),
+                builder_name(&site.name, stale.id).into(),
+                site.resource_group_id.into(),
+            ],
+        ))
+        .await
+        .unwrap();
+
+    harness.builds.reap_stale().await.unwrap();
+
+    assert_eq!(deployment_of(&harness.db, stale.id).await.status, "failed");
+    assert!(harness.scheduler.deleted.lock().unwrap().contains(&builder));
 }

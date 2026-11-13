@@ -1,6 +1,6 @@
 use api_gateway::{
-    db, ingress_sync, init, metrics, openbao, prune, recovery, routes, service_client, site_client,
-    telemetry, tls, vault_service, ApiDoc, AppState,
+    db, gateway_reconciler, idempotency, ingress_sync, init, metrics, openbao, prune, recovery,
+    routes, service_client, site_client, telemetry, tls, vault_service, ApiDoc, AppState,
 };
 use std::net::SocketAddr;
 use utoipa::OpenApi;
@@ -76,6 +76,7 @@ async fn main() {
 
     tracing::info!("starting log prune job");
     prune::spawn_log_prune_job(state.clone());
+    idempotency::spawn_prune_job(state.db_conn.clone());
 
     vault_service::spawn_deletion_job(state.clone());
     vault_service::spawn_purge_job(state.clone());
@@ -86,8 +87,9 @@ async fn main() {
 
     tracing::info!("starting ingress synchronization");
     ingress_sync::spawn(state.db_conn.clone());
+    gateway_reconciler::spawn(state.clone());
 
-    let app = routes::create_router()
+    let app = routes::create_router(state.clone())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state);
 

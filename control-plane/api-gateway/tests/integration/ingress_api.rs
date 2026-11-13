@@ -31,7 +31,8 @@ async fn insert_gateway(
     ingress_gateways::ActiveModel {
         id: Set(Uuid::new_v4()),
         resource_group_id: Set(group_id),
-        workload_id: Set(workload_id),
+        workload_id: Set(Some(workload_id)),
+        status: Set("active".to_string()),
         name: Set(unique("gw")),
         http_port: Set(80),
         https_port: Set(443),
@@ -321,7 +322,7 @@ async fn hosted_gateway(harness: &Harness) -> Hosted {
     let stack = stack(harness).await;
     let agent = insert_agent(&harness.db, "worker", "Online").await;
     let key = insert_api_key(&harness.db, agent.id).await;
-    for id in [stack.gateway.workload_id, stack.workload.id] {
+    for id in [stack.gateway.workload_id.unwrap(), stack.workload.id] {
         let model = entity::entities::workloads::Entity::find_by_id(id)
             .one(&harness.db)
             .await
@@ -333,7 +334,9 @@ async fn hosted_gateway(harness: &Harness) -> Hosted {
     }
     let uri = format!(
         "/api/resource-groups/{}/gateways/{}/config?source_workload_id={}",
-        stack.group.id, stack.gateway.id, stack.gateway.workload_id
+        stack.group.id,
+        stack.gateway.id,
+        stack.gateway.workload_id.unwrap()
     );
     Hosted { stack, key, uri }
 }
@@ -355,7 +358,7 @@ async fn gateway_config_is_restricted_to_the_hosting_agent() {
         "/api/resource-groups/{}/gateways/{}/config?source_workload_id={}",
         hosted.stack.group.id,
         Uuid::new_v4(),
-        hosted.stack.gateway.workload_id
+        hosted.stack.gateway.workload_id.unwrap()
     );
     let (status, _) = keyed(&harness, Method::GET, &missing, &hosted.key, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);

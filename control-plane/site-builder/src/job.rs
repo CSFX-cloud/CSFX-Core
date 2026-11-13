@@ -145,9 +145,13 @@ fn builder_environment(config: &Config, job: &BuildJob) -> BTreeMap<String, Stri
     env
 }
 
+pub fn builder_name(site_name: &str, deployment_id: Uuid) -> String {
+    format!("build-{}-{}", site_name, short_id(deployment_id))
+}
+
 pub fn builder_request(config: &Config, job: &BuildJob) -> Value {
     json!({
-        "name": format!("build-{}-{}", job.site_name, short_id(job.deployment_id)),
+        "name": builder_name(&job.site_name, job.deployment_id),
         "image": config.builder_image,
         "cpu_millicores": BUILD_CPU_MILLICORES,
         "memory_bytes": BUILD_MEMORY_BYTES,

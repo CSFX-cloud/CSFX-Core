@@ -631,18 +631,30 @@ pub async fn delete_site(
         .filter_map(|deployment| deployment.workload_id)
         .collect();
     for workload in workloads {
-        let path = format!("/workloads/{workload}");
-        if let Err(error) = state
-            .service_client
-            .forward_to_scheduler(reqwest::Method::DELETE, &path, None, None)
-            .await
-        {
-            tracing::warn!(workload = %workload, error = %error, "site workload removal failed");
-        }
+        remove_workload(&state, workload).await?;
     }
     purge_images(&state, &site).await;
     Sites::delete_by_id(site.id).exec(&state.db_conn).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_workload(state: &AppState, workload: Uuid) -> Result<(), SiteError> {
+    let path = format!("/workloads/{workload}");
+    let (status, _) = state
+        .service_client
+        .forward_to_scheduler(reqwest::Method::DELETE, &path, None, None)
+        .await
+        .map_err(|error| {
+            tracing::error!(workload = %workload, error = %error, "site workload removal failed");
+            SiteError::Upstream("scheduler unavailable, site was not deleted")
+        })?;
+    if status.is_success() || status == StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    tracing::error!(workload = %workload, status = status.as_u16(), "site workload removal rejected");
+    Err(SiteError::Upstream(
+        "scheduler failed to delete a site workload, site was not deleted",
+    ))
 }
 
 async fn purge_images(state: &AppState, site: &sites::Model) {

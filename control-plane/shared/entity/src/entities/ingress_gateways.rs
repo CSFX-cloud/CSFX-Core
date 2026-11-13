@@ -7,10 +7,11 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     pub resource_group_id: Uuid,
-    pub workload_id: Uuid,
+    pub workload_id: Option<Uuid>,
     pub name: String,
     pub http_port: i32,
     pub https_port: i32,
+    pub status: String,
     pub created_at: DateTime,
 }
 
