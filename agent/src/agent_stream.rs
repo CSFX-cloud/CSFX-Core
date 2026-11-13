@@ -8,10 +8,11 @@ use tokio_tungstenite::Connector;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::backoff;
 use crate::pki::AgentPki;
 
 const MIN_RECONNECT_DELAY: Duration = Duration::from_secs(1);
-const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
 
 fn stream_url(gateway_url: &str) -> String {
     let ws_base = if let Some(rest) = gateway_url.strip_prefix("https://") {
@@ -46,7 +47,7 @@ fn build_connector() -> Result<Connector, anyhow::Error> {
 
 async fn run(gateway_url: String, api_key: String, agent_id: Uuid, tx: mpsc::UnboundedSender<()>) {
     let url = stream_url(&gateway_url);
-    let mut delay = MIN_RECONNECT_DELAY;
+    let mut attempt: u32 = 0;
 
     let connector = match build_connector() {
         Ok(c) => Some(c),
@@ -85,7 +86,7 @@ async fn run(gateway_url: String, api_key: String, agent_id: Uuid, tx: mpsc::Unb
         {
             Ok((socket, _)) => {
                 info!(agent_id = %agent_id, "agent stream connected");
-                delay = MIN_RECONNECT_DELAY;
+                attempt = 0;
 
                 let (_sink, mut stream) = socket.split();
                 while let Some(msg) = stream.next().await {
@@ -105,12 +106,13 @@ async fn run(gateway_url: String, api_key: String, agent_id: Uuid, tx: mpsc::Unb
                 warn!(agent_id = %agent_id, "agent stream disconnected, reconnecting");
             }
             Err(e) => {
-                warn!(agent_id = %agent_id, error = %e, delay_secs = delay.as_secs(), "agent stream connect failed, retrying");
+                warn!(agent_id = %agent_id, error = %e, attempt, "agent stream connect failed, retrying");
             }
         }
 
+        let delay = backoff::full_jitter(MIN_RECONNECT_DELAY, MAX_RECONNECT_DELAY, attempt);
+        attempt = attempt.saturating_add(1);
         tokio::time::sleep(delay).await;
-        delay = std::cmp::min(delay * 2, MAX_RECONNECT_DELAY);
     }
 }
 

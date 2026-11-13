@@ -30,6 +30,9 @@ const METRICS_FILE_NAME: &str = "metrics.fifo";
 const JAIL_KERNEL_NAME: &str = "vmlinux";
 const JAIL_ROOTFS_NAME: &str = "rootfs.ext4";
 const GRACEFUL_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
+const JAILER_APPEAR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const JAILER_POLL_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
+const JAILER_POLL_MAX_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 const GRACEFUL_STOP_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn firecracker_bin_path() -> String {
@@ -917,11 +920,16 @@ async fn spawn_jailer(
         anyhow::bail!("systemd-run failed to start jailer unit {}", unit_name);
     }
 
-    for _ in 0..250 {
+    let started = std::time::Instant::now();
+    let mut attempt: u32 = 0;
+    while started.elapsed() < JAILER_APPEAR_TIMEOUT {
         if let Some(pid) = find_live_jailer_pid(jailer_id).await {
             return Ok(pid);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let delay =
+            crate::backoff::ceiling(JAILER_POLL_MIN_INTERVAL, JAILER_POLL_MAX_INTERVAL, attempt);
+        attempt = attempt.saturating_add(1);
+        tokio::time::sleep(delay).await;
     }
 
     anyhow::bail!("jailer process for id {} did not appear", jailer_id)

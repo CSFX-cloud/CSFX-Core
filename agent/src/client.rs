@@ -2,11 +2,15 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::runtime::VolumeUsage;
+
+fn is_throttled(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+}
 
 #[derive(Debug)]
 pub struct GatewayConfigRejected;
@@ -383,15 +387,20 @@ impl ApiClient {
                 .await
                 .context("Failed to send registration request")?;
 
-            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            if is_throttled(resp.status()) {
                 let retry_after = resp
                     .headers()
                     .get("Retry-After")
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok())
                     .unwrap_or(60);
-                tracing::warn!(retry_after, "Registration rate-limited, retrying");
-                tokio::time::sleep(Duration::from_secs(retry_after)).await;
+                let delay = crate::backoff::retry_after_delay(retry_after);
+                tracing::warn!(
+                    retry_after,
+                    delay_ms = delay.as_millis() as u64,
+                    "Registration rate-limited, retrying"
+                );
+                tokio::time::sleep(delay).await;
                 continue;
             }
 
