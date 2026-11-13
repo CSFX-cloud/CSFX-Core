@@ -45,7 +45,7 @@ ON CONFLICT (id) DO NOTHING";
 const CREATE_INDEXES: &str =
     "CREATE INDEX IF NOT EXISTS idx_audit_log_last_seen_at_id ON audit_log (last_seen_at, id)";
 
-const DROP_ALL: &str = "
+const DOWN: &str = "
 DROP TABLE IF EXISTS audit_log;
 DROP FUNCTION IF EXISTS audit_log_immutable()";
 
@@ -60,10 +60,7 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .get_connection()
-            .execute_unprepared(DROP_ALL)
-            .await?;
+        manager.get_connection().execute_unprepared(DOWN).await?;
         Ok(())
     }
 }
