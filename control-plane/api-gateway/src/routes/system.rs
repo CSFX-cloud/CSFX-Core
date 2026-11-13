@@ -103,6 +103,13 @@ pub fn routes() -> Router<AppState> {
         .route("/system/stats/usage", get(get_usage_history))
 }
 
+async fn collect_local_metrics() -> LocalSystemMetrics {
+    let collector = LocalSystemCollector::shared();
+    tokio::task::spawn_blocking(move || collector.collect())
+        .await
+        .expect("metrics collection task panicked")
+}
+
 async fn health_check() -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "healthy",
@@ -125,8 +132,7 @@ async fn get_system_info(
     _auth: AuthenticatedUser,
     State(_state): State<AppState>,
 ) -> Json<SystemInfoResponse> {
-    let collector = LocalSystemCollector::new();
-    let metrics = collector.collect();
+    let metrics = collect_local_metrics().await;
 
     Json(SystemInfoResponse {
         hostname: metrics.hostname,
@@ -144,8 +150,7 @@ async fn get_system_metrics(
     _auth: AuthenticatedUser,
     State(_state): State<AppState>,
 ) -> Json<SystemMetricsResponse> {
-    let collector = LocalSystemCollector::new();
-    let metrics = collector.collect();
+    let metrics = collect_local_metrics().await;
     Json(SystemMetricsResponse { metrics })
 }
 

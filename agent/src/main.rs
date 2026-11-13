@@ -513,7 +513,13 @@ async fn reconcile_tick(
     )
     .await;
     push_workload_stats(client, api_key, firecracker, running_containers).await;
-    let metrics = system::collect_metrics();
+    let metrics = match tokio::task::spawn_blocking(system::collect_metrics).await {
+        Ok(metrics) => metrics,
+        Err(error) => {
+            error!(error = %error, "metrics collection task failed");
+            return;
+        }
+    };
 
     match client
         .heartbeat(agent_id, api_key, Some(statuses), Some(metrics))

@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::sync::{LazyLock, Mutex};
 use sysinfo::{Disks, Networks, System};
 
 pub struct SystemInfo {
@@ -22,6 +23,15 @@ pub struct SystemMetrics {
     pub uptime_seconds: u64,
 }
 
+static SHARED_SYSTEM: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(fresh_system()));
+
+fn fresh_system() -> System {
+    let mut sys = System::new();
+    sys.refresh_cpu_all();
+    sys.refresh_memory();
+    sys
+}
+
 pub struct LiveMetricsCollector {
     sys: System,
     simulator: Option<LoadSimulator>,
@@ -29,8 +39,7 @@ pub struct LiveMetricsCollector {
 
 impl LiveMetricsCollector {
     pub fn new() -> Self {
-        let mut sys = System::new_all();
-        sys.refresh_cpu_usage();
+        let sys = fresh_system();
         let simulator = std::env::var("CSFX_SIMULATE_LOAD")
             .ok()
             .filter(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -221,8 +230,11 @@ fn read_machine_id() -> Option<String> {
 }
 
 pub fn collect_metrics() -> SystemMetrics {
-    let mut sys = System::new_all();
-    sys.refresh_all();
+    let mut sys = SHARED_SYSTEM
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    sys.refresh_cpu_usage();
+    sys.refresh_memory();
 
     let cpu_usage_percent = sys.global_cpu_usage();
     let cpu_cores = sys.cpus().len() as u32;

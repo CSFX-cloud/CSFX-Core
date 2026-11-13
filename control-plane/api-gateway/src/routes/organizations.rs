@@ -363,6 +363,7 @@ async fn create_user(
     // Hash password
     let salt = crate::auth::crypto::generate_salt();
     let hashed_password = crate::auth::crypto::hash_password(&req.password, &salt)
+        .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let new_user = user::ActiveModel {

@@ -6,10 +6,11 @@ use api_gateway::auth::jwt::{
     verify_node_metrics_ticket, verify_vnc_ticket,
 };
 use api_gateway::auth::rate_limit::{JwtOrIpKeyExtractor, RateLimitKey};
+use api_gateway::auth_service::AuthService;
 use api_gateway::rbac_service::RbacService;
 use api_gateway::{cluster_bundle, init, recovery, tls, vault_service, vault_store};
 use axum::http::{Method, Request, StatusCode};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 use serde_json::json;
 use tower_governor::key_extractor::KeyExtractor;
 use uuid::Uuid;
@@ -160,17 +161,19 @@ fn tickets_are_bound_to_their_purpose() {
     assert!(verify_node_metrics_ticket("garbage", workload).is_err());
 }
 
-#[test]
-fn passwords_and_rsa_round_trip() {
+#[tokio::test]
+async fn passwords_and_rsa_round_trip() {
     let salt = generate_salt();
-    let hashed = hash_password("hunter2-hunter2", &salt).unwrap();
-    assert!(verify_password("hunter2-hunter2", &salt, &hashed).unwrap());
-    assert!(!verify_password("other", &salt, &hashed).unwrap());
+    let hashed = hash_password("hunter2-hunter2", &salt).await.unwrap();
+    assert!(verify_password("hunter2-hunter2", &salt, &hashed)
+        .await
+        .unwrap());
+    assert!(!verify_password("other", &salt, &hashed).await.unwrap());
 
-    let pair = RsaKeyPair::generate().unwrap();
+    let pair = RsaKeyPair::generate().await.unwrap();
     let encrypted = encrypt_password(&pair.public_key, "secret-value");
     assert_eq!(
-        decrypt_password(&encrypted, &pair.private_key).unwrap(),
+        decrypt_password(&encrypted, &pair).await.unwrap(),
         "secret-value"
     );
     assert_eq!(
@@ -179,7 +182,7 @@ fn passwords_and_rsa_round_trip() {
             .public_key,
         pair.public_key
     );
-    assert!(decrypt_password("not-base64!", &pair.private_key).is_err());
+    assert!(decrypt_password("not-base64!", &pair).await.is_err());
     assert!(RsaKeyPair::from_private_key("garbage").is_err());
 }
 
@@ -358,4 +361,60 @@ async fn pending_resource_group_deletions_are_completed_by_the_job() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     panic!("resource group was not removed by the deletion job");
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn concurrent_key_creation_yields_one_row_and_one_key() {
+    let harness = harness().await;
+    let name = format!("race-{}", Uuid::new_v4().simple());
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let service = AuthService::new(harness.db.clone());
+            let name = name.clone();
+            tokio::spawn(async move { service.get_or_create_rsa_key(&name).await.unwrap() })
+        })
+        .collect();
+    let mut public_keys = Vec::new();
+    for handle in handles {
+        public_keys.push(handle.await.unwrap().public_key.clone());
+    }
+    let rows = entity::Key::find()
+        .filter(entity::key::Column::Name.eq(name))
+        .count(&harness.db)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+    assert!(public_keys.windows(2).all(|pair| pair[0] == pair[1]));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn password_verification_does_not_block_async_workers() {
+    const VERIFICATIONS: usize = 20;
+    let salt = generate_salt();
+    let hashed = bcrypt::hash(format!("hunter2-hunter2{salt}"), 12).unwrap();
+    let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let verifications: Vec<_> = (0..VERIFICATIONS)
+        .map(|_| {
+            let (salt, hashed, completed) = (salt.clone(), hashed.clone(), completed.clone());
+            tokio::spawn(async move {
+                let valid = verify_password("hunter2-hunter2", &salt, &hashed)
+                    .await
+                    .unwrap();
+                completed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                valid
+            })
+        })
+        .collect();
+
+    tokio::spawn(async {}).await.unwrap();
+    let finished_before_probe = completed.load(std::sync::atomic::Ordering::SeqCst);
+
+    assert!(
+        finished_before_probe < VERIFICATIONS / 2,
+        "async workers were blocked until {finished_before_probe} verifications finished"
+    );
+    for verification in verifications {
+        assert!(verification.await.unwrap());
+    }
 }

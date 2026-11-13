@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use sysinfo::{Disks, Networks, System};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,19 +41,29 @@ pub struct LocalSystemCollector {
     disks: Arc<Mutex<Disks>>,
 }
 
+static SHARED: LazyLock<Arc<LocalSystemCollector>> =
+    LazyLock::new(|| Arc::new(LocalSystemCollector::new()));
+
 impl LocalSystemCollector {
+    pub fn shared() -> Arc<Self> {
+        Arc::clone(&SHARED)
+    }
+
     pub fn new() -> Self {
+        let mut system = System::new();
+        system.refresh_cpu_all();
+        system.refresh_memory();
         Self {
-            system: Arc::new(Mutex::new(System::new_all())),
+            system: Arc::new(Mutex::new(system)),
             networks: Arc::new(Mutex::new(Networks::new_with_refreshed_list())),
             disks: Arc::new(Mutex::new(Disks::new_with_refreshed_list())),
         }
     }
 
     pub fn collect(&self) -> LocalSystemMetrics {
-        // Refresh all data
-        let mut system = self.system.lock().unwrap();
-        system.refresh_all();
+        let mut system = self.system.lock().unwrap_or_else(|p| p.into_inner());
+        system.refresh_cpu_usage();
+        system.refresh_memory();
 
         let mut networks = self.networks.lock().unwrap();
         networks.refresh();
