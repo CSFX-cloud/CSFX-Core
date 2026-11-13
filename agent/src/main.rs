@@ -6,6 +6,7 @@ mod disks;
 mod endpoint;
 mod fence;
 mod firecracker;
+mod isolation;
 mod join;
 mod journal;
 mod master_join;
@@ -446,7 +447,7 @@ async fn reconcile_tick(
         .await
     {
         Ok(resp) => {
-            fence_guard.record_success();
+            fence_guard.record_contact(std::time::Instant::now());
             if *failure_count > 0 {
                 info!(agent_id = %agent_id, "Heartbeat recovered after {} failures", failure_count);
                 *failure_count = 0;
@@ -476,8 +477,8 @@ async fn reconcile_tick(
                 error = %e,
                 "Heartbeat failed"
             );
-            if fence_guard.record_failure(std::time::Instant::now()) {
-                warn!(agent_id = %agent_id, "Control plane unreachable, self-fencing all workloads");
+            if fence_guard.should_fence(&e).await {
+                warn!(agent_id = %agent_id, "Isolated from control plane and all mesh peers, self-fencing all workloads");
                 reap_stale_containers(
                     firecracker.as_ref(),
                     qemu.as_ref(),
@@ -2097,8 +2098,7 @@ mod tests {
 
     #[tokio::test]
     async fn successful_heartbeats_reset_failures() {
-        let mut guard = fence::FenceGuard::new(0);
-
+        let mut guard = fence::FenceGuard::new(0, std::time::Instant::now());
         let outcome = run_tick(Some(serde_json::json!({})), &mut guard, 2).await;
 
         assert_eq!(outcome.heartbeats, 1);
@@ -2107,8 +2107,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_heartbeats_are_counted() {
-        let mut guard = fence::FenceGuard::new(0);
-
+        let mut guard = fence::FenceGuard::new(0, std::time::Instant::now());
         let outcome = run_tick(None, &mut guard, 1).await;
 
         assert_eq!(outcome.heartbeats, 1);
@@ -2116,14 +2115,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prolonged_isolation_fences_the_agent() {
-        let mut guard = fence::FenceGuard::new(1);
-        let long_ago = std::time::Instant::now() - Duration::from_secs(30);
-        assert!(!guard.record_failure(long_ago));
+    async fn rejected_heartbeats_never_fence_the_agent() {
+        let long_ago = std::time::Instant::now() - Duration::from_secs(3600);
+        let mut guard = fence::FenceGuard::new(1, long_ago);
 
         let outcome = run_tick(None, &mut guard, 0).await;
 
         assert_eq!(outcome.failures, 1);
-        assert!(!guard.record_failure(std::time::Instant::now()));
+        assert!(!guard.record_isolation(long_ago + Duration::from_secs(1)));
     }
 }

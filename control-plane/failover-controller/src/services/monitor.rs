@@ -3,12 +3,13 @@ use sea_orm::DatabaseConnection;
 use shared::leader::LeaderLease;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::time::{interval, Duration};
+use tokio::sync::{Mutex, Semaphore};
+use tokio::time::{interval, Duration, Instant};
 use uuid::Uuid;
 
 use crate::db::agents as agent_db;
 use crate::db::events;
+use crate::services::database_health::{DatabaseHealth, RECOVERY_GRACE};
 use crate::services::eviction::{EvictionService, Pressure};
 use crate::services::failover::FailoverService;
 use crate::services::{hardware_alerts, status_alerts};
@@ -21,19 +22,41 @@ const PRESSURE_RULES: [(&str, Pressure); 2] = [
 const POLL_INTERVAL_SECS: u64 = 15;
 const SOFT_THRESHOLD_SECS: i64 = 50;
 const HARD_THRESHOLD_SECS: i64 = 300;
+const MAX_PARALLEL_FAILOVERS: usize = 4;
+
+fn recovery_grace() -> Duration {
+    let Ok(raw) = std::env::var("CSFX_FAILOVER_GRACE_SECS") else {
+        return RECOVERY_GRACE;
+    };
+    match raw.parse() {
+        Ok(secs) => Duration::from_secs(secs),
+        Err(_) => {
+            crate::log_warn!(
+                "monitor",
+                &format!("Invalid CSFX_FAILOVER_GRACE_SECS value={}", raw)
+            );
+            RECOVERY_GRACE
+        }
+    }
+}
 
 type InFlight = Arc<Mutex<HashSet<Uuid>>>;
+type Permits = Arc<Semaphore>;
 
 pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
     let failover = Arc::new(FailoverService::new(db.clone()));
     let eviction = EvictionService::new(db.clone());
     let in_flight = InFlight::default();
     let mut tick = interval(Duration::from_secs(POLL_INTERVAL_SECS));
+    let permits = Permits::new(Semaphore::new(MAX_PARALLEL_FAILOVERS));
+    let mut database_health = DatabaseHealth::new(recovery_grace());
+    database_health.record_interruption();
 
     loop {
         tick.tick().await;
 
         if !leader.is_leader() {
+            database_health.record_interruption();
             continue;
         }
 
@@ -44,6 +67,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
             match agent_db::get_stale_agents(&db, SOFT_THRESHOLD_SECS, HARD_THRESHOLD_SECS).await {
                 Ok(result) => result,
                 Err(e) => {
+                    database_health.record_interruption();
                     crate::log_error!(
                         "monitor",
                         &format!("Failed to query stale agents err={}", e)
@@ -52,8 +76,19 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
                 }
             };
 
+        database_health.record_success(Instant::now());
         mark_degraded(&db, degraded).await;
-        handle_offline(&db, &failover, &in_flight, offline).await;
+        if !offline.is_empty() && !database_health.settled(Instant::now()) {
+            crate::log_warn!(
+                "monitor",
+                &format!(
+                    "Database recently unavailable, deferring failover stale={}",
+                    offline.len()
+                )
+            );
+        } else {
+            handle_offline(&db, &failover, &in_flight, &permits, offline).await;
+        }
         check_status_alerts(&db).await;
     }
 }
@@ -157,35 +192,40 @@ async fn mark_degraded(db: &DatabaseConnection, degraded: Vec<agents::Model>) {
     }
 }
 
-async fn has_healthy_agent(db: &DatabaseConnection) -> bool {
-    match agent_db::count_online(db).await {
-        Ok(count) => count > 0,
+async fn fleet_staleness(db: &DatabaseConnection) -> Option<(u64, u64)> {
+    match agent_db::count_silent_and_fleet(db, SOFT_THRESHOLD_SECS).await {
+        Ok(counts) => Some(counts),
         Err(e) => {
-            crate::log_error!(
-                "monitor",
-                &format!("Failed to count online agents err={}", e)
-            );
-            false
+            crate::log_error!("monitor", &format!("Failed to count fleet err={}", e));
+            None
         }
     }
+}
+
+fn silent_minority(silent: u64, fleet: u64) -> bool {
+    silent.saturating_mul(2) <= fleet
 }
 
 async fn handle_offline(
     db: &DatabaseConnection,
     failover: &Arc<FailoverService>,
     in_flight: &InFlight,
+    permits: &Permits,
     offline: Vec<agents::Model>,
 ) {
     if offline.is_empty() {
         return;
     }
 
-    if !has_healthy_agent(db).await {
+    let Some((silent, fleet)) = fleet_staleness(db).await else {
+        return;
+    };
+    if !silent_minority(silent, fleet) {
         crate::log_warn!(
             "monitor",
             &format!(
-                "No healthy agent, skipping failover control_plane_isolation_suspected=true stale={}",
-                offline.len()
+                "Majority of fleet silent, skipping failover control_plane_isolation_suspected=true silent={} fleet={}",
+                silent, fleet
             )
         );
         return;
@@ -195,7 +235,7 @@ async fn handle_offline(
         if agent.status != "Offline" && !mark_offline(db, &agent).await {
             continue;
         }
-        start_failover(db, failover, in_flight, agent.id).await;
+        start_failover(db, failover, in_flight, permits, agent.id).await;
     }
 }
 
@@ -219,6 +259,7 @@ async fn start_failover(
     db: &DatabaseConnection,
     failover: &Arc<FailoverService>,
     in_flight: &InFlight,
+    permits: &Permits,
     agent_id: Uuid,
 ) {
     match agent_db::has_active_assignments(db, agent_id).await {
@@ -247,7 +288,9 @@ async fn start_failover(
 
     let failover = failover.clone();
     let in_flight = in_flight.clone();
+    let permits = permits.clone();
     tokio::spawn(async move {
+        let _permit = permits.acquire_owned().await;
         if let Err(e) = failover.handle_failover(agent_id).await {
             crate::log_error!(
                 "monitor",
@@ -256,4 +299,24 @@ async fn start_failover(
         }
         in_flight.lock().await.remove(&agent_id);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::silent_minority;
+
+    #[test]
+    fn single_host_loss_triggers_failover() {
+        assert!(silent_minority(1, 3));
+        assert!(silent_minority(1, 2));
+        assert!(silent_minority(2, 4));
+    }
+
+    #[test]
+    fn fleet_wide_silence_blocks_failover() {
+        assert!(!silent_minority(2, 3));
+        assert!(!silent_minority(2, 2));
+        assert!(!silent_minority(1, 1));
+        assert!(!silent_minority(1, 0));
+    }
 }

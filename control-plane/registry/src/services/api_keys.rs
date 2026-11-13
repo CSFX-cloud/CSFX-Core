@@ -26,6 +26,30 @@ impl ApiKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiKeyError {
+    Invalid,
+    Unavailable,
+}
+
+impl ApiKeyError {
+    pub fn status(self) -> axum::http::StatusCode {
+        match self {
+            Self::Invalid => axum::http::StatusCode::UNAUTHORIZED,
+            Self::Unavailable => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
+}
+
+impl std::fmt::Display for ApiKeyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Invalid => "Invalid API key",
+            Self::Unavailable => "Database error",
+        })
+    }
+}
+
 pub struct ApiKeyManager {
     db: DatabaseConnection,
 }
@@ -54,7 +78,7 @@ impl ApiKeyManager {
         api_key
     }
 
-    pub async fn validate_key(&self, key_str: &str) -> Result<Uuid, String> {
+    pub async fn validate_key(&self, key_str: &str) -> Result<Uuid, ApiKeyError> {
         match crate::db::api_keys::get_agent_by_key(&self.db, key_str).await {
             Ok(Some(agent)) => {
                 crate::log_debug!(
@@ -65,14 +89,14 @@ impl ApiKeyManager {
             }
             Ok(None) => {
                 crate::log_warn!("api_key_manager", "Invalid API key provided");
-                Err("Invalid API key".to_string())
+                Err(ApiKeyError::Invalid)
             }
             Err(e) => {
                 crate::log_error!(
                     "api_key_manager",
                     &format!("Failed to validate API key: {}", e)
                 );
-                Err("Database error".to_string())
+                Err(ApiKeyError::Unavailable)
             }
         }
     }
@@ -98,5 +122,20 @@ impl ApiKeyManager {
                 Err(format!("Failed to revoke key: {}", e))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiKeyError;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn database_failures_are_not_reported_as_invalid_keys() {
+        assert_eq!(ApiKeyError::Invalid.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            ApiKeyError::Unavailable.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }

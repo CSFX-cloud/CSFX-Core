@@ -218,7 +218,7 @@ pub async fn heartbeat(
         Ok(id) => id,
         Err(e) => {
             return Err((
-                StatusCode::UNAUTHORIZED,
+                e.status(),
                 Json(ErrorResponse {
                     error: format!("Invalid API key: {}", e),
                 }),
@@ -318,9 +318,9 @@ pub async fn heartbeat(
             }))
         }
         Err(e) => Err((
-            StatusCode::NOT_FOUND,
+            StatusCode::SERVICE_UNAVAILABLE,
             Json(ErrorResponse {
-                error: format!("Agent not found: {}", e),
+                error: format!("Heartbeat could not be recorded: {}", e),
             }),
         )),
     }

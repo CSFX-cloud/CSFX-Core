@@ -177,7 +177,7 @@ async fn api_key_validates_until_revoked() {
     manager.revoke_all_keys(agent_id).await.unwrap();
     assert_eq!(
         manager.validate_key(&key.key).await,
-        Err("Invalid API key".to_string())
+        Err(registry::services::api_keys::ApiKeyError::Invalid)
     );
 }
 
