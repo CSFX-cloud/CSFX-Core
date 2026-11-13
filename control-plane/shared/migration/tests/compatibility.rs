@@ -3,6 +3,7 @@ use std::path::Path;
 
 const CUTOFF: &str = "m20261114_010000_partition_vault_audit.rs";
 const HOT_TABLES: [&str; 3] = ["LOGS", "WORKLOADS", "AGENT_METRICS"];
+const DOWN_MARKERS: [&str; 2] = ["fn down", "const DOWN"];
 const FORBIDDEN: [&str; 6] = [
     "RENAME COLUMN",
     "RENAME TO",
@@ -13,7 +14,12 @@ const FORBIDDEN: [&str; 6] = [
 ];
 
 fn normalize(source: &str) -> String {
-    let up = source.split("fn down").next().unwrap_or(source);
+    let end = DOWN_MARKERS
+        .iter()
+        .filter_map(|marker| source.find(marker))
+        .min()
+        .unwrap_or(source.len());
+    let up = &source[..end];
     up.to_uppercase()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -106,6 +112,7 @@ fn accepts_additive_migration() {
         UPDATE agents SET note = '' WHERE note IS NULL;
         CREATE INDEX idx_other_x ON other_table (id)")
         async fn down() { DROP TABLE agents; }
+        const DOWN: &[&str] = &["ALTER TABLE agents DROP COLUMN note"];
     "#;
     assert!(violations(source).is_empty());
 }
