@@ -34,6 +34,9 @@ const DEFAULT_HTTPS_PORT: u16 = 443;
 const DEFAULT_AGENT_PORT: u16 = 7443;
 const POLL_INTERVAL: &str = "10s";
 const MAX_NAME_LENGTH: usize = 40;
+pub const STATUS_PENDING: &str = "pending";
+pub const STATUS_ACTIVE: &str = "active";
+pub const STATUS_DELETING: &str = "deleting";
 
 #[derive(Debug, Deserialize)]
 pub struct CreateGatewayRequest {
@@ -56,7 +59,7 @@ fn default_https_port() -> u16 {
 pub struct GatewayResponse {
     pub id: Uuid,
     pub resource_group_id: Uuid,
-    pub workload_id: Uuid,
+    pub workload_id: Option<Uuid>,
     pub name: String,
     pub http_port: i32,
     pub https_port: i32,
@@ -82,7 +85,7 @@ fn response_for(
         name: gateway.name,
         http_port: gateway.http_port,
         https_port: gateway.https_port,
-        status,
+        status: status.or(Some(gateway.status)),
         created_at: gateway.created_at.and_utc().to_rfc3339(),
     }
 }
@@ -201,7 +204,9 @@ pub async fn list_gateways(
         gateways
             .into_iter()
             .map(|gateway| {
-                let status = statuses.get(&gateway.workload_id).cloned();
+                let status = gateway
+                    .workload_id
+                    .and_then(|id| statuses.get(&id).cloned());
                 response_for(gateway, &group.name, status)
             })
             .collect(),
@@ -212,7 +217,10 @@ async fn workload_statuses(
     state: &AppState,
     gateways: &[ingress_gateways::Model],
 ) -> Result<HashMap<Uuid, String>, ApiError> {
-    let ids: Vec<Uuid> = gateways.iter().map(|gateway| gateway.workload_id).collect();
+    let ids: Vec<Uuid> = gateways
+        .iter()
+        .filter_map(|gateway| gateway.workload_id)
+        .collect();
     Ok(workloads::Entity::find()
         .filter(workloads::Column::Id.is_in(ids))
         .all(&state.db_conn)
@@ -234,20 +242,16 @@ pub async fn create_gateway(
         validate_request(&request).map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
     ensure_name_free(&state, group_id, &name).await?;
 
-    let gateway_id = Uuid::new_v4();
-    let workload_id = schedule_workload(&state, &name, &request, group_id, gateway_id).await?;
-    let gateway = ingress_gateways::ActiveModel {
-        id: Set(gateway_id),
-        resource_group_id: Set(group_id),
-        workload_id: Set(workload_id),
-        name: Set(name),
-        http_port: Set(i32::from(request.http_port)),
-        https_port: Set(i32::from(request.https_port)),
-        created_at: Set(Utc::now().naive_utc()),
-    }
-    .insert(&state.db_conn)
-    .await
-    .map_err(internal)?;
+    let pending = insert_pending(&state, group_id, name, &request).await?;
+    let workload_id =
+        match schedule_workload(&state, &pending.name, &request, group_id, pending.id).await {
+            Ok(workload_id) => workload_id,
+            Err(failure) => {
+                discard_pending(&state, pending.id).await;
+                return Err(failure);
+            }
+        };
+    let gateway = confirm(&state, pending, workload_id).await?;
 
     tracing::info!(
         user_id = %claims.user_id,
@@ -259,6 +263,47 @@ pub async fn create_gateway(
         StatusCode::CREATED,
         Json(response_for(gateway, &group.name, Some("pending".into()))),
     ))
+}
+
+async fn insert_pending(
+    state: &AppState,
+    group_id: Uuid,
+    name: String,
+    request: &CreateGatewayRequest,
+) -> Result<ingress_gateways::Model, ApiError> {
+    ingress_gateways::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        resource_group_id: Set(group_id),
+        workload_id: Set(None),
+        name: Set(name),
+        http_port: Set(i32::from(request.http_port)),
+        https_port: Set(i32::from(request.https_port)),
+        status: Set(STATUS_PENDING.to_string()),
+        created_at: Set(Utc::now().naive_utc()),
+    }
+    .insert(&state.db_conn)
+    .await
+    .map_err(internal)
+}
+
+async fn discard_pending(state: &AppState, gateway_id: Uuid) {
+    if let Err(error) = ingress_gateways::Entity::delete_by_id(gateway_id)
+        .exec(&state.db_conn)
+        .await
+    {
+        tracing::error!(gateway_id = %gateway_id, error = %error, "pending gateway could not be discarded");
+    }
+}
+
+pub async fn confirm(
+    state: &AppState,
+    gateway: ingress_gateways::Model,
+    workload_id: Uuid,
+) -> Result<ingress_gateways::Model, ApiError> {
+    let mut active: ingress_gateways::ActiveModel = gateway.into();
+    active.workload_id = Set(Some(workload_id));
+    active.status = Set(STATUS_ACTIVE.to_string());
+    active.update(&state.db_conn).await.map_err(internal)
 }
 
 async fn ensure_name_free(state: &AppState, group_id: Uuid, name: &str) -> Result<(), ApiError> {
@@ -323,23 +368,14 @@ pub async fn delete_gateway(
 ) -> Result<StatusCode, ApiError> {
     ensure_group(&state, group_id).await?;
     let gateway = find_gateway(&state, group_id, gateway_id).await?;
-    let path = format!("/workloads/{}", gateway.workload_id);
-    let (status, _) = state
-        .service_client
-        .forward_to_scheduler(reqwest::Method::DELETE, &path, None, None)
-        .await
-        .map_err(|e| {
-            error(
-                StatusCode::BAD_GATEWAY,
-                &format!("scheduler unavailable: {e}"),
-            )
-        })?;
-    if !status.is_success() && status.as_u16() != StatusCode::NOT_FOUND.as_u16() {
+    let Some(workload_id) = gateway.workload_id else {
         return Err(error(
-            StatusCode::BAD_GATEWAY,
-            "scheduler failed to delete the gateway workload",
+            StatusCode::CONFLICT,
+            "gateway is still being created",
         ));
-    }
+    };
+    mark_deleting(&state, gateway).await?;
+    remove_workload(&state, workload_id).await?;
     ingress_gateways::Entity::delete_by_id(gateway_id)
         .exec(&state.db_conn)
         .await
@@ -350,6 +386,34 @@ pub async fn delete_gateway(
 
     tracing::info!(user_id = %claims.user_id, gateway_id = %gateway_id, "ingress gateway deleted");
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn mark_deleting(state: &AppState, gateway: ingress_gateways::Model) -> Result<(), ApiError> {
+    let mut active: ingress_gateways::ActiveModel = gateway.into();
+    active.status = Set(STATUS_DELETING.to_string());
+    active.update(&state.db_conn).await.map_err(internal)?;
+    Ok(())
+}
+
+pub async fn remove_workload(state: &AppState, workload_id: Uuid) -> Result<(), ApiError> {
+    let path = format!("/workloads/{workload_id}");
+    let (status, _) = state
+        .service_client
+        .forward_to_scheduler(reqwest::Method::DELETE, &path, None, None)
+        .await
+        .map_err(|e| {
+            error(
+                StatusCode::BAD_GATEWAY,
+                &format!("scheduler unavailable: {e}"),
+            )
+        })?;
+    if status.is_success() || status.as_u16() == StatusCode::NOT_FOUND.as_u16() {
+        return Ok(());
+    }
+    Err(error(
+        StatusCode::BAD_GATEWAY,
+        "scheduler failed to delete the gateway workload",
+    ))
 }
 
 async fn find_gateway(
@@ -378,7 +442,7 @@ pub async fn gateway_config(
 ) -> Result<Json<Value>, ApiError> {
     let gateway = find_gateway(&state, group_id, gateway_id).await?;
     ensure_hosted_by(&state, &gateway, &agent).await?;
-    if query.source_workload_id != gateway.workload_id {
+    if Some(query.source_workload_id) != gateway.workload_id {
         tracing::warn!(
             gateway_id = %gateway.id,
             source_workload_id = %query.source_workload_id,
@@ -412,7 +476,13 @@ async fn ensure_hosted_by(
     gateway: &ingress_gateways::Model,
     agent: &AgentApiKey,
 ) -> Result<(), ApiError> {
-    let workload = workloads::Entity::find_by_id(gateway.workload_id)
+    let Some(workload_id) = gateway.workload_id else {
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            "gateway is not hosted by this agent",
+        ));
+    };
+    let workload = workloads::Entity::find_by_id(workload_id)
         .one(&state.db_conn)
         .await
         .map_err(internal)?;

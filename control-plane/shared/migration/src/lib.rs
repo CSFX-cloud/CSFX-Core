@@ -61,6 +61,7 @@ mod m20261113_000000_hash_bootstrap_tokens;
 mod m20261113_010000_add_agent_ssh_host_key;
 mod m20261114_000000_add_retention_indexes;
 mod m20261114_010000_partition_vault_audit;
+mod m20261115_010000_add_pending_state_and_idempotency;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -128,6 +129,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261112_000000_add_vpn_peer_owner::Migration),
             Box::new(m20261114_000000_add_retention_indexes::Migration),
             Box::new(m20261114_010000_partition_vault_audit::Migration),
+            Box::new(m20261115_010000_add_pending_state_and_idempotency::Migration),
         ]
     }
 }

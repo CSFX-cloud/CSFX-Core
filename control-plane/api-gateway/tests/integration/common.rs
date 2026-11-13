@@ -192,7 +192,7 @@ pub async fn harness() -> Harness {
         openbao: None,
         site_builder: None,
     };
-    let app = routes::create_router().with_state(state);
+    let app = routes::create_router(state.clone()).with_state(state);
     Harness {
         app,
         db,

@@ -31,6 +31,8 @@ pub enum SiteError {
     Conflict(&'static str),
     #[error("site hosting is not configured")]
     Unavailable,
+    #[error("{0}")]
+    Upstream(&'static str),
     #[error(transparent)]
     Vault(#[from] VaultError),
     #[error(transparent)]
@@ -48,6 +50,7 @@ impl IntoResponse for SiteError {
             Self::Forbidden => (StatusCode::FORBIDDEN, self.to_string()),
             Self::Conflict(message) => (StatusCode::CONFLICT, message.to_string()),
             Self::Unavailable => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
+            Self::Upstream(message) => (StatusCode::BAD_GATEWAY, message.to_string()),
             Self::Builder(SiteBuilderError::Rejected(message)) => {
                 (StatusCode::BAD_GATEWAY, message)
             }

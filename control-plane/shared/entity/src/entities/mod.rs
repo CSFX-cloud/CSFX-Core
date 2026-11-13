@@ -9,6 +9,7 @@ pub mod certificate_revocations;
 pub mod dns_records;
 pub mod failover_events;
 pub mod garage_nodes;
+pub mod idempotency_keys;
 pub mod identity_providers;
 pub mod idp_group_mappings;
 pub mod image_registries;
