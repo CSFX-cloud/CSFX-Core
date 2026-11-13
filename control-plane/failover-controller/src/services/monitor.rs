@@ -56,7 +56,7 @@ pub async fn run(db: DatabaseConnection, leader: LeaderLease) {
             };
 
         mark_degraded(&db, degraded).await;
-        if recovering(last_database_failure, Instant::now()) {
+        if !offline.is_empty() && recovering(last_database_failure, Instant::now()) {
             crate::log_warn!(
                 "monitor",
                 &format!(
