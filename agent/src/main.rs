@@ -1,5 +1,6 @@
 mod agent_stream;
 mod arp;
+mod backoff;
 mod client;
 mod config;
 mod disks;
@@ -39,23 +40,90 @@ use anyhow::{Context, Result};
 use runtime::Runtime;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{Mutex, Notify};
+use std::time::{Duration, Instant};
+use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 use tracing::{error, info, warn};
 
-#[derive(Clone, Default)]
+const DEFAULT_MAX_PARALLEL_STARTS: usize = 4;
+const START_RETRY_BASE: Duration = Duration::from_secs(5);
+const START_RETRY_CAP: Duration = Duration::from_secs(300);
+const HEARTBEAT_BACKOFF_CAP: Duration = Duration::from_secs(60);
+
+#[derive(Clone)]
 struct StartTracker {
     in_flight: Arc<Mutex<HashSet<String>>>,
+    retries: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
+    limiter: Arc<Semaphore>,
     completed: Arc<Notify>,
 }
 
+impl Default for StartTracker {
+    fn default() -> Self {
+        Self::new(DEFAULT_MAX_PARALLEL_STARTS)
+    }
+}
+
 impl StartTracker {
-    async fn try_begin(&self, workload_id: &str) -> bool {
-        self.in_flight.lock().await.insert(workload_id.to_string())
+    fn new(max_parallel: usize) -> Self {
+        Self {
+            in_flight: Arc::default(),
+            retries: Arc::default(),
+            limiter: Arc::new(Semaphore::new(max_parallel.max(1))),
+            completed: Arc::default(),
+        }
     }
 
-    async fn finish(&self, workload_id: &str, state_changed: bool) {
+    fn from_env() -> Self {
+        let max_parallel = std::env::var("CSFX_MAX_PARALLEL_STARTS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_MAX_PARALLEL_STARTS);
+        Self::new(max_parallel)
+    }
+
+    async fn permit(&self) -> OwnedSemaphorePermit {
+        Arc::clone(&self.limiter)
+            .acquire_owned()
+            .await
+            .expect("start semaphore is never closed")
+    }
+
+    async fn try_begin(&self, workload_id: &str) -> bool {
+        self.try_begin_at(workload_id, Instant::now()).await
+    }
+
+    async fn try_begin_at(&self, workload_id: &str, now: Instant) -> bool {
+        let backing_off = self
+            .retries
+            .lock()
+            .await
+            .get(workload_id)
+            .is_some_and(|(_, next_attempt)| now < *next_attempt);
+        !backing_off && self.in_flight.lock().await.insert(workload_id.to_string())
+    }
+
+    async fn record_failure(&self, workload_id: &str, now: Instant) {
+        let mut retries = self.retries.lock().await;
+        let failures = retries.get(workload_id).map_or(0, |(count, _)| *count);
+        let delay = backoff::equal_jitter(START_RETRY_BASE, START_RETRY_CAP, failures);
+        retries.insert(workload_id.to_string(), (failures + 1, now + delay));
+    }
+
+    async fn forget_unassigned(&self, workloads: &[client::AssignedWorkload]) {
+        let assigned: HashSet<&str> = workloads.iter().map(|w| w.id.as_str()).collect();
+        self.retries
+            .lock()
+            .await
+            .retain(|id, _| assigned.contains(id.as_str()));
+    }
+
+    async fn finish(&self, workload_id: &str, state_changed: bool, started: bool) {
         self.in_flight.lock().await.remove(workload_id);
+        if started {
+            self.retries.lock().await.remove(workload_id);
+        } else {
+            self.record_failure(workload_id, Instant::now()).await;
+        }
         if state_changed {
             self.completed.notify_one();
         }
@@ -503,6 +571,13 @@ async fn reconcile_tick(
     }
 }
 
+fn next_tick_delay(period: Duration, failure_count: u32) -> Duration {
+    if failure_count == 0 {
+        return period;
+    }
+    backoff::full_jitter(period, HEARTBEAT_BACKOFF_CAP.max(period), failure_count - 1)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 async fn run_heartbeat_loop(
@@ -522,10 +597,14 @@ async fn run_heartbeat_loop(
     local_state: Arc<local_state::LocalState>,
     mut assignment_signal: tokio::sync::mpsc::UnboundedReceiver<()>,
 ) {
-    let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
+    let period = Duration::from_secs(interval_secs.max(1));
+    let mut interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + backoff::jitter(period),
+        period,
+    );
     let mut failure_count: u32 = 0;
     let mut fence_guard = fence::FenceGuard::from_env();
-    let starts = StartTracker::default();
+    let starts = StartTracker::from_env();
     let completed = Arc::clone(&starts.completed);
 
     loop {
@@ -552,6 +631,7 @@ async fn run_heartbeat_loop(
                 break;
             }
         }
+        interval.reset_after(next_tick_delay(period, failure_count));
     }
 
     if failure_count > 0 {
@@ -949,6 +1029,7 @@ async fn process_workloads(
         rg_dns_registry: Arc::clone(rg_dns_registry),
     };
 
+    starts.forget_unassigned(&workloads).await;
     for workload in workloads {
         if starts.try_begin(&workload.id).await {
             tokio::spawn(run_workload_start(context.clone(), workload));
@@ -975,6 +1056,7 @@ struct WorkloadStartContext {
 
 async fn run_workload_start(context: WorkloadStartContext, workload: client::AssignedWorkload) {
     let workload_id = workload.id.clone();
+    let _permit = context.starts.permit().await;
     let runtime: &dyn runtime::Runtime = if workload.runtime_class == "vm" {
         context.qemu.as_ref()
     } else {
@@ -1017,7 +1099,10 @@ async fn run_workload_start(context: WorkloadStartContext, workload: client::Ass
         .cloned();
     let state_changed =
         restart_fulfilled || (handle_after.is_some() && handle_after != handle_before);
-    context.starts.finish(&workload_id, state_changed).await;
+    context
+        .starts
+        .finish(&workload_id, state_changed, handle_after.is_some())
+        .await;
 }
 
 async fn volumes_ready(
@@ -1551,12 +1636,69 @@ mod tests {
         let tracker = StartTracker::default();
         assert!(tracker.try_begin("w").await);
         assert!(!tracker.try_begin("w").await);
-        tracker.finish("w", true).await;
+        tracker.finish("w", true, true).await;
         tokio::time::timeout(Duration::from_secs(1), tracker.completed.notified())
             .await
             .unwrap();
         assert!(tracker.try_begin("w").await);
-        tracker.finish("w", false).await;
+        tracker.finish("w", false, true).await;
+    }
+
+    #[tokio::test]
+    async fn start_tracker_limits_parallel_starts() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let tracker = StartTracker::new(2);
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let (tracker, running, peak) = (tracker.clone(), running.clone(), peak.clone());
+                tokio::spawn(async move {
+                    let _permit = tracker.permit().await;
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    running.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.await.unwrap();
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_starts_back_off_exponentially_per_workload() {
+        let tracker = StartTracker::default();
+        let origin = Instant::now();
+        let mut previous_ceiling = Duration::ZERO;
+        for failures in 0..5u32 {
+            tracker.record_failure("w", origin).await;
+            let ceiling = backoff::ceiling(START_RETRY_BASE, START_RETRY_CAP, failures);
+            assert!(ceiling > previous_ceiling);
+            previous_ceiling = ceiling;
+            assert!(
+                !tracker
+                    .try_begin_at("w", origin + ceiling / 2 - Duration::from_millis(1))
+                    .await
+            );
+            assert!(tracker.try_begin_at("w", origin + ceiling).await);
+            tracker.in_flight.lock().await.remove("w");
+        }
+        assert!(tracker.try_begin_at("other", origin).await);
+        tracker.finish("w", false, true).await;
+        assert!(tracker.try_begin_at("w", origin).await);
+    }
+
+    #[test]
+    fn heartbeat_backoff_is_bounded() {
+        let period = Duration::from_secs(30);
+        assert_eq!(next_tick_delay(period, 0), period);
+        for failures in 1..50 {
+            assert!(next_tick_delay(period, failures) <= HEARTBEAT_BACKOFF_CAP);
+        }
     }
 
     #[test]
