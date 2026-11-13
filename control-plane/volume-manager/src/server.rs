@@ -6,7 +6,6 @@ use tokio::sync::Mutex;
 
 use crate::{
     handlers::{internal, volumes},
-    metrics,
     services::volume::VolumeService,
 };
 
@@ -22,9 +21,8 @@ pub async fn health_check() -> impl IntoResponse {
 }
 
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health_check))
-        .route("/metrics", get(metrics::metrics_handler))
         .route("/volumes", axum::routing::post(volumes::create_volume))
         .route("/volumes", get(volumes::list_volumes))
         .route("/volumes/{id}", get(volumes::get_volume))
@@ -57,5 +55,6 @@ pub fn create_router(state: AppState) -> Router {
             "/internal/agents/{id}/detach-all",
             axum::routing::post(internal::detach_all_for_agent),
         )
-        .with_state(state)
+        .with_state(state);
+    shared::observability::instrument(router)
 }

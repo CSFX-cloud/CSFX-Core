@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use registry::{log_error, log_info, logger, metrics, server, services};
+use registry::{log_error, log_info, logger, server, services};
 
 const LEADER_KEY: &str = "/csfx/leaders/registry-health";
 const DEGRADED_AFTER_SECS: i64 = 50;
@@ -17,7 +17,6 @@ async fn main() -> anyhow::Result<()> {
 
     let log_receiver = logger::init_logger();
 
-    metrics::init();
     log_info!("main", "CSFX Registry Service starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
@@ -111,6 +110,9 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let app = server::create_router(state);
+
+    shared::observability::spawn_pool_gauges("default", db_conn.clone());
+    shared::observability::serve_metrics("127.0.0.1:9001").await;
 
     let port = std::env::var("REGISTRY_PORT")
         .ok()

@@ -60,6 +60,18 @@ pub async fn get_agents_for_alerting(db: &DatabaseConnection) -> Result<Vec<agen
     Ok(agents)
 }
 
+fn publish_heartbeat_lag(agents: &[agents::Model], now: chrono::NaiveDateTime) {
+    let lag = agents
+        .iter()
+        .filter(|agent| agent.status != "Offline")
+        .filter(|agent| agent.maintenance_until.is_none_or(|until| until <= now))
+        .filter_map(|agent| agent.last_heartbeat)
+        .map(|seen| (now - seen).num_milliseconds())
+        .max()
+        .unwrap_or(0);
+    shared::observability::set_agent_heartbeat_lag_seconds(lag.max(0) as f64 / 1000.0);
+}
+
 pub async fn get_stale_agents(
     db: &DatabaseConnection,
     soft_threshold_secs: i64,
@@ -73,6 +85,8 @@ pub async fn get_stale_agents(
         .filter(agents::Column::Status.is_in(["Online", "Degraded", "Offline"]))
         .all(db)
         .await?;
+
+    publish_heartbeat_lag(&all, now);
 
     let mut degraded = Vec::new();
     let mut offline = Vec::new();

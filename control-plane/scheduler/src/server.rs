@@ -6,7 +6,6 @@ use tokio::sync::Mutex;
 
 use crate::{
     handlers::{internal, stacks, workloads},
-    metrics,
     services::scheduler::SchedulerService,
 };
 
@@ -22,9 +21,8 @@ pub async fn health_check() -> impl IntoResponse {
 }
 
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health_check))
-        .route("/metrics", get(metrics::metrics_handler))
         .route(
             "/workloads",
             axum::routing::post(workloads::create_workload),
@@ -86,5 +84,6 @@ pub fn create_router(state: AppState) -> Router {
             "/internal/agents/{id}/reschedule",
             axum::routing::post(internal::reschedule_agent_workloads),
         )
-        .with_state(state)
+        .with_state(state);
+    shared::observability::instrument(router)
 }

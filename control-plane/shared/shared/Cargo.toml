@@ -16,6 +16,8 @@ async-trait = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+axum = { workspace = true }
+prometheus = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Utilities
@@ -34,3 +36,5 @@ reqwest = { workspace = true, features = ["json"] }
 [dev-dependencies]
 migration = { path = "../migration" }
 tokio = { workspace = true, features = ["test-util"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use failover_controller::{log_error, log_info, logger, metrics, server, services};
+use failover_controller::{log_error, log_info, logger, server, services};
 
 const LEADER_KEY: &str = "/csfx/leaders/failover-controller";
 
@@ -14,7 +14,6 @@ async fn main() -> anyhow::Result<()> {
 
     let log_receiver = logger::init_logger();
 
-    metrics::init();
     log_info!("main", "CSFX Failover Controller starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
@@ -28,6 +27,9 @@ async fn main() -> anyhow::Result<()> {
     let state = server::AppState { db: db.clone() };
 
     let app = server::create_router(state);
+
+    shared::observability::spawn_pool_gauges("default", db.clone());
+    shared::observability::serve_metrics("127.0.0.1:9004").await;
 
     let port = std::env::var("FAILOVER_CONTROLLER_PORT")
         .ok()

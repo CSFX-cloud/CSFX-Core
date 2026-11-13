@@ -6,7 +6,6 @@ use crate::{
     crypto::SecretBox,
     garage::{GarageClient, S3Client},
     handlers::{buckets, cluster, keys, objects},
-    metrics,
 };
 
 #[derive(Clone)]
@@ -38,9 +37,8 @@ pub async fn health_check() -> impl IntoResponse {
 }
 
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health_check))
-        .route("/metrics", get(metrics::metrics_handler))
         .route(
             "/buckets",
             get(buckets::list_buckets).post(buckets::create_bucket),
@@ -77,5 +75,6 @@ pub fn create_router(state: AppState) -> Router {
             axum::routing::delete(objects::delete_object),
         )
         .route("/cluster", get(cluster::get_cluster_status))
-        .with_state(state)
+        .with_state(state);
+    shared::observability::instrument(router)
 }

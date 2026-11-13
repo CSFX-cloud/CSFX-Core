@@ -29,16 +29,16 @@ async fn insert_event_at(db: &DatabaseConnection, agent_id: Uuid, status: &str, 
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn health_and_metrics_respond() {
+async fn health_is_counted_and_metrics_are_not_public() {
     let (app, _) = router().await;
-    failover_controller::metrics::init();
-    failover_controller::metrics::record_request("GET", "/health", 200, 0.01);
     let (status, body) = call_text(&app, Method::GET, "/health", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "Failover Controller OK");
-    let (status, body) = call_text(&app, Method::GET, "/metrics", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(body.contains("csfx_http_requests_total"));
+    let (status, _) = call_text(&app, Method::GET, "/metrics", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(String::from_utf8(shared::observability::render())
+        .unwrap()
+        .contains("csfx_http_requests_total"));
 }
 
 #[tokio::test]

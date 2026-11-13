@@ -3,7 +3,6 @@ pub mod db;
 pub mod etcd;
 pub mod handlers;
 pub mod logger;
-pub mod metrics;
 pub mod models;
 pub mod patroni;
 pub mod server;

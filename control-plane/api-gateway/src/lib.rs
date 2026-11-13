@@ -16,7 +16,6 @@ pub mod hostname_policy;
 pub mod idempotency;
 pub mod ingress_sync;
 pub mod init;
-pub mod metrics;
 pub mod oidc;
 pub mod openbao;
 pub mod prune;

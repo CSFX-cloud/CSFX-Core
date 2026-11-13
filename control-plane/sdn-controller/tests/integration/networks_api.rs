@@ -6,14 +6,17 @@ use crate::common::{call, create_network, router};
 
 #[tokio::test]
 #[ignore = "requires postgres and etcd"]
-async fn health_and_metrics_respond() {
+async fn health_is_counted_and_metrics_are_not_public() {
     let app = router().await;
 
     let (health, _) = call(&app, Method::GET, "/health", None).await;
     let (metrics, _) = call(&app, Method::GET, "/metrics", None).await;
 
     assert_eq!(health, StatusCode::OK);
-    assert_eq!(metrics, StatusCode::OK);
+    assert_eq!(metrics, StatusCode::NOT_FOUND);
+    assert!(String::from_utf8(shared::observability::render())
+        .unwrap()
+        .contains("csfx_http_requests_total"));
 }
 
 #[tokio::test]

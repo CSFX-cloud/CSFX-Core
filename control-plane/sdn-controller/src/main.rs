@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use sdn_controller::{log_error, log_info, logger, metrics, server, services};
+use sdn_controller::{log_error, log_info, logger, server, services};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -12,7 +12,6 @@ async fn main() -> anyhow::Result<()> {
 
     let log_receiver = logger::init_logger();
 
-    metrics::init();
     log_info!("main", "CSFX SDN Controller starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
@@ -32,8 +31,11 @@ async fn main() -> anyhow::Result<()> {
     log_info!("main", "etcd connection established");
 
     let ipam = services::ipam::IpamService::new(etcd);
-    let state = server::AppState::new(db, ipam);
+    let state = server::AppState::new(db.clone(), ipam);
     let app = server::create_router(state);
+
+    shared::observability::spawn_pool_gauges("default", db);
+    shared::observability::serve_metrics("127.0.0.1:9005").await;
 
     let port = std::env::var("SDN_CONTROLLER_PORT")
         .ok()

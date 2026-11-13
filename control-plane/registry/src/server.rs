@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use crate::{
     handlers::{admin, agent, pki},
-    metrics,
     services::{
         api_keys::ApiKeyManager, bootstrap_tokens::BootstrapTokenManager,
         mgmt_ipam::MgmtIpamService, pki::PkiService, registry::AgentRegistry, tokens::TokenManager,
@@ -37,9 +36,8 @@ pub async fn health_check() -> impl IntoResponse {
 }
 
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health_check))
-        .route("/metrics", get(metrics::metrics_handler))
         .route(
             "/admin/agents/pre-register",
             post(admin::pre_register_agent),
@@ -86,5 +84,6 @@ pub fn create_router(state: AppState) -> Router {
             "/agents/{agent_id}/rotate-certificate",
             post(pki::rotate_certificate),
         )
-        .with_state(state)
+        .with_state(state);
+    shared::observability::instrument(router)
 }

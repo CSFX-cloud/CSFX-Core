@@ -3,8 +3,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::{channel, error::TrySendError, Receiver, Sender};
 use tracing::field::{Field, Visit};
+use tracing::span::Attributes;
+use tracing::Id;
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::Context;
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
 use uuid::Uuid;
 
@@ -263,8 +266,51 @@ fn build_record(service: &'static str, event: &Event<'_>, mut visitor: EventVisi
     }
 }
 
-impl<S: Subscriber> Layer<S> for DbLogLayer {
-    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+const REQUEST_ID_KEY: &str = "request_id";
+
+struct RequestId(String);
+
+#[derive(Default)]
+struct RequestIdVisitor(Option<String>);
+
+impl Visit for RequestIdVisitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == REQUEST_ID_KEY {
+            self.0 = Some(format!("{value:?}"));
+        }
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == REQUEST_ID_KEY {
+            self.0 = Some(value.to_string());
+        }
+    }
+}
+
+fn request_id_in_scope<S>(event: &Event<'_>, ctx: &Context<'_, S>) -> Option<String>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    ctx.event_scope(event)?
+        .find_map(|span| span.extensions().get::<RequestId>().map(|id| id.0.clone()))
+}
+
+impl<S> Layer<S> for DbLogLayer
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        let mut visitor = RequestIdVisitor::default();
+        attrs.record(&mut visitor);
+        let Some(request_id) = visitor.0 else {
+            return;
+        };
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut().insert(RequestId(request_id));
+        }
+    }
+
+    fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
         if *event.metadata().level() == Level::TRACE {
             return;
         }
@@ -281,6 +327,13 @@ impl<S: Subscriber> Layer<S> for DbLogLayer {
 
         if is_noisy_message_event(&visitor) {
             return;
+        }
+
+        if let Some(request_id) = request_id_in_scope(event, &ctx) {
+            visitor
+                .fields
+                .entry(REQUEST_ID_KEY)
+                .or_insert(Value::String(request_id));
         }
 
         self.sink.submit(build_record(self.service, event, visitor));

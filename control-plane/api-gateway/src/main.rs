@@ -1,6 +1,6 @@
 use api_gateway::{
-    db, gateway_reconciler, idempotency, ingress_sync, init, metrics, openbao, prune, recovery,
-    routes, service_client, site_client, telemetry, tls, vault_service, ApiDoc, AppState,
+    db, gateway_reconciler, idempotency, ingress_sync, init, openbao, prune, recovery, routes,
+    service_client, site_client, telemetry, tls, vault_service, ApiDoc, AppState,
 };
 use std::net::SocketAddr;
 use utoipa::OpenApi;
@@ -42,7 +42,6 @@ async fn main() {
         .install_default()
         .expect("failed to install rustls crypto provider");
 
-    metrics::init();
     let log_receiver = telemetry::init_tracing();
     tracing::info!("api-gateway starting");
 
@@ -54,7 +53,11 @@ async fn main() {
     let db_conn = connect_or_exit("", db::USER_DEFAULT_MAX_CONNECTIONS).await;
     let agent_db = connect_or_exit("agent", db::AGENT_DEFAULT_MAX_CONNECTIONS).await;
     let log_db = connect_or_exit("log", db::LOG_DEFAULT_MAX_CONNECTIONS).await;
-    shared::spawn_log_writer(log_receiver, log_db);
+    shared::spawn_log_writer(log_receiver, log_db.clone());
+    shared::observability::spawn_pool_gauges("default", db_conn.clone());
+    shared::observability::spawn_pool_gauges("agent", agent_db.clone());
+    shared::observability::spawn_pool_gauges("log", log_db);
+    shared::observability::serve_metrics("127.0.0.1:9000").await;
 
     let default_org_id = match init::initialize_database(&db_conn).await {
         Ok(id) => id,

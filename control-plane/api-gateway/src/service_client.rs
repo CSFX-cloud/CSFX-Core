@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, RequestBuilder, StatusCode};
+use shared::observability::{current_request_id, REQUEST_ID_HEADER};
 use std::time::Duration;
 
 #[derive(Clone, Copy)]
@@ -14,6 +15,33 @@ pub struct ListReply {
     pub status: StatusCode,
     pub body: Option<serde_json::Value>,
     pub next_cursor: Option<String>,
+}
+
+const SKIPPED_HEADERS: [&str; 5] = [
+    "content-length",
+    "host",
+    "content-type",
+    "transfer-encoding",
+    "x-request-id",
+];
+
+fn with_forwarded_headers(
+    mut request: RequestBuilder,
+    headers: Option<Vec<(String, String)>>,
+) -> RequestBuilder {
+    for (key, value) in headers.into_iter().flatten() {
+        if SKIPPED_HEADERS
+            .iter()
+            .any(|skipped| key.eq_ignore_ascii_case(skipped))
+        {
+            continue;
+        }
+        request = request.header(key, value);
+    }
+    match current_request_id() {
+        Some(id) => request.header(REQUEST_ID_HEADER.clone(), id),
+        None => request,
+    }
 }
 
 /// HTTP Client for internal service-to-service communication
@@ -76,14 +104,10 @@ impl ServiceClient {
             ListTarget::FailoverController => &self.failover_controller_url,
             ListTarget::ObjectStorage => &self.object_storage_url,
         };
-        let mut request = self.client.get(format!("{}{}", base, path_and_query));
-        for (key, value) in headers {
-            let key_lower = key.to_lowercase();
-            if key_lower == "content-length" || key_lower == "host" || key_lower == "content-type" {
-                continue;
-            }
-            request = request.header(key, value);
-        }
+        let request = with_forwarded_headers(
+            self.client.get(format!("{}{}", base, path_and_query)),
+            Some(headers),
+        );
         let response = request
             .send()
             .await
@@ -130,19 +154,7 @@ impl ServiceClient {
             }
         };
 
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                let key_lower = key.to_lowercase();
-                if key_lower == "content-length"
-                    || key_lower == "host"
-                    || key_lower == "content-type"
-                    || key_lower == "transfer-encoding"
-                {
-                    continue;
-                }
-                request = request.header(key, value);
-            }
-        }
+        request = with_forwarded_headers(request, headers);
 
         if let Some(body) = body {
             request = request.json(&body);
@@ -195,19 +207,7 @@ impl ServiceClient {
             _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
         };
 
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                let key_lower = key.to_lowercase();
-                if key_lower == "content-length"
-                    || key_lower == "host"
-                    || key_lower == "content-type"
-                    || key_lower == "transfer-encoding"
-                {
-                    continue;
-                }
-                request = request.header(key, value);
-            }
-        }
+        request = with_forwarded_headers(request, headers);
 
         if let Some(body) = body {
             request = request.json(&body);
@@ -249,19 +249,7 @@ impl ServiceClient {
             _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
         };
 
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                let key_lower = key.to_lowercase();
-                if key_lower == "content-length"
-                    || key_lower == "host"
-                    || key_lower == "content-type"
-                    || key_lower == "transfer-encoding"
-                {
-                    continue;
-                }
-                request = request.header(key, value);
-            }
-        }
+        request = with_forwarded_headers(request, headers);
 
         if let Some(body) = body {
             request = request.json(&body);
@@ -307,19 +295,7 @@ impl ServiceClient {
             _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
         };
 
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                let key_lower = key.to_lowercase();
-                if key_lower == "content-length"
-                    || key_lower == "host"
-                    || key_lower == "content-type"
-                    || key_lower == "transfer-encoding"
-                {
-                    continue;
-                }
-                request = request.header(key, value);
-            }
-        }
+        request = with_forwarded_headers(request, headers);
 
         if let Some(body) = body {
             request = request.json(&body);
@@ -361,19 +337,7 @@ impl ServiceClient {
             _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
         };
 
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                let key_lower = key.to_lowercase();
-                if key_lower == "content-length"
-                    || key_lower == "host"
-                    || key_lower == "content-type"
-                    || key_lower == "transfer-encoding"
-                {
-                    continue;
-                }
-                request = request.header(key, value);
-            }
-        }
+        request = with_forwarded_headers(request, headers);
 
         if let Some(body) = body {
             request = request.json(&body);
@@ -416,19 +380,7 @@ impl ServiceClient {
             _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
         };
 
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                let key_lower = key.to_lowercase();
-                if key_lower == "content-length"
-                    || key_lower == "host"
-                    || key_lower == "content-type"
-                    || key_lower == "transfer-encoding"
-                {
-                    continue;
-                }
-                request = request.header(key, value);
-            }
-        }
+        request = with_forwarded_headers(request, headers);
 
         if let Some(body) = body {
             request = request.json(&body);
@@ -456,5 +408,117 @@ impl ServiceClient {
 impl Default for ServiceClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::extract::Request;
+    use axum::http::HeaderMap;
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use http_body_util::BodyExt;
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+
+    async fn echo_request_ids(headers: HeaderMap) -> Json<Value> {
+        let ids: Vec<&str> = headers
+            .get_all("x-request-id")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect();
+        Json(json!({ "ids": ids }))
+    }
+
+    fn client() -> ServiceClient {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        ServiceClient::new()
+    }
+
+    async fn spawn_mock_registry() -> String {
+        let router = Router::new().route("/echo", get(echo_request_ids));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        url
+    }
+
+    async fn gateway(registry_url: String) -> Router {
+        let mut client = client();
+        client.registry_url = registry_url;
+        let handler = move |request: Request| {
+            let client = client.clone();
+            async move {
+                let headers = request
+                    .headers()
+                    .iter()
+                    .map(|(name, value)| {
+                        (
+                            name.to_string(),
+                            value.to_str().unwrap_or_default().to_string(),
+                        )
+                    })
+                    .collect();
+                let (_, body) = client
+                    .forward_to_registry(reqwest::Method::GET, "/echo", None, Some(headers))
+                    .await
+                    .unwrap();
+                Json(body.unwrap())
+            }
+        };
+        shared::observability::instrument(Router::new().route("/forward", get(handler)))
+    }
+
+    async fn call(app: &Router, request_id: Option<&str>) -> (String, Value) {
+        let mut builder = Request::builder().uri("/forward");
+        if let Some(id) = request_id {
+            builder = builder.header("x-request-id", id);
+        }
+        let response = app
+            .clone()
+            .oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let echoed = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (echoed, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn generated_request_id_reaches_the_downstream_service() {
+        let app = gateway(spawn_mock_registry().await).await;
+
+        let (echoed, body) = call(&app, None).await;
+
+        assert!(uuid::Uuid::parse_str(&echoed).is_ok());
+        assert_eq!(body["ids"], json!([echoed]));
+    }
+
+    #[tokio::test]
+    async fn incoming_request_id_is_forwarded_once() {
+        let app = gateway(spawn_mock_registry().await).await;
+
+        let (echoed, body) = call(&app, Some("trace-me-42")).await;
+
+        assert_eq!(echoed, "trace-me-42");
+        assert_eq!(body["ids"], json!(["trace-me-42"]));
+    }
+
+    #[tokio::test]
+    async fn no_request_id_is_sent_outside_a_request() {
+        let mut client = client();
+        client.registry_url = spawn_mock_registry().await;
+
+        let (_, body) = client
+            .forward_to_registry(reqwest::Method::GET, "/echo", None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(body.unwrap()["ids"], json!([]));
     }
 }
