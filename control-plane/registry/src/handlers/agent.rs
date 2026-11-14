@@ -3,6 +3,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use entity::agent_metrics;
+use sea_orm::{ActiveModelTrait, Set};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -293,7 +295,7 @@ pub async fn heartbeat(
         .await
     {
         Ok(role) => {
-            forward_metrics(&state, agent_id, &request).await;
+            store_metrics(&state, agent_id, &request).await;
 
             if let Some(statuses) = request.container_statuses {
                 if !statuses.is_empty() {
@@ -469,7 +471,12 @@ async fn forward_container_statuses(
     }
 }
 
-async fn forward_metrics(
+fn percent_of(used: Option<u64>, total: Option<u64>) -> Option<f32> {
+    let total = total.filter(|total| *total > 0)?;
+    Some(used? as f32 / total as f32 * 100.0)
+}
+
+async fn store_metrics(
     state: &crate::server::AppState,
     agent_id: Uuid,
     request: &HeartbeatRequest,
@@ -478,58 +485,36 @@ async fn forward_metrics(
         return;
     }
 
-    use serde_json::json;
+    let row = agent_metrics::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        agent_id: Set(agent_id),
+        timestamp: Set(chrono::Utc::now().naive_utc()),
+        cpu_usage_percent: Set(request.cpu_usage_percent),
+        cpu_cores: Set(request.cpu_cores.map(|value| value as i32)),
+        memory_total_bytes: Set(request.memory_total_bytes.map(|value| value as i64)),
+        memory_used_bytes: Set(request.memory_used_bytes.map(|value| value as i64)),
+        memory_usage_percent: Set(percent_of(
+            request.memory_used_bytes,
+            request.memory_total_bytes,
+        )),
+        disk_total_bytes: Set(request.disk_total_bytes.map(|value| value as i64)),
+        disk_used_bytes: Set(request.disk_used_bytes.map(|value| value as i64)),
+        disk_usage_percent: Set(percent_of(
+            request.disk_used_bytes,
+            request.disk_total_bytes,
+        )),
+        network_rx_bytes: Set(request.network_rx_bytes.map(|value| value as i64)),
+        network_tx_bytes: Set(request.network_tx_bytes.map(|value| value as i64)),
+        uptime_seconds: Set(request.uptime_seconds.map(|value| value as i64)),
+        ..Default::default()
+    };
 
-    let payload = json!({
-        "agent_id": agent_id,
-        "timestamp": chrono::Utc::now(),
-        "cpu_usage_percent": request.cpu_usage_percent,
-        "cpu_cores": request.cpu_cores,
-        "memory_total_bytes": request.memory_total_bytes,
-        "memory_used_bytes": request.memory_used_bytes,
-        "disk_total_bytes": request.disk_total_bytes,
-        "disk_used_bytes": request.disk_used_bytes,
-        "network_rx_bytes": request.network_rx_bytes,
-        "network_tx_bytes": request.network_tx_bytes,
-        "uptime_seconds": request.uptime_seconds,
-    });
-
-    let url = format!("{}/api/agents/metrics", state.gateway_url);
-
-    for attempt in 1..=2 {
-        match state.http_client.post(&url).json(&payload).send().await {
-            Ok(resp) if resp.status().is_success() => return,
-            Ok(resp) => {
-                crate::log_warn!(
-                    "agent_handler",
-                    &format!(
-                        "Metrics forward rejected by gateway agent_id={} attempt={} status={}",
-                        agent_id,
-                        attempt,
-                        resp.status()
-                    )
-                );
-            }
-            Err(e) => {
-                crate::log_warn!(
-                    "agent_handler",
-                    &format!(
-                        "Failed to forward metrics to gateway agent_id={} attempt={} err={}",
-                        agent_id, attempt, e
-                    )
-                );
-            }
-        }
-
-        if attempt == 1 {
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
+    if let Err(e) = row.insert(&state.db).await {
+        crate::log_error!(
+            "agent_handler",
+            &format!("Failed to store metrics agent_id={} err={}", agent_id, e)
+        );
     }
-
-    crate::log_error!(
-        "agent_handler",
-        &format!("Metrics forward permanently failed agent_id={}", agent_id)
-    );
 }
 
 #[cfg(test)]

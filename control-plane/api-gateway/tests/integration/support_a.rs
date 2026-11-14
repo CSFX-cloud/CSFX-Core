@@ -11,7 +11,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use chrono::Utc;
-use entity::entities::{agent_api_keys, agents, logs, resource_groups, volumes, workloads};
+use entity::entities::{
+    agent_api_keys, agent_metrics, agents, logs, resource_groups, volumes, workloads,
+};
 use http_body_util::BodyExt;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
 use serde_json::{json, Value};
@@ -317,6 +319,27 @@ pub async fn update_agent(
     let mut active: agents::ActiveModel = agent.into();
     change(&mut active);
     active.update(db).await.unwrap()
+}
+
+pub async fn insert_metrics(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+    cpu: Option<f32>,
+    memory: Option<f32>,
+    disk: Option<f32>,
+) {
+    agent_metrics::ActiveModel {
+        id: Set(Uuid::new_v4()),
+        agent_id: Set(agent_id),
+        timestamp: Set(Utc::now().naive_utc()),
+        cpu_usage_percent: Set(cpu),
+        memory_usage_percent: Set(memory),
+        disk_usage_percent: Set(disk),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
 }
 
 pub async fn insert_api_key(db: &DatabaseConnection, agent_id: Uuid) -> String {

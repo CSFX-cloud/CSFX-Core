@@ -1,9 +1,9 @@
 use axum::http::{Method, StatusCode};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::common::{harness, Harness};
 use crate::support_a::{
-    insert_agent, insert_api_key, insert_group, insert_volume, insert_workload, keyed, WorkloadSpec,
+    insert_agent, insert_group, insert_metrics, insert_volume, insert_workload, WorkloadSpec,
 };
 
 fn has_node(topology: &Value, id: &str, kind: &str) -> bool {
@@ -23,21 +23,7 @@ fn has_edge(topology: &Value, kind: &str, source: &str, target: &str) -> bool {
 }
 
 async fn push_metrics(harness: &Harness, agent_id: uuid::Uuid) {
-    let payload = json!({
-        "cpu_usage_percent": 12.5,
-        "memory_usage_percent": 40.0,
-        "disk_usage_percent": 55.0
-    });
-    let key = insert_api_key(&harness.db, agent_id).await;
-    let (status, _) = keyed(
-        harness,
-        Method::POST,
-        "/api/agents/self/metrics",
-        &key,
-        Some(payload),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
+    insert_metrics(&harness.db, agent_id, Some(12.5), Some(40.0), Some(55.0)).await;
 }
 
 #[tokio::test]
