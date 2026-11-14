@@ -1,6 +1,6 @@
 <script lang="ts">
     import SideDrawer from "$lib/components/shell/side-drawer.svelte";
-    import UserAvatar from "$lib/components/settings/user-avatar.svelte";
+    import UserAvatar from "$lib/components/user-avatar.svelte";
     import type { OrganizationRole, OrganizationUser } from "$lib/api/users";
 
     type Props = {

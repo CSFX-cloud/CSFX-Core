@@ -5,7 +5,7 @@
     import { getReleases, getUpdateStatus, type ReleaseEntry } from "$lib/api/system";
     import { auth } from "$lib/auth/store.svelte";
     import { commandPalette } from "$lib/components/command-palette/command-palette-store.svelte.js";
-    import UserAvatar from "$lib/components/shell/user-avatar.svelte";
+    import UserAvatar from "$lib/components/user-avatar.svelte";
     import { isActive, PRIMARY_NAV, RESOURCE_NAV, SETTINGS_NAV, type NavItem } from "$lib/components/shell/navigation";
 
     const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
@@ -104,7 +104,7 @@
                 aria-expanded={menuOpen}
                 onclick={() => (menuOpen = !menuOpen)}
             >
-                <UserAvatar />
+                {#if auth.user}<UserAvatar name={auth.user.username} gravatarEmail={auth.user.gravatar_email} size={22} />{/if}
                 <span style="flex: 1; overflow: hidden; text-overflow: ellipsis">{auth.user?.email ?? auth.user?.username ?? ""}</span>
                 <ChevronsUpDown class="cx-i" aria-hidden="true" />
             </button>

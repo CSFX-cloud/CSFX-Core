@@ -12,7 +12,7 @@
     } from "$lib/api/users";
     import EmptyState from "$lib/components/dashboard/empty-state.svelte";
     import CreateUserDialog from "$lib/components/settings/create-user-dialog.svelte";
-    import UserAvatar from "$lib/components/settings/user-avatar.svelte";
+    import UserAvatar from "$lib/components/user-avatar.svelte";
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import UserDrawer from "$lib/components/settings/user-drawer.svelte";
 
