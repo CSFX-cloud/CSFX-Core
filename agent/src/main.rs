@@ -834,12 +834,12 @@ async fn reap_stale_containers(
 }
 
 async fn should_restart_after_crash(
-    docker: &dyn runtime::Runtime,
+    runtime: &dyn runtime::Runtime,
     workload: &client::AssignedWorkload,
     container_id: &str,
     restart_counts: &Arc<Mutex<HashMap<String, u32>>>,
 ) -> bool {
-    let status = match docker.inspect_status(container_id).await {
+    let status = match runtime.inspect_status(container_id).await {
         Ok(s) => s,
         Err(e) => {
             warn!(workload_id = %workload.id, container_id = %container_id, error = %e, "Failed to inspect container");
@@ -852,7 +852,7 @@ async fn should_restart_after_crash(
     }
 
     if workload.restart_policy == "never" {
-        if let Err(e) = docker.stop_workload(container_id).await {
+        if let Err(e) = runtime.stop_workload(container_id).await {
             warn!(workload_id = %workload.id, container_id = %container_id, error = %e, "Failed to stop container with restart_policy=never");
         }
         return false;
@@ -865,7 +865,7 @@ async fn should_restart_after_crash(
         if *count as i32 >= max {
             warn!(workload_id = %workload.id, restart_count = *count, max_restarts = max, "Crash-loop limit reached, stopping container");
             drop(counts);
-            if let Err(e) = docker.stop_workload(container_id).await {
+            if let Err(e) = runtime.stop_workload(container_id).await {
                 warn!(workload_id = %workload.id, container_id = %container_id, error = %e, "Failed to stop container after crash-loop limit");
             }
             return false;
