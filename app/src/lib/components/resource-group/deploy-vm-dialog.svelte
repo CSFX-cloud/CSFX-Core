@@ -9,12 +9,11 @@
         presignObjectDownload,
         type ObjectEntry,
     } from "$lib/api/resource-groups";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import Icon from "@iconify/svelte";
+    import ModalDialog from "./modal-dialog.svelte";
 
     let { rgId, onDeployed }: { rgId: string; onDeployed: () => Promise<void> } = $props();
 
-    let dialog = $state<HTMLDialogElement | null>(null);
+    let dialog = $state<ModalDialog | null>(null);
     let vmFormName = $state("");
     let vmFormVcpus = $state("2");
     let vmFormMemoryGb = $state("2");
@@ -44,7 +43,7 @@
     let vmError = $state<string | null>(null);
 
     export function open() {
-        dialog?.showModal();
+        dialog?.open();
         loadExistingIsos();
     }
 
@@ -138,131 +137,82 @@
     }
 </script>
 
-<dialog
-    bind:this={dialog}
-    class="fixed inset-0 z-50 m-auto w-full max-w-lg rounded-xl border bg-background shadow-xl p-0 backdrop:bg-black/40"
-    onclose={() => resetVmForm()}
->
-    <div class="flex flex-col gap-5 p-6">
-        <div class="flex items-center justify-between">
-            <h2 class="text-base font-semibold">Deploy Virtual Machine</h2>
-            <button
-                class="flex items-center justify-center w-8 h-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                onclick={() => dialog?.close()}
-                aria-label="Close"
-                title="Close"
-            >
-                <Icon icon="mdi:close" width={18} height={18} />
-            </button>
+<ModalDialog bind:this={dialog} title="Deploy Virtual Machine" size="md" onclose={resetVmForm}>
+    <div class="md__fields">
+        <div class="cx-field">
+            <label class="cx-label" for="vm-name">Name</label>
+            <input id="vm-name" class="cx-input" placeholder="my-vm" bind:value={vmFormName} />
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1 sm:col-span-2">
-                <label class="text-xs text-muted-foreground" for="vm-name">Name</label>
-                <input id="vm-name" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="my-vm" bind:value={vmFormName} />
-            </div>
-            <div class="flex flex-col gap-2 sm:col-span-2">
-                <div class="flex items-center justify-between">
-                    <span class="text-xs text-muted-foreground">ISO Image</span>
-                    {#if vmExistingIsos.length > 0}
-                        <div class="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-muted">
-                            <button
-                                type="button"
-                                class="px-2 py-0.5 rounded text-xs font-medium transition-colors {vmIsoMode === 'existing' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-                                onclick={() => (vmIsoMode = "existing")}
-                            >
-                                Existing
-                            </button>
-                            <button
-                                type="button"
-                                class="px-2 py-0.5 rounded text-xs font-medium transition-colors {vmIsoMode === 'upload' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-                                onclick={() => (vmIsoMode = "upload")}
-                            >
-                                Upload new
-                            </button>
-                        </div>
-                    {/if}
-                </div>
-                {#if vmExistingIsosLoading}
-                    <p class="text-xs text-muted-foreground">Loading isos...</p>
-                {:else if vmIsoMode === "existing"}
-                    <select
-                        id="vm-iso-existing"
-                        class="border rounded px-3 py-1.5 text-sm bg-background"
-                        bind:value={vmSelectedIsoKey}
-                    >
-                        {#each vmExistingIsos as obj (obj.key)}
-                            <option value={obj.key}>{isoFileName(obj.key)}</option>
-                        {/each}
-                    </select>
-                {:else}
-                    <input
-                        id="vm-iso"
-                        type="file"
-                        accept=".iso"
-                        class="border rounded px-3 py-1.5 text-sm bg-background file:mr-3 file:rounded file:border-0 file:bg-muted file:px-2 file:py-1 file:text-xs"
-                        onchange={handleVmIsoFileChange}
-                    />
-                    {#if vmDeploying && vmFormIsoFile}
-                        <div class="h-1.5 rounded-full bg-muted overflow-hidden mt-1">
-                            <div class="h-full bg-primary transition-all" style="width: {Math.round(vmUploadProgress * 100)}%"></div>
-                        </div>
-                    {/if}
+        <div class="cx-field">
+            <div class="md__foot" style="justify-content: space-between; align-items: center">
+                <span class="cx-label">ISO Image</span>
+                {#if vmExistingIsos.length > 0}
+                    <div class="cx-tabs cx-tabs--contained cx-tabs--sm" role="tablist" aria-label="ISO source">
+                        <button class="cx-tab" role="tab" type="button" aria-selected={vmIsoMode === "existing"} onclick={() => (vmIsoMode = "existing")}>Existing</button>
+                        <button class="cx-tab" role="tab" type="button" aria-selected={vmIsoMode === "upload"} onclick={() => (vmIsoMode = "upload")}>Upload new</button>
+                    </div>
                 {/if}
             </div>
-            {#if vmFormAdvanced}
-                <div class="flex flex-col gap-1">
-                    <label class="text-xs text-muted-foreground" for="vm-cpu">CPU (millicores)</label>
-                    <input id="vm-cpu" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="2000" bind:value={vmFormCpuMillicores} />
-                </div>
-                <div class="flex flex-col gap-1">
-                    <label class="text-xs text-muted-foreground" for="vm-mem">Memory (MB)</label>
-                    <input id="vm-mem" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="2048" bind:value={vmFormMemoryMb} />
-                </div>
-                <div class="flex flex-col gap-1 sm:col-span-2">
-                    <label class="text-xs text-muted-foreground" for="vm-disk">Disk (MB)</label>
-                    <input id="vm-disk" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="20480" bind:value={vmFormDiskMb} />
-                </div>
+            {#if vmExistingIsosLoading}
+                <p class="cx-hint">Loading isos</p>
+            {:else if vmIsoMode === "existing"}
+                <select id="vm-iso-existing" class="cx-input" bind:value={vmSelectedIsoKey}>
+                    {#each vmExistingIsos as obj (obj.key)}
+                        <option value={obj.key}>{isoFileName(obj.key)}</option>
+                    {/each}
+                </select>
             {:else}
-                <div class="flex flex-col gap-1">
-                    <label class="text-xs text-muted-foreground" for="vm-vcpus">vCPUs</label>
-                    <input id="vm-vcpus" type="number" min="1" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="2" bind:value={vmFormVcpus} />
-                </div>
-                <div class="flex flex-col gap-1">
-                    <label class="text-xs text-muted-foreground" for="vm-mem-gb">Memory (GB)</label>
-                    <input id="vm-mem-gb" type="number" min="1" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="2" bind:value={vmFormMemoryGb} />
-                </div>
-                <div class="flex flex-col gap-1 sm:col-span-2">
-                    <label class="text-xs text-muted-foreground" for="vm-disk-gb">Disk (GB)</label>
-                    <input id="vm-disk-gb" type="number" min="1" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="20" bind:value={vmFormDiskGb} />
-                </div>
+                <input id="vm-iso" type="file" accept=".iso" class="cx-input" onchange={handleVmIsoFileChange} />
+                {#if vmDeploying && vmFormIsoFile}
+                    <progress value={vmUploadProgress} max="1" style="width: 100%"></progress>
+                {/if}
             {/if}
-            <div class="sm:col-span-2">
-                <button
-                    type="button"
-                    class="text-xs text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2"
-                    onclick={() => (vmFormAdvanced = !vmFormAdvanced)}
-                >
-                    {vmFormAdvanced ? "Use simple units" : "Advanced (millicores / MB)"}
-                </button>
-            </div>
         </div>
-        <p class="text-xs text-muted-foreground">
-            The ISO boots on first start. Open the console after deploying to complete the installation.
-        </p>
-        {#if vmError}
-            <p class="text-xs text-destructive">{vmError}</p>
+        {#if vmFormAdvanced}
+        <div class="cx-field">
+        <label class="cx-label" for="vm-cpu">CPU (millicores)</label>
+        <input id="vm-cpu" type="number" class="cx-input" placeholder="2000" bind:value={vmFormCpuMillicores} />
+        </div>
+        <div class="cx-field">
+        <label class="cx-label" for="vm-mem">Memory (MB)</label>
+        <input id="vm-mem" type="number" class="cx-input" placeholder="2048" bind:value={vmFormMemoryMb} />
+        </div>
+        <div class="cx-field">
+        <label class="cx-label" for="vm-disk">Disk (MB)</label>
+        <input id="vm-disk" type="number" class="cx-input" placeholder="20480" bind:value={vmFormDiskMb} />
+        </div>
+        {:else}
+        <div class="cx-field">
+        <label class="cx-label" for="vm-vcpus">vCPUs</label>
+        <input id="vm-vcpus" type="number" min="1" class="cx-input" placeholder="2" bind:value={vmFormVcpus} />
+        </div>
+        <div class="cx-field">
+        <label class="cx-label" for="vm-mem-gb">Memory (GB)</label>
+        <input id="vm-mem-gb" type="number" min="1" class="cx-input" placeholder="2" bind:value={vmFormMemoryGb} />
+        </div>
+        <div class="cx-field">
+        <label class="cx-label" for="vm-disk-gb">Disk (GB)</label>
+        <input id="vm-disk-gb" type="number" min="1" class="cx-input" placeholder="20" bind:value={vmFormDiskGb} />
+        </div>
         {/if}
-        <div class="flex gap-2 justify-end">
-            <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
-            <Button
-                size="sm"
+        <div>
+            <button type="button" class="cx-btn cx-btn--ghost cx-btn--sm" onclick={() => (vmFormAdvanced = !vmFormAdvanced)}>
+                {vmFormAdvanced ? "Use simple units" : "Advanced (millicores / MB)"}
+            </button>
+        </div>
+        <p class="cx-hint">The ISO boots on first start. Open the console after deploying to complete the installation.</p>
+        {#if vmError}<p class="cx-hint cx-hint--error">{vmError}</p>{/if}
+        <div class="md__foot">
+            <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => dialog?.close()}>Cancel</button>
+            <button
+                class="cx-btn cx-btn--primary cx-btn--sm"
+                type="button"
                 onclick={handleDeployVm}
-                disabled={vmDeploying ||
-                    !vmFormName ||
-                    (vmIsoMode === "upload" ? !vmFormIsoFile : !vmSelectedIsoKey)}
+                disabled={vmDeploying || !vmFormName || (vmIsoMode === "upload" ? !vmFormIsoFile : !vmSelectedIsoKey)}
+                aria-busy={vmDeploying}
             >
-                {vmDeploying ? "Deploying..." : "Deploy"}
-            </Button>
+                {vmDeploying ? "Deploying" : "Deploy"}
+            </button>
         </div>
     </div>
-</dialog>
+</ModalDialog>

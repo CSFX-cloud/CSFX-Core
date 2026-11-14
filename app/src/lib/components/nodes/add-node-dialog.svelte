@@ -1,7 +1,7 @@
 <script lang="ts">
     import { auth } from '$lib/auth/store.svelte';
     import { createJoinToken, type JoinToken } from '$lib/api/nodes';
-    import { Button } from '$lib/components/ui/button/index.js';
+    import ModalDialog from '$lib/components/resource-group/modal-dialog.svelte';
 
     const TTL_OPTIONS = [
         { hours: 1, label: '1 hour' },
@@ -9,7 +9,7 @@
         { hours: 72, label: '3 days' },
     ];
 
-    let dialog = $state<HTMLDialogElement | null>(null);
+    let dialog = $state<ModalDialog | null>(null);
     let role = $state<JoinToken['role']>('worker');
     let ttlHours = $state(1);
     let busy = $state(false);
@@ -21,7 +21,7 @@
         result = null;
         error = null;
         copied = false;
-        dialog?.showModal();
+        dialog?.open();
     }
 
     async function generate() {
@@ -44,46 +44,40 @@
     }
 </script>
 
-<dialog
-    bind:this={dialog}
-    class="fixed inset-0 z-50 m-auto w-full max-w-lg rounded-xl border bg-background shadow-xl p-0 backdrop:bg-black/40"
->
-    <div class="flex flex-col gap-4 p-6">
-        <h2 class="text-base font-semibold">Add node</h2>
-        {#if result}
-            <p class="text-sm text-muted-foreground">
-                Set this value as CSFX_JOIN on the new {result.role} node, or enter it in the node console. It works once and expires at {new Date(result.expires_at).toLocaleString()}.
-            </p>
-            <code class="block break-all rounded border bg-muted/40 px-3 py-2 text-xs">{result.join_string}</code>
-            <div class="flex gap-2 justify-end">
-                <Button size="sm" variant="outline" onclick={copy}>{copied ? 'Copied' : 'Copy'}</Button>
-                <Button size="sm" onclick={() => dialog?.close()}>Done</Button>
-            </div>
-        {:else}
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="join-role">Role</label>
-                <select id="join-role" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={role}>
+<ModalDialog bind:this={dialog} title="Add node" size="md">
+    {#if result}
+        <p class="cx-hint">
+            Set this value as CSFX_JOIN on the new {result.role} node, or enter it in the node console. It works once and expires at {new Date(result.expires_at).toLocaleString()}.
+        </p>
+        <code class="cx-mono" style="word-break: break-all">{result.join_string}</code>
+        <div class="md__foot">
+            <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={copy}>{copied ? 'Copied' : 'Copy'}</button>
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" onclick={() => dialog?.close()}>Done</button>
+        </div>
+    {:else}
+        <div class="md__fields">
+            <div class="cx-field">
+                <label class="cx-label" for="join-role">Role</label>
+                <select id="join-role" class="cx-input" bind:value={role}>
                     <option value="worker">Worker</option>
                     <option value="master">Master (control plane)</option>
                 </select>
             </div>
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="join-ttl">Valid for</label>
-                <select id="join-ttl" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={ttlHours}>
-                    {#each TTL_OPTIONS as option}
+            <div class="cx-field">
+                <label class="cx-label" for="join-ttl">Valid for</label>
+                <select id="join-ttl" class="cx-input" bind:value={ttlHours}>
+                    {#each TTL_OPTIONS as option (option.hours)}
                         <option value={option.hours}>{option.label}</option>
                     {/each}
                 </select>
             </div>
-            {#if error}
-                <p class="text-xs text-destructive">{error}</p>
-            {/if}
-            <div class="flex gap-2 justify-end">
-                <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
-                <Button size="sm" onclick={generate} disabled={busy}>
-                    {busy ? 'Creating...' : 'Create join string'}
-                </Button>
-            </div>
-        {/if}
-    </div>
-</dialog>
+            {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
+        </div>
+        <div class="md__foot">
+            <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => dialog?.close()}>Cancel</button>
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" onclick={generate} disabled={busy} aria-busy={busy}>
+                {busy ? 'Creating' : 'Create join string'}
+            </button>
+        </div>
+    {/if}
+</ModalDialog>

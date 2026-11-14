@@ -6,8 +6,8 @@
         type Volume,
         type VolumeMount,
     } from "$lib/api/resource-groups";
-    import { Button } from "$lib/components/ui/button/index.js";
-    import Icon from "@iconify/svelte";
+    import { ArrowRight, Plus, X } from "@lucide/svelte";
+    import ModalDialog from "./modal-dialog.svelte";
 
     let {
         rgId,
@@ -15,7 +15,7 @@
         onDeployed,
     }: { rgId: string; volumes: Volume[]; onDeployed: () => Promise<void> } = $props();
 
-    let dialog = $state<HTMLDialogElement | null>(null);
+    let dialog = $state<ModalDialog | null>(null);
     let deploying = $state(false);
     let deployError = $state<string | null>(null);
 
@@ -40,7 +40,7 @@
     );
 
     export function open() {
-        dialog?.showModal();
+        dialog?.open();
     }
 
     function parseEnvVars(raw: string): Record<string, string> | null {
@@ -141,185 +141,118 @@
     }
 </script>
 
-<dialog
-    bind:this={dialog}
-    class="fixed inset-0 z-50 m-auto w-full max-w-lg rounded-xl border bg-background shadow-xl p-0 backdrop:bg-black/40"
-    onclose={() => resetDeployForm()}
->
-    <div class="flex flex-col gap-5 p-6">
-        <div class="flex items-center justify-between">
-            <h2 class="text-base font-semibold">Deploy Container</h2>
-            <button
-                class="flex items-center justify-center w-8 h-8 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                onclick={() => dialog?.close()}
-                aria-label="Close"
-                title="Close"
-            >
-                <Icon icon="mdi:close" width={18} height={18} />
-            </button>
+<ModalDialog bind:this={dialog} title="Deploy Container" size="md" onclose={resetDeployForm}>
+    <div class="md__fields">
+        <div class="cx-field">
+            <label class="cx-label" for="d-name">Name</label>
+            <input id="d-name" class="cx-input" placeholder="my-app" bind:value={formName} />
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-name">Name</label>
-                <input id="d-name" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="my-app" bind:value={formName} />
+        <div class="cx-field">
+            <label class="cx-label" for="d-image">Image</label>
+            <input id="d-image" class="cx-input cx-mono" placeholder="nginx:latest" bind:value={formImage} />
+        </div>
+        <div class="cx-field">
+            <label class="cx-label" for="d-mode">Resources</label>
+            <select id="d-mode" class="cx-input" bind:value={formMode}>
+                <option value="fixed">Fixed</option>
+                <option value="burst">Burst up to a limit</option>
+                <option value="auto">Auto (right-size from usage)</option>
+            </select>
+        </div>
+        <div class="cx-field">
+            <label class="cx-label" for="d-replicas">Replicas</label>
+            <input id="d-replicas" type="number" min="1" max="32" class="cx-input" bind:value={formReplicas} />
+        </div>
+        <div class="cx-field">
+            <label class="cx-label" for="d-cpu">{formMode === "fixed" ? "CPU (millicores)" : "CPU request (millicores)"}</label>
+            <input id="d-cpu" type="number" class="cx-input" placeholder="500" bind:value={formCpu} />
+        </div>
+        <div class="cx-field">
+            <label class="cx-label" for="d-mem">{formMode === "fixed" ? "Memory (MB)" : "Memory request (MB)"}</label>
+            <input id="d-mem" type="number" class="cx-input" placeholder="512" bind:value={formMemory} />
+        </div>
+        {#if formMode === "burst"}
+            <div class="cx-field">
+                <label class="cx-label" for="d-cpu-limit">CPU limit (millicores)</label>
+                <input id="d-cpu-limit" type="number" class="cx-input" bind:value={formCpuLimit} />
             </div>
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-image">Image</label>
-                <input id="d-image" class="border rounded px-3 py-1.5 text-sm bg-background font-mono" placeholder="nginx:latest" bind:value={formImage} />
+            <div class="cx-field">
+                <label class="cx-label" for="d-mem-limit">Memory limit (MB)</label>
+                <input id="d-mem-limit" type="number" class="cx-input" bind:value={formMemoryLimit} />
             </div>
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-mode">Resources</label>
-                <select id="d-mode" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={formMode}>
-                    <option value="fixed">Fixed</option>
-                    <option value="burst">Burst up to a limit</option>
-                    <option value="auto">Auto (right-size from usage)</option>
-                </select>
+            {#if limitInvalid}<p class="cx-hint cx-hint--error">Limits must not be below the requests.</p>{/if}
+        {:else if formMode === "auto"}
+            <p class="cx-hint">
+                Starts with the values above. On the next restart the request shrinks to the observed peak plus 20 percent, and the original value becomes the burst limit.
+            </p>
+        {/if}
+        <div class="cx-field">
+            <label class="cx-label" for="d-disk">Disk (MB)</label>
+            <input id="d-disk" type="number" class="cx-input" placeholder="1024" bind:value={formDisk} />
+        </div>
+        <div class="cx-field">
+            <div class="md__foot" style="justify-content: space-between; align-items: center">
+                <span class="cx-label">Ports</span>
+                <button type="button" class="cx-btn cx-btn--ghost cx-btn--sm" onclick={addPortRow}><Plus class="cx-i" aria-hidden="true" /> Add port</button>
             </div>
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-replicas">Replicas</label>
-                <input id="d-replicas" type="number" min="1" max="32" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={formReplicas} />
-            </div>
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-cpu">{formMode === "fixed" ? "CPU (millicores)" : "CPU request (millicores)"}</label>
-                <input id="d-cpu" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="500" bind:value={formCpu} />
-            </div>
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-mem">{formMode === "fixed" ? "Memory (MB)" : "Memory request (MB)"}</label>
-                <input id="d-mem" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="512" bind:value={formMemory} />
-            </div>
-            {#if formMode === "burst"}
-                <div class="flex flex-col gap-1">
-                    <label class="text-xs text-muted-foreground" for="d-cpu-limit">CPU limit (millicores)</label>
-                    <input id="d-cpu-limit" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={formCpuLimit} />
+            {#if formPortRows.length === 0}
+                <p class="cx-hint">No ports exposed. Container is only reachable via RG-internal DNS on its default port.</p>
+            {:else}
+                <div class="md__fields">
+                    {#each formPortRows as row, i}
+                        {@const cPort = String(row.containerPort).trim()}
+                        {@const rPort = String(row.rgPort).trim()}
+                        {@const nPort = String(row.nodePort).trim()}
+                        <div style="display: grid; grid-template-columns: 1fr auto 1fr 1fr auto auto; gap: var(--space-2); align-items: center">
+                            <input type="number" class="cx-input cx-mono" placeholder="80" aria-label="Container port" bind:value={row.containerPort} />
+                            <ArrowRight class="cx-i" aria-hidden="true" />
+                            <input type="number" class="cx-input cx-mono" placeholder="8080" aria-label="RG port" bind:value={row.rgPort} />
+                            <input type="number" class="cx-input cx-mono" placeholder="35000" aria-label="Node port" bind:value={row.nodePort} />
+                            <select class="cx-input" aria-label="Protocol" bind:value={row.protocol}>
+                                <option value="tcp">TCP</option>
+                                <option value="udp">UDP</option>
+                            </select>
+                            <button type="button" class="cx-icon-btn cx-icon-btn--sm" onclick={() => removePortRow(i)} aria-label="Remove port" title="Remove">
+                                <X class="cx-i" aria-hidden="true" />
+                            </button>
+                        </div>
+                        {#if cPort}
+                            <p class="cx-hint cx-mono">
+                                RG mesh: {rPort || cPort}/{row.protocol} → container:{cPort}
+                                {#if nPort}&nbsp;·&nbsp; external: node-ip:{nPort} → container:{cPort}{/if}
+                            </p>
+                        {/if}
+                    {/each}
                 </div>
-                <div class="flex flex-col gap-1">
-                    <label class="text-xs text-muted-foreground" for="d-mem-limit">Memory limit (MB)</label>
-                    <input id="d-mem-limit" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" bind:value={formMemoryLimit} />
-                </div>
-                {#if limitInvalid}
-                    <p class="text-xs text-destructive sm:col-span-2">Limits must not be below the requests.</p>
-                {/if}
-            {:else if formMode === "auto"}
-                <p class="text-xs text-muted-foreground sm:col-span-2">
-                    Starts with the values above. On the next restart the request shrinks to the observed peak plus 20 percent, and the original value becomes the burst limit.
+                <p class="cx-hint">
+                    Order: container port, RG port, node port. RG port maps to the container port inside the RG mesh (optional, defaults to container port). Node port separately exposes it externally on the node's IP, like a Kubernetes NodePort.
                 </p>
             {/if}
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-disk">Disk (MB)</label>
-                <input id="d-disk" type="number" class="border rounded px-3 py-1.5 text-sm bg-background" placeholder="1024" bind:value={formDisk} />
-            </div>
-            <div class="flex flex-col gap-2 sm:col-span-2">
-                <div class="flex items-center justify-between">
-                    <span class="text-xs text-muted-foreground">Ports</span>
-                    <button
-                        type="button"
-                        class="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-                        onclick={addPortRow}
-                    >
-                        <Icon icon="mdi:plus" width={14} height={14} />
-                        Add port
-                    </button>
-                </div>
-                {#if formPortRows.length === 0}
-                    <p class="text-xs text-muted-foreground">No ports exposed. Container is only reachable via RG-internal DNS on its default port.</p>
-                {:else}
-                    <div class="flex items-center gap-3 pl-0.5">
-                        <span class="text-xs text-muted-foreground w-20">Container port</span>
-                        <span class="w-4 shrink-0"></span>
-                        <span class="text-xs text-muted-foreground w-20">RG port</span>
-                        <span class="w-px h-3 bg-border shrink-0"></span>
-                        <span class="text-xs text-muted-foreground w-20">Node port</span>
-                    </div>
-                    <div class="space-y-2">
-                        {#each formPortRows as row, i}
-                            {@const cPort = String(row.containerPort).trim()}
-                            {@const rPort = String(row.rgPort).trim()}
-                            {@const nPort = String(row.nodePort).trim()}
-                            <div class="flex items-center gap-3">
-                                <input
-                                    type="number"
-                                    class="border rounded px-2 py-1.5 text-sm bg-background font-mono w-20"
-                                    placeholder="80"
-                                    aria-label="Container port"
-                                    bind:value={row.containerPort}
-                                />
-                                <Icon icon="mdi:arrow-right" width={16} height={16} class="text-muted-foreground shrink-0" />
-                                <input
-                                    type="number"
-                                    class="border rounded px-2 py-1.5 text-sm bg-background font-mono w-20"
-                                    placeholder="8080"
-                                    aria-label="RG port"
-                                    bind:value={row.rgPort}
-                                />
-                                <span class="w-px h-5 bg-border shrink-0"></span>
-                                <input
-                                    type="number"
-                                    class="border rounded px-2 py-1.5 text-sm bg-background font-mono w-20"
-                                    placeholder="35000"
-                                    aria-label="Node port"
-                                    bind:value={row.nodePort}
-                                />
-                                <select
-                                    class="border rounded px-2 py-1.5 text-sm bg-background"
-                                    aria-label="Protocol"
-                                    bind:value={row.protocol}
-                                >
-                                    <option value="tcp">TCP</option>
-                                    <option value="udp">UDP</option>
-                                </select>
-                                <button
-                                    type="button"
-                                    class="flex items-center justify-center w-8 h-8 rounded-full text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
-                                    onclick={() => removePortRow(i)}
-                                    aria-label="Remove port"
-                                    title="Remove"
-                                >
-                                    <Icon icon="mdi:close" width={16} height={16} />
-                                </button>
-                            </div>
-                            {#if cPort}
-                                <p class="text-xs text-muted-foreground font-mono pl-0.5">
-                                    RG mesh: {rPort || cPort}/{row.protocol} → container:{cPort}
-                                    {#if nPort}
-                                        &nbsp;·&nbsp; external: node-ip:{nPort} → container:{cPort}
-                                    {/if}
-                                </p>
-                            {/if}
-                        {/each}
-                    </div>
-                    <p class="text-xs text-muted-foreground">
-                        RG port maps to the container port inside the RG mesh (optional, defaults to container port). Node port separately exposes it externally on the node's IP, like a Kubernetes NodePort.
-                    </p>
-                {/if}
-            </div>
         </div>
         {#if volumes.length > 0}
-            <div class="flex flex-col gap-1">
-                <label class="text-xs text-muted-foreground" for="d-vols">
-                    Volume Mounts (name-or-id:/mount/path, one per line)
-                </label>
+            <div class="cx-field">
+                <label class="cx-label" for="d-vols">Volume Mounts (name-or-id:/mount/path, one per line)</label>
                 <textarea
                     id="d-vols"
-                    class="border rounded px-3 py-1.5 text-sm bg-background font-mono resize-none"
+                    class="cx-input cx-mono"
+                    style="height: auto; padding: 10px 14px"
                     rows={Math.min(4, volumes.length + 1)}
-                    placeholder={volumes.map(v => `${v.name}:/data`).slice(0, 2).join("\n")}
+                    placeholder={volumes.map((v) => `${v.name}:/data`).slice(0, 2).join("\n")}
                     bind:value={formVolumeMounts}
                 ></textarea>
-                <p class="text-xs text-muted-foreground">Available: {volumes.map(v => v.name).join(", ")}</p>
+                <p class="cx-hint">Available: {volumes.map((v) => v.name).join(", ")}</p>
             </div>
         {/if}
-        <div class="flex flex-col gap-1">
-            <label class="text-xs text-muted-foreground" for="d-env">Environment Variables (KEY=VALUE, one per line)</label>
-            <textarea id="d-env" class="border rounded px-3 py-1.5 text-sm bg-background font-mono resize-none" rows={3} placeholder={"NODE_ENV=production\nPORT=3000"} bind:value={formEnv}></textarea>
+        <div class="cx-field">
+            <label class="cx-label" for="d-env">Environment Variables (KEY=VALUE, one per line)</label>
+            <textarea id="d-env" class="cx-input cx-mono" style="height: auto; padding: 10px 14px" rows={3} placeholder={"NODE_ENV=production\nPORT=3000"} bind:value={formEnv}></textarea>
         </div>
-        {#if deployError}
-            <p class="text-xs text-destructive">{deployError}</p>
-        {/if}
-        <div class="flex gap-2 justify-end">
-            <Button size="sm" variant="outline" onclick={() => dialog?.close()}>Cancel</Button>
-            <Button size="sm" onclick={handleDeploy} disabled={deploying || !formName || !formImage || limitInvalid}>
-                {deploying ? "Deploying..." : "Deploy"}
-            </Button>
+        {#if deployError}<p class="cx-hint cx-hint--error">{deployError}</p>{/if}
+        <div class="md__foot">
+            <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => dialog?.close()}>Cancel</button>
+            <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" onclick={handleDeploy} disabled={deploying || !formName || !formImage || limitInvalid} aria-busy={deploying}>
+                {deploying ? "Deploying" : "Deploy"}
+            </button>
         </div>
     </div>
-</dialog>
+</ModalDialog>

@@ -1,18 +1,20 @@
 <script lang="ts">
+    import ModalDialog from "$lib/components/resource-group/modal-dialog.svelte";
+
     const DEFAULT_MINUTES = "60";
 
     type Props = { busy: boolean; error: string | null; onsubmit: (minutes: number) => void };
 
     let { busy, error, onsubmit }: Props = $props();
 
-    let dialog = $state<HTMLDialogElement | null>(null);
+    let dialog = $state<ModalDialog | null>(null);
     let minutes = $state(DEFAULT_MINUTES);
 
     const parsed = $derived(Number.parseInt(minutes, 10));
     const valid = $derived(Number.isInteger(parsed) && parsed >= 1);
 
     export function open() {
-        dialog?.showModal();
+        dialog?.open();
     }
 
     export function close() {
@@ -20,20 +22,14 @@
     }
 </script>
 
-<dialog bind:this={dialog} class="md-dialog" style="max-width: 400px">
+<ModalDialog bind:this={dialog} title="Start maintenance" subtitle="Hardware alerts for this node are suppressed until maintenance ends.">
     <form
-        class="md__body"
+        class="md__fields"
         onsubmit={(event) => {
             event.preventDefault();
             if (valid) onsubmit(parsed);
         }}
     >
-        <div class="md__head">
-            <div>
-                <h2>Start maintenance</h2>
-                <p>Hardware alerts for this node are suppressed until maintenance ends.</p>
-            </div>
-        </div>
         <div class="cx-field">
             <label class="cx-label" for="maintenance-minutes">Duration (minutes)</label>
             <input class="cx-input" id="maintenance-minutes" type="number" min="1" aria-invalid={!valid} bind:value={minutes} />
@@ -46,4 +42,4 @@
             </button>
         </div>
     </form>
-</dialog>
+</ModalDialog>
