@@ -140,8 +140,8 @@
     }
 </script>
 
-<ModalDialog bind:this={dialog} title="Deploy Container" size="md" onclose={resetDeployForm}>
-    <div class="md__fields">
+<ModalDialog bind:this={dialog} title="Deploy Container" size="lg" onclose={resetDeployForm}>
+    <div class="md__fields md__fields--two">
         <div class="cx-field">
             <label class="cx-label" for="d-name">Name</label>
             <input id="d-name" class="cx-input" placeholder="my-app" bind:value={formName} />
@@ -179,9 +179,9 @@
                 <label class="cx-label" for="d-mem-limit">Memory limit (MB)</label>
                 <input id="d-mem-limit" type="number" class="cx-input" bind:value={formMemoryLimit} />
             </div>
-            {#if limitInvalid}<p class="cx-hint cx-hint--error">Limits must not be below the requests.</p>{/if}
+            {#if limitInvalid}<p class="cx-hint cx-hint--error md__span">Limits must not be below the requests.</p>{/if}
         {:else if formMode === "auto"}
-            <p class="cx-hint">
+            <p class="cx-hint md__span">
                 Starts with the values above. On the next restart the request shrinks to the observed peak plus 20 percent, and the original value becomes the burst limit.
             </p>
         {/if}
@@ -189,7 +189,7 @@
             <label class="cx-label" for="d-disk">Disk (MB)</label>
             <input id="d-disk" type="number" class="cx-input" placeholder="1024" bind:value={formDisk} />
         </div>
-        <div class="cx-field">
+        <div class="cx-field md__span">
             <div class="md__foot" style="justify-content: space-between; align-items: center">
                 <span class="cx-label">Ports</span>
                 <button type="button" class="cx-btn cx-btn--ghost cx-btn--sm" onclick={addPortRow}><Plus class="cx-i" aria-hidden="true" /> Add port</button>
@@ -229,7 +229,7 @@
             {/if}
         </div>
         {#if volumes.length > 0}
-            <div class="cx-field">
+            <div class="cx-field md__span">
                 <label class="cx-label" for="d-vols">Volume Mounts (name-or-id:/mount/path, one per line)</label>
                 <textarea
                     id="d-vols"
@@ -242,12 +242,12 @@
                 <p class="cx-hint">Available: {volumes.map((v) => v.name).join(", ")}</p>
             </div>
         {/if}
-        <div class="cx-field">
+        <div class="cx-field md__span">
             <label class="cx-label" for="d-env">Environment Variables (KEY=VALUE, one per line)</label>
             <textarea id="d-env" class="cx-input cx-mono" style="height: auto; padding: 10px 14px" rows={3} placeholder={"NODE_ENV=production\nPORT=3000"} bind:value={formEnv}></textarea>
         </div>
-        {#if deployError}<p class="cx-hint cx-hint--error">{deployError}</p>{/if}
-        <div class="md__foot">
+        {#if deployError}<p class="cx-hint cx-hint--error md__span">{deployError}</p>{/if}
+        <div class="md__foot md__span">
             <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => dialog?.close()}>Cancel</button>
             <button class="cx-btn cx-btn--primary cx-btn--sm" type="button" onclick={handleDeploy} disabled={deploying || !formName || !formImage || limitInvalid} aria-busy={deploying}>
                 {deploying ? "Deploying" : "Deploy"}

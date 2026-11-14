@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { Upload } from "@lucide/svelte";
     import {
         createWorkload,
         ensureIsoBucket,
@@ -135,13 +136,13 @@
     }
 </script>
 
-<ModalDialog bind:this={dialog} title="Deploy Virtual Machine" size="md" onclose={resetVmForm}>
-    <div class="md__fields">
-        <div class="cx-field">
+<ModalDialog bind:this={dialog} title="Deploy Virtual Machine" size="lg" onclose={resetVmForm}>
+    <div class="md__fields md__fields--two">
+        <div class="cx-field md__span">
             <label class="cx-label" for="vm-name">Name</label>
             <input id="vm-name" class="cx-input" placeholder="my-vm" bind:value={vmFormName} />
         </div>
-        <div class="cx-field">
+        <div class="cx-field md__span">
             <div class="md__foot" style="justify-content: space-between; align-items: center">
                 <span class="cx-label">ISO Image</span>
                 {#if vmExistingIsos.length > 0}
@@ -160,47 +161,54 @@
                     {/each}
                 </select>
             {:else}
-                <input id="vm-iso" type="file" accept=".iso" class="cx-input" onchange={handleVmIsoFileChange} />
+                <div class="md__foot" style="justify-content: flex-start; align-items: center">
+                    <label class="cx-btn cx-btn--secondary cx-btn--sm" style="cursor: pointer">
+                        <Upload class="cx-i" aria-hidden="true" />
+                        Choose ISO
+                        <input id="vm-iso" type="file" accept=".iso" class="db-sr-only" onchange={handleVmIsoFileChange} />
+                    </label>
+                    <span class="cx-hint">{vmFormIsoFile?.name ?? "No file selected"}</span>
+                </div>
                 {#if vmDeploying && vmFormIsoFile}
                     <progress value={vmUploadProgress} max="1" style="width: 100%"></progress>
                 {/if}
             {/if}
         </div>
         {#if vmFormAdvanced}
-        <div class="cx-field">
-        <label class="cx-label" for="vm-cpu">CPU (millicores)</label>
-        <input id="vm-cpu" type="number" class="cx-input" placeholder="2000" bind:value={vmFormCpuMillicores} />
-        </div>
-        <div class="cx-field">
-        <label class="cx-label" for="vm-mem">Memory (MB)</label>
-        <input id="vm-mem" type="number" class="cx-input" placeholder="2048" bind:value={vmFormMemoryMb} />
-        </div>
-        <div class="cx-field">
-        <label class="cx-label" for="vm-disk">Disk (MB)</label>
-        <input id="vm-disk" type="number" class="cx-input" placeholder="20480" bind:value={vmFormDiskMb} />
-        </div>
+            <div class="cx-field">
+                <label class="cx-label" for="vm-cpu">CPU (millicores)</label>
+                <input id="vm-cpu" type="number" class="cx-input" placeholder="2000" bind:value={vmFormCpuMillicores} />
+            </div>
+            <div class="cx-field">
+                <label class="cx-label" for="vm-mem">Memory (MB)</label>
+                <input id="vm-mem" type="number" class="cx-input" placeholder="2048" bind:value={vmFormMemoryMb} />
+            </div>
+            <div class="cx-field md__span">
+                <label class="cx-label" for="vm-disk">Disk (MB)</label>
+                <input id="vm-disk" type="number" class="cx-input" placeholder="20480" bind:value={vmFormDiskMb} />
+            </div>
         {:else}
-        <div class="cx-field">
-        <label class="cx-label" for="vm-vcpus">vCPUs</label>
-        <input id="vm-vcpus" type="number" min="1" class="cx-input" placeholder="2" bind:value={vmFormVcpus} />
-        </div>
-        <div class="cx-field">
-        <label class="cx-label" for="vm-mem-gb">Memory (GB)</label>
-        <input id="vm-mem-gb" type="number" min="1" class="cx-input" placeholder="2" bind:value={vmFormMemoryGb} />
-        </div>
-        <div class="cx-field">
-        <label class="cx-label" for="vm-disk-gb">Disk (GB)</label>
-        <input id="vm-disk-gb" type="number" min="1" class="cx-input" placeholder="20" bind:value={vmFormDiskGb} />
-        </div>
+            <div class="cx-field">
+                <label class="cx-label" for="vm-vcpus">vCPUs</label>
+                <input id="vm-vcpus" type="number" min="1" class="cx-input" placeholder="2" bind:value={vmFormVcpus} />
+            </div>
+            <div class="cx-field">
+                <label class="cx-label" for="vm-mem-gb">Memory (GB)</label>
+                <input id="vm-mem-gb" type="number" min="1" class="cx-input" placeholder="2" bind:value={vmFormMemoryGb} />
+            </div>
+            <div class="cx-field md__span">
+                <label class="cx-label" for="vm-disk-gb">Disk (GB)</label>
+                <input id="vm-disk-gb" type="number" min="1" class="cx-input" placeholder="20" bind:value={vmFormDiskGb} />
+            </div>
         {/if}
-        <div>
-            <button type="button" class="cx-btn cx-btn--ghost cx-btn--sm" onclick={() => (vmFormAdvanced = !vmFormAdvanced)}>
+        <div class="md__span">
+            <button type="button" class="cx-link" onclick={() => (vmFormAdvanced = !vmFormAdvanced)}>
                 {vmFormAdvanced ? "Use simple units" : "Advanced (millicores / MB)"}
             </button>
         </div>
-        <p class="cx-hint">The ISO boots on first start. Open the console after deploying to complete the installation.</p>
-        {#if vmError}<p class="cx-hint cx-hint--error">{vmError}</p>{/if}
-        <div class="md__foot">
+        <p class="cx-hint md__span">The ISO boots on first start. Open the console after deploying to complete the installation.</p>
+        {#if vmError}<p class="cx-hint cx-hint--error md__span">{vmError}</p>{/if}
+        <div class="md__foot md__span">
             <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => dialog?.close()}>Cancel</button>
             <button
                 class="cx-btn cx-btn--primary cx-btn--sm"
