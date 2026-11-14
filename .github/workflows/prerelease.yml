@@ -334,6 +334,16 @@ jobs:
                 sha256 = "aee80c3ab9bc2d32f4c00de8ddf919c200359a400aae7c4710e8bc8ad438e1c4";
               };
             };
+            firecracker = {
+              amd64 = {
+                url  = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.13.2/firecracker-v1.13.2-x86_64.tgz";
+                hash = "sha256-pts7RR9QDf2CmJRH/r9Utci7iSnk7nx/hKlpXxMNpUc=";
+              };
+              arm64 = {
+                url  = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.13.2/firecracker-v1.13.2-aarch64.tgz";
+                hash = "sha256-pkwLkTspuOpLWZDsuUqSy3y064UAFbaaoWgNJdnLQb8=";
+              };
+            };
             csfx = {
               version = "${VERSION}";
               agent = {
