@@ -9,6 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageSystem, CanViewAgents},
@@ -242,7 +243,7 @@ pub async fn list_pending_agents(
 pub async fn delete_pending_agent(
     CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map: Vec<(String, String)> = headers
@@ -487,7 +488,7 @@ pub async fn register_agent(
 )]
 pub async fn agent_heartbeat(
     State(state): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -651,7 +652,7 @@ pub async fn get_statistics(
 pub async fn revoke_certificate(
     CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -675,7 +676,7 @@ pub async fn revoke_certificate(
 pub async fn get_agent_endpoint(
     CanViewAgents(_claims): CanViewAgents,
     State(state): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map: Vec<(String, String)> = headers
@@ -703,7 +704,7 @@ pub async fn get_crl(
 /// Issue certificate for agent
 pub async fn issue_certificate(
     State(state): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -726,7 +727,7 @@ pub async fn issue_certificate(
 /// Rotate agent certificate
 pub async fn rotate_certificate(
     State(state): State<AppState>,
-    Path(agent_id): Path<String>,
+    Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -824,7 +825,7 @@ pub async fn list_bootstrap_tokens(
 pub async fn revoke_bootstrap_token(
     CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map: Vec<(String, String)> = headers

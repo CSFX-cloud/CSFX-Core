@@ -24,60 +24,60 @@ fn cases() -> Vec<Case> {
     vec![
         case(Method::POST, "/api/buckets", "/buckets", payload.clone()),
         case(Method::GET, "/api/buckets", "/buckets", None),
-        case(Method::GET, "/api/buckets/b1", "/buckets/b1", None),
+        case(Method::GET, "/api/buckets/00000000-0000-0000-0000-0000000000b1", "/buckets/00000000-0000-0000-0000-0000000000b1", None),
         case(
             Method::PATCH,
-            "/api/buckets/b1",
-            "/buckets/b1",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1",
+            "/buckets/00000000-0000-0000-0000-0000000000b1",
             payload.clone(),
         ),
-        case(Method::DELETE, "/api/buckets/b1", "/buckets/b1", None),
+        case(Method::DELETE, "/api/buckets/00000000-0000-0000-0000-0000000000b1", "/buckets/00000000-0000-0000-0000-0000000000b1", None),
         case(
             Method::GET,
-            "/api/buckets/b1/keys",
-            "/buckets/b1/keys",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1/keys",
+            "/buckets/00000000-0000-0000-0000-0000000000b1/keys",
             None,
         ),
         case(
             Method::POST,
-            "/api/buckets/b1/keys",
-            "/buckets/b1/keys",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1/keys",
+            "/buckets/00000000-0000-0000-0000-0000000000b1/keys",
             payload.clone(),
         ),
         case(
             Method::POST,
-            "/api/buckets/b1/keys/k1/rotate",
-            "/buckets/b1/keys/k1/rotate",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1/keys/00000000-0000-0000-0000-0000000000c1/rotate",
+            "/buckets/00000000-0000-0000-0000-0000000000b1/keys/00000000-0000-0000-0000-0000000000c1/rotate",
             None,
         ),
         case(
             Method::DELETE,
-            "/api/buckets/b1/keys/k1",
-            "/buckets/b1/keys/k1",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1/keys/00000000-0000-0000-0000-0000000000c1",
+            "/buckets/00000000-0000-0000-0000-0000000000b1/keys/00000000-0000-0000-0000-0000000000c1",
             None,
         ),
         case(
             Method::GET,
-            "/api/buckets/b1/objects?prefix=a%20b",
-            "/buckets/b1/objects",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1/objects?prefix=a%20b",
+            "/buckets/00000000-0000-0000-0000-0000000000b1/objects",
             None,
         ),
         case(
             Method::DELETE,
-            "/api/buckets/b1/objects/dir/file.txt",
-            "/buckets/b1/objects/dir/file.txt",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1/objects/dir/file.txt",
+            "/buckets/00000000-0000-0000-0000-0000000000b1/objects/dir/file.txt",
             None,
         ),
         case(
             Method::POST,
-            "/api/buckets/b1/objects/presign-upload",
-            "/buckets/b1/objects/presign-upload",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1/objects/presign-upload",
+            "/buckets/00000000-0000-0000-0000-0000000000b1/objects/presign-upload",
             payload,
         ),
         case(
             Method::GET,
-            "/api/buckets/b1/objects/presign-download/dir/file.txt",
-            "/buckets/b1/objects/presign-download/dir/file.txt",
+            "/api/buckets/00000000-0000-0000-0000-0000000000b1/objects/presign-download/dir/file.txt",
+            "/buckets/00000000-0000-0000-0000-0000000000b1/objects/presign-download/dir/file.txt",
             None,
         ),
         case(Method::GET, "/api/object-storage/cluster", "/cluster", None),
@@ -102,7 +102,7 @@ async fn bucket_requests_are_forwarded_to_object_storage() {
 #[ignore = "requires postgres via DATABASE_URL"]
 async fn object_listing_encodes_prefix_and_continuation_token() {
     let harness = harness().await;
-    let uri = "/api/buckets/b1/objects?prefix=a%20b%2Fc&continuation_token=t%2B1";
+    let uri = "/api/buckets/00000000-0000-0000-0000-0000000000b1/objects?prefix=a%20b%2Fc&continuation_token=t%2B1";
     let (status, echoed) = harness.get(uri).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(echoed["query"], "prefix=a%20b%2Fc&continuation_token=t%2B1");
