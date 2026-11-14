@@ -54,9 +54,9 @@ export async function loadGroupInventory(token: string, groupId: string): Promis
         listResourceGroupWorkloads(token, groupId),
         listResourceGroupVolumes(token, groupId),
         listResourceGroupBuckets(token, groupId),
-        listVaults(token, groupId),
-        listSites(token, groupId),
-        listRegistries(token, groupId),
+        listVaults(token, groupId).catch((): Vault[] => []),
+        listSites(token, groupId).catch((): SiteSummary[] => []),
+        listRegistries(token, groupId).catch((): Registry[] => []),
         listGateways(token, groupId),
     ]);
     return { workloads, volumes, buckets, vaults, sites, registries, gateways };

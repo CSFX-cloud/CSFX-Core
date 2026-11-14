@@ -1,13 +1,13 @@
 <script lang="ts">
     import { Server } from "@lucide/svelte";
     import { Handle, Position, type NodeProps } from "@xyflow/svelte";
-    import { statusVariant } from "$lib/utils/status";
+    import { statusTone } from "$lib/utils/tone";
     import { nodeTone } from "$lib/utils/dashboard";
 
     let { data, selected }: NodeProps = $props();
 
     const status = $derived(String(data.status ?? "unknown"));
-    const online = $derived(statusVariant(status) === "success");
+    const online = $derived(statusTone(status) === "success");
     const statusText = $derived(status.charAt(0).toUpperCase() + status.slice(1).toLowerCase());
 
     function percent(value: unknown): string {

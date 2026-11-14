@@ -8,7 +8,7 @@
     import { createIngress, deleteGateway, deleteIngress, listIngress, type IngressRoute } from "$lib/api/ingress";
     import { addSiteDomain, updateSite, type SiteSummary } from "$lib/api/sites";
     import { Button } from "$lib/components/ui/button/index.js";
-    import StatusBadge from "$lib/components/status-badge.svelte";
+    import { badgeClass, statusLabel } from "$lib/utils/tone";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
     import ContainerLogsTab from "$lib/components/resource-group/container-logs-tab.svelte";
     import DnsRecordsPanel from "$lib/components/resource-group/dns-records-panel.svelte";
@@ -141,7 +141,7 @@
             <div class="flex items-center gap-2">
                 <span class="text-base font-semibold leading-tight truncate">{gateway.name}</span>
                 {#if gatewayWorkload}
-                    <StatusBadge status={gatewayWorkload.status} class="shrink-0" />
+                    <span class="{badgeClass(gatewayWorkload.status)} shrink-0">{statusLabel(gatewayWorkload.status)}</span>
                 {/if}
             </div>
             <p class="text-xs text-muted-foreground font-mono truncate">{gateway.endpoint} - ports {gateway.http_port} / {gateway.https_port}</p>

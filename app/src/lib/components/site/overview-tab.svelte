@@ -1,8 +1,9 @@
 <script lang="ts">
+    import { toneBadgeClass } from "$lib/utils/tone";
     import { ExternalLink } from "@lucide/svelte";
     import type { DeploymentSummary, SiteDetail } from "$lib/api/sites";
     import { relativeTime } from "$lib/utils/dashboard";
-    import { badgeClass, buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
+    import { buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
     import UsageStats from "./usage-stats.svelte";
 
     const PREVIEW_LIMIT = 8;
@@ -37,7 +38,7 @@
     {#if production}
         {@const status = deploymentStatus(production.status)}
         <dl class="ov-grid">
-            <div><dt>Status</dt><dd><span class={badgeClass(status.tone)}>{status.label}</span></dd></div>
+            <div><dt>Status</dt><dd><span class={toneBadgeClass(status.tone)}>{status.label}</span></dd></div>
             <div><dt>Deployed</dt><dd>{relativeTime(production.created_at, Date.now())}</dd></div>
             <div><dt>Commit</dt><dd>{production.commit_message || "No message"}<br /><span class="cx-soft">{shortSha(production.commit_sha)} &middot; {production.branch}</span></dd></div>
             <div><dt>Build time</dt><dd>{buildDuration(production.duration_ms)}</dd></div>
@@ -92,7 +93,7 @@
                                     <span class="cx-soft">&mdash;</span>
                                 {/if}
                             </td>
-                            <td><span class={badgeClass(status.tone)}>{status.label}</span></td>
+                            <td><span class={toneBadgeClass(status.tone)}>{status.label}</span></td>
                             <td class="cx-soft">{relativeTime(deployment.created_at, Date.now())}</td>
                         </tr>
                     {/each}

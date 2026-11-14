@@ -1,8 +1,9 @@
 <script lang="ts">
+    import { toneBadgeClass } from "$lib/utils/tone";
     import { auth } from "$lib/auth/store.svelte";
     import { promoteDeployment, type DeploymentSummary } from "$lib/api/sites";
     import { relativeTime } from "$lib/utils/dashboard";
-    import { badgeClass, buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
+    import { buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
     import BuildLog from "./build-log.svelte";
 
     type Props = {
@@ -55,7 +56,7 @@
                     {@const label = actionLabel(deployment)}
                     <tr>
                         <td>
-                            <span class={badgeClass(status.tone)}>{status.label}</span>
+                            <span class={toneBadgeClass(status.tone)}>{status.label}</span>
                             {#if deployment.current}<span class="cx-badge">current</span>{/if}
                             {#if deployment.expired}<span class="cx-badge cx-badge--warning" title="The build output was removed to save space">expired</span>{/if}
                         </td>

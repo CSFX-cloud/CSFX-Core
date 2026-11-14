@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { toneBadgeClass } from "$lib/utils/tone";
     import { onMount, untrack } from "svelte";
     import { ExternalLink, Rocket, Trash2 } from "@lucide/svelte";
     import { goto } from "$app/navigation";
@@ -16,7 +17,7 @@
     import OverviewTab from "$lib/components/site/overview-tab.svelte";
     import WebhookPanel from "$lib/components/site/webhook-panel.svelte";
     import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
-    import { buildDuration, badgeClass, deploymentStatus, repoLabel } from "$lib/utils/site-status";
+    import { buildDuration, deploymentStatus, repoLabel } from "$lib/utils/site-status";
 
     type Tab = "overview" | "build" | "deployments" | "settings";
 
@@ -112,7 +113,7 @@
                 <div>
                     <h1 class="db-title">{site.name}</h1>
                     <p class="db-sub">
-                        <span class={badgeClass(status.tone)}>{status.label}</span>
+                        <span class={toneBadgeClass(status.tone)}>{status.label}</span>
                         <span class="cx-soft">{repoLabel(site.repo_url)} &middot; {site.production_branch}</span>
                     </p>
                 </div>
