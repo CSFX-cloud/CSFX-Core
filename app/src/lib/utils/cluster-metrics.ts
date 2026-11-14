@@ -6,20 +6,11 @@ export interface UsageSample {
     disk: number;
 }
 
-const HEALTHY_UPTIME = 99.9;
-const DEGRADED_UPTIME = 99;
 const BUCKET_SECONDS = 3600;
 const MS_PER_SECOND = 1000;
 
 function percent(used: number, total: number): number {
     return total > 0 ? Math.min(100, (used / total) * 100) : 0;
-}
-
-export function uptimeColor(uptimePercent: number | null): string {
-    if (uptimePercent === null) return "currentColor";
-    if (uptimePercent >= HEALTHY_UPTIME) return "#22c55e";
-    if (uptimePercent >= DEGRADED_UPTIME) return "#eab308";
-    return "#ef4444";
 }
 
 export function toUsageSample(stats: ClusterStats): UsageSample {

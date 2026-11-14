@@ -27,7 +27,6 @@
 		"@storybook/addon-svelte-csf": "latest",
 		"@storybook/addon-vitest": "^10.6.0",
 		"@storybook/sveltekit": "^10.6.0",
-		"@sveltejs/adapter-auto": "^7.0.1",
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.57.0",
 		"@sveltejs/vite-plugin-svelte": "^7.0.0",
@@ -36,7 +35,6 @@
 		"@vitest/coverage-v8": "latest",
 		"bits-ui": "^2.18.0",
 		"clsx": "^2.1.1",
-		"layerchart": "^2.5.0",
 		"mode-watcher": "^1.1.0",
 		"playwright": "latest",
 		"shadcn-svelte": "^1.2.7",
@@ -54,14 +52,10 @@
 		"vitest": "latest"
 	},
 	"dependencies": {
-		"@blobatar/svelte": "^2.7.0",
 		"@iconify/svelte": "^5.2.1",
-		"@jis3r/icons": "^2.7.0",
 		"@novnc/novnc": "^1.7.0",
 		"@xterm/addon-fit": "^0.11.0",
 		"@xterm/xterm": "^6.0.0",
-		"@xyflow/svelte": "^1.7.0",
-		"blobatar": "^2.7.0",
-		"geist": "^1.7.0"
+		"@xyflow/svelte": "^1.7.0"
 	}
 }
