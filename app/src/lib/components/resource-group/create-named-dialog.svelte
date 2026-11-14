@@ -1,5 +1,4 @@
 <script lang="ts" generics="T">
-    import { auth } from "$lib/auth/store.svelte";
     import ModalDialog from "./modal-dialog.svelte";
 
     type Props = {
@@ -9,7 +8,7 @@
         placeholder: string;
         inputId: string;
         failure: string;
-        create: (token: string, name: string) => Promise<T>;
+        create: (name: string) => Promise<T>;
         onCreated: (created: T) => Promise<void>;
     };
 
@@ -25,11 +24,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !name.trim()) return;
+        if (!name.trim()) return;
         creating = true;
         error = null;
         try {
-            const created = await create(auth.token, name.trim());
+            const created = await create(name.trim());
             dialog?.close();
             name = "";
             await onCreated(created);

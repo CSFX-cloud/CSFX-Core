@@ -14,7 +14,7 @@
     {#if live && auth.token}
         {#key workload.id}
             <div style="position: absolute; inset: 0; pointer-events: none">
-                <VncConsole token={auth.token} workloadId={workload.id} viewOnly />
+                <VncConsole workloadId={workload.id} viewOnly />
             </div>
         {/key}
         <span class="vm-screen__live"><i></i>LIVE</span>

@@ -1,6 +1,5 @@
 <script lang="ts">
     import { Plus, Trash2 } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { deleteToken, type RegistryDetail } from "$lib/api/registries";
     import CodeBlock from "$lib/components/resource-group/code-block.svelte";
     import { relativeTime } from "$lib/utils/dashboard";
@@ -21,9 +20,9 @@
     );
 
     async function revoke(tokenId: string, name: string) {
-        if (!auth.token || !confirm(`Revoke ${name}? Anything that uses it loses access immediately.`)) return;
+        if (!confirm(`Revoke ${name}? Anything that uses it loses access immediately.`)) return;
         try {
-            await deleteToken(auth.token, rgId, registry.id, tokenId);
+            await deleteToken(rgId, registry.id, tokenId);
             await onChanged();
         } catch (e) {
             onError(e instanceof Error ? e.message : "Failed to revoke access token");

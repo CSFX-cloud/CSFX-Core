@@ -27,9 +27,8 @@
     });
 
     async function refresh() {
-        if (!auth.token) return;
         try {
-            [records, zone] = await Promise.all([listDnsRecords(auth.token, groupId), getDnsZone(auth.token)]);
+            [records, zone] = await Promise.all([listDnsRecords(groupId), getDnsZone()]);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load dns records";
@@ -37,10 +36,9 @@
     }
 
     async function handleCreate() {
-        if (!auth.token) return;
         busy = true;
         try {
-            await createDnsRecord(auth.token, groupId, { name: name.trim(), record_type: recordType, value: value.trim() });
+            await createDnsRecord(groupId, { name: name.trim(), record_type: recordType, value: value.trim() });
             name = "";
             value = "";
             await refresh();
@@ -52,10 +50,9 @@
     }
 
     async function handleDelete(record: DnsRecord) {
-        if (!auth.token) return;
         if (!confirm(`Remove ${record.name}?`)) return;
         try {
-            await deleteDnsRecord(auth.token, groupId, record.id);
+            await deleteDnsRecord(groupId, record.id);
             await refresh();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to delete dns record";

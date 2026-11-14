@@ -1,5 +1,4 @@
 import { getContext, setContext } from "svelte";
-import { auth } from "$lib/auth/store.svelte";
 import type { Gateway } from "$lib/api/ingress";
 import { getResourceGroup, type Bucket, type ResourceGroup, type Volume, type Workload } from "$lib/api/resource-groups";
 import type { Registry } from "$lib/api/registries";
@@ -42,9 +41,8 @@ export class ResourceGroupState {
     constructor(readonly rgId: string) {}
 
     load = async () => {
-        if (!auth.token) return;
         try {
-            const [group, inventory] = await Promise.all([getResourceGroup(auth.token, this.rgId), loadGroupInventory(auth.token, this.rgId)]);
+            const [group, inventory] = await Promise.all([getResourceGroup(this.rgId), loadGroupInventory(this.rgId)]);
             this.group = group;
             ({
                 workloads: this.workloads,

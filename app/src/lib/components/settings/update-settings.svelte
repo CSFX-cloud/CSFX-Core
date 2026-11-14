@@ -3,7 +3,6 @@
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import ReleaseNotesDrawer from "$lib/components/shell/release-notes-drawer.svelte";
     import Switch from "$lib/components/shell/switch.svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import {
         getUpdateStatus,
         getReleases,
@@ -30,9 +29,8 @@
     let pollInterval: ReturnType<typeof setInterval> | null = null;
 
     async function fetchStatus() {
-        if (!auth.token) return;
         try {
-            status = await getUpdateStatus(auth.token);
+            status = await getUpdateStatus();
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "failed to fetch update status";
@@ -42,10 +40,9 @@
     }
 
     async function fetchReleases() {
-        if (!auth.token) return;
         releasesLoading = true;
         try {
-            releases = await getReleases(auth.token, includePre);
+            releases = await getReleases(includePre);
         } catch (e) {
             error = e instanceof Error ? e.message : "failed to fetch releases";
         } finally {
@@ -64,10 +61,9 @@
     });
 
     async function handleTrigger(version: string) {
-        if (!auth.token) return;
         actionLoading = true;
         try {
-            await triggerUpdate(auth.token, version);
+            await triggerUpdate(version);
             await fetchStatus();
         } catch (e) {
             error = e instanceof Error ? e.message : "trigger update failed";
@@ -77,12 +73,11 @@
     }
 
     async function openNotes(release: ReleaseEntry) {
-        if (!auth.token) return;
         notesRelease = release;
         notes = null;
         notesLoading = true;
         try {
-            notes = await getReleaseNotes(auth.token, release.version);
+            notes = await getReleaseNotes(release.version);
         } catch {
             notes = null;
         } finally {
@@ -91,10 +86,9 @@
     }
 
     async function handlePause() {
-        if (!auth.token) return;
         actionLoading = true;
         try {
-            await pauseUpdate(auth.token);
+            await pauseUpdate();
             await fetchStatus();
         } catch (e) {
             error = e instanceof Error ? e.message : "pause failed";
@@ -104,10 +98,9 @@
     }
 
     async function handleResume() {
-        if (!auth.token) return;
         actionLoading = true;
         try {
-            await resumeUpdate(auth.token);
+            await resumeUpdate();
             await fetchStatus();
         } catch (e) {
             error = e instanceof Error ? e.message : "resume failed";

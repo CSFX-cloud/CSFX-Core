@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import { resizeVolume, type Volume } from "$lib/api/resource-groups";
     import ModalDialog from "./modal-dialog.svelte";
 
@@ -23,11 +22,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !volume || !valid) return;
+        if (!volume || !valid) return;
         busy = true;
         error = null;
         try {
-            await resizeVolume(auth.token, volume.id, size);
+            await resizeVolume(volume.id, size);
             dialog?.close();
             await onResized();
         } catch (e) {

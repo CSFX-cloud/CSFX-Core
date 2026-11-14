@@ -9,7 +9,7 @@
 	});
 </script>
 
-<Story name="Default" args={{ token: "storybook-preview-token", workloadId: "preview-workload" }}>
+<Story name="Default" args={{ workloadId: "preview-workload" }}>
 	{#snippet template(args)}
 		<div class="h-96 w-full">
 			<VncConsole {...args} />

@@ -21,7 +21,7 @@
     onMount(async () => {
         if (!auth.token) return;
         try {
-            usage = await getSiteUsage(auth.token, rgId, siteId, WINDOW_DAYS);
+            usage = await getSiteUsage(rgId, siteId, WINDOW_DAYS);
         } catch {
             failed = true;
         }

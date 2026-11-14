@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import { Plus } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { deleteRole, listPermissions, listRoles, type Permission, type Role } from "$lib/api/roles";
     import { pluralize } from "$lib/utils/format";
     import RoleDialog from "$lib/components/settings/role-dialog.svelte";
@@ -15,11 +14,10 @@
     let dialog = $state<RoleDialog | null>(null);
 
     async function load() {
-        if (!auth.token) return;
         try {
             [roles, permissions] = await Promise.all([
-                listRoles(auth.token),
-                listPermissions(auth.token),
+                listRoles(),
+                listPermissions(),
             ]);
             error = null;
         } catch (e) {
@@ -30,9 +28,8 @@
     }
 
     async function remove(role: Role) {
-        if (!auth.token) return;
         try {
-            await deleteRole(auth.token, role.id);
+            await deleteRole(role.id);
             pendingDeleteId = null;
             await load();
         } catch (e) {

@@ -3,7 +3,6 @@
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import ReleaseNotesDrawer from "$lib/components/shell/release-notes-drawer.svelte";
     import Switch from "$lib/components/shell/switch.svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { getReleases, getReleaseNotes, type ReleaseEntry, type ReleaseNotes, type ReleasesResponse } from "$lib/api/system";
 
     let releases = $state<ReleasesResponse | null>(null);
@@ -15,10 +14,9 @@
     let notesLoading = $state(false);
 
     async function loadReleases() {
-        if (!auth.token) return;
         releasesLoading = true;
         try {
-            releases = await getReleases(auth.token, includePre);
+            releases = await getReleases(includePre);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "failed to fetch releases";
@@ -28,12 +26,11 @@
     }
 
     async function openNotes(release: ReleaseEntry) {
-        if (!auth.token) return;
         selected = release;
         notes = null;
         notesLoading = true;
         try {
-            notes = await getReleaseNotes(auth.token, release.version);
+            notes = await getReleaseNotes(release.version);
         } catch {
             notes = null;
         } finally {

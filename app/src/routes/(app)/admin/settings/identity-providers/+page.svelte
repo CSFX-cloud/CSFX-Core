@@ -3,7 +3,6 @@
     import Icon from "@iconify/svelte";
     import { toast } from "svelte-sonner";
     import { KeyRound, Plus, RefreshCw } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import {
         deleteIdentityProvider,
         listIdentityProviders,
@@ -29,12 +28,11 @@
     const selected = $derived(providers.find((provider) => provider.id === selectedId) ?? null);
 
     async function load() {
-        if (!auth.token) return;
         refreshing = true;
         try {
             [providers, roles] = await Promise.all([
-                listIdentityProviders(auth.token),
-                listRoles(auth.token),
+                listIdentityProviders(),
+                listRoles(),
             ]);
             error = null;
         } catch (e) {
@@ -46,10 +44,10 @@
     }
 
     async function testSelected() {
-        if (!auth.token || !selected) return;
+        if (!selected) return;
         testing = true;
         try {
-            const result = await testIdentityProvider(auth.token, selected.id);
+            const result = await testIdentityProvider(selected.id);
             toast.success("Discovery succeeded", { description: result.issuer });
         } catch (e) {
             toast.error("Discovery failed", {
@@ -61,9 +59,9 @@
     }
 
     async function removeSelected(deleteUsers: boolean) {
-        if (!auth.token || !selected) return;
+        if (!selected) return;
         try {
-            await deleteIdentityProvider(auth.token, selected.id, deleteUsers);
+            await deleteIdentityProvider(selected.id, deleteUsers);
             selectedId = null;
             await load();
         } catch (e) {

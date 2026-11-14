@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount, tick } from "svelte";
     import { FileText } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { streamWorkloadLogs, type Workload } from "$lib/api/resource-groups";
 
     interface LogLine {
@@ -21,11 +20,10 @@
     const services = $derived(workloads.map((workload) => workload.service_name ?? workload.name));
 
     async function stream(workload: Workload, signal: AbortSignal) {
-        if (!auth.token) return;
         const service = workload.service_name ?? workload.name;
         const decoder = new TextDecoder();
         try {
-            const reader = (await streamWorkloadLogs(auth.token, workload.id, signal)).getReader();
+            const reader = (await streamWorkloadLogs(workload.id, signal)).getReader();
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;

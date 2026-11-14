@@ -37,9 +37,8 @@
     }
 
     async function load() {
-        if (!auth.token) return;
         try {
-            groups = await listResourceGroups(auth.token);
+            groups = await listResourceGroups();
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load resource groups";

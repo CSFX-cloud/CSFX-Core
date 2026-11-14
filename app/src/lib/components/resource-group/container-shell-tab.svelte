@@ -3,7 +3,6 @@
     import { Play, Terminal as TerminalIcon } from "@lucide/svelte";
     import type { Terminal } from "@xterm/xterm";
     import "@xterm/xterm/css/xterm.css";
-    import { auth } from "$lib/auth/store.svelte";
     import { openWorkloadExecSocket, type Workload } from "$lib/api/resource-groups";
 
     let { workload, onstart }: { workload: Workload; onstart: () => void } = $props();
@@ -13,7 +12,7 @@
 
     const running = $derived(workload.status === "running");
 
-    async function startSession(element: HTMLDivElement, token: string): Promise<() => void> {
+    async function startSession(element: HTMLDivElement): Promise<() => void> {
         const { Terminal } = await import("@xterm/xterm");
         const { FitAddon } = await import("@xterm/addon-fit");
 
@@ -25,7 +24,7 @@
 
         let socket: WebSocket | null = null;
         try {
-            socket = await openWorkloadExecSocket(token, workload.id);
+            socket = await openWorkloadExecSocket(workload.id);
             socket.binaryType = "arraybuffer";
             socket.onmessage = (event) => terminal.write(event.data instanceof ArrayBuffer ? new Uint8Array(event.data) : event.data);
             socket.onerror = () => (error = "Exec socket error");
@@ -42,8 +41,8 @@
     }
 
     onMount(() => {
-        if (!auth.token || !terminalElement || !running) return;
-        const session = startSession(terminalElement, auth.token);
+        if (!terminalElement || !running) return;
+        const session = startSession(terminalElement);
         return () => {
             session.then((cleanup) => cleanup());
         };

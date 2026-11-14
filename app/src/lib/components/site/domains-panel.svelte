@@ -1,6 +1,5 @@
 <script lang="ts">
     import { Plus, Trash2 } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { addSiteDomain, deleteSiteDomain, type SiteDetail } from "$lib/api/sites";
 
     type Props = { rgId: string; site: SiteDetail; onChanged: () => Promise<void>; onError: (message: string) => void };
@@ -16,10 +15,9 @@
         return "production";
     }
 
-    async function run(action: (token: string) => Promise<unknown>, failure: string) {
-        if (!auth.token) return;
+    async function run(action: () => Promise<unknown>, failure: string) {
         try {
-            await action(auth.token);
+            await action();
             await onChanged();
         } catch (e) {
             onError(e instanceof Error ? e.message : failure);
@@ -29,7 +27,7 @@
     async function add() {
         if (hostname.trim() === "") return;
         adding = true;
-        await run((token) => addSiteDomain(token, rgId, site.id, hostname.trim()), "Failed to add domain");
+        await run(() => addSiteDomain(rgId, site.id, hostname.trim()), "Failed to add domain");
         hostname = "";
         adding = false;
     }
@@ -58,7 +56,7 @@
                                         type="button"
                                         aria-label="Remove {domain.hostname}"
                                         title="Remove"
-                                        onclick={() => run((token) => deleteSiteDomain(token, rgId, site.id, domain.id), "Failed to remove domain")}
+                                        onclick={() => run(() => deleteSiteDomain(rgId, site.id, domain.id), "Failed to remove domain")}
                                     >
                                         <Trash2 class="cx-i" aria-hidden="true" />
                                     </button>

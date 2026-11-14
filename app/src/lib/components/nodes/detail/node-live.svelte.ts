@@ -38,12 +38,12 @@ export class NodeLiveMetrics {
         this.#nodeId = nodeId;
     }
 
-    async start(token: string) {
-        await this.#load(token);
+    async start() {
+        await this.#load();
         this.#timer = setInterval(() => {
-            if (!this.live) this.#load(token);
+            if (!this.live) this.#load();
         }, POLL_INTERVAL_MS);
-        await this.#openSocket(token);
+        await this.#openSocket();
     }
 
     stop() {
@@ -54,10 +54,10 @@ export class NodeLiveMetrics {
         this.#timer = null;
     }
 
-    async #load(token: string) {
+    async #load() {
         this.loading = true;
         try {
-            const latest = await getNodeMetricsLatest(token, this.#nodeId);
+            const latest = await getNodeMetricsLatest(this.#nodeId);
             this.metrics = latest;
             this.#push(latest.cpu_usage_percent, latest.memory_used_bytes, latest.memory_total_bytes, latest.network_rx_bytes, latest.network_tx_bytes);
             this.error = null;
@@ -68,9 +68,9 @@ export class NodeLiveMetrics {
         }
     }
 
-    async #openSocket(token: string) {
+    async #openSocket() {
         try {
-            const socket = await openNodeMetricsSocket(token, this.#nodeId);
+            const socket = await openNodeMetricsSocket(this.#nodeId);
             this.#socket = socket;
             socket.onmessage = (event) => this.#receive(event.data);
             socket.onclose = () => (this.live = false);

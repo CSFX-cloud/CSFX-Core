@@ -54,34 +54,33 @@
     const openEvents = $derived(events.filter((event) => event.status === "open"));
     const hasCritical = $derived(openEvents.some((event) => event.severity === "critical"));
 
-    async function guarded(source: string, task: (token: string) => Promise<unknown>) {
-        if (!auth.token) return;
+    async function guarded(source: string, task: () => Promise<unknown>) {
         try {
-            await task(auth.token);
+            await task();
             delete failures[source];
         } catch (e) {
             failures[source] = e instanceof Error ? e.message : `Failed to load ${source}`;
         }
     }
 
-    const refreshLive = () => guarded("stats", async (token) => (stats = await getClusterStats(token)));
-    const refreshNodes = () => guarded("nodes", async (token) => (nodes = await listNodes(token)));
-    const refreshEvents = () => guarded("events", async (token) => (events = await listEvents(token)));
+    const refreshLive = () => guarded("stats", async () => (stats = await getClusterStats()));
+    const refreshNodes = () => guarded("nodes", async () => (nodes = await listNodes()));
+    const refreshEvents = () => guarded("events", async () => (events = await listEvents()));
 
-    const refreshWorkloads = () => guarded("workloads", async (token) => (workloads = await listWorkloads(token)));
-    const refreshVolumes = () => guarded("volumes", async (token) => (volumes = await listVolumes(token)));
-    const refreshBuckets = () => guarded("buckets", async (token) => (buckets = await listBuckets(token)));
+    const refreshWorkloads = () => guarded("workloads", async () => (workloads = await listWorkloads()));
+    const refreshVolumes = () => guarded("volumes", async () => (volumes = await listVolumes()));
+    const refreshBuckets = () => guarded("buckets", async () => (buckets = await listBuckets()));
 
     const refreshUptime = () =>
-        guarded("uptime", async (token) => {
-            const weekly = await getHealthHistory(token, "7d");
+        guarded("uptime", async () => {
+            const weekly = await getHealthHistory("7d");
             uptimePercent = clusterUptimePercent(weekly, stats?.node_count ?? nodes.length);
         });
 
     const refreshUsage = () =>
-        guarded("usage", async (token) => {
+        guarded("usage", async () => {
             const range = usageRange;
-            const history = await getUsageHistory(token, range);
+            const history = await getUsageHistory(range);
             if (range === usageRange) usageHistory = history;
         });
 

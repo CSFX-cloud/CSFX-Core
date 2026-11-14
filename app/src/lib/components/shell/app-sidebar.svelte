@@ -15,8 +15,8 @@
     let menuOpen = $state(false);
     let account = $state<HTMLElement>();
 
-    async function loadVersions(token: string) {
-        const [status, releases] = await Promise.allSettled([getUpdateStatus(token), getReleases(token)]);
+    async function loadVersions() {
+        const [status, releases] = await Promise.allSettled([getUpdateStatus(), getReleases()]);
         if (status.status === "fulfilled") version = status.value.current_version;
         if (releases.status !== "fulfilled") return;
         const { latest_update, releases: entries } = releases.value;
@@ -24,10 +24,9 @@
     }
 
     $effect(() => {
-        const token = auth.token;
-        if (!token) return;
-        loadVersions(token);
-        const timer = setInterval(() => loadVersions(token), UPDATE_CHECK_INTERVAL_MS);
+        if (!auth.token) return;
+        loadVersions();
+        const timer = setInterval(loadVersions, UPDATE_CHECK_INTERVAL_MS);
         return () => clearInterval(timer);
     });
 

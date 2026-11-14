@@ -33,11 +33,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !valid) return;
+        if (!valid) return;
         creating = true;
         error = null;
         try {
-            await createUser(auth.token, {
+            await createUser({
                 username: username.trim(),
                 email: email.trim() === "" ? null : email.trim(),
                 password,

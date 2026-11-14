@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import {
         updateResourceGroup,
         uploadResourceGroupIconImage,
@@ -30,11 +29,11 @@
     }
 
     async function save() {
-        if (!auth.token || !group) return;
+        if (!group) return;
         saving = true;
         error = null;
         try {
-            onUpdated(await updateResourceGroup(auth.token, group.id, { icon, color }));
+            onUpdated(await updateResourceGroup(group.id, { icon, color }));
             dialog?.close();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to update appearance";
@@ -44,11 +43,11 @@
     }
 
     async function uploadImage(file: File) {
-        if (!auth.token || !group) return;
+        if (!group) return;
         uploadingImage = true;
         imageError = null;
         try {
-            onUpdated(await uploadResourceGroupIconImage(auth.token, group.id, file));
+            onUpdated(await uploadResourceGroupIconImage(group.id, file));
         } catch (e) {
             imageError = e instanceof Error ? e.message : "Failed to upload icon image";
         } finally {
@@ -57,10 +56,10 @@
     }
 
     async function removeImage() {
-        if (!auth.token || !group) return;
+        if (!group) return;
         imageError = null;
         try {
-            onUpdated(await deleteResourceGroupIconImage(auth.token, group.id));
+            onUpdated(await deleteResourceGroupIconImage(group.id));
         } catch (e) {
             imageError = e instanceof Error ? e.message : "Failed to remove icon image";
         }

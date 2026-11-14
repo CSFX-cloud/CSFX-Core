@@ -1,6 +1,5 @@
 <script lang="ts">
     import { untrack } from "svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { updateSite, type SiteDetail } from "$lib/api/sites";
 
     type Props = { rgId: string; site: SiteDetail; onChanged: () => Promise<void>; onError: (message: string) => void };
@@ -20,10 +19,9 @@
     let saving = $state(false);
 
     async function save() {
-        if (!auth.token) return;
         saving = true;
         try {
-            await updateSite(auth.token, rgId, site.id, {
+            await updateSite(rgId, site.id, {
                 production_branch: branch.trim(),
                 root_dir: rootDir.trim(),
                 install_command: installCommand,

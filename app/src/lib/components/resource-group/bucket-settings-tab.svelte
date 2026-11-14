@@ -33,20 +33,19 @@
     let saved = $state(false);
 
     async function loadKeys() {
-        if (!auth.token) return;
         try {
-            keys = await listBucketKeys(auth.token, bucket.id);
+            keys = await listBucketKeys(bucket.id);
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load access keys";
         }
     }
 
     async function createKey() {
-        if (!auth.token || !newKeyName) return;
+        if (!newKeyName) return;
         creating = true;
         error = null;
         try {
-            createdKey = await createBucketKey(auth.token, bucket.id, {
+            createdKey = await createBucketKey(bucket.id, {
                 name: newKeyName,
                 ...(newKeyExpiry && { expires_at: `${newKeyExpiry}T23:59:59` }),
             });
@@ -61,10 +60,10 @@
     }
 
     async function removeKey(key: BucketAccessKey) {
-        if (!auth.token || !confirm(`Delete access key ${key.name}?`)) return;
+        if (!confirm(`Delete access key ${key.name}?`)) return;
         error = null;
         try {
-            await deleteBucketKey(auth.token, bucket.id, key.id);
+            await deleteBucketKey(bucket.id, key.id);
             keys = keys.filter((entry) => entry.id !== key.id);
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to delete access key";
@@ -72,13 +71,12 @@
     }
 
     async function saveSettings() {
-        if (!auth.token) return;
         saving = true;
         saved = false;
         error = null;
         try {
             onUpdated(
-                await updateBucket(auth.token, bucket.id, {
+                await updateBucket(bucket.id, {
                     exposure,
                     ...(quotaGib && { quota_max_size: Math.round(Number(quotaGib) * BYTES_PER_GIB) }),
                     ...(maxObjects && { quota_max_objects: Number(maxObjects) }),

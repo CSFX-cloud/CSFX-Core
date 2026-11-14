@@ -105,7 +105,7 @@
     placeholder="kv-prod"
     inputId="kv-name"
     failure="Failed to create vault"
-    create={(token, name) => createVault(token, rg.rgId, name)}
+    create={(name) => createVault(rg.rgId, name)}
     onCreated={openVault}
 />
 <CreateNamedDialog
@@ -116,7 +116,7 @@
     placeholder="main"
     inputId="cr-name"
     failure="Failed to create registry"
-    create={(token, name) => createRegistry(token, rg.rgId, name)}
+    create={(name) => createRegistry(rg.rgId, name)}
     onCreated={openRegistry}
 />
 

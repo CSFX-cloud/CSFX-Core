@@ -13,7 +13,7 @@
     const label = $derived(notifications.openCount ? `Notifications, ${notifications.openCount} open` : "Notifications");
 
     onMount(() => {
-        const refresh = () => auth.token && notifications.refresh(auth.token);
+        const refresh = () => auth.token && notifications.refresh();
         refresh();
         const timer = setInterval(refresh, REFRESH_INTERVAL_MS);
         return () => clearInterval(timer);

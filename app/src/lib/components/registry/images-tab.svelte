@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import { Check, Copy, Trash2 } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { deleteImage, listImages, type RegistryDetail, type Repository } from "$lib/api/registries";
     import { createClipboard } from "$lib/utils/clipboard.svelte";
     import { formatBytes } from "$lib/utils/format";
@@ -28,9 +27,8 @@
     );
 
     async function load() {
-        if (!auth.token) return;
         try {
-            repositories = (await listImages(auth.token, rgId, registry.id)).repositories;
+            repositories = (await listImages(rgId, registry.id)).repositories;
             onLoaded(repositories);
         } catch (e) {
             onError(e instanceof Error ? e.message : "Failed to list images");
@@ -40,9 +38,9 @@
     }
 
     async function remove(repository: string, tag: string) {
-        if (!auth.token || !confirm(`Delete ${repository}:${tag}? Deployments that still use it can no longer start.`)) return;
+        if (!confirm(`Delete ${repository}:${tag}? Deployments that still use it can no longer start.`)) return;
         try {
-            await deleteImage(auth.token, rgId, registry.id, repository, tag);
+            await deleteImage(rgId, registry.id, repository, tag);
             await load();
         } catch (e) {
             onError(e instanceof Error ? e.message : "Failed to delete image");

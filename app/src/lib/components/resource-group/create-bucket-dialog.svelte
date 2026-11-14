@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import { createBucket } from "$lib/api/resource-groups";
     import ModalDialog from "./modal-dialog.svelte";
 
@@ -16,11 +15,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !name.trim()) return;
+        if (!name.trim()) return;
         creating = true;
         error = null;
         try {
-            await createBucket(auth.token, { name: name.trim(), resource_group_id: rgId, exposure });
+            await createBucket({ name: name.trim(), resource_group_id: rgId, exposure });
             dialog?.close();
             name = "";
             exposure = "internal";

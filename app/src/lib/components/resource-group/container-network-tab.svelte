@@ -28,7 +28,7 @@
 
     onMount(async () => {
         if (!auth.token || !workload.assigned_agent_id) return;
-        nodeIp = await getNode(auth.token, workload.assigned_agent_id)
+        nodeIp = await getNode(workload.assigned_agent_id)
             .then((node) => node.ip_address)
             .catch(() => null);
     });

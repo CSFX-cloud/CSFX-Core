@@ -63,9 +63,8 @@
     const groupColors = $derived(topology ? resourceGroupColors(topology) : new Map());
 
     async function load() {
-        if (!auth.token) return;
         try {
-            topology = await getTopology(auth.token);
+            topology = await getTopology();
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load topology";

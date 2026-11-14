@@ -17,19 +17,18 @@
     let addNodeDialog = $state<ReturnType<typeof AddNodeDialog> | null>(null);
 
     async function refreshStats() {
-        if (!auth.token) return;
         try {
-            stats = await getClusterStats(auth.token);
+            stats = await getClusterStats();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load cluster stats";
         }
     }
 
     async function refresh() {
-        if (!auth.token || refreshing) return;
+        if (refreshing) return;
         refreshing = true;
         try {
-            [nodes] = await Promise.all([listNodes(auth.token), refreshStats()]);
+            [nodes] = await Promise.all([listNodes(), refreshStats()]);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load nodes";

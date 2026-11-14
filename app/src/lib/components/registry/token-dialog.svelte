@@ -1,6 +1,5 @@
 <script lang="ts">
     import { Check, Copy } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { createToken, type CreatedToken, type TokenScope } from "$lib/api/registries";
     import ModalDialog from "$lib/components/resource-group/modal-dialog.svelte";
     import { createClipboard } from "$lib/utils/clipboard.svelte";
@@ -30,11 +29,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !name.trim()) return;
+        if (!name.trim()) return;
         creating = true;
         error = null;
         try {
-            created = await createToken(auth.token, rgId, registryId, name.trim(), scope);
+            created = await createToken(rgId, registryId, name.trim(), scope);
             await onCreated();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to create access token";

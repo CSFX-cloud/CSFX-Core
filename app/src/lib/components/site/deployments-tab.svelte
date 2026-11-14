@@ -1,6 +1,5 @@
 <script lang="ts">
     import { toneBadgeClass } from "$lib/utils/tone";
-    import { auth } from "$lib/auth/store.svelte";
     import { promoteDeployment, type DeploymentSummary } from "$lib/api/sites";
     import { relativeTime } from "$lib/utils/dashboard";
     import { buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
@@ -27,10 +26,9 @@
     }
 
     async function promote(deployment: DeploymentSummary) {
-        if (!auth.token) return;
         busy = deployment.id;
         try {
-            await promoteDeployment(auth.token, rgId, siteId, deployment.id);
+            await promoteDeployment(rgId, siteId, deployment.id);
             await onChanged();
         } catch (e) {
             onError(e instanceof Error ? e.message : "Failed to promote deployment");
