@@ -1,7 +1,7 @@
 <script lang="ts">
+    import { saveBlob } from "$lib/utils/download";
     import { onMount, tick } from "svelte";
     import { Download } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { getDeployment, type Deployment } from "$lib/api/sites";
     import { shortSha } from "$lib/utils/site-status";
 
@@ -25,10 +25,9 @@
     }
 
     async function refresh() {
-        if (!auth.token) return;
         const wasRunning = running;
         try {
-            deployment = await getDeployment(auth.token, rgId, siteId, deploymentId);
+            deployment = await getDeployment(rgId, siteId, deploymentId);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load the build log";
@@ -39,12 +38,7 @@
     }
 
     function download() {
-        const url = URL.createObjectURL(new Blob([deployment?.build_log ?? ""], { type: "text/plain" }));
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `build-${deploymentId.slice(0, 8)}.txt`;
-        link.click();
-        URL.revokeObjectURL(url);
+        saveBlob(new Blob([deployment?.build_log ?? ""], { type: "text/plain" }), `build-${deploymentId.slice(0, 8)}.txt`);
     }
 
     onMount(() => {

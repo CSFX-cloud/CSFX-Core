@@ -1,7 +1,7 @@
 <script lang="ts">
     import type { Bucket, Volume, Workload } from "$lib/api/resource-groups";
     import { formatCapacity, pluralize } from "$lib/utils/format";
-    import { isTransientStatus } from "$lib/utils/status.js";
+    import { isTransientStatus } from "$lib/utils/tone";
 
     const MILLICORES_PER_CORE = 1000;
     const BYTES_PER_GB = 1_073_741_824;

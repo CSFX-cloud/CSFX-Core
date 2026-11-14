@@ -3,10 +3,9 @@
     import { getWorkloadVncUrl } from "$lib/api/resource-groups";
 
     let {
-        token,
         workloadId,
         viewOnly = false,
-    }: { token: string; workloadId: string; viewOnly?: boolean } = $props();
+    }: { workloadId: string; viewOnly?: boolean } = $props();
 
     let container = $state<HTMLDivElement | null>(null);
     let error = $state<string | null>(null);
@@ -15,7 +14,7 @@
     onMount(async () => {
         if (!container) return;
         try {
-            const url = await getWorkloadVncUrl(token, workloadId);
+            const url = await getWorkloadVncUrl(workloadId);
             const { default: RFB } = await import("@novnc/novnc");
             rfb = new RFB(container, url);
             rfb.scaleViewport = true;

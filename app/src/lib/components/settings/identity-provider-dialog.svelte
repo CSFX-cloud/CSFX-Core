@@ -88,7 +88,7 @@
         dialog?.open();
         if (provider && auth.token) {
             try {
-                mappings = await listGroupMappings(auth.token, provider.id);
+                mappings = await listGroupMappings(provider.id);
             } catch (e) {
                 error = e instanceof Error ? e.message : "Failed to load group mappings";
             }
@@ -112,17 +112,15 @@
     }
 
     async function save() {
-        if (!auth.token || !valid) return;
+        if (!valid) return;
         saving = true;
         error = null;
         try {
             const input = buildInput();
             const saved = editing
-                ? await updateIdentityProvider(auth.token, editing.id, input)
-                : await createIdentityProvider(auth.token, slug, input);
-            await replaceGroupMappings(
-                auth.token,
-                saved.id,
+                ? await updateIdentityProvider(editing.id, input)
+                : await createIdentityProvider(slug, input);
+            await replaceGroupMappings(saved.id,
                 mappings.map((mapping) => ({ ...mapping, external_group: mapping.external_group.trim() })),
             );
             dialog?.close();

@@ -40,11 +40,10 @@
     const rates = $derived(history.length ? history[history.length - 1] : null);
 
     $effect(() => {
-        const token = auth.token;
         const selected = range;
-        if (!token) return;
+        if (!auth.token) return;
         const load = async () => {
-            const points = await getUsageHistory(token, selected, node.id).catch(() => []);
+            const points = await getUsageHistory(selected, node.id).catch(() => []);
             if (selected === range) usageHistory = points;
         };
         load();

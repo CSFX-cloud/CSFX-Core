@@ -5,7 +5,7 @@
     import { listBuckets, listResourceGroups, type Bucket } from "$lib/api/resource-groups";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
     import { badgeClass, statusLabel } from "$lib/utils/tone";
-    import { fmtBytes } from "$lib/utils/format";
+    import { formatBytes } from "$lib/utils/format";
 
     const SKELETON_ROWS = 3;
 
@@ -16,10 +16,10 @@
     let error = $state<string | null>(null);
 
     async function refresh() {
-        if (!auth.token || refreshing) return;
+        if (refreshing) return;
         refreshing = true;
         try {
-            const [loaded, groups] = await Promise.all([listBuckets(auth.token), listResourceGroups(auth.token).catch(() => [])]);
+            const [loaded, groups] = await Promise.all([listBuckets(), listResourceGroups().catch(() => [])]);
             buckets = loaded;
             groupNames = new Map(groups.map((group) => [group.id, group.name]));
             error = null;
@@ -87,7 +87,7 @@
                                 </td>
                                 <td class="cx-num">{bucket.global_alias}</td>
                                 <td class="cx-soft">{bucket.exposure}</td>
-                                <td class="cx-soft">{bucket.quota_max_size ? fmtBytes(bucket.quota_max_size) : "unlimited"}</td>
+                                <td class="cx-soft">{bucket.quota_max_size ? formatBytes(bucket.quota_max_size) : "unlimited"}</td>
                                 <td><span class={badgeClass(bucket.status)}>{statusLabel(bucket.status)}</span></td>
                                 <td class="cx-soft">
                                     {#if bucket.resource_group_id}

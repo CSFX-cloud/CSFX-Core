@@ -2,7 +2,6 @@
     import { onMount } from "svelte";
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
     import Switch from "$lib/components/shell/switch.svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { getNtfySettings, sendTestNotification, updateNtfySettings, type NtfySeverity } from "$lib/api/notifications";
 
     const SEVERITIES: { value: NtfySeverity; label: string }[] = [
@@ -24,9 +23,8 @@
     let notice = $state<string | null>(null);
 
     async function load() {
-        if (!auth.token) return;
         try {
-            const settings = await getNtfySettings(auth.token);
+            const settings = await getNtfySettings();
             enabled = settings.enabled;
             serverUrl = settings.server_url;
             topic = settings.topic;
@@ -41,11 +39,10 @@
     }
 
     async function save() {
-        if (!auth.token) return;
         saving = true;
         notice = null;
         try {
-            const settings = await updateNtfySettings(auth.token, {
+            const settings = await updateNtfySettings({
                 enabled,
                 server_url: serverUrl,
                 topic,
@@ -64,11 +61,10 @@
     }
 
     async function sendTest() {
-        if (!auth.token) return;
         testing = true;
         notice = null;
         try {
-            await sendTestNotification(auth.token);
+            await sendTestNotification();
             error = null;
             notice = "Test notification sent";
         } catch (e) {
@@ -79,11 +75,10 @@
     }
 
     async function clearToken() {
-        if (!auth.token) return;
         accessToken = "";
         saving = true;
         try {
-            const settings = await updateNtfySettings(auth.token, { enabled, server_url: serverUrl, topic, token: "", min_severity: minSeverity });
+            const settings = await updateNtfySettings({ enabled, server_url: serverUrl, topic, token: "", min_severity: minSeverity });
             tokenSet = settings.token_set;
             error = null;
         } catch (e) {

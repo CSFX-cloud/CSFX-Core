@@ -1,3 +1,5 @@
+import { api, ApiError } from '$lib/api/http';
+
 const API_BASE = '/api';
 
 export interface AuthResponse {
@@ -18,10 +20,8 @@ export interface UserProfile {
 }
 
 async function fetchPublicKeyPem(): Promise<string> {
-    const res = await fetch(`${API_BASE}/public-key`);
-    if (!res.ok) throw new Error(`public-key fetch failed: ${res.status}`);
-    const data = await res.json();
-    return data.public_key as string;
+    const data = await api<{ public_key: string }>('GET', '/public-key');
+    return data.public_key;
 }
 
 function pkcs1PemToSpki(pem: string): ArrayBuffer {
@@ -99,29 +99,17 @@ export async function login(
     password: string,
     twoFactorCode?: string,
 ): Promise<AuthResponse> {
-    const pem = await fetchPublicKeyPem();
-    const publicKey = await importRsaKey(pem);
-    const encryptedPassword = await encryptPassword(password, publicKey);
-
-    const res = await fetch(`${API_BASE}/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    const [encryptedPassword] = await encryptForServer(password);
+    try {
+        return await api<AuthResponse>('POST', '/login', {
             username,
             encrypted_password: encryptedPassword,
             two_factor_code: twoFactorCode ?? null,
-        }),
-    });
-
-    if (res.status === 403) {
-        throw new TwoFactorRequiredError(username, password);
+        });
+    } catch (e) {
+        if (e instanceof ApiError && e.status === 403) throw new TwoFactorRequiredError(username, password);
+        throw e;
     }
-
-    if (!res.ok) {
-        throw new Error(`login failed: ${res.status}`);
-    }
-
-    return res.json();
 }
 
 export interface SsoProvider {
@@ -129,88 +117,29 @@ export interface SsoProvider {
     display_name: string;
 }
 
-export async function listSsoProviders(): Promise<SsoProvider[]> {
-    const res = await fetch(`${API_BASE}/auth/providers`);
-    if (!res.ok) throw new Error(`sso providers fetch failed: ${res.status}`);
-    return res.json();
-}
+export const listSsoProviders = () => api<SsoProvider[]>('GET', '/auth/providers');
 
 export function ssoStartUrl(slug: string): string {
     return `${API_BASE}/auth/oidc/${encodeURIComponent(slug)}/start`;
 }
 
-export async function exchangeSsoCode(code: string): Promise<AuthResponse> {
-    const res = await fetch(`${API_BASE}/auth/oidc/exchange`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-    });
-    if (!res.ok) throw new Error(`sso exchange failed: ${res.status}`);
-    return res.json();
-}
+export const exchangeSsoCode = (code: string) => api<AuthResponse>('POST', '/auth/oidc/exchange', { code });
 
-export async function changePassword(
-    token: string,
-    oldPassword: string,
-    newPassword: string,
-): Promise<string> {
-    const pem = await fetchPublicKeyPem();
-    const publicKey = await importRsaKey(pem);
-    const encryptedOld = await encryptPassword(oldPassword, publicKey);
-    const encryptedNew = await encryptPassword(newPassword, publicKey);
-
-    const res = await fetch(`${API_BASE}/change-password`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-            old_password: encryptedOld,
-            new_password: encryptedNew,
-        }),
-    });
-
-    if (!res.ok) throw new Error(`change-password failed: ${res.status}`);
-    const body: { token: string } = await res.json();
+export async function changePassword(oldPassword: string, newPassword: string): Promise<string> {
+    const [old_password, new_password] = await encryptForServer(oldPassword, newPassword);
+    const body = await api<{ token: string }>('POST', '/change-password', { old_password, new_password });
     return body.token;
 }
 
-export async function validateSession(token: string): Promise<UserProfile> {
-    const res = await fetch(`${API_BASE}/validate-session`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error('session invalid');
-    return res.json();
+export const validateSession = () => api<UserProfile>('GET', '/validate-session');
+
+export async function changeEmail(newEmail: string, password: string): Promise<void> {
+    const [encryptedPassword] = await encryptForServer(password);
+    await api<void>('POST', '/change-email', { new_email: newEmail, password: encryptedPassword });
 }
 
-export async function changeEmail(token: string, newEmail: string, password: string): Promise<void> {
-    const pem = await fetchPublicKeyPem();
-    const publicKey = await importRsaKey(pem);
-    const encryptedPassword = await encryptPassword(password, publicKey);
-
-    const res = await fetch(`${API_BASE}/change-email`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ new_email: newEmail, password: encryptedPassword }),
-    });
-    if (!res.ok) throw new Error(`change-email failed: ${res.status}`);
-}
-
-export async function changeGravatarEmail(token: string, gravatarEmail: string | null): Promise<void> {
-    const res = await fetch(`${API_BASE}/change-gravatar-email`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ gravatar_email: gravatarEmail }),
-    });
-    if (!res.ok) throw new Error(`change-gravatar-email failed: ${res.status}`);
-}
+export const changeGravatarEmail = (gravatarEmail: string | null) =>
+    api<void>('POST', '/change-gravatar-email', { gravatar_email: gravatarEmail });
 
 export async function gravatarUrl(email: string, size = 80): Promise<string> {
     const normalized = email.trim().toLowerCase();
@@ -222,74 +151,19 @@ export async function gravatarUrl(email: string, size = 80): Promise<string> {
     return `https://www.gravatar.com/avatar/${hash}?s=${size}&d=404`;
 }
 
-export type AvatarFallbackStyle = 'initials' | 'blobatar';
-
-export async function getAvatarFallbackStyle(token: string): Promise<AvatarFallbackStyle> {
-    const res = await fetch(`${API_BASE}/settings/avatar-fallback`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`get avatar fallback failed: ${res.status}`);
-    const data = await res.json();
-    return data.style === 'blobatar' ? 'blobatar' : 'initials';
-}
-
-export async function setAvatarFallbackStyle(token: string, style: AvatarFallbackStyle): Promise<void> {
-    const res = await fetch(`${API_BASE}/settings/avatar-fallback`, {
-        method: 'PUT',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ style }),
-    });
-    if (!res.ok) throw new Error(`set avatar fallback failed: ${res.status}`);
-}
-
 export interface Setup2FAResponse {
     secret: string;
     qr_code: string;
 }
 
-export async function setup2FA(token: string, password: string): Promise<Setup2FAResponse> {
-    const pem = await fetchPublicKeyPem();
-    const publicKey = await importRsaKey(pem);
-    const encryptedPassword = await encryptPassword(password, publicKey);
-
-    const res = await fetch(`${API_BASE}/2fa/setup`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ password: encryptedPassword }),
-    });
-    if (!res.ok) throw new Error(`2fa setup failed: ${res.status}`);
-    return res.json();
+export async function setup2FA(password: string): Promise<Setup2FAResponse> {
+    const [encryptedPassword] = await encryptForServer(password);
+    return api<Setup2FAResponse>('POST', '/2fa/setup', { password: encryptedPassword });
 }
 
-export async function enable2FA(token: string, code: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/2fa/enable`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ code }),
-    });
-    if (!res.ok) throw new Error(`2fa enable failed: ${res.status}`);
-}
+export const enable2FA = (code: string) => api<void>('POST', '/2fa/enable', { code });
 
-export async function disable2FA(token: string, code: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/2fa/disable`, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ code }),
-    });
-    if (!res.ok) throw new Error(`2fa disable failed: ${res.status}`);
-}
+export const disable2FA = (code: string) => api<void>('POST', '/2fa/disable', { code });
 
 export class TwoFactorRequiredError extends Error {
     constructor(
@@ -327,48 +201,34 @@ export class SetupError extends Error {
     }
 }
 
-export const SETUP_CA_URL = `${API_BASE}/setup/ca.crt`;
-
-export async function getSetupStatus(): Promise<SetupStatus> {
-    const res = await fetch(`${API_BASE}/setup/status`);
-    if (!res.ok) throw new Error(`setup status failed: ${res.status}`);
-    return res.json();
+async function asSetupError<T>(call: () => Promise<T>): Promise<T> {
+    try {
+        return await call();
+    } catch (e) {
+        if (e instanceof ApiError) throw new SetupError(e.status, e.message);
+        throw e;
+    }
 }
 
+export const SETUP_CA_URL = `${API_BASE}/setup/ca.crt`;
+
+export const getSetupStatus = () => api<SetupStatus>('GET', '/setup/status');
+
 export async function completeSetup(input: SetupInput): Promise<SetupResult> {
-    const [encryptedPassword, encryptedConsolePin] = await encryptForServer(
-        input.password,
-        input.consolePin,
-    );
-    const res = await fetch(`${API_BASE}/setup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+    const [encryptedPassword, encryptedConsolePin] = await encryptForServer(input.password, input.consolePin);
+    return asSetupError(() =>
+        api<SetupResult>('POST', '/setup', {
             setup_code: input.setupCode,
             organization_name: input.organizationName,
             admin_email: input.adminEmail,
             encrypted_password: encryptedPassword,
             encrypted_console_pin: encryptedConsolePin,
         }),
-    });
-    if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'setup failed' }));
-        throw new SetupError(res.status, body.error ?? 'setup failed');
-    }
-    return res.json();
+    );
 }
 
-export async function requestClusterJoin(setupCode: string, joinString: string): Promise<void> {
-    const res = await fetch(`${API_BASE}/setup/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ setup_code: setupCode, join_string: joinString }),
-    });
-    if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'join failed' }));
-        throw new SetupError(res.status, body.error ?? 'join failed');
-    }
-}
+export const requestClusterJoin = (setupCode: string, joinString: string) =>
+    asSetupError(() => api<void>('POST', '/setup/join', { setup_code: setupCode, join_string: joinString }));
 
 export interface SshAccess {
     enabled: boolean;
@@ -376,27 +236,7 @@ export interface SshAccess {
     effective: boolean;
 }
 
-export async function getSshAccess(token: string): Promise<SshAccess> {
-    const res = await fetch(`${API_BASE}/admin/settings/ssh`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`get ssh access failed: ${res.status}`);
-    return res.json();
-}
+export const getSshAccess = () => api<SshAccess>('GET', '/admin/settings/ssh');
 
-export async function setSshAccess(
-    token: string,
-    enabled: boolean,
-    durationHours: number | null,
-): Promise<SshAccess> {
-    const res = await fetch(`${API_BASE}/admin/settings/ssh`, {
-        method: 'PUT',
-        headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ enabled, duration_hours: durationHours }),
-    });
-    if (!res.ok) throw new Error(`set ssh access failed: ${res.status}`);
-    return res.json();
-}
+export const setSshAccess = (enabled: boolean, durationHours: number | null) =>
+    api<SshAccess>('PUT', '/admin/settings/ssh', { enabled, duration_hours: durationHours });

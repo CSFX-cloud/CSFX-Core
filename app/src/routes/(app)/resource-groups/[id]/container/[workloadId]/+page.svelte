@@ -50,12 +50,12 @@
         ...(nodeName ? [{ icon: Server, text: nodeName }] : []),
     ]);
 
-    async function runAction(action: (token: string, id: string) => Promise<unknown>, failure: string) {
-        if (!auth.token || !container) return false;
+    async function runAction(action: (id: string) => Promise<unknown>, failure: string) {
+        if (!container) return false;
         actionBusy = true;
         actionError = null;
         try {
-            await action(auth.token, container.id);
+            await action(container.id);
             await rg.load();
             return true;
         } catch (e) {
@@ -73,9 +73,8 @@
 
     $effect(() => {
         const agentId = container?.assigned_agent_id;
-        const token = auth.token;
-        if (!agentId || !token) return;
-        getNode(token, agentId)
+        if (!agentId || !auth.token) return;
+        getNode(agentId)
             .then((node) => (nodeName = node.hostname))
             .catch(() => (nodeName = null));
     });
@@ -132,7 +131,7 @@
         {:else if tab === "network"}
             <ContainerNetworkTab workload={container} rgId={rg.rgId} groupName={rg.group?.name ?? "the group"} cidr={rg.group?.internal_cidr ?? "—"} />
         {:else if tab === "storage"}
-            <StorageUsageTab rows={storage} title={name} rgId={rg.rgId} workload={container} {available} restart={() => restartWorkload(auth.token ?? "", container.id)} onChanged={rg.load} />
+            <StorageUsageTab rows={storage} title={name} rgId={rg.rgId} workload={container} {available} restart={() => restartWorkload(container.id)} onChanged={rg.load} />
         {:else}
             <ContainerSettingsTab workload={container} onRedeployed={rg.load} />
         {/if}

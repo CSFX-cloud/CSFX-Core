@@ -1,8 +1,8 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
+    import { toneBadgeClass } from "$lib/utils/tone";
     import { promoteDeployment, type DeploymentSummary } from "$lib/api/sites";
     import { relativeTime } from "$lib/utils/dashboard";
-    import { badgeClass, buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
+    import { buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
     import BuildLog from "./build-log.svelte";
 
     type Props = {
@@ -26,10 +26,9 @@
     }
 
     async function promote(deployment: DeploymentSummary) {
-        if (!auth.token) return;
         busy = deployment.id;
         try {
-            await promoteDeployment(auth.token, rgId, siteId, deployment.id);
+            await promoteDeployment(rgId, siteId, deployment.id);
             await onChanged();
         } catch (e) {
             onError(e instanceof Error ? e.message : "Failed to promote deployment");
@@ -55,7 +54,7 @@
                     {@const label = actionLabel(deployment)}
                     <tr>
                         <td>
-                            <span class={badgeClass(status.tone)}>{status.label}</span>
+                            <span class={toneBadgeClass(status.tone)}>{status.label}</span>
                             {#if deployment.current}<span class="cx-badge">current</span>{/if}
                             {#if deployment.expired}<span class="cx-badge cx-badge--warning" title="The build output was removed to save space">expired</span>{/if}
                         </td>

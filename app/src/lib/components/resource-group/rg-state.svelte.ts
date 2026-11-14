@@ -1,21 +1,12 @@
 import { getContext, setContext } from "svelte";
-import { auth } from "$lib/auth/store.svelte";
-import { listGateways, type Gateway } from "$lib/api/ingress";
-import {
-    getResourceGroup,
-    listResourceGroupBuckets,
-    listResourceGroupVolumes,
-    listResourceGroupWorkloads,
-    type Bucket,
-    type ResourceGroup,
-    type Volume,
-    type Workload,
-} from "$lib/api/resource-groups";
-import { listRegistries, type Registry } from "$lib/api/registries";
-import { listSites, type SiteSummary } from "$lib/api/sites";
-import { listVaults, type Vault } from "$lib/api/vaults";
+import type { Gateway } from "$lib/api/ingress";
+import { getResourceGroup, type Bucket, type ResourceGroup, type Volume, type Workload } from "$lib/api/resource-groups";
+import type { Registry } from "$lib/api/registries";
+import type { SiteSummary } from "$lib/api/sites";
+import type { Vault } from "$lib/api/vaults";
+import { loadGroupInventory } from "$lib/utils/delete-preview";
 import { groupHealth } from "$lib/utils/group-health";
-import { isTransientStatus } from "$lib/utils/status.js";
+import { isTransientStatus } from "$lib/utils/tone";
 
 const CONTEXT_KEY = Symbol("resource-group-state");
 
@@ -50,18 +41,18 @@ export class ResourceGroupState {
     constructor(readonly rgId: string) {}
 
     load = async () => {
-        if (!auth.token) return;
         try {
-            [this.group, this.workloads, this.volumes, this.buckets, this.gateways, this.vaults, this.sites, this.registries] = await Promise.all([
-                getResourceGroup(auth.token, this.rgId),
-                listResourceGroupWorkloads(auth.token, this.rgId),
-                listResourceGroupVolumes(auth.token, this.rgId),
-                listResourceGroupBuckets(auth.token, this.rgId),
-                listGateways(auth.token, this.rgId),
-                listVaults(auth.token, this.rgId).catch((): Vault[] => []),
-                listSites(auth.token, this.rgId).catch((): SiteSummary[] => []),
-                listRegistries(auth.token, this.rgId).catch((): Registry[] => []),
-            ]);
+            const [group, inventory] = await Promise.all([getResourceGroup(this.rgId), loadGroupInventory(this.rgId)]);
+            this.group = group;
+            ({
+                workloads: this.workloads,
+                volumes: this.volumes,
+                buckets: this.buckets,
+                gateways: this.gateways,
+                vaults: this.vaults,
+                sites: this.sites,
+                registries: this.registries,
+            } = inventory);
         } catch (e) {
             this.error = e instanceof Error ? e.message : "Failed to load";
         } finally {

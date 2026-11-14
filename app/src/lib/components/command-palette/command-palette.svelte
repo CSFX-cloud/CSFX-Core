@@ -2,7 +2,6 @@
     import { tick } from "svelte";
     import { goto } from "$app/navigation";
     import { Bell, Box, Layers, Monitor, Search, Server, SunMoon, TriangleAlert, Database } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { commandPalette } from "./command-palette-store.svelte.js";
     import { highlight, search, suggestions, type PaletteItem } from "./command-palette-search";
     import { listNodes, type Node } from "$lib/api/nodes";
@@ -25,15 +24,15 @@
     let alerts = $state<AlertEvent[]>([]);
 
     async function loadData() {
-        if (!auth.token || loading) return;
+        if (loading) return;
         loading = true;
         try {
             [nodes, workloads, resourceGroups, buckets, alerts] = await Promise.all([
-                listNodes(auth.token),
-                listWorkloads(auth.token),
-                listResourceGroups(auth.token),
-                listBuckets(auth.token),
-                listEvents(auth.token, { status: "open" }),
+                listNodes(),
+                listWorkloads(),
+                listResourceGroups(),
+                listBuckets(),
+                listEvents({ status: "open" }),
             ]);
         } catch {
             return;

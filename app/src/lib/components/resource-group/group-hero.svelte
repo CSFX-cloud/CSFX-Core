@@ -1,6 +1,7 @@
 <script lang="ts">
+    import { request } from "$lib/api/http";
+    import { saveBlob } from "$lib/utils/download";
     import { Calendar, Network, Pin, Plus, ShieldCheck, Trash2 } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { updateResourceGroup, type ResourceGroup } from "$lib/api/resource-groups";
     import GroupTile from "$lib/components/resource-group/group-tile.svelte";
     import type { GroupHealth } from "$lib/utils/group-health";
@@ -23,10 +24,9 @@
     let editValue = $state("");
     let downloadingVpn = $state(false);
 
-    async function patch(changes: Parameters<typeof updateResourceGroup>[2]) {
-        if (!auth.token) return;
+    async function patch(changes: Parameters<typeof updateResourceGroup>[1]) {
         try {
-            onupdated(await updateResourceGroup(auth.token, group.id, changes));
+            onupdated(await updateResourceGroup(group.id, changes));
         } catch (e) {
             onerror(e instanceof Error ? e.message : "Failed to update resource group");
         }
@@ -58,20 +58,11 @@
     }
 
     async function downloadVpnConfig() {
-        if (!auth.token) return;
         downloadingVpn = true;
         try {
-            const response = await fetch(`/api/resource-groups/${group.id}/vpn-config`, { method: "POST", headers: { Authorization: `Bearer ${auth.token}` } });
-            if (!response.ok) {
-                const body = await response.json().catch(() => ({}));
-                throw new Error(body.error ?? `HTTP ${response.status}`);
-            }
-            const url = URL.createObjectURL(await response.blob());
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = (response.headers.get("content-disposition") ?? "").match(/filename="([^"]+)"/)?.[1] ?? "csfx-vpn.conf";
-            link.click();
-            URL.revokeObjectURL(url);
+            const response = await request("POST", `/resource-groups/${group.id}/vpn-config`);
+            const filename = (response.headers.get("content-disposition") ?? "").match(/filename="([^"]+)"/)?.[1] ?? "csfx-vpn.conf";
+            saveBlob(await response.blob(), filename);
         } catch (e) {
             onerror(e instanceof Error ? e.message : "VPN config download failed");
         } finally {

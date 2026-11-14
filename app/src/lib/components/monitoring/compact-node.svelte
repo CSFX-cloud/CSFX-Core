@@ -1,14 +1,13 @@
 <script lang="ts">
     import Icon from "@iconify/svelte";
     import { Handle, Position, type NodeProps } from "@xyflow/svelte";
-    import { statusVariant } from "$lib/utils/status";
+    import { statusTone } from "$lib/utils/tone";
 
-    const DOT_COLORS = { success: "var(--success)", destructive: "var(--danger)" };
+    const DOT_COLORS = { success: "var(--success)", danger: "var(--danger)", warning: "var(--warning)" };
 
     let { data, type, selected }: NodeProps = $props();
 
-    const variant = $derived(statusVariant(String(data.status ?? "")));
-    const dotColor = $derived(DOT_COLORS[variant as keyof typeof DOT_COLORS] ?? "var(--warning)");
+    const dotColor = $derived(DOT_COLORS[statusTone(String(data.status ?? "")) || "warning"]);
     const subtitle = $derived(type === "workload" ? String(data.image ?? "") : type === "volume" ? `${data.size_gb} GB` : "");
 </script>
 

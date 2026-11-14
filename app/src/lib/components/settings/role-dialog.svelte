@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import { createRole, updateRole, type Permission, type Role } from "$lib/api/roles";
     import ModalDialog from "$lib/components/resource-group/modal-dialog.svelte";
 
@@ -39,7 +38,7 @@
     }
 
     async function save() {
-        if (!auth.token || name.trim() === "") return;
+        if (name.trim() === "") return;
         saving = true;
         error = null;
         const input = {
@@ -49,9 +48,9 @@
         };
         try {
             if (editing) {
-                await updateRole(auth.token, editing.id, input);
+                await updateRole(editing.id, input);
             } else {
-                await createRole(auth.token, input);
+                await createRole(input);
             }
             dialog?.close();
             await onSaved();

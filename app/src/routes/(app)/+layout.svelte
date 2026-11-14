@@ -7,6 +7,7 @@
     import CommandPalette from "$lib/components/command-palette/command-palette.svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { validateSession } from "$lib/auth/api";
+    import { ApiError } from "$lib/api/http";
     import { goto } from "$app/navigation";
     import { onMount } from "svelte";
 
@@ -20,11 +21,9 @@
             return;
         }
         try {
-            const profile = await validateSession(auth.token);
-            auth.setUser(profile);
-        } catch {
-            auth.clearSession();
-            goto("/login");
+            auth.setUser(await validateSession());
+        } catch (e) {
+            if (!(e instanceof ApiError && e.status === 401)) throw e;
         }
     });
 </script>

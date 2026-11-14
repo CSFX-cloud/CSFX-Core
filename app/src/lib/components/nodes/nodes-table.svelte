@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { saveBlob } from "$lib/utils/download";
     import { ArrowUpDown, ChevronRight, Download, Search, Server, ServerOff } from "@lucide/svelte";
     import type { Node, NodeMetrics } from "$lib/api/nodes";
     import EmptyState from "$lib/components/dashboard/empty-state.svelte";
@@ -67,13 +68,7 @@
     }
 
     function exportCsv() {
-        const blob = new Blob([nodesCsv(visible, metricsById)], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `nodes-${new Date().toISOString().slice(0, 10)}.csv`;
-        link.click();
-        URL.revokeObjectURL(url);
+        saveBlob(new Blob([nodesCsv(visible, metricsById)], { type: "text/csv;charset=utf-8;" }), `nodes-${new Date().toISOString().slice(0, 10)}.csv`);
     }
 
     function label(value: string): string {

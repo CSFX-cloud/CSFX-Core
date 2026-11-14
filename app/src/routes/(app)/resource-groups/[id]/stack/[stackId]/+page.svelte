@@ -46,12 +46,11 @@
         { icon: Layers, text: rg.group?.name ?? "Resource group", href: base },
     ]);
 
-    async function runAction(action: (token: string, id: string) => Promise<unknown>, failure: string) {
-        if (!auth.token) return false;
+    async function runAction(action: (id: string) => Promise<unknown>, failure: string) {
         actionBusy = true;
         actionError = null;
         try {
-            await action(auth.token, stackId);
+            await action(stackId);
             await rg.load();
             return true;
         } catch (e) {
@@ -69,12 +68,12 @@
 
     async function done() {
         await rg.load();
-        if (auth.token) stack = await getStack(auth.token, stackId);
+        if (auth.token) stack = await getStack(stackId);
         tab = "logs";
     }
 
     onMount(async () => {
-        if (auth.token) stack = await getStack(auth.token, stackId);
+        if (auth.token) stack = await getStack(stackId);
     });
 
     $effect(() => {
@@ -148,7 +147,7 @@
                 </div>
             </section>
         {:else if tab === "storage"}
-            <StorageUsageTab rows={storage} title={name} rgId={rg.rgId} available={[]} restart={() => restartStack(auth.token ?? "", stackId)} onChanged={rg.load} />
+            <StorageUsageTab rows={storage} title={name} rgId={rg.rgId} available={[]} restart={() => restartStack(stackId)} onChanged={rg.load} />
         {:else}
             <ComposeEditor rgId={rg.rgId} groupName={rg.group?.name ?? "the group"} {stackId} onDone={done} />
         {/if}

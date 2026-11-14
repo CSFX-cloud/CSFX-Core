@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export interface IngressRoute {
     id: string;
@@ -21,36 +19,14 @@ export interface CreateIngressRequest {
     tls: boolean;
 }
 
-async function failure(res: Response, fallback: string): Promise<Error> {
-    const body = await res.json().catch(() => ({ error: `${fallback}: ${res.status}` }));
-    return new Error(body.error ?? `${fallback}: ${res.status}`);
-}
+export const listIngress = (groupId: string) =>
+    api<IngressRoute[]>('GET', `/resource-groups/${groupId}/ingress`);
 
-export async function listIngress(token: string, groupId: string): Promise<IngressRoute[]> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/ingress`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw await failure(res, 'Failed to list ingress routes');
-    return res.json();
-}
+export const createIngress = (groupId: string, request: CreateIngressRequest) =>
+    api<IngressRoute>('POST', `/resource-groups/${groupId}/ingress`, request);
 
-export async function createIngress(token: string, groupId: string, request: CreateIngressRequest): Promise<IngressRoute> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/ingress`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to create ingress route');
-    return res.json();
-}
-
-export async function deleteIngress(token: string, groupId: string, routeId: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/ingress/${routeId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw await failure(res, 'Failed to delete ingress route');
-}
+export const deleteIngress = (groupId: string, routeId: string) =>
+    api<void>('DELETE', `/resource-groups/${groupId}/ingress/${routeId}`);
 
 export interface Gateway {
     id: string;
@@ -93,62 +69,23 @@ export interface DnsZone {
     console_host: string;
 }
 
-export async function listGateways(token: string, groupId: string): Promise<Gateway[]> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/gateways`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw await failure(res, 'Failed to list gateways');
-    return res.json();
-}
+export const listGateways = (groupId: string) =>
+    api<Gateway[]>('GET', `/resource-groups/${groupId}/gateways`);
 
-export async function createGateway(token: string, groupId: string, request: CreateGatewayRequest): Promise<Gateway> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/gateways`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to create gateway');
-    return res.json();
-}
+export const createGateway = (groupId: string, request: CreateGatewayRequest) =>
+    api<Gateway>('POST', `/resource-groups/${groupId}/gateways`, request);
 
-export async function deleteGateway(token: string, groupId: string, gatewayId: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/gateways/${gatewayId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw await failure(res, 'Failed to delete gateway');
-}
+export const deleteGateway = (groupId: string, gatewayId: string) =>
+    api<void>('DELETE', `/resource-groups/${groupId}/gateways/${gatewayId}`);
 
-export async function listDnsRecords(token: string, groupId: string): Promise<DnsRecord[]> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/dns-records`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw await failure(res, 'Failed to list dns records');
-    return res.json();
-}
+export const listDnsRecords = (groupId: string) =>
+    api<DnsRecord[]>('GET', `/resource-groups/${groupId}/dns-records`);
 
-export async function createDnsRecord(token: string, groupId: string, request: CreateDnsRecordRequest): Promise<DnsRecord> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/dns-records`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to create dns record');
-    return res.json();
-}
+export const createDnsRecord = (groupId: string, request: CreateDnsRecordRequest) =>
+    api<DnsRecord>('POST', `/resource-groups/${groupId}/dns-records`, request);
 
-export async function deleteDnsRecord(token: string, groupId: string, recordId: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${groupId}/dns-records/${recordId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw await failure(res, 'Failed to delete dns record');
-}
+export const deleteDnsRecord = (groupId: string, recordId: string) =>
+    api<void>('DELETE', `/resource-groups/${groupId}/dns-records/${recordId}`);
 
-export async function getDnsZone(token: string): Promise<DnsZone> {
-    const res = await authedFetch(`${API_BASE}/dns/zone`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw await failure(res, 'Failed to load dns zone');
-    return res.json();
-}
+export const getDnsZone = () =>
+    api<DnsZone>('GET', '/dns/zone');

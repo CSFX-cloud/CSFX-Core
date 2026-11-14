@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { getClusterVip, updateClusterVip } from "$lib/api/cluster";
 
     const DEFAULT_PREFIX_LENGTH = 24;
@@ -30,10 +29,9 @@
     }
 
     async function load() {
-        if (!auth.token) return;
         loading = true;
         try {
-            const vip = await getClusterVip(auth.token);
+            const vip = await getClusterVip();
             if (vip) {
                 address = vip.address;
                 prefixLength = String(vip.prefix_length);
@@ -49,7 +47,6 @@
     }
 
     async function save() {
-        if (!auth.token) return;
         const problem = validate();
         if (problem) {
             error = problem;
@@ -58,7 +55,7 @@
         saving = true;
         saved = false;
         try {
-            await updateClusterVip(auth.token, {
+            await updateClusterVip({
                 address: address.trim(),
                 prefix_length: Number(prefixLength),
                 router_id: Number(routerId),

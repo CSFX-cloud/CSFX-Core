@@ -1,6 +1,5 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api, request } from './http';
+import { saveBlob } from '$lib/utils/download';
 
 export interface LogEntry {
     id: string;
@@ -76,71 +75,27 @@ function buildQuery(filter: LogsFilter): string {
     return query ? `?${query}` : '';
 }
 
-export async function listLogs(token: string, filter: LogsFilter): Promise<LogsResponse> {
-    const res = await authedFetch(`${API_BASE}/logs${buildQuery(filter)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list logs: ${res.status}`);
-    return res.json();
-}
+export const listLogs = (filter: LogsFilter) =>
+    api<LogsResponse>('GET', `/logs${buildQuery(filter)}`);
 
 export interface LogsTrendPoint {
     start: string;
     count: number;
 }
 
-export async function getLogsTrend(token: string, filter: LogsFilter): Promise<LogsTrendPoint[]> {
-    const res = await authedFetch(`${API_BASE}/logs/trend${buildQuery(filter)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to load log trend: ${res.status}`);
-    return res.json();
+export const getLogsTrend = (filter: LogsFilter) =>
+    api<LogsTrendPoint[]>('GET', `/logs/trend${buildQuery(filter)}`);
+
+export const getLogsFacets = (filter: LogsFilter) =>
+    api<LogsFacets>('GET', `/logs/facets${buildQuery(filter)}`);
+
+export async function exportLogsCef(filter: LogsFilter): Promise<void> {
+    const res = await request('GET', `/logs/export${buildQuery(filter)}`);
+    saveBlob(await res.blob(), 'csfx-logs.cef');
 }
 
-export async function getLogsFacets(token: string, filter: LogsFilter): Promise<LogsFacets> {
-    const res = await authedFetch(`${API_BASE}/logs/facets${buildQuery(filter)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to load log facets: ${res.status}`);
-    return res.json();
-}
+export const getLogsRetention = () =>
+    api<LogsRetention>('GET', '/admin/settings/logs-retention');
 
-export async function exportLogsCef(token: string, filter: LogsFilter): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/logs/export${buildQuery(filter)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to export logs: ${res.status}`);
-    const url = URL.createObjectURL(await res.blob());
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'csfx-logs.cef';
-    link.click();
-    URL.revokeObjectURL(url);
-}
-
-export async function getLogsRetention(token: string): Promise<LogsRetention> {
-    const res = await authedFetch(`${API_BASE}/admin/settings/logs-retention`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to get logs retention: ${res.status}`);
-    return res.json();
-}
-
-export async function updateLogsRetention(
-    token: string,
-    retentionDays: number,
-): Promise<LogsRetention> {
-    const res = await authedFetch(`${API_BASE}/admin/settings/logs-retention`, {
-        method: 'PUT',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ retention_days: retentionDays }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to update logs retention: ${res.status}`);
-    }
-    return res.json();
-}
+export const updateLogsRetention = (retentionDays: number) =>
+    api<LogsRetention>('PUT', '/admin/settings/logs-retention', { retention_days: retentionDays });

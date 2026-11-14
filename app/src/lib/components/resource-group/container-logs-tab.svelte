@@ -1,7 +1,7 @@
 <script lang="ts">
+    import { saveBlob } from "$lib/utils/download";
     import { onMount, tick } from "svelte";
     import { Download, FileText, Search } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { streamWorkloadLogs } from "$lib/api/resource-groups";
 
     let { workloadId, running }: { workloadId: string; running: boolean } = $props();
@@ -15,10 +15,9 @@
     const visible = $derived(filter.trim() ? lines.filter((line) => line.toLowerCase().includes(filter.trim().toLowerCase())) : lines);
 
     async function stream(signal: AbortSignal) {
-        if (!auth.token) return;
         const decoder = new TextDecoder();
         try {
-            const reader = (await streamWorkloadLogs(auth.token, workloadId, signal)).getReader();
+            const reader = (await streamWorkloadLogs(workloadId, signal)).getReader();
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
@@ -37,12 +36,7 @@
     }
 
     function download() {
-        const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain" }));
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `${workloadId.slice(0, 8)}-logs.txt`;
-        link.click();
-        URL.revokeObjectURL(url);
+        saveBlob(new Blob([lines.join("\n")], { type: "text/plain" }), `${workloadId.slice(0, 8)}-logs.txt`);
     }
 
     $effect(() => {

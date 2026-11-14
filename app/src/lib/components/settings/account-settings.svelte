@@ -53,10 +53,10 @@
     const passwordValid = $derived(newPassword.length >= 8 && newPassword === confirmPassword);
 
     async function saveEmail() {
-        if (!auth.token || !emailChanged) return;
+        if (!emailChanged) return;
         emailSaving = true;
         try {
-            await changeEmail(auth.token, email.trim(), emailPassword);
+            await changeEmail(email.trim(), emailPassword);
             emailPassword = "";
             auth.setUser({ ...auth.user!, email: email.trim() });
             toast.success("Email updated");
@@ -68,11 +68,11 @@
     }
 
     async function saveGravatarEmail() {
-        if (!auth.token || !gravatarChanged) return;
+        if (!gravatarChanged) return;
         gravatarSaving = true;
         try {
             const trimmed = gravatarEmail.trim();
-            await changeGravatarEmail(auth.token, trimmed === "" ? null : trimmed);
+            await changeGravatarEmail(trimmed === "" ? null : trimmed);
             auth.setUser({ ...auth.user!, gravatar_email: trimmed === "" ? null : trimmed });
             toast.success("Gravatar updated");
         } catch {
@@ -83,10 +83,10 @@
     }
 
     async function savePassword() {
-        if (!auth.token || !passwordValid) return;
+        if (!passwordValid) return;
         passwordSaving = true;
         try {
-            auth.setToken(await changePassword(auth.token, oldPassword, newPassword));
+            auth.setToken(await changePassword(oldPassword, newPassword));
             oldPassword = "";
             newPassword = "";
             confirmPassword = "";
@@ -99,7 +99,6 @@
     }
 
     async function toggleTwoFactor(next: boolean) {
-        if (!auth.token) return;
         if (next) {
             twoFactorStep = "authorizing";
             twoFactorPassword = "";
@@ -110,10 +109,10 @@
     }
 
     async function startEnrollment() {
-        if (!auth.token || !twoFactorPassword) return;
+        if (!twoFactorPassword) return;
         twoFactorBusy = true;
         try {
-            const response = await setup2FA(auth.token, twoFactorPassword);
+            const response = await setup2FA(twoFactorPassword);
             qrCode = response.qr_code;
             twoFactorStep = "enrolling";
             twoFactorPassword = "";
@@ -125,10 +124,10 @@
     }
 
     async function confirmEnable() {
-        if (!auth.token || otpValue.length !== OTP_LENGTH) return;
+        if (otpValue.length !== OTP_LENGTH) return;
         twoFactorBusy = true;
         try {
-            await enable2FA(auth.token, otpValue);
+            await enable2FA(otpValue);
             auth.setUser({ ...auth.user!, two_factor_enabled: true });
             twoFactorStep = "idle";
             otpValue = "";
@@ -142,10 +141,10 @@
     }
 
     async function confirmDisable() {
-        if (!auth.token || otpValue.length !== OTP_LENGTH) return;
+        if (otpValue.length !== OTP_LENGTH) return;
         twoFactorBusy = true;
         try {
-            await disable2FA(auth.token, otpValue);
+            await disable2FA(otpValue);
             auth.setUser({ ...auth.user!, two_factor_enabled: false });
             twoFactorStep = "idle";
             otpValue = "";

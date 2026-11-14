@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import { createSecret, updateSecret, type SecretInput, type SecretSummary } from "$lib/api/vaults";
     import ModalDialog from "$lib/components/resource-group/modal-dialog.svelte";
 
@@ -26,12 +25,12 @@
     }
 
     async function submit() {
-        if (!auth.token || !value) return;
+        if (!value) return;
         saving = true;
         error = null;
         try {
-            if (existing) await updateSecret(auth.token, rgId, vaultId, existing.name, payload());
-            else await createSecret(auth.token, rgId, vaultId, { ...payload(), name: name.trim() });
+            if (existing) await updateSecret(rgId, vaultId, existing.name, payload());
+            else await createSecret(rgId, vaultId, { ...payload(), name: name.trim() });
             dialog?.close();
             await onSaved();
         } catch (e) {

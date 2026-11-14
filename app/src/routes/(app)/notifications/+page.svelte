@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import { Cpu, HardDrive, MemoryStick, Server, ServerOff, TriangleAlert } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { listEvents, resolveEvent, type AlertEvent } from "$lib/api/events";
     import { notifications } from "$lib/components/shell/notifications.svelte";
 
@@ -63,9 +62,8 @@
     const sourceCount = (value: Source) => events.filter((event) => value === "all" || sourceOf(event) === value).length;
 
     async function load() {
-        if (!auth.token) return;
         try {
-            events = await listEvents(auth.token);
+            events = await listEvents();
             notifications.set(events.filter((event) => event.status === "open").length);
             selectedId = selectedId ?? events[0]?.id ?? null;
             error = null;
@@ -77,10 +75,9 @@
     }
 
     async function resolve(event: AlertEvent) {
-        if (!auth.token) return;
         resolving = true;
         try {
-            await resolveEvent(auth.token, event.id);
+            await resolveEvent(event.id);
             await load();
         } catch (e) {
             error = e instanceof Error ? e.message : "failed to resolve notification";
@@ -90,11 +87,9 @@
     }
 
     async function resolveAll() {
-        if (!auth.token) return;
-        const token = auth.token;
         resolving = true;
         try {
-            await Promise.all(resolvable.map((event) => resolveEvent(token, event.id)));
+            await Promise.all(resolvable.map((event) => resolveEvent(event.id)));
         } catch (e) {
             error = e instanceof Error ? e.message : "failed to resolve notifications";
         } finally {

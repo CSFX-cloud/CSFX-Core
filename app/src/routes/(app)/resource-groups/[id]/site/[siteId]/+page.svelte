@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { toneBadgeClass } from "$lib/utils/tone";
     import { onMount, untrack } from "svelte";
     import { ExternalLink, Rocket, Trash2 } from "@lucide/svelte";
     import { goto } from "$app/navigation";
@@ -16,7 +17,7 @@
     import OverviewTab from "$lib/components/site/overview-tab.svelte";
     import WebhookPanel from "$lib/components/site/webhook-panel.svelte";
     import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
-    import { buildDuration, badgeClass, deploymentStatus, repoLabel } from "$lib/utils/site-status";
+    import { buildDuration, deploymentStatus, repoLabel } from "$lib/utils/site-status";
 
     type Tab = "overview" | "build" | "deployments" | "settings";
 
@@ -45,9 +46,8 @@
     const lastBuild = $derived(site?.deployments.find((deployment) => deployment.duration_ms !== null));
 
     async function load() {
-        if (!auth.token) return;
         try {
-            site = await getSite(auth.token, rg.rgId, siteId);
+            site = await getSite(rg.rgId, siteId);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load web app";
@@ -57,10 +57,9 @@
     }
 
     async function redeploy() {
-        if (!auth.token) return;
         busy = true;
         try {
-            await redeploySite(auth.token, rg.rgId, siteId);
+            await redeploySite(rg.rgId, siteId);
             await load();
             tab = "overview";
         } catch (e) {
@@ -71,10 +70,10 @@
     }
 
     async function remove() {
-        if (!auth.token || !site || !confirm(`Delete ${site.name}? Its deployments and domains are removed.`)) return;
+        if (!site || !confirm(`Delete ${site.name}? Its deployments and domains are removed.`)) return;
         busy = true;
         try {
-            await deleteSite(auth.token, rg.rgId, siteId);
+            await deleteSite(rg.rgId, siteId);
             await rg.load();
             await goto(base);
         } catch (e) {
@@ -112,7 +111,7 @@
                 <div>
                     <h1 class="db-title">{site.name}</h1>
                     <p class="db-sub">
-                        <span class={badgeClass(status.tone)}>{status.label}</span>
+                        <span class={toneBadgeClass(status.tone)}>{status.label}</span>
                         <span class="cx-soft">{repoLabel(site.repo_url)} &middot; {site.production_branch}</span>
                     </p>
                 </div>

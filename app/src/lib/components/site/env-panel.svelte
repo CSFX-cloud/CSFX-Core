@@ -22,17 +22,15 @@
 
     $effect(() => {
         const vaultId = site.vault_id;
-        const token = auth.token;
-        if (!vaultId || !token) return;
-        listSecrets(token, rgId, vaultId)
+        if (!vaultId || !auth.token) return;
+        listSecrets(rgId, vaultId)
             .then((secrets) => (secretNames = secrets.filter((entry) => !entry.deleted).map((entry) => entry.name)))
             .catch(() => (secretNames = []));
     });
 
-    async function run(action: (token: string) => Promise<unknown>, failure: string) {
-        if (!auth.token) return;
+    async function run(action: () => Promise<unknown>, failure: string) {
         try {
-            await action(auth.token);
+            await action();
             await onChanged();
         } catch (e) {
             onError(e instanceof Error ? e.message : failure);
@@ -43,7 +41,7 @@
         if (!valid) return;
         adding = true;
         await run(
-            (token) => addSiteEnv(token, rgId, site.id, { name: name.trim(), value: fromVault ? undefined : value, vault_secret: fromVault ? secret : undefined, scope }),
+            () => addSiteEnv(rgId, site.id, { name: name.trim(), value: fromVault ? undefined : value, vault_secret: fromVault ? secret : undefined, scope }),
             "Failed to add variable",
         );
         name = "";
@@ -78,7 +76,7 @@
                                     type="button"
                                     aria-label="Remove {variable.name}"
                                     title="Remove"
-                                    onclick={() => run((token) => deleteSiteEnv(token, rgId, site.id, variable.id), "Failed to remove variable")}
+                                    onclick={() => run(() => deleteSiteEnv(rgId, site.id, variable.id), "Failed to remove variable")}
                                 >
                                     <Trash2 class="cx-i" aria-hidden="true" />
                                 </button>

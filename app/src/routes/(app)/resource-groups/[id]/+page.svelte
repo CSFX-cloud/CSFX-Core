@@ -21,23 +21,21 @@
     let nodeNames = $state(new Map<string, string>());
 
     async function loadNodeNames() {
-        if (!auth.token) return;
-        const nodes = await listNodes(auth.token).catch(() => []);
+        const nodes = await listNodes().catch(() => []);
         nodeNames = new Map(nodes.map((node) => [node.id, node.hostname]));
     }
 
     function deleteGroup() {
         const group = rg.group;
-        const token = auth.token;
-        if (!token || !group) return;
+        if (!group) return;
         deleteDialog?.open({
             title: `Delete ${group.name}`,
             name: group.name,
             requireStop: true,
-            load: async () => groupDeletePreview(await loadGroupInventory(token, group.id), group.internal_cidr),
+            load: async () => groupDeletePreview(await loadGroupInventory(group.id), group.internal_cidr),
             run: async (preview, stopRunning) => {
-                if (stopRunning) await stopAndWait(token, group.id, preview.running);
-                await deleteResourceGroup(token, group.id);
+                if (stopRunning) await stopAndWait(group.id, preview.running);
+                await deleteResourceGroup(group.id);
                 await goto("/resource-groups");
             },
         });

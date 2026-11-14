@@ -35,9 +35,8 @@
     const imageCount = $derived(repositories.reduce((count, repository) => count + repository.tags.length, 0));
 
     async function load() {
-        if (!auth.token) return;
         try {
-            registry = await getRegistry(auth.token, rg.rgId, registryId);
+            registry = await getRegistry(rg.rgId, registryId);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load registry";
@@ -47,10 +46,10 @@
     }
 
     async function remove() {
-        if (!auth.token || !registry || !confirm(`Delete ${registry.name} and all of its images? This cannot be undone.`)) return;
+        if (!registry || !confirm(`Delete ${registry.name} and all of its images? This cannot be undone.`)) return;
         busy = true;
         try {
-            await deleteRegistry(auth.token, rg.rgId, registryId);
+            await deleteRegistry(rg.rgId, registryId);
             await rg.load();
             await goto(base);
         } catch (e) {

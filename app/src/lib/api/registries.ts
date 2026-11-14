@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export type TokenScope = 'pull' | 'push';
 
@@ -41,48 +39,30 @@ export interface Repository {
 }
 
 function registriesPath(rgId: string, registryId?: string): string {
-    const root = `${API_BASE}/resource-groups/${rgId}/registries`;
+    const root = `/resource-groups/${rgId}/registries`;
     return registryId ? `${root}/${registryId}` : root;
 }
 
-async function send<T>(token: string, url: string, method: string, fallback: string, body?: unknown): Promise<T> {
-    const res = await authedFetch(url, {
-        method,
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload.error ?? `${fallback}: ${res.status}`);
-    }
-    return res.status === 204 ? (undefined as T) : res.json();
-}
+export const listRegistries = (rgId: string) =>
+    api<Registry[]>('GET', registriesPath(rgId));
 
-export const listRegistries = (token: string, rgId: string) =>
-    send<Registry[]>(token, registriesPath(rgId), 'GET', 'Failed to list registries');
+export const createRegistry = (rgId: string, name: string) =>
+    api<Registry>('POST', registriesPath(rgId), { name });
 
-export const createRegistry = (token: string, rgId: string, name: string) =>
-    send<Registry>(token, registriesPath(rgId), 'POST', 'Failed to create registry', { name });
+export const getRegistry = (rgId: string, registryId: string) =>
+    api<RegistryDetail>('GET', registriesPath(rgId, registryId));
 
-export const getRegistry = (token: string, rgId: string, registryId: string) =>
-    send<RegistryDetail>(token, registriesPath(rgId, registryId), 'GET', 'Failed to load registry');
+export const deleteRegistry = (rgId: string, registryId: string) =>
+    api<void>('DELETE', registriesPath(rgId, registryId));
 
-export const deleteRegistry = (token: string, rgId: string, registryId: string) =>
-    send<void>(token, registriesPath(rgId, registryId), 'DELETE', 'Failed to delete registry');
+export const listImages = (rgId: string, registryId: string) =>
+    api<{ repositories: Repository[] }>('GET', `${registriesPath(rgId, registryId)}/images`);
 
-export const listImages = (token: string, rgId: string, registryId: string) =>
-    send<{ repositories: Repository[] }>(token, `${registriesPath(rgId, registryId)}/images`, 'GET', 'Failed to list images');
+export const deleteImage = (rgId: string, registryId: string, repository: string, tag: string) =>
+    api<void>('DELETE', `${registriesPath(rgId, registryId)}/images?repository=${encodeURIComponent(repository)}&tag=${encodeURIComponent(tag)}`);
 
-export const deleteImage = (token: string, rgId: string, registryId: string, repository: string, tag: string) =>
-    send<void>(
-        token,
-        `${registriesPath(rgId, registryId)}/images?repository=${encodeURIComponent(repository)}&tag=${encodeURIComponent(tag)}`,
-        'DELETE',
-        'Failed to delete image',
-    );
+export const createToken = (rgId: string, registryId: string, name: string, scope: TokenScope) =>
+    api<CreatedToken>('POST', `${registriesPath(rgId, registryId)}/tokens`, { name, scope });
 
-export const createToken = (token: string, rgId: string, registryId: string, name: string, scope: TokenScope) =>
-    send<CreatedToken>(token, `${registriesPath(rgId, registryId)}/tokens`, 'POST', 'Failed to create access token', { name, scope });
-
-export const deleteToken = (token: string, rgId: string, registryId: string, tokenId: string) =>
-    send<void>(token, `${registriesPath(rgId, registryId)}/tokens/${tokenId}`, 'DELETE', 'Failed to revoke access token');
+export const deleteToken = (rgId: string, registryId: string, tokenId: string) =>
+    api<void>('DELETE', `${registriesPath(rgId, registryId)}/tokens/${tokenId}`);

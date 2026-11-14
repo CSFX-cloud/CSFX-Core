@@ -49,12 +49,12 @@
             : [],
     );
 
-    async function runAction(action: (token: string, id: string) => Promise<unknown>, failure: string) {
-        if (!auth.token || !workload) return false;
+    async function runAction(action: (id: string) => Promise<unknown>, failure: string) {
+        if (!workload) return false;
         actionBusy = true;
         actionError = null;
         try {
-            await action(auth.token, workload.id);
+            await action(workload.id);
             await rg.load();
             return true;
         } catch (e) {
@@ -72,9 +72,8 @@
 
     $effect(() => {
         const agentId = workload?.assigned_agent_id;
-        const token = auth.token;
-        if (!agentId || !token) return;
-        getNode(token, agentId)
+        if (!agentId || !auth.token) return;
+        getNode(agentId)
             .then((node) => (nodeIp = node.ip_address))
             .catch(() => (nodeIp = null));
     });
@@ -146,7 +145,7 @@
                     </div>
                     <div class="vm-console__screen">
                         {#key workload.id}
-                            <VncConsole token={auth.token} workloadId={workload.id} />
+                            <VncConsole workloadId={workload.id} />
                         {/key}
                     </div>
                 </section>

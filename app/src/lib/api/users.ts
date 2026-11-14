@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api, ApiError } from './http';
 
 export interface OrganizationUser {
     id: string;
@@ -22,21 +20,11 @@ export interface OrganizationRole {
     is_system_role: boolean;
 }
 
-function authHeaders(token: string): HeadersInit {
-    return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-}
+export const listUsers = () =>
+    api<OrganizationUser[]>('GET', '/organization/users');
 
-export async function listUsers(token: string): Promise<OrganizationUser[]> {
-    const res = await authedFetch(`${API_BASE}/organization/users`, { headers: authHeaders(token) });
-    if (!res.ok) throw new Error(`Failed to list users: ${res.status}`);
-    return res.json();
-}
-
-export async function listOrganizationRoles(token: string): Promise<OrganizationRole[]> {
-    const res = await authedFetch(`${API_BASE}/organization/roles`, { headers: authHeaders(token) });
-    if (!res.ok) throw new Error(`Failed to list roles: ${res.status}`);
-    return res.json();
-}
+export const listOrganizationRoles = () =>
+    api<OrganizationRole[]>('GET', '/organization/roles');
 
 export interface CreateUserInput {
     username: string;
@@ -46,29 +34,17 @@ export interface CreateUserInput {
     force_password_change: boolean;
 }
 
-export async function createUser(token: string, input: CreateUserInput): Promise<OrganizationUser> {
-    const res = await authedFetch(`${API_BASE}/organization/users`, {
-        method: 'POST',
-        headers: authHeaders(token),
-        body: JSON.stringify(input),
-    });
-    if (!res.ok) throw new Error(res.status === 409 ? 'Username or email already in use' : `Failed to create user: ${res.status}`);
-    return res.json();
+export async function createUser(input: CreateUserInput): Promise<OrganizationUser> {
+    try {
+        return await api<OrganizationUser>('POST', '/organization/users', input);
+    } catch (e) {
+        if (e instanceof ApiError && e.status === 409) throw new Error('Username or email already in use');
+        throw e;
+    }
 }
 
-export async function updateUserRole(token: string, userId: string, roleId: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/organization/users/${userId}/role`, {
-        method: 'PUT',
-        headers: authHeaders(token),
-        body: JSON.stringify({ role_id: roleId }),
-    });
-    if (!res.ok) throw new Error(`Failed to update role: ${res.status}`);
-}
+export const updateUserRole = (userId: string, roleId: string) =>
+    api<void>('PUT', `/organization/users/${userId}/role`, { role_id: roleId });
 
-export async function deleteUser(token: string, userId: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/organization/users/${userId}`, {
-        method: 'DELETE',
-        headers: authHeaders(token),
-    });
-    if (!res.ok) throw new Error(`Failed to delete user: ${res.status}`);
-}
+export const deleteUser = (userId: string) =>
+    api<void>('DELETE', `/organization/users/${userId}`);

@@ -1,11 +1,12 @@
 <script lang="ts">
+    import { toneBadgeClass } from "$lib/utils/tone";
     import { ExternalLink, Rocket, Trash2 } from "@lucide/svelte";
     import { goto } from "$app/navigation";
     import type { SiteSummary } from "$lib/api/sites";
     import ActionMenu from "$lib/components/resource-group/action-menu.svelte";
     import type { MenuAction } from "$lib/components/resource-group/menu-action";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
-    import { badgeClass, deploymentStatus, repoLabel } from "$lib/utils/site-status";
+    import { deploymentStatus, repoLabel } from "$lib/utils/site-status";
 
     let { s, href, onRedeploy, onDelete }: { s: SiteSummary; href: string; onRedeploy: () => void; onDelete: () => void } = $props();
 
@@ -28,7 +29,7 @@
             </span>
         </div>
     </td>
-    <td><span class={badgeClass(status.tone)}>{status.label}</span></td>
+    <td><span class={toneBadgeClass(status.tone)}>{status.label}</span></td>
     <td class="cx-soft">{domain ?? repoLabel(s.repo_url)}</td>
     <td class="cx-soft">&mdash;</td>
     <td class="cx-num">{s.created_at.slice(0, 10)}</td>

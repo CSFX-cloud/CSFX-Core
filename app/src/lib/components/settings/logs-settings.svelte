@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import SettingsPage from "$lib/components/settings/settings-page.svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { getLogsRetention, updateLogsRetention } from "$lib/api/logs";
 
     const MIN_RETENTION_DAYS = 1;
@@ -15,10 +14,9 @@
     let saved = $state(false);
 
     async function load() {
-        if (!auth.token) return;
         loading = true;
         try {
-            const response = await getLogsRetention(auth.token);
+            const response = await getLogsRetention();
             retentionDays = response.retention_days;
             inputValue = String(response.retention_days);
             error = null;
@@ -30,7 +28,6 @@
     }
 
     async function save() {
-        if (!auth.token) return;
         const days = Number(inputValue);
         if (!Number.isInteger(days) || days < MIN_RETENTION_DAYS || days > MAX_RETENTION_DAYS) {
             error = `retention days must be between ${MIN_RETENTION_DAYS} and ${MAX_RETENTION_DAYS}`;
@@ -39,7 +36,7 @@
         saving = true;
         saved = false;
         try {
-            const response = await updateLogsRetention(auth.token, days);
+            const response = await updateLogsRetention(days);
             retentionDays = response.retention_days;
             error = null;
             saved = true;

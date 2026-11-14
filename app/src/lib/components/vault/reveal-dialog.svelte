@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import { revealSecret, type RevealedSecret } from "$lib/api/vaults";
     import ModalDialog from "$lib/components/resource-group/modal-dialog.svelte";
 
@@ -24,11 +23,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !ready) return;
+        if (!ready) return;
         busy = true;
         error = null;
         try {
-            onRevealed(await revealSecret(auth.token, rgId, vaultId, secretName, { reason: reason.trim(), code }));
+            onRevealed(await revealSecret(rgId, vaultId, secretName, { reason: reason.trim(), code }));
             dialog?.close();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to reveal secret";

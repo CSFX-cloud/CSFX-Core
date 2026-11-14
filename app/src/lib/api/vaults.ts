@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export interface Vault {
     id: string;
@@ -74,70 +72,51 @@ export interface VaultAuditEntry {
 }
 
 function vaultsPath(rgId: string, vaultId?: string): string {
-    const root = `${API_BASE}/resource-groups/${rgId}/vaults`;
+    const root = `/resource-groups/${rgId}/vaults`;
     return vaultId ? `${root}/${vaultId}` : root;
 }
 
-function headers(token: string): HeadersInit {
-    return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-}
+export const listVaults = (rgId: string) =>
+    api<Vault[]>('GET', vaultsPath(rgId));
 
-async function failure(res: Response, fallback: string): Promise<Error> {
-    const body = await res.json().catch(() => ({}));
-    return new Error(body.error ?? `${fallback}: ${res.status}`);
-}
+export const createVault = (rgId: string, name: string) =>
+    api<Vault>('POST', vaultsPath(rgId), { name });
 
-async function send<T>(token: string, url: string, method: string, fallback: string, body?: unknown): Promise<T> {
-    const res = await authedFetch(url, {
-        method,
-        headers: headers(token),
-        body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) throw await failure(res, fallback);
-    return res.status === 204 ? (undefined as T) : res.json();
-}
+export const getVault = (rgId: string, vaultId: string) =>
+    api<VaultOverview>('GET', vaultsPath(rgId, vaultId));
 
-export const listVaults = (token: string, rgId: string) =>
-    send<Vault[]>(token, vaultsPath(rgId), 'GET', 'Failed to list vaults');
+export const deleteVault = (rgId: string, vaultId: string) =>
+    api<void>('DELETE', vaultsPath(rgId, vaultId));
 
-export const createVault = (token: string, rgId: string, name: string) =>
-    send<Vault>(token, vaultsPath(rgId), 'POST', 'Failed to create vault', { name });
+export const setVaultSealed = (rgId: string, vaultId: string, sealed: boolean) =>
+    api<Vault>('POST', `${vaultsPath(rgId, vaultId)}/${sealed ? 'seal' : 'unseal'}`);
 
-export const getVault = (token: string, rgId: string, vaultId: string) =>
-    send<VaultOverview>(token, vaultsPath(rgId, vaultId), 'GET', 'Failed to load vault');
+export const listSecrets = (rgId: string, vaultId: string) =>
+    api<SecretSummary[]>('GET', `${vaultsPath(rgId, vaultId)}/secrets`);
 
-export const deleteVault = (token: string, rgId: string, vaultId: string) =>
-    send<void>(token, vaultsPath(rgId, vaultId), 'DELETE', 'Failed to delete vault');
+export const createSecret = (rgId: string, vaultId: string, input: SecretInput) =>
+    api<{ name: string; version: number }>('POST', `${vaultsPath(rgId, vaultId)}/secrets`, input);
 
-export const setVaultSealed = (token: string, rgId: string, vaultId: string, sealed: boolean) =>
-    send<Vault>(token, `${vaultsPath(rgId, vaultId)}/${sealed ? 'seal' : 'unseal'}`, 'POST', 'Failed to change vault state');
+export const updateSecret = (rgId: string, vaultId: string, name: string, input: SecretInput) =>
+    api<{ name: string; version: number }>('PUT', `${vaultsPath(rgId, vaultId)}/secrets/${name}`, input);
 
-export const listSecrets = (token: string, rgId: string, vaultId: string) =>
-    send<SecretSummary[]>(token, `${vaultsPath(rgId, vaultId)}/secrets`, 'GET', 'Failed to list secrets');
+export const deleteSecret = (rgId: string, vaultId: string, name: string) =>
+    api<void>('DELETE', `${vaultsPath(rgId, vaultId)}/secrets/${name}`);
 
-export const createSecret = (token: string, rgId: string, vaultId: string, input: SecretInput) =>
-    send<{ name: string; version: number }>(token, `${vaultsPath(rgId, vaultId)}/secrets`, 'POST', 'Failed to create secret', input);
+export const restoreSecret = (rgId: string, vaultId: string, name: string, version: number) =>
+    api<void>('POST', `${vaultsPath(rgId, vaultId)}/secrets/${name}/restore`, { version });
 
-export const updateSecret = (token: string, rgId: string, vaultId: string, name: string, input: SecretInput) =>
-    send<{ name: string; version: number }>(token, `${vaultsPath(rgId, vaultId)}/secrets/${name}`, 'PUT', 'Failed to update secret', input);
+export const revealSecret = (rgId: string, vaultId: string, name: string, input: RevealInput) =>
+    api<RevealedSecret>('POST', `${vaultsPath(rgId, vaultId)}/secrets/${name}/reveal`, input);
 
-export const deleteSecret = (token: string, rgId: string, vaultId: string, name: string) =>
-    send<void>(token, `${vaultsPath(rgId, vaultId)}/secrets/${name}`, 'DELETE', 'Failed to delete secret');
+export const listGrants = (rgId: string, vaultId: string) =>
+    api<VaultGrant[]>('GET', `${vaultsPath(rgId, vaultId)}/grants`);
 
-export const restoreSecret = (token: string, rgId: string, vaultId: string, name: string, version: number) =>
-    send<void>(token, `${vaultsPath(rgId, vaultId)}/secrets/${name}/restore`, 'POST', 'Failed to restore secret', { version });
+export const createGrant = (rgId: string, vaultId: string, input: GrantInput) =>
+    api<VaultGrant>('POST', `${vaultsPath(rgId, vaultId)}/grants`, input);
 
-export const revealSecret = (token: string, rgId: string, vaultId: string, name: string, input: RevealInput) =>
-    send<RevealedSecret>(token, `${vaultsPath(rgId, vaultId)}/secrets/${name}/reveal`, 'POST', 'Failed to reveal secret', input);
+export const deleteGrant = (rgId: string, vaultId: string, grantId: string) =>
+    api<void>('DELETE', `${vaultsPath(rgId, vaultId)}/grants/${grantId}`);
 
-export const listGrants = (token: string, rgId: string, vaultId: string) =>
-    send<VaultGrant[]>(token, `${vaultsPath(rgId, vaultId)}/grants`, 'GET', 'Failed to list access grants');
-
-export const createGrant = (token: string, rgId: string, vaultId: string, input: GrantInput) =>
-    send<VaultGrant>(token, `${vaultsPath(rgId, vaultId)}/grants`, 'POST', 'Failed to grant access', input);
-
-export const deleteGrant = (token: string, rgId: string, vaultId: string, grantId: string) =>
-    send<void>(token, `${vaultsPath(rgId, vaultId)}/grants/${grantId}`, 'DELETE', 'Failed to revoke access');
-
-export const listVaultAudit = (token: string, rgId: string, vaultId: string) =>
-    send<VaultAuditEntry[]>(token, `${vaultsPath(rgId, vaultId)}/audit`, 'GET', 'Failed to load audit log');
+export const listVaultAudit = (rgId: string, vaultId: string) =>
+    api<VaultAuditEntry[]>('GET', `${vaultsPath(rgId, vaultId)}/audit`);

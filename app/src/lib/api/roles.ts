@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export interface Permission {
     id: string;
@@ -24,51 +22,17 @@ export interface RoleInput {
     permission_ids: string[];
 }
 
-async function failure(res: Response, fallback: string): Promise<Error> {
-    const body = await res.json().catch(() => ({}));
-    return new Error(body.error ?? `${fallback}: ${res.status}`);
-}
+export const listRoles = () =>
+    api<Role[]>('GET', '/roles');
 
-function authHeaders(token: string): HeadersInit {
-    return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-}
+export const listPermissions = () =>
+    api<Permission[]>('GET', '/permissions');
 
-export async function listRoles(token: string): Promise<Role[]> {
-    const res = await authedFetch(`${API_BASE}/roles`, { headers: authHeaders(token) });
-    if (!res.ok) throw await failure(res, 'Failed to list roles');
-    return res.json();
-}
+export const createRole = (input: RoleInput) =>
+    api<Role>('POST', '/roles', input);
 
-export async function listPermissions(token: string): Promise<Permission[]> {
-    const res = await authedFetch(`${API_BASE}/permissions`, { headers: authHeaders(token) });
-    if (!res.ok) throw await failure(res, 'Failed to list permissions');
-    return res.json();
-}
+export const updateRole = (id: string, input: RoleInput) =>
+    api<Role>('PUT', `/roles/${id}`, input);
 
-export async function createRole(token: string, input: RoleInput): Promise<Role> {
-    const res = await authedFetch(`${API_BASE}/roles`, {
-        method: 'POST',
-        headers: authHeaders(token),
-        body: JSON.stringify(input),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to create role');
-    return res.json();
-}
-
-export async function updateRole(token: string, id: string, input: RoleInput): Promise<Role> {
-    const res = await authedFetch(`${API_BASE}/roles/${id}`, {
-        method: 'PUT',
-        headers: authHeaders(token),
-        body: JSON.stringify(input),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to update role');
-    return res.json();
-}
-
-export async function deleteRole(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/roles/${id}`, {
-        method: 'DELETE',
-        headers: authHeaders(token),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to delete role');
-}
+export const deleteRole = (id: string) =>
+    api<void>('DELETE', `/roles/${id}`);

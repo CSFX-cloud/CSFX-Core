@@ -44,13 +44,12 @@
     let error = $state<string | null>(null);
 
     async function load() {
-        if (!auth.token) return;
         try {
-            vault = await getVault(auth.token, rg.rgId, vaultId);
+            vault = await getVault(rg.rgId, vaultId);
             [secrets, grants, audit] = await Promise.all([
-                vault.sealed ? Promise.resolve([]) : listSecrets(auth.token, rg.rgId, vaultId),
-                listGrants(auth.token, rg.rgId, vaultId),
-                listVaultAudit(auth.token, rg.rgId, vaultId),
+                vault.sealed ? Promise.resolve([]) : listSecrets(rg.rgId, vaultId),
+                listGrants(rg.rgId, vaultId),
+                listVaultAudit(rg.rgId, vaultId),
             ]);
             error = null;
         } catch (e) {
@@ -61,12 +60,12 @@
     }
 
     async function toggleSeal() {
-        if (!auth.token || !vault) return;
+        if (!vault) return;
         const sealing = !vault.sealed;
         if (sealing && !confirm(`Seal ${vault.name}? Nobody can read or change secrets until it is unsealed.`)) return;
         busy = true;
         try {
-            await setVaultSealed(auth.token, rg.rgId, vaultId, sealing);
+            await setVaultSealed(rg.rgId, vaultId, sealing);
             await load();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to change vault state";
@@ -76,10 +75,10 @@
     }
 
     async function remove() {
-        if (!auth.token || !vault || !confirm(`Delete ${vault.name} and all of its secrets? This cannot be undone.`)) return;
+        if (!vault || !confirm(`Delete ${vault.name} and all of its secrets? This cannot be undone.`)) return;
         busy = true;
         try {
-            await deleteVault(auth.token, rg.rgId, vaultId);
+            await deleteVault(rg.rgId, vaultId);
             await rg.load();
             await goto(base);
         } catch (e) {

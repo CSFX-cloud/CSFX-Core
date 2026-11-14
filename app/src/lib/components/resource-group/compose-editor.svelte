@@ -1,7 +1,6 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import { Upload } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { createWorkloadStack, getStack, redeployStack } from "$lib/api/resource-groups";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
     import { parseComposePreview } from "$lib/utils/compose-preview";
@@ -56,10 +55,9 @@
     }
 
     async function loadStack(id: string) {
-        if (!auth.token) return;
         error = null;
         try {
-            const stack = await getStack(auth.token, id);
+            const stack = await getStack(id);
             stackName = stack.name;
             yaml = stack.compose_source ?? "";
         } catch (e) {
@@ -68,14 +66,14 @@
     }
 
     async function deploy() {
-        if (!auth.token || !valid || !nameValid || (!editing && !stackName)) return;
+        if (!valid || !nameValid || (!editing && !stackName)) return;
         deploying = true;
         error = null;
         try {
             if (stackId) {
-                await redeployStack(auth.token, stackId, yaml);
+                await redeployStack(stackId, yaml);
             } else {
-                await createWorkloadStack(auth.token, { name: stackName, resource_group_id: rgId, compose_yaml: yaml });
+                await createWorkloadStack({ name: stackName, resource_group_id: rgId, compose_yaml: yaml });
             }
             await onDone();
         } catch (e) {
