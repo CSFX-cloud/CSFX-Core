@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export type SiteMode = 'static' | 'container';
 export type DeploymentStatus = 'queued' | 'building' | 'ready' | 'failed' | 'rolled_back';
@@ -189,58 +187,45 @@ export interface EnvInput {
 }
 
 function sitesPath(rgId: string, siteId?: string): string {
-    const root = `${API_BASE}/resource-groups/${rgId}/sites`;
+    const root = `/resource-groups/${rgId}/sites`;
     return siteId ? `${root}/${siteId}` : root;
 }
 
-async function send<T>(token: string, url: string, method: string, fallback: string, body?: unknown): Promise<T> {
-    const res = await authedFetch(url, {
-        method,
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload.error ?? `${fallback}: ${res.status}`);
-    }
-    return res.status === 204 ? (undefined as T) : res.json();
-}
+export const listSites = (rgId: string) => api<SiteSummary[]>('GET', sitesPath(rgId));
 
-export const listSites = (token: string, rgId: string) => send<SiteSummary[]>(token, sitesPath(rgId), 'GET', 'Failed to list web apps');
+export const detectSite = (rgId: string, input: SourceInput) =>
+    api<{ detection: Detection | null }>('POST', `${sitesPath(rgId)}/detect`, input);
 
-export const detectSite = (token: string, rgId: string, input: SourceInput) =>
-    send<{ detection: Detection | null }>(token, `${sitesPath(rgId)}/detect`, 'POST', 'Failed to inspect the repository', input);
+export const createSite = (rgId: string, input: CreateSiteInput) =>
+    api<Site>('POST', sitesPath(rgId), input);
 
-export const createSite = (token: string, rgId: string, input: CreateSiteInput) =>
-    send<Site>(token, sitesPath(rgId), 'POST', 'Failed to create web app', input);
+export const getSite = (rgId: string, siteId: string) => api<SiteDetail>('GET', sitesPath(rgId, siteId));
 
-export const getSite = (token: string, rgId: string, siteId: string) => send<SiteDetail>(token, sitesPath(rgId, siteId), 'GET', 'Failed to load web app');
+export const updateSite = (rgId: string, siteId: string, input: UpdateSiteInput) =>
+    api<Site>('PUT', sitesPath(rgId, siteId), input);
 
-export const updateSite = (token: string, rgId: string, siteId: string, input: UpdateSiteInput) =>
-    send<Site>(token, sitesPath(rgId, siteId), 'PUT', 'Failed to update web app', input);
+export const deleteSite = (rgId: string, siteId: string) => api<void>('DELETE', sitesPath(rgId, siteId));
 
-export const deleteSite = (token: string, rgId: string, siteId: string) => send<void>(token, sitesPath(rgId, siteId), 'DELETE', 'Failed to delete web app');
+export const redeploySite = (rgId: string, siteId: string, branch?: string) =>
+    api<DeploymentSummary>('POST', `${sitesPath(rgId, siteId)}/deployments`, branch ? { branch } : {});
 
-export const redeploySite = (token: string, rgId: string, siteId: string, branch?: string) =>
-    send<DeploymentSummary>(token, `${sitesPath(rgId, siteId)}/deployments`, 'POST', 'Failed to start deployment', branch ? { branch } : {});
+export const getDeployment = (rgId: string, siteId: string, deploymentId: string) =>
+    api<Deployment>('GET', `${sitesPath(rgId, siteId)}/deployments/${deploymentId}`);
 
-export const getDeployment = (token: string, rgId: string, siteId: string, deploymentId: string) =>
-    send<Deployment>(token, `${sitesPath(rgId, siteId)}/deployments/${deploymentId}`, 'GET', 'Failed to load deployment');
+export const promoteDeployment = (rgId: string, siteId: string, deploymentId: string) =>
+    api<void>('POST', `${sitesPath(rgId, siteId)}/deployments/${deploymentId}/promote`);
 
-export const promoteDeployment = (token: string, rgId: string, siteId: string, deploymentId: string) =>
-    send<void>(token, `${sitesPath(rgId, siteId)}/deployments/${deploymentId}/promote`, 'POST', 'Failed to promote deployment');
+export const addSiteEnv = (rgId: string, siteId: string, input: EnvInput) =>
+    api<SiteEnv>('POST', `${sitesPath(rgId, siteId)}/env`, input);
 
-export const addSiteEnv = (token: string, rgId: string, siteId: string, input: EnvInput) =>
-    send<SiteEnv>(token, `${sitesPath(rgId, siteId)}/env`, 'POST', 'Failed to add variable', input);
+export const deleteSiteEnv = (rgId: string, siteId: string, envId: string) =>
+    api<void>('DELETE', `${sitesPath(rgId, siteId)}/env/${envId}`);
 
-export const deleteSiteEnv = (token: string, rgId: string, siteId: string, envId: string) =>
-    send<void>(token, `${sitesPath(rgId, siteId)}/env/${envId}`, 'DELETE', 'Failed to remove variable');
+export const addSiteDomain = (rgId: string, siteId: string, hostname: string) =>
+    api<SiteDomain>('POST', `${sitesPath(rgId, siteId)}/domains`, { hostname });
 
-export const addSiteDomain = (token: string, rgId: string, siteId: string, hostname: string) =>
-    send<SiteDomain>(token, `${sitesPath(rgId, siteId)}/domains`, 'POST', 'Failed to add domain', { hostname });
+export const deleteSiteDomain = (rgId: string, siteId: string, domainId: string) =>
+    api<void>('DELETE', `${sitesPath(rgId, siteId)}/domains/${domainId}`);
 
-export const deleteSiteDomain = (token: string, rgId: string, siteId: string, domainId: string) =>
-    send<void>(token, `${sitesPath(rgId, siteId)}/domains/${domainId}`, 'DELETE', 'Failed to remove domain');
-
-export const getSiteUsage = (token: string, rgId: string, siteId: string, days: number) =>
-    send<SiteUsage>(token, `${sitesPath(rgId, siteId)}/usage?days=${days}`, 'GET', 'Failed to load usage');
+export const getSiteUsage = (rgId: string, siteId: string, days: number) =>
+    api<SiteUsage>('GET', `${sitesPath(rgId, siteId)}/usage?days=${days}`);

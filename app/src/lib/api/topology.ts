@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export type TopologyNodeKind = 'cluster' | 'agent' | 'workload' | 'volume' | 'resource_group';
 export type TopologyEdgeKind = 'member' | 'runs' | 'unscheduled' | 'mounts' | 'attached' | 'unattached';
@@ -24,10 +22,5 @@ export interface Topology {
     edges: TopologyEdge[];
 }
 
-export async function getTopology(token: string): Promise<Topology> {
-    const res = await authedFetch(`${API_BASE}/topology`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to load topology: ${res.status}`);
-    return res.json();
-}
+export const getTopology = () =>
+    api<Topology>('GET', '/topology');

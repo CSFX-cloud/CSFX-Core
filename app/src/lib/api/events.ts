@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export interface AlertEvent {
     id: string;
@@ -15,51 +13,19 @@ export interface AlertEvent {
     message: string | null;
 }
 
-export async function listEvents(
-    token: string,
-    filters?: { status?: string; agentId?: string },
-): Promise<AlertEvent[]> {
+export function listEvents(filters?: { status?: string; agentId?: string }): Promise<AlertEvent[]> {
     const params = new URLSearchParams();
     if (filters?.status) params.set('status', filters.status);
     if (filters?.agentId) params.set('agent_id', filters.agentId);
     const query = params.toString();
-    const res = await authedFetch(`${API_BASE}/events${query ? `?${query}` : ''}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`events fetch failed: ${res.status}`);
-    return res.json();
+    return api<AlertEvent[]>('GET', `/events${query ? `?${query}` : ''}`);
 }
 
-export async function resolveEvent(token: string, eventId: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/events/${eventId}/resolve`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to resolve alert: ${res.status}`);
-    }
-}
+export const resolveEvent = (eventId: string) =>
+    api<void>('POST', `/events/${eventId}/resolve`);
 
-export async function setMaintenance(token: string, agentId: string, minutes: number): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/agents/${agentId}/maintenance`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ minutes }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to set maintenance: ${res.status}`);
-    }
-}
+export const setMaintenance = (agentId: string, minutes: number) =>
+    api<void>('POST', `/agents/${agentId}/maintenance`, { minutes });
 
-export async function clearMaintenance(token: string, agentId: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/agents/${agentId}/maintenance`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to clear maintenance: ${res.status}`);
-    }
-}
+export const clearMaintenance = (agentId: string) =>
+    api<void>('DELETE', `/agents/${agentId}/maintenance`);

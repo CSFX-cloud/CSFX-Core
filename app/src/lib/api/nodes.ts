@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api, openSocketUrl } from './http';
 
 export interface Node {
     id: string;
@@ -68,37 +66,17 @@ export interface ClusterStats {
     nodes: NodeMetrics[];
 }
 
-export async function listNodes(token: string): Promise<Node[]> {
-    const res = await authedFetch(`${API_BASE}/agents`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`agents fetch failed: ${res.status}`);
-    return res.json();
-}
+export const listNodes = () =>
+    api<Node[]>('GET', '/agents');
 
-export async function getClusterStats(token: string): Promise<ClusterStats> {
-    const res = await authedFetch(`${API_BASE}/system/stats`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`system/stats fetch failed: ${res.status}`);
-    return res.json();
-}
+export const getClusterStats = () =>
+    api<ClusterStats>('GET', '/system/stats');
 
-export async function getNode(token: string, id: string): Promise<Node> {
-    const res = await authedFetch(`${API_BASE}/agents/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`agent fetch failed: ${res.status}`);
-    return res.json();
-}
+export const getNode = (id: string) =>
+    api<Node>('GET', `/agents/${id}`);
 
-export async function getNodeMetricsLatest(token: string, id: string): Promise<NodeMetricsLatest> {
-    const res = await authedFetch(`${API_BASE}/agents/${id}/metrics/latest`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`metrics fetch failed: ${res.status}`);
-    return res.json();
-}
+export const getNodeMetricsLatest = (id: string) =>
+    api<NodeMetricsLatest>('GET', `/agents/${id}/metrics/latest`);
 
 export interface LiveNodeMetrics {
     cpu_usage_percent: number;
@@ -112,20 +90,8 @@ export interface LiveNodeMetrics {
     uptime_seconds: number;
 }
 
-export async function openNodeMetricsSocket(token: string, agentId: string): Promise<WebSocket> {
-    const res = await authedFetch(`${API_BASE}/agents/${agentId}/metrics/ticket`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to issue metrics ticket: ${res.status}`);
-    }
-    const { ticket } = await res.json();
-
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${wsProtocol}//${window.location.host}${API_BASE}/agents/${agentId}/metrics/stream?ticket=${encodeURIComponent(ticket)}`;
-    return new WebSocket(url);
+export async function openNodeMetricsSocket(agentId: string): Promise<WebSocket> {
+    return new WebSocket(await openSocketUrl(`/agents/${agentId}/metrics/ticket`, `/agents/${agentId}/metrics/stream`));
 }
 
 export interface SmartInfo {
@@ -145,26 +111,16 @@ export interface DiskInfo {
     smart: SmartInfo | null;
 }
 
-export async function getNodeDisks(token: string, id: string): Promise<DiskInfo[]> {
-    const res = await authedFetch(`${API_BASE}/agents/${id}/disks`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`disks fetch failed: ${res.status}`);
-    return res.json();
-}
+export const getNodeDisks = (id: string) =>
+    api<DiskInfo[]>('GET', `/agents/${id}/disks`);
 
 export interface HealthHistoryPoint {
     bucket: string;
     online_count: number;
 }
 
-export async function getHealthHistory(token: string, range: '1h' | '24h' | '7d' | '30d'): Promise<HealthHistoryPoint[]> {
-    const res = await authedFetch(`${API_BASE}/system/stats/history?range=${range}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`health history fetch failed: ${res.status}`);
-    return res.json();
-}
+export const getHealthHistory = (range: '1h' | '24h' | '7d' | '30d') =>
+    api<HealthHistoryPoint[]>('GET', `/system/stats/history?range=${range}`);
 
 export interface UsageHistoryPoint {
     bucket: string;
@@ -175,82 +131,28 @@ export interface UsageHistoryPoint {
 
 export type UsageRange = '1h' | '24h' | '7d';
 
-export async function getUsageHistory(token: string, range: UsageRange, agentId?: string): Promise<UsageHistoryPoint[]> {
+export function getUsageHistory(range: UsageRange, agentId?: string): Promise<UsageHistoryPoint[]> {
     const agentQuery = agentId ? `&agent_id=${encodeURIComponent(agentId)}` : '';
-    const res = await authedFetch(`${API_BASE}/system/stats/usage?range=${range}${agentQuery}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`usage history fetch failed: ${res.status}`);
-    return res.json();
+    return api<UsageHistoryPoint[]>('GET', `/system/stats/usage?range=${range}${agentQuery}`);
 }
 
-export async function rebootNode(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/agents/${id}/power`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'reboot' }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to reboot node: ${res.status}`);
-    }
-}
+export const rebootNode = (id: string) =>
+    api<void>('POST', `/agents/${id}/power`, { action: 'reboot' });
 
-export async function powerOffNode(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/agents/${id}/power`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'poweroff' }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to power off node: ${res.status}`);
-    }
-}
+export const powerOffNode = (id: string) =>
+    api<void>('POST', `/agents/${id}/power`, { action: 'poweroff' });
 
-export async function drainNode(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/agents/${id}/drain`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to drain node: ${res.status}`);
-    }
-}
+export const drainNode = (id: string) =>
+    api<void>('POST', `/agents/${id}/drain`);
 
-export async function uncordonNode(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/agents/${id}/uncordon`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to uncordon node: ${res.status}`);
-    }
-}
+export const uncordonNode = (id: string) =>
+    api<void>('POST', `/agents/${id}/uncordon`);
 
-export async function cordonNode(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/agents/${id}/cordon`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to cordon node: ${res.status}`);
-    }
-}
+export const cordonNode = (id: string) =>
+    api<void>('POST', `/agents/${id}/cordon`);
 
-export async function removeNode(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/cluster/nodes/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to remove node: ${res.status}`);
-    }
-}
+export const removeNode = (id: string) =>
+    api<void>('DELETE', `/cluster/nodes/${id}`);
 
 export interface JoinToken {
     join_string: string;
@@ -258,15 +160,5 @@ export interface JoinToken {
     expires_at: string;
 }
 
-export async function createJoinToken(token: string, role: JoinToken['role'], ttlHours: number): Promise<JoinToken> {
-    const res = await authedFetch(`${API_BASE}/cluster/join-tokens`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role, ttl_hours: ttlHours }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to create join token: ${res.status}`);
-    }
-    return res.json();
-}
+export const createJoinToken = (role: JoinToken['role'], ttlHours: number) =>
+    api<JoinToken>('POST', '/cluster/join-tokens', { role, ttl_hours: ttlHours });

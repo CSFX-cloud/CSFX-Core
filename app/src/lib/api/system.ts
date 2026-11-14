@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api, ApiError } from './http';
 
 export interface UpdateStatus {
     current_version: string;
@@ -10,41 +8,17 @@ export interface UpdateStatus {
     paused: boolean;
 }
 
-export async function getUpdateStatus(token: string): Promise<UpdateStatus> {
-    const res = await authedFetch(`${API_BASE}/system/update/status`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`update status fetch failed: ${res.status}`);
-    return res.json();
-}
+export const getUpdateStatus = () =>
+    api<UpdateStatus>('GET', '/system/update/status');
 
-export async function triggerUpdate(token: string, version: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/system/update`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ version }),
-    });
-    if (!res.ok) throw new Error(`trigger update failed: ${res.status}`);
-}
+export const triggerUpdate = (version: string) =>
+    api<void>('POST', '/system/update', { version });
 
-export async function pauseUpdate(token: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/system/update/pause`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`pause update failed: ${res.status}`);
-}
+export const pauseUpdate = () =>
+    api<void>('POST', '/system/update/pause');
 
-export async function resumeUpdate(token: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/system/update/resume`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`resume update failed: ${res.status}`);
-}
+export const resumeUpdate = () =>
+    api<void>('POST', '/system/update/resume');
 
 export interface ReleaseEntry {
     version: string;
@@ -79,20 +53,14 @@ export interface ReleaseNotes {
     sections: Partial<Record<NoteCategory, NoteBlock[]>>;
 }
 
-export async function getReleases(token: string, includePre = false): Promise<ReleasesResponse> {
-    const url = `${API_BASE}/system/releases${includePre ? '?include_pre=true' : ''}`;
-    const res = await authedFetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`releases fetch failed: ${res.status}`);
-    return res.json();
-}
+export const getReleases = (includePre = false) =>
+    api<ReleasesResponse>('GET', `/system/releases${includePre ? '?include_pre=true' : ''}`);
 
-export async function getReleaseNotes(token: string, version: string): Promise<ReleaseNotes | null> {
-    const res = await authedFetch(`${API_BASE}/system/releases/${encodeURIComponent(version)}/notes`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`release notes fetch failed: ${res.status}`);
-    return res.json();
+export async function getReleaseNotes(version: string): Promise<ReleaseNotes | null> {
+    try {
+        return await api<ReleaseNotes>('GET', `/system/releases/${encodeURIComponent(version)}/notes`);
+    } catch (e) {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+    }
 }
