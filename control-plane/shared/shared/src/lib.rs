@@ -1,3 +1,4 @@
+pub mod agent_auth;
 pub mod db;
 pub mod db_log_layer;
 pub mod env;

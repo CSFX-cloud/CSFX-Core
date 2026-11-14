@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, TransactionTrait};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -59,33 +59,37 @@ impl ApiKeyManager {
         Self { db }
     }
 
-    pub async fn create_key(&self, agent_id: Uuid) -> ApiKey {
+    pub async fn issue_key(&self, agent_id: Uuid, revoke_existing: bool) -> anyhow::Result<ApiKey> {
         let api_key = ApiKey::new(agent_id);
-        let key_hash = crate::db::api_keys::hash_key(&api_key.key);
+        let key_hash = shared::agent_auth::hash_key(&api_key.key);
 
-        if let Err(e) = crate::db::api_keys::create(&self.db, agent_id, key_hash).await {
-            crate::log_error!(
+        let txn = self.db.begin().await?;
+        if revoke_existing {
+            let revoked = crate::db::api_keys::revoke_by_agent(&txn, agent_id).await?;
+            crate::log_info!(
                 "api_key_manager",
-                &format!("Failed to save API key to database: {}", e)
+                &format!("Revoked {} API key(s) for agent: {}", revoked, agent_id)
             );
         }
+        crate::db::api_keys::create(&txn, agent_id, key_hash).await?;
+        txn.commit().await?;
 
         crate::log_info!(
             "api_key_manager",
             &format!("Created API key for agent: {}", agent_id)
         );
 
-        api_key
+        Ok(api_key)
     }
 
     pub async fn validate_key(&self, key_str: &str) -> Result<Uuid, ApiKeyError> {
-        match crate::db::api_keys::get_agent_by_key(&self.db, key_str).await {
-            Ok(Some(agent)) => {
+        match shared::agent_auth::agent_for_key(&self.db, key_str).await {
+            Ok(Some(agent_id)) => {
                 crate::log_debug!(
                     "api_key_manager",
-                    &format!("API key validated for agent: {}", agent.id)
+                    &format!("API key validated for agent: {}", agent_id)
                 );
-                Ok(agent.id)
+                Ok(agent_id)
             }
             Ok(None) => {
                 crate::log_warn!("api_key_manager", "Invalid API key provided");
@@ -99,10 +103,6 @@ impl ApiKeyManager {
                 Err(ApiKeyError::Unavailable)
             }
         }
-    }
-
-    pub async fn revoke_all_keys(&self, agent_id: Uuid) -> Result<(), String> {
-        self.revoke_key(agent_id).await
     }
 
     pub async fn revoke_key(&self, agent_id: Uuid) -> Result<(), String> {

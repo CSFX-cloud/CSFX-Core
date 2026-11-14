@@ -14,8 +14,7 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::Utc;
 use entity::{
-    agent_api_keys, image_registry_tokens, site_deployments, AgentApiKeys, ImageRegistries,
-    ImageRegistryTokens, SiteDeployments,
+    image_registry_tokens, site_deployments, ImageRegistries, ImageRegistryTokens, SiteDeployments,
 };
 use jsonwebtoken::{Algorithm, Header};
 use keys::RegistryKeys;
@@ -145,10 +144,7 @@ async fn deployment_principal(
 }
 
 async fn agent_principal(state: &RegistryState, password: &str) -> Result<Principal, ServiceError> {
-    AgentApiKeys::find()
-        .filter(agent_api_keys::Column::KeyHash.eq(hash_key(password)))
-        .filter(agent_api_keys::Column::IsActive.eq(true))
-        .one(&state.db)
+    shared::agent_auth::agent_for_key(&state.db, password)
         .await?
         .map(|_| Principal::Agent)
         .ok_or(ServiceError::Unauthorized)

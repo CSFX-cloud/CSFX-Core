@@ -1,7 +1,7 @@
-use crate::db::api_keys::hash_key;
 use chrono::{DateTime, Utc};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
+use shared::agent_auth::hash_key;
 use uuid::Uuid;
 
 const TOKEN_PREFIX: &str = "csfx-bootstrap.";
