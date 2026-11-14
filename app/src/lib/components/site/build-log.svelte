@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { saveBlob } from "$lib/utils/download";
     import { onMount, tick } from "svelte";
     import { Download } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
@@ -39,12 +40,7 @@
     }
 
     function download() {
-        const url = URL.createObjectURL(new Blob([deployment?.build_log ?? ""], { type: "text/plain" }));
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `build-${deploymentId.slice(0, 8)}.txt`;
-        link.click();
-        URL.revokeObjectURL(url);
+        saveBlob(new Blob([deployment?.build_log ?? ""], { type: "text/plain" }), `build-${deploymentId.slice(0, 8)}.txt`);
     }
 
     onMount(() => {

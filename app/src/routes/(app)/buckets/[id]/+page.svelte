@@ -17,7 +17,7 @@
     import BucketIntegrationTab from "$lib/components/resource-group/bucket-integration-tab.svelte";
     import BucketSettingsTab from "$lib/components/resource-group/bucket-settings-tab.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
-    import { fmtBytes, formatBytes } from "$lib/utils/format";
+    import { formatBytes } from "$lib/utils/format";
     import { folderName, objectName, prefixCrumbs } from "$lib/utils/bucket-objects";
     import { badgeClass, statusLabel } from "$lib/utils/tone";
     import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
@@ -149,7 +149,7 @@
             </div>
             <div class="cx-stat">
                 <p class="cx-stat__label">Quota</p>
-                <p class="db-stat-value">{bucket.quota_max_size ? fmtBytes(bucket.quota_max_size) : "Unlimited"}</p>
+                <p class="db-stat-value">{bucket.quota_max_size ? formatBytes(bucket.quota_max_size) : "Unlimited"}</p>
             </div>
             <div class="cx-stat">
                 <p class="cx-stat__label">Resource group</p>

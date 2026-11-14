@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { saveBlob } from "$lib/utils/download";
     import { onMount, tick } from "svelte";
     import { Download, FileText, Search } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
@@ -37,12 +38,7 @@
     }
 
     function download() {
-        const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/plain" }));
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = `${workloadId.slice(0, 8)}-logs.txt`;
-        link.click();
-        URL.revokeObjectURL(url);
+        saveBlob(new Blob([lines.join("\n")], { type: "text/plain" }), `${workloadId.slice(0, 8)}-logs.txt`);
     }
 
     $effect(() => {

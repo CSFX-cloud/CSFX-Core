@@ -1,4 +1,5 @@
 import { authedFetch } from './http';
+import { saveBlob } from '$lib/utils/download';
 
 const API_BASE = '/api';
 
@@ -110,12 +111,7 @@ export async function exportLogsCef(token: string, filter: LogsFilter): Promise<
         headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) throw new Error(`Failed to export logs: ${res.status}`);
-    const url = URL.createObjectURL(await res.blob());
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'csfx-logs.cef';
-    link.click();
-    URL.revokeObjectURL(url);
+    saveBlob(await res.blob(), 'csfx-logs.cef');
 }
 
 export async function getLogsRetention(token: string): Promise<LogsRetention> {

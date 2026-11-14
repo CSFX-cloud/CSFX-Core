@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { saveBlob } from "$lib/utils/download";
     import { Calendar, Network, Pin, Plus, ShieldCheck, Trash2 } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import { updateResourceGroup, type ResourceGroup } from "$lib/api/resource-groups";
@@ -66,12 +67,8 @@
                 const body = await response.json().catch(() => ({}));
                 throw new Error(body.error ?? `HTTP ${response.status}`);
             }
-            const url = URL.createObjectURL(await response.blob());
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = (response.headers.get("content-disposition") ?? "").match(/filename="([^"]+)"/)?.[1] ?? "csfx-vpn.conf";
-            link.click();
-            URL.revokeObjectURL(url);
+            const filename = (response.headers.get("content-disposition") ?? "").match(/filename="([^"]+)"/)?.[1] ?? "csfx-vpn.conf";
+            saveBlob(await response.blob(), filename);
         } catch (e) {
             onerror(e instanceof Error ? e.message : "VPN config download failed");
         } finally {

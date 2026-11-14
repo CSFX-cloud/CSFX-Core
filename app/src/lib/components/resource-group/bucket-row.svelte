@@ -5,7 +5,7 @@
     import ActionMenu from "$lib/components/resource-group/action-menu.svelte";
     import type { MenuAction } from "$lib/components/resource-group/menu-action";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
-    import { fmtBytes } from "$lib/utils/format";
+    import { formatBytes } from "$lib/utils/format";
     import { badgeClass, statusLabel } from "$lib/utils/tone";
 
     let { b, onDelete }: { b: Bucket; onDelete: () => void } = $props();
@@ -30,7 +30,7 @@
         </div>
     </td>
     <td><span class={badgeClass(b.status)}>{statusLabel(b.status)}</span></td>
-    <td class="cx-soft">{b.quota_max_size ? fmtBytes(b.quota_max_size) : "unlimited"} &middot; {b.exposure}</td>
+    <td class="cx-soft">{b.quota_max_size ? formatBytes(b.quota_max_size) : "unlimited"} &middot; {b.exposure}</td>
     <td class="cx-soft">&mdash;</td>
     <td class="cx-num">{b.created_at.slice(0, 10)}</td>
     <td><ActionMenu label="Actions for {b.name}" {actions} /></td>
