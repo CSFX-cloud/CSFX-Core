@@ -1,9 +1,7 @@
 use axum::http::{Method, StatusCode};
-use entity::entities::{agent_metrics, agents, logs, workloads};
+use entity::entities::{agents, logs, workloads};
 use futures_util::StreamExt;
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
@@ -11,24 +9,12 @@ use uuid::Uuid;
 
 use crate::common::{harness, Harness};
 use crate::support_a::{
-    insert_agent, insert_api_key, insert_group, insert_volume, insert_workload, keyed, serve,
-    update_agent, WorkloadSpec,
+    insert_agent, insert_api_key, insert_group, insert_metrics, insert_volume, insert_workload,
+    keyed, serve, update_agent, WorkloadSpec,
 };
 
 async fn worker(harness: &Harness) -> agents::Model {
     insert_agent(&harness.db, "worker", "Online").await
-}
-
-fn metrics_payload() -> Value {
-    json!({
-        "cpu_model": "test-cpu",
-        "cpu_cores": 4,
-        "memory_total_bytes": 1000,
-        "memory_used_bytes": 250,
-        "disk_total_bytes": 0,
-        "disk_used_bytes": 10,
-        "hostname": "metrics-host"
-    })
 }
 
 #[tokio::test]
@@ -91,49 +77,10 @@ async fn agents_are_listed_and_fetched_without_container_hosts() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn pushed_metrics_are_stored_and_served() {
+async fn stored_metrics_are_served() {
     let harness = harness().await;
     let agent = worker(&harness).await;
-    let key = insert_api_key(&harness.db, agent.id).await;
-    let (status, _) = harness
-        .send(
-            Method::POST,
-            "/api/agents/self/metrics",
-            None,
-            Some(metrics_payload()),
-        )
-        .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let other = worker(&harness).await;
-    let (status, _) = keyed(
-        &harness,
-        Method::POST,
-        "/api/agents/self/metrics",
-        &key,
-        Some(json!({ "agent_id": other.id, "timestamp": "2999-01-01T00:00:00Z", "cpu_cores": 0 })),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
-    let foreign = agent_metrics::Entity::find()
-        .filter(agent_metrics::Column::AgentId.eq(other.id))
-        .count(&harness.db)
-        .await
-        .unwrap();
-    assert_eq!(foreign, 0);
-    agent_metrics::Entity::delete_many()
-        .filter(agent_metrics::Column::AgentId.eq(agent.id))
-        .exec(&harness.db)
-        .await
-        .unwrap();
-    let (status, _) = keyed(
-        &harness,
-        Method::POST,
-        "/api/agents/self/metrics",
-        &key,
-        Some(metrics_payload()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
+    insert_metrics(&harness.db, agent.id, Some(10.0), Some(25.0), None).await;
 
     let (status, history) = harness
         .get(&format!("/api/agents/{}/metrics", agent.id))
@@ -146,12 +93,6 @@ async fn pushed_metrics_are_stored_and_served() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(latest["memory_usage_percent"], 25.0);
     assert!(latest["disk_usage_percent"].is_null());
-    let stored = agent_metrics::Entity::find()
-        .filter(agent_metrics::Column::AgentId.eq(agent.id))
-        .count(&harness.db)
-        .await
-        .unwrap();
-    assert_eq!(stored, 1);
 }
 
 #[tokio::test]
@@ -160,15 +101,6 @@ async fn latest_metrics_of_an_unknown_agent_are_missing() {
     let harness = harness().await;
     let uri = format!("/api/agents/{}/metrics/latest", Uuid::new_v4());
     assert_eq!(harness.get(&uri).await.0, StatusCode::NOT_FOUND);
-    let (status, _) = harness
-        .send(
-            Method::POST,
-            "/api/agents/self/metrics",
-            None,
-            Some(json!({})),
-        )
-        .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]

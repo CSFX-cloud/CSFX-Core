@@ -19,36 +19,6 @@ use crate::auth::rbac::{CanManageSystem, CanViewAgents};
 use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SystemMetrics {
-    // CPU
-    pub cpu_model: Option<String>,
-    pub cpu_cores: Option<u32>,
-    pub cpu_threads: Option<u32>,
-    pub cpu_usage_percent: Option<f32>,
-
-    // Memory
-    pub memory_total_bytes: Option<u64>,
-    pub memory_used_bytes: Option<u64>,
-    pub memory_usage_percent: Option<f32>,
-
-    // Disk
-    pub disk_total_bytes: Option<u64>,
-    pub disk_used_bytes: Option<u64>,
-    pub disk_usage_percent: Option<f32>,
-
-    // Network
-    pub network_rx_bytes: Option<u64>,
-    pub network_tx_bytes: Option<u64>,
-
-    // System
-    pub os_name: Option<String>,
-    pub os_version: Option<String>,
-    pub kernel_version: Option<String>,
-    pub hostname: Option<String>,
-    pub uptime_seconds: Option<u64>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct AgentResponse {
     pub id: Uuid,
     pub name: String,
@@ -93,56 +63,6 @@ impl From<agents::Model> for AgentResponse {
             ssh_host_key: model.ssh_host_key,
         }
     }
-}
-
-fn percent_of(used: Option<u64>, total: Option<u64>) -> Option<f32> {
-    let total = total.filter(|total| *total > 0)?;
-    Some(used? as f32 / total as f32 * 100.0)
-}
-
-pub async fn receive_metrics(
-    agent: AgentApiKey,
-    State(state): State<AppState>,
-    Json(metrics): Json<SystemMetrics>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let new_metrics = agent_metrics::ActiveModel {
-        id: ActiveValue::Set(Uuid::new_v4()),
-        agent_id: ActiveValue::Set(agent.agent_id),
-        timestamp: ActiveValue::Set(chrono::Utc::now().naive_utc()),
-        cpu_model: ActiveValue::Set(metrics.cpu_model),
-        cpu_cores: ActiveValue::Set(metrics.cpu_cores.map(|v| v as i32)),
-        cpu_threads: ActiveValue::Set(metrics.cpu_threads.map(|v| v as i32)),
-        cpu_usage_percent: ActiveValue::Set(metrics.cpu_usage_percent),
-        memory_total_bytes: ActiveValue::Set(metrics.memory_total_bytes.map(|v| v as i64)),
-        memory_used_bytes: ActiveValue::Set(metrics.memory_used_bytes.map(|v| v as i64)),
-        memory_usage_percent: ActiveValue::Set(
-            metrics
-                .memory_usage_percent
-                .or_else(|| percent_of(metrics.memory_used_bytes, metrics.memory_total_bytes)),
-        ),
-        disk_total_bytes: ActiveValue::Set(metrics.disk_total_bytes.map(|v| v as i64)),
-        disk_used_bytes: ActiveValue::Set(metrics.disk_used_bytes.map(|v| v as i64)),
-        disk_usage_percent: ActiveValue::Set(
-            metrics
-                .disk_usage_percent
-                .or_else(|| percent_of(metrics.disk_used_bytes, metrics.disk_total_bytes)),
-        ),
-        network_rx_bytes: ActiveValue::Set(metrics.network_rx_bytes.map(|v| v as i64)),
-        network_tx_bytes: ActiveValue::Set(metrics.network_tx_bytes.map(|v| v as i64)),
-        os_name: ActiveValue::Set(metrics.os_name),
-        os_version: ActiveValue::Set(metrics.os_version),
-        kernel_version: ActiveValue::Set(metrics.kernel_version),
-        hostname: ActiveValue::Set(metrics.hostname),
-        uptime_seconds: ActiveValue::Set(metrics.uptime_seconds.map(|v| v as i64)),
-        custom_metrics: ActiveValue::Set(None),
-    };
-
-    new_metrics.insert(&state.agent_db).await.map_err(|e| {
-        tracing::error!("Failed to store metrics: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    Ok(StatusCode::CREATED)
 }
 
 fn is_container_id(hostname: &str) -> bool {
@@ -517,7 +437,6 @@ pub fn agents_routes() -> Router<AppState> {
 
 pub fn agents_unmetered_routes() -> Router<AppState> {
     Router::new()
-        .route("/agents/self/metrics", post(receive_metrics))
         .route("/agents/self/workloads", get(get_self_workloads))
         .route(
             "/agents/self/workloads/{id}/restart-ack",
