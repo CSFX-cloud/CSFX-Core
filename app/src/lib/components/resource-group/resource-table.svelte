@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { Plus } from "@lucide/svelte";
+    import { ExternalLink, KeyRound, Plus } from "@lucide/svelte";
     import { auth } from "$lib/auth/store.svelte";
     import type { Gateway } from "$lib/api/ingress";
     import {
@@ -32,10 +32,9 @@
     } from "$lib/utils/delete-preview";
     import BucketRow from "./bucket-row.svelte";
     import DeleteDialog from "./delete-dialog.svelte";
-    import RegistryRow from "./registry-row.svelte";
     import SiteRow from "./site-row.svelte";
     import StackRow from "./stack-row.svelte";
-    import VaultRow from "./vault-row.svelte";
+    import SimpleResourceRow from "./simple-resource-row.svelte";
     import VolumeRow from "./volume-row.svelte";
     import WorkloadRow from "./workload-row.svelte";
 
@@ -197,15 +196,29 @@
                         {:else if item.kind === "volume"}
                             <VolumeRow v={item.data} onDelete={() => requestDelete(`Delete ${item.data.name}`, item.data.name, volumeDeletePreview(item.data, inventory()), () => deleteVolume(token(), item.data.id))} />
                         {:else if item.kind === "vault"}
-                            <VaultRow
-                                v={item.data}
+                            <SimpleResourceRow
+                                name={item.data.name}
+                                kind="Key Vault"
+                                service="key-vault"
+                                openIcon={KeyRound}
                                 href="{base}/vault/{item.data.id}"
+                                badgeClass={item.data.sealed ? "cx-badge--warning" : "cx-badge--success"}
+                                badgeLabel={item.data.sealed ? "Sealed" : "Unsealed"}
+                                detail="Soft delete {item.data.soft_delete_days} days"
+                                createdAt={item.data.created_at}
                                 onDelete={() => requestSimpleDelete(`Delete ${item.data.name}`, { type: "Vault", name: item.data.name, status: item.data.sealed ? "sealed" : "active" }, () => deleteVault(token(), item.data.resource_group_id, item.data.id))}
                             />
                         {:else if item.kind === "registry"}
-                            <RegistryRow
-                                r={item.data}
+                            <SimpleResourceRow
+                                name={item.data.name}
+                                kind="Container Registry"
+                                service="container-registry"
+                                openIcon={ExternalLink}
                                 href="{base}/registry/{item.data.id}"
+                                badgeClass="cx-badge--success"
+                                badgeLabel="Active"
+                                detail={item.data.prefix}
+                                createdAt={item.data.created_at}
                                 onDelete={() => requestSimpleDelete(`Delete ${item.data.name}`, { type: "Registry", name: item.data.name, status: "active" }, () => deleteRegistry(token(), item.data.resource_group_id, item.data.id))}
                             />
                         {:else if item.kind === "site"}

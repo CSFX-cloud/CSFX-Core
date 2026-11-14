@@ -1,9 +1,19 @@
-<script lang="ts">
+<script lang="ts" generics="T">
     import { auth } from "$lib/auth/store.svelte";
-    import { createVault, type Vault } from "$lib/api/vaults";
     import ModalDialog from "./modal-dialog.svelte";
 
-    let { rgId, onCreated }: { rgId: string; onCreated: (vault: Vault) => Promise<void> } = $props();
+    type Props = {
+        title: string;
+        subtitle: string;
+        hint: string;
+        placeholder: string;
+        inputId: string;
+        failure: string;
+        create: (token: string, name: string) => Promise<T>;
+        onCreated: (created: T) => Promise<void>;
+    };
+
+    let { title, subtitle, hint, placeholder, inputId, failure, create, onCreated }: Props = $props();
 
     let dialog = $state<ModalDialog | null>(null);
     let name = $state("");
@@ -19,19 +29,19 @@
         creating = true;
         error = null;
         try {
-            const vault = await createVault(auth.token, rgId, name.trim());
+            const created = await create(auth.token, name.trim());
             dialog?.close();
             name = "";
-            await onCreated(vault);
+            await onCreated(created);
         } catch (e) {
-            error = e instanceof Error ? e.message : "Failed to create vault";
+            error = e instanceof Error ? e.message : failure;
         } finally {
             creating = false;
         }
     }
 </script>
 
-<ModalDialog bind:this={dialog} title="Create key vault" subtitle="Secrets stay encrypted. Resources read them at start." onclose={() => (error = null)}>
+<ModalDialog bind:this={dialog} {title} {subtitle} onclose={() => (error = null)}>
     <form
         class="md__fields"
         onsubmit={(event) => {
@@ -40,9 +50,9 @@
         }}
     >
         <div class="cx-field">
-            <label class="cx-label" for="kv-name">Name</label>
-            <input class="cx-input" id="kv-name" placeholder="kv-prod" autocomplete="off" bind:value={name} />
-            <p class="cx-hint">Lowercase letters, digits and hyphens.</p>
+            <label class="cx-label" for={inputId}>Name</label>
+            <input class="cx-input" id={inputId} {placeholder} autocomplete="off" bind:value={name} />
+            <p class="cx-hint">{hint}</p>
         </div>
         {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
         <div class="md__foot">

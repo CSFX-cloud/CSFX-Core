@@ -1,13 +1,12 @@
 <script lang="ts">
     import { ChevronLeft, Search } from "@lucide/svelte";
     import { goto } from "$app/navigation";
-    import type { Registry } from "$lib/api/registries";
-    import type { Vault } from "$lib/api/vaults";
+    import { createRegistry, type Registry } from "$lib/api/registries";
+    import { createVault, type Vault } from "$lib/api/vaults";
     import EmptyState from "$lib/components/dashboard/empty-state.svelte";
     import CreateBucketDialog from "$lib/components/resource-group/create-bucket-dialog.svelte";
     import CreateGatewayDialog from "$lib/components/resource-group/create-gateway-dialog.svelte";
-    import CreateRegistryDialog from "$lib/components/resource-group/create-registry-dialog.svelte";
-    import CreateVaultDialog from "$lib/components/resource-group/create-vault-dialog.svelte";
+    import CreateNamedDialog from "$lib/components/resource-group/create-named-dialog.svelte";
     import CreateVolumeDialog from "$lib/components/resource-group/create-volume-dialog.svelte";
     import DeployContainerDialog from "$lib/components/resource-group/deploy-container-dialog.svelte";
     import DeployVmDialog from "$lib/components/resource-group/deploy-vm-dialog.svelte";
@@ -33,8 +32,8 @@
     let volumeDialog = $state<CreateVolumeDialog | null>(null);
     let bucketDialog = $state<CreateBucketDialog | null>(null);
     let gatewayDialog = $state<CreateGatewayDialog | null>(null);
-    let vaultDialog = $state<CreateVaultDialog | null>(null);
-    let registryDialog = $state<CreateRegistryDialog | null>(null);
+    let vaultDialog = $state<CreateNamedDialog<Vault> | null>(null);
+    let registryDialog = $state<CreateNamedDialog<Registry> | null>(null);
 
     const matching = $derived(
         RESOURCE_TYPES.filter((type) => `${type.label} ${type.description} ${type.equivalent}`.toLowerCase().includes(searchText.trim().toLowerCase())),
@@ -98,8 +97,28 @@
 <CreateVolumeDialog bind:this={volumeDialog} rgId={rg.rgId} onCreated={finish} />
 <CreateBucketDialog bind:this={bucketDialog} rgId={rg.rgId} onCreated={finish} />
 <CreateGatewayDialog bind:this={gatewayDialog} rgId={rg.rgId} onCreated={openGateway} />
-<CreateVaultDialog bind:this={vaultDialog} rgId={rg.rgId} onCreated={openVault} />
-<CreateRegistryDialog bind:this={registryDialog} rgId={rg.rgId} onCreated={openRegistry} />
+<CreateNamedDialog
+    bind:this={vaultDialog}
+    title="Create key vault"
+    subtitle="Secrets stay encrypted. Resources read them at start."
+    hint="Lowercase letters, digits and hyphens."
+    placeholder="kv-prod"
+    inputId="kv-name"
+    failure="Failed to create vault"
+    create={(token, name) => createVault(token, rg.rgId, name)}
+    onCreated={openVault}
+/>
+<CreateNamedDialog
+    bind:this={registryDialog}
+    title="Create container registry"
+    subtitle="Push images here and deploy them in this resource group."
+    hint="Lowercase letters, digits and hyphens. Part of every image path."
+    placeholder="main"
+    inputId="cr-name"
+    failure="Failed to create registry"
+    create={(token, name) => createRegistry(token, rg.rgId, name)}
+    onCreated={openRegistry}
+/>
 
 <div class="db-content">
     <section class="cx-stage" aria-label="Add resource">
