@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export interface ClusterVip {
     address: string;
@@ -8,28 +6,8 @@ export interface ClusterVip {
     router_id: number;
 }
 
-export async function getClusterVip(token: string): Promise<ClusterVip | null> {
-    const res = await authedFetch(`${API_BASE}/cluster/vip`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to get cluster vip: ${res.status}`);
-    const body: { vip: ClusterVip | null } = await res.json();
-    return body.vip;
-}
+export const getClusterVip = async (): Promise<ClusterVip | null> =>
+    (await api<{ vip: ClusterVip | null }>('GET', '/cluster/vip')).vip;
 
-export async function updateClusterVip(token: string, vip: ClusterVip): Promise<ClusterVip> {
-    const res = await authedFetch(`${API_BASE}/cluster/vip`, {
-        method: 'PUT',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(vip),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to update cluster vip: ${res.status}`);
-    }
-    const body: { vip: ClusterVip } = await res.json();
-    return body.vip;
-}
+export const updateClusterVip = async (vip: ClusterVip): Promise<ClusterVip> =>
+    (await api<{ vip: ClusterVip }>('PUT', '/cluster/vip', vip)).vip;

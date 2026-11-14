@@ -66,9 +66,8 @@
     }
 
     async function refresh() {
-        if (!auth.token) return;
         try {
-            const all = await listIngress(auth.token, rg.rgId);
+            const all = await listIngress(rg.rgId);
             routes = all.filter((route) => route.gateway_id === gatewayId);
             error = null;
         } catch (e) {
@@ -76,14 +75,14 @@
         }
     }
 
-    async function connectSite(token: string, site: SiteSummary) {
-        await addSiteDomain(token, rg.rgId, site.id, hostname.trim());
-        if (site.gateway_id !== gatewayId) await updateSite(token, rg.rgId, site.id, { gateway_id: gatewayId });
+    async function connectSite(site: SiteSummary) {
+        await addSiteDomain(rg.rgId, site.id, hostname.trim());
+        if (site.gateway_id !== gatewayId) await updateSite(rg.rgId, site.id, { gateway_id: gatewayId });
         await rg.load();
     }
 
-    async function connectWorkload(token: string, port: number) {
-        await createIngress(token, rg.rgId, {
+    async function connectWorkload(port: number) {
+        await createIngress(rg.rgId, {
             hostname: hostname.trim(),
             gateway_id: gatewayId,
             workload_id: workloadId,
@@ -93,11 +92,11 @@
     }
 
     async function handleCreate() {
-        if (!auth.token || (!selectedSite && containerPort === null)) return;
+        if ((!selectedSite && containerPort === null)) return;
         busy = true;
         try {
-            if (selectedSite) await connectSite(auth.token, selectedSite);
-            else if (containerPort !== null) await connectWorkload(auth.token, containerPort);
+            if (selectedSite) await connectSite(selectedSite);
+            else if (containerPort !== null) await connectWorkload(containerPort);
             hostname = "";
             await refresh();
         } catch (e) {
@@ -108,10 +107,9 @@
     }
 
     async function handleDeleteRoute(route: IngressRoute) {
-        if (!auth.token) return;
         if (!confirm(`Remove ${route.hostname}?`)) return;
         try {
-            await deleteIngress(auth.token, rg.rgId, route.id);
+            await deleteIngress(rg.rgId, route.id);
             await refresh();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to delete route";
@@ -119,10 +117,10 @@
     }
 
     async function handleDeleteGateway() {
-        if (!auth.token || !gateway) return;
+        if (!gateway) return;
         if (!confirm(`Remove gateway ${gateway.name} and all routes behind it?`)) return;
         try {
-            await deleteGateway(auth.token, rg.rgId, gateway.id);
+            await deleteGateway(rg.rgId, gateway.id);
             await rg.load();
             goto(base);
         } catch (e) {

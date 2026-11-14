@@ -74,13 +74,12 @@
     }
 
     async function load() {
-        if (!auth.token) return;
         try {
             const filter = baseFilter();
             const [list, facetResult, trendResult] = await Promise.all([
-                listLogs(auth.token, { ...filter, limit: PAGE_LIMIT, offset }),
-                getLogsFacets(auth.token, filter),
-                getLogsTrend(auth.token, filter),
+                listLogs({ ...filter, limit: PAGE_LIMIT, offset }),
+                getLogsFacets(filter),
+                getLogsTrend(filter),
             ]);
             trend = trendResult;
             entries = list.entries;
@@ -97,8 +96,7 @@
     }
 
     async function loadDirectories() {
-        if (!auth.token) return;
-        const [nodeResult, userResult] = await Promise.allSettled([listNodes(auth.token), listUsers(auth.token)]);
+        const [nodeResult, userResult] = await Promise.allSettled([listNodes(), listUsers()]);
         if (nodeResult.status === "fulfilled") nodes = nodeResult.value;
         if (userResult.status === "fulfilled") users = userResult.value;
     }
@@ -122,9 +120,8 @@
     }
 
     async function exportCef() {
-        if (!auth.token) return;
         try {
-            await exportLogsCef(auth.token, baseFilter());
+            await exportLogsCef(baseFilter());
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to export logs";
         }

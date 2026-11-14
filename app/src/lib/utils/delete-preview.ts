@@ -49,15 +49,15 @@ export function displayName(workload: Workload): string {
     return workload.service_name ?? workload.name;
 }
 
-export async function loadGroupInventory(token: string, groupId: string): Promise<GroupInventory> {
+export async function loadGroupInventory(groupId: string): Promise<GroupInventory> {
     const [workloads, volumes, buckets, vaults, sites, registries, gateways] = await Promise.all([
-        listResourceGroupWorkloads(token, groupId),
-        listResourceGroupVolumes(token, groupId),
-        listResourceGroupBuckets(token, groupId),
-        listVaults(token, groupId).catch((): Vault[] => []),
-        listSites(token, groupId).catch((): SiteSummary[] => []),
-        listRegistries(token, groupId).catch((): Registry[] => []),
-        listGateways(token, groupId),
+        listResourceGroupWorkloads(groupId),
+        listResourceGroupVolumes(groupId),
+        listResourceGroupBuckets(groupId),
+        listVaults(groupId).catch((): Vault[] => []),
+        listSites(groupId).catch((): SiteSummary[] => []),
+        listRegistries(groupId).catch((): Registry[] => []),
+        listGateways(groupId),
     ]);
     return { workloads, volumes, buckets, vaults, sites, registries, gateways };
 }
@@ -148,11 +148,11 @@ function pause(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, STOP_POLL_INTERVAL_MS));
 }
 
-export async function stopAndWait(token: string, groupId: string, workloads: Workload[]): Promise<void> {
-    await Promise.all(workloads.map((workload) => stopWorkload(token, workload.id)));
+export async function stopAndWait(groupId: string, workloads: Workload[]): Promise<void> {
+    await Promise.all(workloads.map((workload) => stopWorkload(workload.id)));
     const ids = new Set(workloads.map((workload) => workload.id));
     for (let attempt = 0; attempt < STOP_POLL_ATTEMPTS; attempt++) {
-        const current = await listResourceGroupWorkloads(token, groupId);
+        const current = await listResourceGroupWorkloads(groupId);
         if (!current.some((workload) => ids.has(workload.id) && isActive(workload))) return;
         await pause();
     }

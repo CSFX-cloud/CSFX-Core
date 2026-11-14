@@ -16,10 +16,10 @@
     let error = $state<string | null>(null);
 
     async function refresh() {
-        if (!auth.token || refreshing) return;
+        if (refreshing) return;
         refreshing = true;
         try {
-            const [loaded, groups] = await Promise.all([listBuckets(auth.token), listResourceGroups(auth.token).catch(() => [])]);
+            const [loaded, groups] = await Promise.all([listBuckets(), listResourceGroups().catch(() => [])]);
             buckets = loaded;
             groupNames = new Map(groups.map((group) => [group.id, group.name]));
             error = null;

@@ -1,6 +1,4 @@
-import { authedFetch } from './http';
-
-const API_BASE = '/api';
+import { api } from './http';
 
 export interface IdentityProvider {
     id: string;
@@ -46,87 +44,23 @@ export interface DiscoveryResult {
     jwks_uri: string;
 }
 
-async function failure(res: Response, fallback: string): Promise<Error> {
-    const body = await res.json().catch(() => ({}));
-    return new Error(body.error ?? `${fallback}: ${res.status}`);
-}
+export const listIdentityProviders = () =>
+    api<IdentityProvider[]>('GET', '/identity-providers');
 
-function authHeaders(token: string): HeadersInit {
-    return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
-}
+export const createIdentityProvider = (slug: string, input: IdentityProviderInput) =>
+    api<IdentityProvider>('POST', '/identity-providers', { slug, ...input });
 
-export async function listIdentityProviders(token: string): Promise<IdentityProvider[]> {
-    const res = await authedFetch(`${API_BASE}/identity-providers`, { headers: authHeaders(token) });
-    if (!res.ok) throw await failure(res, 'Failed to list identity providers');
-    return res.json();
-}
+export const updateIdentityProvider = (id: string, input: IdentityProviderInput) =>
+    api<IdentityProvider>('PUT', `/identity-providers/${id}`, input);
 
-export async function createIdentityProvider(
-    token: string,
-    slug: string,
-    input: IdentityProviderInput,
-): Promise<IdentityProvider> {
-    const res = await authedFetch(`${API_BASE}/identity-providers`, {
-        method: 'POST',
-        headers: authHeaders(token),
-        body: JSON.stringify({ slug, ...input }),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to create identity provider');
-    return res.json();
-}
+export const deleteIdentityProvider = (id: string, deleteUsers: boolean) =>
+    api<void>('DELETE', `/identity-providers/${id}?delete_users=${deleteUsers}`);
 
-export async function updateIdentityProvider(
-    token: string,
-    id: string,
-    input: IdentityProviderInput,
-): Promise<IdentityProvider> {
-    const res = await authedFetch(`${API_BASE}/identity-providers/${id}`, {
-        method: 'PUT',
-        headers: authHeaders(token),
-        body: JSON.stringify(input),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to update identity provider');
-    return res.json();
-}
+export const testIdentityProvider = (id: string) =>
+    api<DiscoveryResult>('POST', `/identity-providers/${id}/test`);
 
-export async function deleteIdentityProvider(
-    token: string,
-    id: string,
-    deleteUsers: boolean,
-): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/identity-providers/${id}?delete_users=${deleteUsers}`, {
-        method: 'DELETE',
-        headers: authHeaders(token),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to delete identity provider');
-}
+export const listGroupMappings = (id: string) =>
+    api<GroupMapping[]>('GET', `/identity-providers/${id}/group-mappings`);
 
-export async function testIdentityProvider(token: string, id: string): Promise<DiscoveryResult> {
-    const res = await authedFetch(`${API_BASE}/identity-providers/${id}/test`, {
-        method: 'POST',
-        headers: authHeaders(token),
-    });
-    if (!res.ok) throw await failure(res, 'Discovery failed');
-    return res.json();
-}
-
-export async function listGroupMappings(token: string, id: string): Promise<GroupMapping[]> {
-    const res = await authedFetch(`${API_BASE}/identity-providers/${id}/group-mappings`, {
-        headers: authHeaders(token),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to list group mappings');
-    return res.json();
-}
-
-export async function replaceGroupMappings(
-    token: string,
-    id: string,
-    mappings: GroupMapping[],
-): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/identity-providers/${id}/group-mappings`, {
-        method: 'PUT',
-        headers: authHeaders(token),
-        body: JSON.stringify(mappings),
-    });
-    if (!res.ok) throw await failure(res, 'Failed to save group mappings');
-}
+export const replaceGroupMappings = (id: string, mappings: GroupMapping[]) =>
+    api<void>('PUT', `/identity-providers/${id}/group-mappings`, mappings);

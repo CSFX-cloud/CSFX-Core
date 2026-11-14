@@ -50,16 +50,14 @@
     const empty = $derived(folders.length === 0 && objects.length === 0);
 
     async function loadObjects() {
-        if (!auth.token) return;
-        const result = await listBucketObjects(auth.token, bucketId, currentPrefix);
+        const result = await listBucketObjects(bucketId, currentPrefix);
         objects = result.objects;
         folders = result.folders;
     }
 
     async function load() {
-        if (!auth.token) return;
         try {
-            await Promise.all([getBucket(auth.token, bucketId).then((loaded) => (bucket = loaded)), loadObjects()]);
+            await Promise.all([getBucket(bucketId).then((loaded) => (bucket = loaded)), loadObjects()]);
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load bucket";
         } finally {
@@ -78,7 +76,7 @@
         uploading = true;
         error = null;
         try {
-            const presigned = await presignObjectUpload(auth.token, bucketId, `${currentPrefix}${file.name}`);
+            const presigned = await presignObjectUpload(bucketId, `${currentPrefix}${file.name}`);
             await uploadObjectToPresignedUrl(presigned.url, file);
             await loadObjects();
         } catch (e) {
@@ -90,18 +88,17 @@
     }
 
     async function handleDownload(key: string) {
-        if (!auth.token) return;
         try {
-            window.open((await presignObjectDownload(auth.token, bucketId, key)).url, "_blank");
+            window.open((await presignObjectDownload(bucketId, key)).url, "_blank");
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to download file";
         }
     }
 
     async function handleDelete(key: string) {
-        if (!auth.token || !confirm(`Delete ${objectName(key)}?`)) return;
+        if (!confirm(`Delete ${objectName(key)}?`)) return;
         try {
-            await deleteBucketObject(auth.token, bucketId, key);
+            await deleteBucketObject(bucketId, key);
             objects = objects.filter((object) => object.key !== key);
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to delete object";

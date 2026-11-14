@@ -1,6 +1,5 @@
 <script lang="ts">
     import { Upload } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import {
         createWorkload,
         ensureIsoBucket,
@@ -49,12 +48,11 @@
     }
 
     async function loadExistingIsos() {
-        if (!auth.token) return;
         vmExistingIsosLoading = true;
         try {
-            const bucket = await findIsoBucket(auth.token, rgId);
+            const bucket = await findIsoBucket(rgId);
             vmIsoBucketId = bucket?.id ?? null;
-            vmExistingIsos = bucket ? (await listBucketObjects(auth.token, bucket.id, "")).objects : [];
+            vmExistingIsos = bucket ? (await listBucketObjects(bucket.id, "")).objects : [];
             if (vmExistingIsos.length > 0) {
                 vmIsoMode = "existing";
                 vmSelectedIsoKey = vmExistingIsos[0].key;
@@ -97,7 +95,7 @@
     }
 
     async function handleDeployVm() {
-        if (!auth.token || !vmFormName) return;
+        if (!vmFormName) return;
         if (vmIsoMode === "upload" && !vmFormIsoFile) return;
         if (vmIsoMode === "existing" && !vmSelectedIsoKey) return;
         vmDeploying = true;
@@ -106,16 +104,16 @@
         try {
             let isoUrl: string;
             if (vmIsoMode === "existing" && vmIsoBucketId) {
-                const presigned = await presignObjectDownload(auth.token, vmIsoBucketId, vmSelectedIsoKey);
+                const presigned = await presignObjectDownload(vmIsoBucketId, vmSelectedIsoKey);
                 isoUrl = presigned.url;
             } else {
-                const bucket = await ensureIsoBucket(auth.token, rgId);
-                isoUrl = await uploadIso(auth.token, bucket.id, vmFormIsoFile!, (fraction) => {
+                const bucket = await ensureIsoBucket(rgId);
+                isoUrl = await uploadIso(bucket.id, vmFormIsoFile!, (fraction) => {
                     vmUploadProgress = fraction;
                 });
             }
 
-            await createWorkload(auth.token, {
+            await createWorkload({
                 name: vmFormName,
                 image: isoUrl,
                 cpu_millicores: vmEffectiveCpuMillicores,

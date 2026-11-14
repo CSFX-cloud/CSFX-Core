@@ -65,7 +65,7 @@
         tokenSecret = "";
         tokenNames = [];
         if (!auth.token || !vaultId) return;
-        const secrets = await listSecrets(auth.token, rg.rgId, vaultId).catch(() => []);
+        const secrets = await listSecrets(rg.rgId, vaultId).catch(() => []);
         tokenNames = secrets.filter((secret) => !secret.deleted).map((secret) => secret.name);
     }
 
@@ -114,12 +114,11 @@
     }
 
     async function inspect() {
-        if (!auth.token) return;
         const run = ++inspectRun;
         inspecting = true;
         error = null;
         try {
-            const result = await detectSite(auth.token, rg.rgId, {
+            const result = await detectSite(rg.rgId, {
                 repo_url: repoUrl.trim(),
                 branch: branch.trim() || DEFAULT_BRANCH,
                 root_dir: rootDir.trim(),
@@ -148,11 +147,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !canCreate) return;
+        if (!canCreate) return;
         creating = true;
         error = null;
         try {
-            const site = await createSite(auth.token, rg.rgId, {
+            const site = await createSite(rg.rgId, {
                 name: name.trim(),
                 repo_url: repoUrl.trim(),
                 branch: branch.trim() || DEFAULT_BRANCH,

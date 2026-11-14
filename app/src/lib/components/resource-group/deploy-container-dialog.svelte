@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import {
         createWorkload,
         type PortMapping,
@@ -95,11 +94,11 @@
     }
 
     async function handleDeploy() {
-        if (!auth.token || !formImage || !formName) return;
+        if (!formImage || !formName) return;
         deploying = true;
         deployError = null;
         try {
-            await createWorkload(auth.token, {
+            await createWorkload({
                 name: formName,
                 image: formImage,
                 cpu_millicores: parseInt(formCpu),

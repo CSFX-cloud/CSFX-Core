@@ -31,16 +31,16 @@
     }
 
     export async function open() {
-        if (auth.token) cidr = await suggestCidr(auth.token).catch(() => DEFAULT_CIDR);
+        if (auth.token) cidr = await suggestCidr().catch(() => DEFAULT_CIDR);
         dialog?.open();
     }
 
     async function submit() {
-        if (!auth.token || !valid) return;
+        if (!valid) return;
         creating = true;
         error = null;
         try {
-            const created = await createResourceGroup(auth.token, {
+            const created = await createResourceGroup({
                 name: name.trim(),
                 description: description.trim() || undefined,
                 internal_cidr: cidr.trim(),

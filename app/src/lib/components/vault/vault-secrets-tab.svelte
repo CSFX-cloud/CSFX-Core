@@ -1,6 +1,5 @@
 <script lang="ts">
     import { Check, Copy, Eye, EyeOff, Pencil, Plus, Trash2, Undo2 } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { deleteSecret, restoreSecret, type RevealedSecret, type SecretSummary, type VaultGrant } from "$lib/api/vaults";
     import { scopeMatches } from "$lib/utils/vault-scope";
     import { createClipboard } from "$lib/utils/clipboard.svelte";
@@ -44,10 +43,9 @@
         setTimeout(() => hide(secret.name), REVEAL_VISIBLE_MS);
     }
 
-    async function run(action: (token: string) => Promise<unknown>, failure: string) {
-        if (!auth.token) return;
+    async function run(action: () => Promise<unknown>, failure: string) {
         try {
-            await action(auth.token);
+            await action();
             await onChanged();
         } catch (e) {
             onError(e instanceof Error ? e.message : failure);
@@ -56,7 +54,7 @@
 
     function remove(secret: SecretSummary) {
         if (!confirm(`Delete ${secret.name}? It can be restored for the soft delete period.`)) return;
-        run((token) => deleteSecret(token, rgId, vaultId, secret.name), "Failed to delete secret");
+        run(() => deleteSecret(rgId, vaultId, secret.name), "Failed to delete secret");
     }
 </script>
 
@@ -113,7 +111,7 @@
                         <td>
                             <div class="db-actions" style="justify-content: flex-end">
                                 {#if secret.deleted}
-                                    <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label="Restore {secret.name}" title="Restore" onclick={() => run((token) => restoreSecret(token, rgId, vaultId, secret.name, secret.version), "Failed to restore secret")}>
+                                    <button class="cx-icon-btn cx-icon-btn--sm" type="button" aria-label="Restore {secret.name}" title="Restore" onclick={() => run(() => restoreSecret(rgId, vaultId, secret.name, secret.version), "Failed to restore secret")}>
                                         <Undo2 class="cx-i" aria-hidden="true" />
                                     </button>
                                 {:else}

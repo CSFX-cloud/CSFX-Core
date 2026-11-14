@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import { createVolume } from "$lib/api/resource-groups";
     import ModalDialog from "./modal-dialog.svelte";
 
@@ -21,11 +20,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !valid) return;
+        if (!valid) return;
         creating = true;
         error = null;
         try {
-            await createVolume(auth.token, { name: name.trim(), size_gb: size, resource_group_id: rgId });
+            await createVolume({ name: name.trim(), size_gb: size, resource_group_id: rgId });
             dialog?.close();
             name = "";
             sizeGb = DEFAULT_SIZE_GB;

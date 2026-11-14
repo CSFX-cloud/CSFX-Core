@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import { createVolume, updateWorkload, type Volume, type Workload } from "$lib/api/resource-groups";
     import ModalDialog from "./modal-dialog.svelte";
 
@@ -29,20 +28,20 @@
         dialog?.open();
     }
 
-    async function resolveVolumeId(token: string): Promise<string> {
+    async function resolveVolumeId(): Promise<string> {
         if (!creating) return choice;
-        const created = await createVolume(token, { name: name.trim(), size_gb: size, resource_group_id: rgId });
+        const created = await createVolume({ name: name.trim(), size_gb: size, resource_group_id: rgId });
         return created.id;
     }
 
     async function submit() {
-        if (!auth.token || !valid) return;
+        if (!valid) return;
         busy = true;
         error = null;
         try {
-            const volumeId = await resolveVolumeId(auth.token);
+            const volumeId = await resolveVolumeId();
             const mounts = [...(workload.volume_mounts ?? []), { volume_id: volumeId, mount_path: mountPath }];
-            await updateWorkload(auth.token, workload.id, { volume_mounts: mounts });
+            await updateWorkload(workload.id, { volume_mounts: mounts });
             dialog?.close();
             await onAttached();
         } catch (e) {

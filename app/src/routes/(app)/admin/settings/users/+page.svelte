@@ -28,10 +28,9 @@
     const selected = $derived(users.find((user) => user.id === selectedId) ?? null);
 
     async function load() {
-        if (!auth.token) return;
         refreshing = true;
         try {
-            [users, roles] = await Promise.all([listUsers(auth.token), listOrganizationRoles(auth.token)]);
+            [users, roles] = await Promise.all([listUsers(), listOrganizationRoles()]);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load users";
@@ -42,10 +41,10 @@
     }
 
     async function changeRole(roleId: string) {
-        if (!auth.token || !selected || roleId === selected.role_id) return;
+        if (!selected || roleId === selected.role_id) return;
         busy = true;
         try {
-            await updateUserRole(auth.token, selected.id, roleId);
+            await updateUserRole(selected.id, roleId);
             await load();
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to update role";
@@ -55,10 +54,10 @@
     }
 
     async function removeSelected() {
-        if (!auth.token || !selected) return;
+        if (!selected) return;
         busy = true;
         try {
-            await deleteUser(auth.token, selected.id);
+            await deleteUser(selected.id);
             selectedId = null;
             await load();
         } catch (e) {

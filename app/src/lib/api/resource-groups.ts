@@ -1,4 +1,4 @@
-import { authedFetch } from './http';
+import { api, openSocketUrl, request } from './http';
 
 const API_BASE = '/api';
 
@@ -215,164 +215,45 @@ export interface CreateStackResponse {
     workloads: CreateStackWorkloadResult[];
 }
 
-export async function listResourceGroups(token: string): Promise<ResourceGroup[]> {
-    const res = await authedFetch(`${API_BASE}/resource-groups`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list resource groups: ${res.status}`);
-    return res.json();
-}
+export const listResourceGroups = () =>
+    api<ResourceGroup[]>('GET', '/resource-groups');
 
-export async function suggestCidr(token: string): Promise<string> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/suggest-cidr`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to suggest cidr: ${res.status}`);
-    const data = await res.json();
-    return data.internal_cidr;
-}
+export const suggestCidr = async (): Promise<string> =>
+    (await api<{ internal_cidr: string }>('GET', '/resource-groups/suggest-cidr')).internal_cidr;
 
-export async function getResourceGroup(token: string, id: string): Promise<ResourceGroup> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to get resource group: ${res.status}`);
-    return res.json();
-}
+export const getResourceGroup = (id: string) =>
+    api<ResourceGroup>('GET', `/resource-groups/${id}`);
 
-export async function createResourceGroup(
-    token: string,
-    req: CreateResourceGroupRequest,
-): Promise<ResourceGroup> {
-    const res = await authedFetch(`${API_BASE}/resource-groups`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) throw new Error(`Failed to create resource group: ${res.status}`);
-    return res.json();
-}
+export const createResourceGroup = (req: CreateResourceGroupRequest) =>
+    api<ResourceGroup>('POST', '/resource-groups', req);
 
-export async function updateResourceGroup(
-    token: string,
-    id: string,
-    req: UpdateResourceGroupRequest,
-): Promise<ResourceGroup> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${id}`, {
-        method: 'PATCH',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to update resource group: ${res.status}`);
-    }
-    return res.json();
-}
+export const updateResourceGroup = (id: string, req: UpdateResourceGroupRequest) =>
+    api<ResourceGroup>('PATCH', `/resource-groups/${id}`, req);
 
 export function resourceGroupIconImageUrl(id: string): string {
     return `${API_BASE}/resource-groups/${id}/icon-image`;
 }
 
-export async function uploadResourceGroupIconImage(
-    token: string,
-    id: string,
-    file: File,
-): Promise<ResourceGroup> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${id}/icon-image`, {
-        method: 'PUT',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': file.type,
-        },
-        body: file,
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to upload icon image: ${res.status}`);
-    }
-    return res.json();
-}
+export const uploadResourceGroupIconImage = (id: string, file: File) =>
+    api<ResourceGroup>('PUT', `/resource-groups/${id}/icon-image`, file);
 
-export async function deleteResourceGroupIconImage(token: string, id: string): Promise<ResourceGroup> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${id}/icon-image`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to remove icon image: ${res.status}`);
-    }
-    return res.json();
-}
+export const deleteResourceGroupIconImage = (id: string) =>
+    api<ResourceGroup>('DELETE', `/resource-groups/${id}/icon-image`);
 
-export async function deleteResourceGroup(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? `Failed to delete resource group: ${res.status}`);
-    }
-}
+export const deleteResourceGroup = (id: string) =>
+    api<void>('DELETE', `/resource-groups/${id}`);
 
-export async function listResourceGroupWorkloads(token: string, rgId: string): Promise<Workload[]> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${rgId}/workloads`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list workloads: ${res.status}`);
-    return res.json();
-}
+export const listResourceGroupWorkloads = (rgId: string) =>
+    api<Workload[]>('GET', `/resource-groups/${rgId}/workloads`);
 
-export async function listWorkloads(token: string): Promise<Workload[]> {
-    const res = await authedFetch(`${API_BASE}/workloads`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list workloads: ${res.status}`);
-    return res.json();
-}
+export const listWorkloads = () =>
+    api<Workload[]>('GET', '/workloads');
 
-export async function createWorkload(token: string, req: CreateWorkloadRequest): Promise<CreateWorkloadResult | CreateWorkloadResult[]> {
-    const res = await authedFetch(`${API_BASE}/workloads`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to create workload: ${res.status}`);
-    }
-    return res.json();
-}
+export const createWorkload = (req: CreateWorkloadRequest) =>
+    api<CreateWorkloadResult | CreateWorkloadResult[]>('POST', '/workloads', req);
 
-export async function createWorkloadStack(
-    token: string,
-    req: CreateStackRequest,
-): Promise<CreateStackResponse> {
-    const res = await authedFetch(`${API_BASE}/workload-stacks`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to create stack: ${res.status}`);
-    }
-    return res.json();
-}
+export const createWorkloadStack = (req: CreateStackRequest) =>
+    api<CreateStackResponse>('POST', '/workload-stacks', req);
 
 export interface Stack {
     id: string;
@@ -384,301 +265,86 @@ export interface Stack {
     updated_at: string | null;
 }
 
-export async function getStack(token: string, id: string): Promise<Stack> {
-    const res = await authedFetch(`${API_BASE}/workload-stacks/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to get stack: ${res.status}`);
-    return res.json();
-}
+export const getStack = (id: string) =>
+    api<Stack>('GET', `/workload-stacks/${id}`);
 
-export async function deleteStack(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/workload-stacks/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to delete stack: ${res.status}`);
-}
+export const deleteStack = (id: string) =>
+    api<void>('DELETE', `/workload-stacks/${id}`);
 
-export async function stopStack(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/workload-stacks/${id}/stop`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to stop stack: ${res.status}`);
-}
+export const stopStack = (id: string) =>
+    api<void>('POST', `/workload-stacks/${id}/stop`);
 
-export async function restartStack(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/workload-stacks/${id}/restart`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to restart stack: ${res.status}`);
-}
+export const restartStack = (id: string) =>
+    api<void>('POST', `/workload-stacks/${id}/restart`);
 
-export async function redeployStack(token: string, id: string, compose_yaml: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/workload-stacks/${id}`, {
-        method: 'PATCH',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ compose_yaml }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to redeploy stack: ${res.status}`);
-    }
-}
+export const redeployStack = (id: string, compose_yaml: string) =>
+    api<void>('PATCH', `/workload-stacks/${id}`, { compose_yaml });
 
-export async function deleteWorkload(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/workloads/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to delete workload: ${res.status}`);
-}
+export const deleteWorkload = (id: string) =>
+    api<void>('DELETE', `/workloads/${id}`);
 
-export async function updateWorkload(
-    token: string,
-    id: string,
-    req: UpdateWorkloadRequest,
-): Promise<Workload> {
-    const res = await authedFetch(`${API_BASE}/workloads/${id}`, {
-        method: 'PATCH',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to update workload: ${res.status}`);
-    }
-    return res.json();
-}
+export const updateWorkload = (id: string, req: UpdateWorkloadRequest) =>
+    api<Workload>('PATCH', `/workloads/${id}`, req);
 
-export async function stopWorkload(token: string, id: string): Promise<Workload> {
-    const res = await authedFetch(`${API_BASE}/workloads/${id}/stop`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to stop workload: ${res.status}`);
-    return res.json();
-}
+export const stopWorkload = (id: string) =>
+    api<Workload>('POST', `/workloads/${id}/stop`);
 
-export async function restartWorkload(token: string, id: string): Promise<Workload> {
-    const res = await authedFetch(`${API_BASE}/workloads/${id}/restart`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to restart workload: ${res.status}`);
-    return res.json();
-}
+export const restartWorkload = (id: string) =>
+    api<Workload>('POST', `/workloads/${id}/restart`);
 
-export async function streamWorkloadLogs(
-    token: string,
-    id: string,
-    signal: AbortSignal,
-): Promise<ReadableStream<Uint8Array>> {
-    const res = await authedFetch(`${API_BASE}/workloads/${id}/logs`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal,
-    });
-    if (!res.ok || !res.body) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to stream logs: ${res.status}`);
-    }
+export async function streamWorkloadLogs(id: string, signal: AbortSignal): Promise<ReadableStream<Uint8Array>> {
+    const res = await request('GET', `/workloads/${id}/logs`, undefined, signal);
+    if (!res.body) throw new Error('Log stream has no body');
     return res.body;
 }
 
-export async function openWorkloadExecSocket(token: string, id: string): Promise<WebSocket> {
-    const res = await authedFetch(`${API_BASE}/workloads/${id}/exec/ticket`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to issue exec ticket: ${res.status}`);
-    }
-    const { ticket } = await res.json();
-
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${wsProtocol}//${window.location.host}${API_BASE}/workloads/${id}/exec?ticket=${encodeURIComponent(ticket)}`;
-    return new WebSocket(url);
+export async function openWorkloadExecSocket(id: string): Promise<WebSocket> {
+    return new WebSocket(await openSocketUrl(`/workloads/${id}/exec/ticket`, `/workloads/${id}/exec`));
 }
 
-export async function getWorkloadVncUrl(token: string, id: string): Promise<string> {
-    const res = await authedFetch(`${API_BASE}/workloads/${id}/vnc/ticket`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to issue vnc ticket: ${res.status}`);
-    }
-    const { ticket } = await res.json();
+export const getWorkloadVncUrl = (id: string) => openSocketUrl(`/workloads/${id}/vnc/ticket`, `/workloads/${id}/vnc`);
 
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${wsProtocol}//${window.location.host}${API_BASE}/workloads/${id}/vnc?ticket=${encodeURIComponent(ticket)}`;
-}
+export const listResourceGroupVolumes = (rgId: string) =>
+    api<Volume[]>('GET', `/resource-groups/${rgId}/volumes`);
 
-export async function listResourceGroupVolumes(token: string, rgId: string): Promise<Volume[]> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${rgId}/volumes`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list volumes: ${res.status}`);
-    return res.json();
-}
+export const listVolumes = () =>
+    api<Volume[]>('GET', '/volumes');
 
-export async function listVolumes(token: string): Promise<Volume[]> {
-    const res = await authedFetch(`${API_BASE}/volumes`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list volumes: ${res.status}`);
-    return res.json();
-}
+export const createVolume = (req: CreateVolumeRequest) =>
+    api<Volume>('POST', '/volumes', req);
 
-export async function createVolume(token: string, req: CreateVolumeRequest): Promise<Volume> {
-    const res = await authedFetch(`${API_BASE}/volumes`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to create volume: ${res.status}`);
-    }
-    return res.json();
-}
+export const resizeVolume = (id: string, sizeGb: number) =>
+    api<Volume>('POST', `/volumes/${id}/resize`, { size_gb: sizeGb });
 
-export async function resizeVolume(token: string, id: string, sizeGb: number): Promise<Volume> {
-    const res = await authedFetch(`${API_BASE}/volumes/${id}/resize`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ size_gb: sizeGb }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to resize volume: ${res.status}`);
-    }
-    return res.json();
-}
+export const deleteVolume = (id: string) =>
+    api<void>('DELETE', `/volumes/${id}`);
 
-export async function deleteVolume(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/volumes/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to delete volume: ${res.status}`);
-}
+export const listBuckets = () =>
+    api<Bucket[]>('GET', '/buckets');
 
-export async function listBuckets(token: string): Promise<Bucket[]> {
-    const res = await authedFetch(`${API_BASE}/buckets`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list buckets: ${res.status}`);
-    return res.json();
-}
+export const getBucket = (id: string) =>
+    api<Bucket>('GET', `/buckets/${id}`);
 
-export async function getBucket(token: string, id: string): Promise<Bucket> {
-    const res = await authedFetch(`${API_BASE}/buckets/${id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to get bucket: ${res.status}`);
-    }
-    return res.json();
-}
+export const listResourceGroupBuckets = (rgId: string) =>
+    api<Bucket[]>('GET', `/resource-groups/${rgId}/buckets`);
 
-export async function listResourceGroupBuckets(token: string, rgId: string): Promise<Bucket[]> {
-    const res = await authedFetch(`${API_BASE}/resource-groups/${rgId}/buckets`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list buckets: ${res.status}`);
-    return res.json();
-}
+export const createBucket = (req: CreateBucketRequest) =>
+    api<Bucket>('POST', '/buckets', req);
 
-export async function createBucket(token: string, req: CreateBucketRequest): Promise<Bucket> {
-    const res = await authedFetch(`${API_BASE}/buckets`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to create bucket: ${res.status}`);
-    }
-    return res.json();
-}
+export const updateBucket = (id: string, req: UpdateBucketRequest) =>
+    api<Bucket>('PATCH', `/buckets/${id}`, req);
 
-export async function updateBucket(token: string, id: string, req: UpdateBucketRequest): Promise<Bucket> {
-    const res = await authedFetch(`${API_BASE}/buckets/${id}`, {
-        method: 'PATCH',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to update bucket: ${res.status}`);
-    }
-    return res.json();
-}
+export const deleteBucket = (id: string) =>
+    api<void>('DELETE', `/buckets/${id}`);
 
-export async function deleteBucket(token: string, id: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/buckets/${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to delete bucket: ${res.status}`);
-}
+export const listBucketKeys = (bucketId: string) =>
+    api<BucketAccessKey[]>('GET', `/buckets/${bucketId}/keys`);
 
-export async function listBucketKeys(token: string, bucketId: string): Promise<BucketAccessKey[]> {
-    const res = await authedFetch(`${API_BASE}/buckets/${bucketId}/keys`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to list access keys: ${res.status}`);
-    return res.json();
-}
+export const createBucketKey = (bucketId: string, req: CreateBucketAccessKeyRequest) =>
+    api<BucketAccessKeyCreated>('POST', `/buckets/${bucketId}/keys`, req);
 
-export async function createBucketKey(
-    token: string,
-    bucketId: string,
-    req: CreateBucketAccessKeyRequest
-): Promise<BucketAccessKeyCreated> {
-    const res = await authedFetch(`${API_BASE}/buckets/${bucketId}/keys`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(req),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to create access key: ${res.status}`);
-    }
-    return res.json();
-}
-
-export async function deleteBucketKey(token: string, bucketId: string, keyId: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/buckets/${bucketId}/keys/${keyId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to delete access key: ${res.status}`);
-}
+export const deleteBucketKey = (bucketId: string, keyId: string) =>
+    api<void>('DELETE', `/buckets/${bucketId}/keys/${keyId}`);
 
 export interface ObjectEntry {
     key: string;
@@ -697,62 +363,27 @@ export interface PresignResult {
     expires_in_seconds: number;
 }
 
-export async function listBucketObjects(
-    token: string,
-    bucketId: string,
-    prefix: string
-): Promise<ListObjectsResult> {
-    const res = await authedFetch(
-        `${API_BASE}/buckets/${bucketId}/objects?prefix=${encodeURIComponent(prefix)}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to list objects: ${res.status}`);
-    }
-    return res.json();
-}
+export const listBucketObjects = (bucketId: string, prefix: string) =>
+    api<ListObjectsResult>('GET', `/buckets/${bucketId}/objects?prefix=${encodeURIComponent(prefix)}`);
 
-export async function deleteBucketObject(token: string, bucketId: string, key: string): Promise<void> {
-    const res = await authedFetch(`${API_BASE}/buckets/${bucketId}/objects/${key}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) throw new Error(`Failed to delete object: ${res.status}`);
-}
+export const deleteBucketObject = (bucketId: string, key: string) =>
+    api<void>('DELETE', `/buckets/${bucketId}/objects/${key}`);
 
-export async function presignObjectUpload(
-    token: string,
-    bucketId: string,
-    key: string
-): Promise<PresignResult> {
-    const res = await authedFetch(`${API_BASE}/buckets/${bucketId}/objects/presign-upload`, {
-        method: 'POST',
-        headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ key }),
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to presign upload: ${res.status}`);
-    }
-    return res.json();
-}
+export const presignObjectUpload = (bucketId: string, key: string) =>
+    api<PresignResult>('POST', `/buckets/${bucketId}/objects/presign-upload`, { key });
 
 const ISO_BUCKET_NAME = 'vm-isos';
 
-export async function findIsoBucket(token: string, rgId: string): Promise<Bucket | null> {
-    const buckets = await listResourceGroupBuckets(token, rgId);
+export async function findIsoBucket(rgId: string): Promise<Bucket | null> {
+    const buckets = await listResourceGroupBuckets(rgId);
     return buckets.find((b) => b.name === ISO_BUCKET_NAME) ?? null;
 }
 
-export async function ensureIsoBucket(token: string, rgId: string): Promise<Bucket> {
-    const existing = await findIsoBucket(token, rgId);
+export async function ensureIsoBucket(rgId: string): Promise<Bucket> {
+    const existing = await findIsoBucket(rgId);
     if (existing) return existing;
 
-    return createBucket(token, {
+    return createBucket({
         name: ISO_BUCKET_NAME,
         resource_group_id: rgId,
         exposure: 'internal',
@@ -760,13 +391,12 @@ export async function ensureIsoBucket(token: string, rgId: string): Promise<Buck
 }
 
 export async function uploadIso(
-    token: string,
     bucketId: string,
     file: File,
     onProgress?: (fraction: number) => void
 ): Promise<string> {
     const key = `${crypto.randomUUID()}-${file.name}`;
-    const { url } = await presignObjectUpload(token, bucketId, key);
+    const { url } = await presignObjectUpload(bucketId, key);
 
     await new Promise<void>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
@@ -782,25 +412,12 @@ export async function uploadIso(
         xhr.send(file);
     });
 
-    const { url: downloadUrl } = await presignObjectDownload(token, bucketId, key);
+    const { url: downloadUrl } = await presignObjectDownload(bucketId, key);
     return downloadUrl;
 }
 
-export async function presignObjectDownload(
-    token: string,
-    bucketId: string,
-    key: string
-): Promise<PresignResult> {
-    const res = await authedFetch(
-        `${API_BASE}/buckets/${bucketId}/objects/presign-download/${key}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-    );
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.status }));
-        throw new Error(err.error ?? `Failed to presign download: ${res.status}`);
-    }
-    return res.json();
-}
+export const presignObjectDownload = (bucketId: string, key: string) =>
+    api<PresignResult>('GET', `/buckets/${bucketId}/objects/presign-download/${key}`);
 
 export async function uploadObjectToPresignedUrl(url: string, file: File): Promise<void> {
     const res = await fetch(url, {

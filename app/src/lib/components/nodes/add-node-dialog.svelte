@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from '$lib/auth/store.svelte';
     import { createJoinToken, type JoinToken } from '$lib/api/nodes';
     import ModalDialog from '$lib/components/resource-group/modal-dialog.svelte';
 
@@ -25,11 +24,10 @@
     }
 
     async function generate() {
-        if (!auth.token) return;
         busy = true;
         error = null;
         try {
-            result = await createJoinToken(auth.token, role, ttlHours);
+            result = await createJoinToken(role, ttlHours);
         } catch (e) {
             error = e instanceof Error ? e.message : 'Failed to create join token';
         } finally {

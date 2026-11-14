@@ -1,7 +1,6 @@
 <script lang="ts">
     import { untrack } from "svelte";
     import { RefreshCw } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { updateWorkload, type Workload } from "$lib/api/resource-groups";
 
     let { workload, onRedeployed }: { workload: Workload; onRedeployed: () => Promise<void> } = $props();
@@ -39,12 +38,11 @@
     }
 
     async function redeploy() {
-        if (!auth.token) return;
         saving = true;
         error = null;
         try {
             if (!image.trim()) throw new Error("Image cannot be empty");
-            await updateWorkload(auth.token, workload.id, {
+            await updateWorkload(workload.id, {
                 image: image.trim(),
                 env_vars: parseEnv(envText),
                 restart_policy: restartPolicy,

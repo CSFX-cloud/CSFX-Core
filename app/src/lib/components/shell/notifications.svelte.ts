@@ -9,9 +9,9 @@ export const notifications = {
     set(value: number) {
         openCount = value;
     },
-    async refresh(token: string) {
+    async refresh() {
         try {
-            openCount = (await listEvents(token, { status: "open" })).length;
+            openCount = (await listEvents({ status: "open" })).length;
         } catch {
             return;
         }

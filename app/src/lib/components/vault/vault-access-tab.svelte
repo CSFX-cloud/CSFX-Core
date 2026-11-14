@@ -1,6 +1,5 @@
 <script lang="ts">
     import { Plus, Trash2 } from "@lucide/svelte";
-    import { auth } from "$lib/auth/store.svelte";
     import { deleteGrant, type Capability, type VaultAuditEntry, type VaultGrant } from "$lib/api/vaults";
     import GrantDialog from "./grant-dialog.svelte";
 
@@ -27,9 +26,9 @@
     let grantDialog = $state<GrantDialog | null>(null);
 
     async function revoke(grant: VaultGrant) {
-        if (!auth.token || !confirm(`Revoke ${CAPABILITY_LABELS[grant.capability]} for ${grant.principal}?`)) return;
+        if (!confirm(`Revoke ${CAPABILITY_LABELS[grant.capability]} for ${grant.principal}?`)) return;
         try {
-            await deleteGrant(auth.token, rgId, vaultId, grant.id);
+            await deleteGrant(rgId, vaultId, grant.id);
             await onChanged();
         } catch (e) {
             onError(e instanceof Error ? e.message : "Failed to revoke access");

@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { auth } from "$lib/auth/store.svelte";
     import { createGateway } from "$lib/api/ingress";
     import ModalDialog from "./modal-dialog.svelte";
 
@@ -19,11 +18,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !valid) return;
+        if (!valid) return;
         creating = true;
         error = null;
         try {
-            const gateway = await createGateway(auth.token, rgId, { name: name.trim(), http_port: httpPort, https_port: httpsPort });
+            const gateway = await createGateway(rgId, { name: name.trim(), http_port: httpPort, https_port: httpsPort });
             dialog?.close();
             name = "";
             await onCreated(gateway.id);

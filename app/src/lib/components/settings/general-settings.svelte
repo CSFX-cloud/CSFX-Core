@@ -25,19 +25,17 @@
     let sshHours = $state<number | null>(8);
 
     async function loadSsh() {
-        if (!auth.token) return;
         try {
-            ssh = await getSshAccess(auth.token);
+            ssh = await getSshAccess();
         } catch {
             ssh = null;
         }
     }
 
     async function updateSsh(enabled: boolean) {
-        if (!auth.token) return;
         sshSaving = true;
         try {
-            ssh = await setSshAccess(auth.token, enabled, sshHours);
+            ssh = await setSshAccess(enabled, sshHours);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "failed to save setting";

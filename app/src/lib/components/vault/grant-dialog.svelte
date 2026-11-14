@@ -36,7 +36,7 @@
         scope = ALL_SECRETS;
         requiresApproval = false;
         dialog?.open();
-        if (auth.token) users = (await listUsers(auth.token).catch(() => [])).map((user) => user.username);
+        if (auth.token) users = (await listUsers().catch(() => [])).map((user) => user.username);
     }
 
     function changeCapability(value: Capability) {
@@ -46,11 +46,11 @@
     }
 
     async function submit() {
-        if (!auth.token || !principal) return;
+        if (!principal) return;
         busy = true;
         error = null;
         try {
-            await createGrant(auth.token, rgId, vaultId, {
+            await createGrant(rgId, vaultId, {
                 principal,
                 capability,
                 scope,

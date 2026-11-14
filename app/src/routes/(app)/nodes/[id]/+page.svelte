@@ -74,28 +74,27 @@
         NODE_TABS.map((tab) => ({ ...tab, label: tab.id === "alerts" && openAlerts.length ? `Alerts ${openAlerts.length}` : tab.label })),
     );
 
-    async function load<T>(task: (token: string) => Promise<T>, apply: (value: T) => void, fail: (message: string) => void, fallback: string) {
-        if (!auth.token) return;
+    async function load<T>(task: () => Promise<T>, apply: (value: T) => void, fail: (message: string) => void, fallback: string) {
         try {
-            apply(await task(auth.token));
+            apply(await task());
         } catch (e) {
             fail(e instanceof Error ? e.message : fallback);
         }
     }
 
     async function loadNode() {
-        await load((token) => getNode(token, nodeId), (value) => (node = value), (message) => (error = message), "Failed to load node");
+        await load(() => getNode(nodeId), (value) => (node = value), (message) => (error = message), "Failed to load node");
         loading = false;
     }
 
     async function loadAlerts() {
-        await load((token) => listEvents(token, { agentId: nodeId }), (value) => (alerts = value), (message) => (alertsError = message), "Failed to load alerts");
+        await load(() => listEvents({ agentId: nodeId }), (value) => (alerts = value), (message) => (alertsError = message), "Failed to load alerts");
         alertsLoading = false;
     }
 
     async function loadWorkloads() {
         await load(
-            (token) => listWorkloads(token),
+            () => listWorkloads(),
             (value) => (workloads = value.filter((workload) => workload.assigned_agent_id === nodeId)),
             (message) => (workloadsError = message),
             "Failed to load workloads",
@@ -111,21 +110,21 @@
     async function loadDisks() {
         if (disksLoaded) return;
         disksLoading = true;
-        await load((token) => getNodeDisks(token, nodeId), applyDisks, (message) => (disksError = message), "Failed to load disks");
+        await load(() => getNodeDisks(nodeId), applyDisks, (message) => (disksError = message), "Failed to load disks");
         disksLoading = false;
     }
 
     async function resolveAlert(eventId: string) {
-        await load((token) => resolveEvent(token, eventId), () => loadAlerts(), (message) => (alertsError = message), "Failed to resolve alert");
+        await load(() => resolveEvent(eventId), () => loadAlerts(), (message) => (alertsError = message), "Failed to resolve alert");
     }
 
-    async function runAction(task: (token: string, id: string) => Promise<void>, fallback: string, confirmation?: string, refresh = true) {
-        if (!auth.token || !node || (confirmation && !confirm(confirmation))) return;
+    async function runAction(task: (id: string) => Promise<void>, fallback: string, confirmation?: string, refresh = true) {
+        if (!node || (confirmation && !confirm(confirmation))) return;
         actionBusy = true;
         actionError = null;
         try {
-            await task(auth.token, node.id);
-            if (refresh) node = await getNode(auth.token, nodeId);
+            await task(node.id);
+            if (refresh) node = await getNode(nodeId);
         } catch (e) {
             actionError = e instanceof Error ? e.message : fallback;
         } finally {
@@ -135,15 +134,15 @@
 
     async function startMaintenance(minutes: number) {
         maintenanceError = null;
-        await runAction((token, id) => setMaintenance(token, id, minutes), "Failed to set maintenance");
+        await runAction((id) => setMaintenance(id, minutes), "Failed to set maintenance");
         if (!actionError) maintenanceDialog?.close();
         maintenanceError = actionError;
     }
 
     async function removeFromCluster() {
         await runAction(
-            async (token, id) => {
-                await removeNode(token, id);
+            async (id) => {
+                await removeNode(id);
                 await goto("/nodes");
             },
             "Failed to remove node",
@@ -167,13 +166,12 @@
     };
 
     $effect(() => {
-        const token = auth.token;
-        if (!token) return;
+        if (!auth.token) return;
         untrack(() => {
             loadNode();
             loadAlerts();
             loadWorkloads();
-            live.start(token);
+            live.start();
         });
         const timer = setInterval(() => (now = Date.now()), MAINTENANCE_TICK_MS);
         return () => {

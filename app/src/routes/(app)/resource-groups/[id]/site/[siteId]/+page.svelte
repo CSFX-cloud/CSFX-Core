@@ -46,9 +46,8 @@
     const lastBuild = $derived(site?.deployments.find((deployment) => deployment.duration_ms !== null));
 
     async function load() {
-        if (!auth.token) return;
         try {
-            site = await getSite(auth.token, rg.rgId, siteId);
+            site = await getSite(rg.rgId, siteId);
             error = null;
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to load web app";
@@ -58,10 +57,9 @@
     }
 
     async function redeploy() {
-        if (!auth.token) return;
         busy = true;
         try {
-            await redeploySite(auth.token, rg.rgId, siteId);
+            await redeploySite(rg.rgId, siteId);
             await load();
             tab = "overview";
         } catch (e) {
@@ -72,10 +70,10 @@
     }
 
     async function remove() {
-        if (!auth.token || !site || !confirm(`Delete ${site.name}? Its deployments and domains are removed.`)) return;
+        if (!site || !confirm(`Delete ${site.name}? Its deployments and domains are removed.`)) return;
         busy = true;
         try {
-            await deleteSite(auth.token, rg.rgId, siteId);
+            await deleteSite(rg.rgId, siteId);
             await rg.load();
             await goto(base);
         } catch (e) {
