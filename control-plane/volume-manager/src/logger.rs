@@ -54,9 +54,7 @@ pub fn init_logger() -> shared::db_log_layer::LogReceiver {
     init_logger_with_service(env!("CARGO_PKG_NAME"))
 }
 
-pub fn init_logger_with_service(
-    service_name: &'static str,
-) -> shared::db_log_layer::LogReceiver {
+pub fn init_logger_with_service(service_name: &'static str) -> shared::db_log_layer::LogReceiver {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let fmt_layer = fmt::layer().with_target(false).with_thread_ids(true);
     let (db_layer, db_receiver) = shared::db_log_layer::DbLogLayer::new(service_name);
