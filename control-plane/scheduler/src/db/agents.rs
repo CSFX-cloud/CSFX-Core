@@ -1,5 +1,7 @@
 use entity::entities::{agent_metrics, agents, volumes, workloads};
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ColumnTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, Statement,
+};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -66,6 +68,25 @@ fn allocatable(total: f64, ratio: f64) -> f64 {
     total * (1.0 - SYSTEM_RESERVE_FRACTION) * ratio
 }
 
+const LATEST_METRICS_SQL: &str = "
+SELECT DISTINCT ON (agent_id) *
+FROM agent_metrics
+WHERE agent_id IN (SELECT id FROM agents WHERE status = 'Online' AND cordoned = false)
+ORDER BY agent_id, timestamp DESC";
+
+async fn latest_metrics_by_agent(
+    db: &DatabaseConnection,
+) -> Result<HashMap<Uuid, agent_metrics::Model>, sea_orm::DbErr> {
+    let rows = agent_metrics::Entity::find()
+        .from_raw_sql(Statement::from_string(
+            DatabaseBackend::Postgres,
+            LATEST_METRICS_SQL,
+        ))
+        .all(db)
+        .await?;
+    Ok(rows.into_iter().map(|row| (row.agent_id, row)).collect())
+}
+
 async fn get_online_agents_with_capacity(
     db: &DatabaseConnection,
 ) -> Result<Vec<AgentResources>, sea_orm::DbErr> {
@@ -75,16 +96,11 @@ async fn get_online_agents_with_capacity(
         .all(db)
         .await?;
 
+    let mut latest_metrics = latest_metrics_by_agent(db).await?;
     let mut result = Vec::with_capacity(online_agents.len());
 
     for agent in online_agents {
-        let latest_metrics = agent_metrics::Entity::find()
-            .filter(agent_metrics::Column::AgentId.eq(agent.id))
-            .order_by_desc(agent_metrics::Column::Timestamp)
-            .one(db)
-            .await?;
-
-        let Some(m) = latest_metrics else {
+        let Some(m) = latest_metrics.remove(&agent.id) else {
             continue;
         };
 
