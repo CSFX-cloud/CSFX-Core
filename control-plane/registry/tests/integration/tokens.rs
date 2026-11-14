@@ -171,10 +171,10 @@ async fn api_key_validates_until_revoked() {
     let db = common::migrated_database().await;
     let agent_id = common::insert_agent(&db).await;
     let manager = ApiKeyManager::new(db);
-    let key = manager.create_key(agent_id).await;
+    let key = manager.issue_key(agent_id, false).await.unwrap();
 
     assert_eq!(manager.validate_key(&key.key).await, Ok(agent_id));
-    manager.revoke_all_keys(agent_id).await.unwrap();
+    manager.revoke_key(agent_id).await.unwrap();
     assert_eq!(
         manager.validate_key(&key.key).await,
         Err(registry::services::api_keys::ApiKeyError::Invalid)

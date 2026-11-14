@@ -9,7 +9,12 @@ async fn authenticated_agent() -> (axum::Router, Uuid, String) {
     let db = common::migrated_database().await;
     let agent_id = common::insert_agent(&db).await;
     let state = common::app_state(db);
-    let key = state.api_key_manager.create_key(agent_id).await.key;
+    let key = state
+        .api_key_manager
+        .issue_key(agent_id, false)
+        .await
+        .unwrap()
+        .key;
     (registry::server::create_router(state), agent_id, key)
 }
 
@@ -233,12 +238,22 @@ async fn heartbeat_cannot_claim_another_agents_mesh_identity() {
     let state = common::app_state(common::migrated_database().await);
     let victim = common::insert_agent(&state.db).await;
     let attacker = common::insert_agent(&state.db).await;
-    let key = state.api_key_manager.create_key(attacker).await.key;
+    let key = state
+        .api_key_manager
+        .issue_key(attacker, false)
+        .await
+        .unwrap()
+        .key;
     let app = registry::server::create_router(state.clone());
     let victim_endpoint = format!("198.51.100.{}:51820", victim.as_u128() % 200 + 1);
     let uri = |id: Uuid| format!("/agents/{}/heartbeat", id);
 
-    let victim_key = state.api_key_manager.create_key(victim).await.key;
+    let victim_key = state
+        .api_key_manager
+        .issue_key(victim, false)
+        .await
+        .unwrap()
+        .key;
     let (status, _) = post_as_agent(
         &app,
         &uri(victim),
@@ -357,7 +372,12 @@ async fn registered_master(state: &registry::server::AppState) -> Victim {
         .issue_certificate(id, &common::csr_pem_for(&key))
         .await
         .unwrap();
-    let api_key = state.api_key_manager.create_key(id).await.key;
+    let api_key = state
+        .api_key_manager
+        .issue_key(id, false)
+        .await
+        .unwrap()
+        .key;
     Victim {
         id,
         machine_id,

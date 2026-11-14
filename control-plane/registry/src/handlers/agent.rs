@@ -127,19 +127,25 @@ pub async fn register_agent(
         }
     };
 
-    if reregistered {
-        if let Err(e) = state.api_key_manager.revoke_all_keys(agent.id).await {
-            crate::log_warn!(
+    let api_key = match state
+        .api_key_manager
+        .issue_key(agent.id, reregistered)
+        .await
+    {
+        Ok(api_key) => api_key,
+        Err(e) => {
+            crate::log_error!(
                 "agent_handler",
-                &format!(
-                    "Failed to revoke old API keys for agent={}: {}",
-                    agent.id, e
-                )
+                &format!("Failed to issue API key for agent={}: {}", agent.id, e)
             );
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "Failed to issue API key".to_string(),
+                }),
+            ));
         }
-    }
-
-    let api_key = state.api_key_manager.create_key(agent.id).await;
+    };
 
     let (certificate_pem, ca_cert_pem) = if let Some(ref csr) = csr_pem {
         match state.pki_service.issue_certificate(agent.id, csr).await {

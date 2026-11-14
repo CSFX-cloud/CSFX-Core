@@ -4,7 +4,7 @@ use axum::http::{Method, StatusCode};
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::Utc;
-use entity::{agent_api_keys, image_registries, image_registry_tokens};
+use entity::{agent_api_keys, agents, image_registries, image_registry_tokens};
 use ring::digest;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 use serde_json::Value;
@@ -125,9 +125,32 @@ async fn agent_keys_receive_pull_access() {
     let (app, db) = app().await;
     let key = unique("agent-key");
     let transaction = relaxed(&db).await;
+    let agent_id = Uuid::new_v4();
+    let now = Utc::now().naive_utc();
+    agents::ActiveModel {
+        id: Set(agent_id),
+        name: Set(unique("agent")),
+        hostname: Set(unique("host")),
+        agent_version: Set("test".to_string()),
+        os_type: Set("linux".to_string()),
+        os_version: Set("test".to_string()),
+        architecture: Set("x86_64".to_string()),
+        status: Set("Online".to_string()),
+        registered_at: Set(now),
+        kvm_capable: Set(false),
+        cordoned: Set(false),
+        role: Set("worker".to_string()),
+        cpu_overcommit_ratio: Set(1.0),
+        memory_overcommit_ratio: Set(1.0),
+        disk_overcommit_ratio: Set(1.0),
+        ..Default::default()
+    }
+    .insert(&transaction)
+    .await
+    .unwrap();
     agent_api_keys::ActiveModel {
         id: Set(Uuid::new_v4()),
-        agent_id: Set(Uuid::new_v4()),
+        agent_id: Set(agent_id),
         key_hash: Set(sha256_hex(&key)),
         created_at: Set(Utc::now().naive_utc()),
         last_used_at: Set(None),
