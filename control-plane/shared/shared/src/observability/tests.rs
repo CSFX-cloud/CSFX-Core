@@ -8,8 +8,12 @@ use tower::ServiceExt;
 use super::{current_request_id, instrument, metrics_router, render, REQUEST_ID_HEADER};
 
 fn app() -> Router {
+    app_at("/probe/{id}")
+}
+
+fn app_at(route: &str) -> Router {
     instrument(Router::new().route(
-        "/probe/{id}",
+        route,
         get(|| async {
             current_request_id()
                 .map(|id| id.to_str().unwrap().to_string())
@@ -50,13 +54,13 @@ fn sample(metric: &str, labels: &str) -> f64 {
 
 #[tokio::test]
 async fn request_is_counted_by_matched_route_with_a_latency_sample() {
-    let app = app();
-    let counter_labels = r#"method="GET",path="/probe/{id}",status="200""#;
+    let app = app_at("/counted/{id}");
+    let counter_labels = r#"method="GET",path="/counted/{id}",status="200""#;
     let before = sample("csfx_http_requests_total", counter_labels);
     let count_before = sample("csfx_http_request_duration_seconds_count", counter_labels);
 
-    send(&app, "/probe/one", None).await;
-    send(&app, "/probe/two", None).await;
+    send(&app, "/counted/one", None).await;
+    send(&app, "/counted/two", None).await;
 
     assert_eq!(
         sample("csfx_http_requests_total", counter_labels) - before,
