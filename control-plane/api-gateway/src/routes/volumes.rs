@@ -7,6 +7,7 @@ use axum::{
     Router,
 };
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageVolumes, CanViewVolumes},
@@ -87,7 +88,7 @@ pub async fn list_volumes(
 pub async fn get_volume(
     CanViewVolumes(_claims): CanViewVolumes,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -104,7 +105,7 @@ pub async fn get_volume(
 pub async fn delete_volume(
     CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -121,7 +122,7 @@ pub async fn delete_volume(
 pub async fn attach_volume(
     CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -140,7 +141,7 @@ pub async fn attach_volume(
 pub async fn resize_volume(
     CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -159,7 +160,7 @@ pub async fn resize_volume(
 pub async fn detach_volume(
     CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -176,7 +177,7 @@ pub async fn detach_volume(
 pub async fn create_snapshot(
     CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -195,7 +196,7 @@ pub async fn create_snapshot(
 pub async fn list_snapshots(
     CanViewVolumes(_claims): CanViewVolumes,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);

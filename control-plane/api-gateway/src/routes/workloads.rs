@@ -91,8 +91,7 @@ fn reject_foreign_group_images(
     Ok(())
 }
 
-async fn workload_group(state: &AppState, id: &str) -> Option<Uuid> {
-    let id = Uuid::parse_str(id).ok()?;
+async fn workload_group(state: &AppState, id: Uuid) -> Option<Uuid> {
     entity::workloads::Entity::find_by_id(id)
         .one(&state.db_conn)
         .await
@@ -101,8 +100,7 @@ async fn workload_group(state: &AppState, id: &str) -> Option<Uuid> {
         .and_then(|workload| workload.resource_group_id)
 }
 
-async fn stack_group(state: &AppState, id: &str) -> Option<Uuid> {
-    let id = Uuid::parse_str(id).ok()?;
+async fn stack_group(state: &AppState, id: Uuid) -> Option<Uuid> {
     entity::workload_stacks::Entity::find_by_id(id)
         .one(&state.db_conn)
         .await
@@ -182,7 +180,7 @@ pub async fn list_workloads(
 pub async fn delete_workload(
     CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -199,13 +197,13 @@ pub async fn delete_workload(
 pub async fn update_workload(
     CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
     reject_site_images(&body_json)?;
-    reject_foreign_group_images(&body_json, workload_group(&state, &id).await)?;
+    reject_foreign_group_images(&body_json, workload_group(&state, id).await)?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -220,7 +218,7 @@ pub async fn update_workload(
 pub async fn stop_workload(
     CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -237,7 +235,7 @@ pub async fn stop_workload(
 pub async fn restart_workload(
     CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -274,7 +272,7 @@ pub async fn create_stack(
 pub async fn get_stack(
     CanViewWorkloads(_claims): CanViewWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -291,7 +289,7 @@ pub async fn get_stack(
 pub async fn delete_stack(
     CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -308,7 +306,7 @@ pub async fn delete_stack(
 pub async fn stop_stack(
     CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -325,7 +323,7 @@ pub async fn stop_stack(
 pub async fn restart_stack(
     CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -342,13 +340,13 @@ pub async fn restart_stack(
 pub async fn redeploy_stack(
     CanManageWorkloads(_claims): CanManageWorkloads,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
     reject_site_images(&body_json)?;
-    reject_foreign_group_images(&body_json, stack_group(&state, &id).await)?;
+    reject_foreign_group_images(&body_json, stack_group(&state, id).await)?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,

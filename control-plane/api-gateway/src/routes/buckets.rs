@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageBuckets, CanViewBuckets},
@@ -88,7 +89,7 @@ pub async fn list_buckets(
 pub async fn get_bucket(
     CanViewBuckets(_claims): CanViewBuckets,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -105,7 +106,7 @@ pub async fn get_bucket(
 pub async fn update_bucket(
     CanManageBuckets(_claims): CanManageBuckets,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -124,7 +125,7 @@ pub async fn update_bucket(
 pub async fn delete_bucket(
     CanManageBuckets(_claims): CanManageBuckets,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -141,7 +142,7 @@ pub async fn delete_bucket(
 pub async fn list_keys(
     CanViewBuckets(_claims): CanViewBuckets,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -158,7 +159,7 @@ pub async fn list_keys(
 pub async fn create_key(
     CanManageBuckets(_claims): CanManageBuckets,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -177,7 +178,7 @@ pub async fn create_key(
 pub async fn rotate_key(
     CanManageBuckets(_claims): CanManageBuckets,
     State(state): State<AppState>,
-    Path((bucket_id, key_id)): Path<(String, String)>,
+    Path((bucket_id, key_id)): Path<(Uuid, String)>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -194,7 +195,7 @@ pub async fn rotate_key(
 pub async fn delete_key(
     CanManageBuckets(_claims): CanManageBuckets,
     State(state): State<AppState>,
-    Path((bucket_id, key_id)): Path<(String, String)>,
+    Path((bucket_id, key_id)): Path<(Uuid, String)>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -235,7 +236,7 @@ pub struct ListObjectsQuery {
 pub async fn list_objects(
     CanViewBuckets(_claims): CanViewBuckets,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     Query(query): Query<ListObjectsQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -257,7 +258,7 @@ pub async fn list_objects(
 pub async fn delete_object(
     CanManageBuckets(_claims): CanManageBuckets,
     State(state): State<AppState>,
-    Path((bucket_id, key)): Path<(String, String)>,
+    Path((bucket_id, key)): Path<(Uuid, String)>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
@@ -274,7 +275,7 @@ pub async fn delete_object(
 pub async fn presign_upload(
     CanManageBuckets(_claims): CanManageBuckets,
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: String,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
@@ -293,7 +294,7 @@ pub async fn presign_upload(
 pub async fn presign_download(
     CanViewBuckets(_claims): CanViewBuckets,
     State(state): State<AppState>,
-    Path((bucket_id, key)): Path<(String, String)>,
+    Path((bucket_id, key)): Path<(Uuid, String)>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let header_map = header_vec(&headers);
