@@ -27,7 +27,11 @@ async fn post_text(uri: &str, body: &str) -> (StatusCode, Value) {
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
 async fn volume_bodies_that_are_not_json_are_forwarded_empty() {
-    for suffix in ["", "/vol-1/attach", "/vol-1/snapshots"] {
+    for suffix in [
+        "",
+        "/00000000-0000-0000-0000-0000000000a1/attach",
+        "/00000000-0000-0000-0000-0000000000a1/snapshots",
+    ] {
         let (status, echoed) = post_text(&format!("/api/volumes{suffix}"), "not json").await;
         assert_eq!(status, StatusCode::OK, "{suffix}");
         assert!(echoed["body"].is_null(), "{suffix}");
