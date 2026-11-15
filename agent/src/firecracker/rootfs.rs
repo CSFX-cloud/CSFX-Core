@@ -133,11 +133,19 @@ fn source_key(reference: &Reference) -> String {
         .collect()
 }
 
+fn is_missing_image(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_lowercase();
+    text.contains("manifest unknown") || text.contains("name unknown")
+}
+
 fn cached_rootfs(
     reference: &Reference,
     guest_init_version: &str,
     error: anyhow::Error,
 ) -> Result<PathBuf> {
+    if is_missing_image(&error) {
+        return Err(error);
+    }
     let cache_dir = Path::new(ROOTFS_CACHE_DIR);
     let source = source_key(reference);
     let pinned = reference.digest().map(|digest| {
@@ -683,6 +691,14 @@ async fn build_ext4_image(source_dir: &Path, image_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn only_definitive_registry_answers_block_the_cache_fallback() {
+        let missing = anyhow::anyhow!("OCI API errors: [OCI API error: manifest unknown]");
+        let outage = anyhow::anyhow!("error sending request: connection refused");
+        assert!(is_missing_image(&missing));
+        assert!(!is_missing_image(&outage));
+    }
 
     #[test]
     fn docker_hub_images_are_routed_through_the_mirror() {
