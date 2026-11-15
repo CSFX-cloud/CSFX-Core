@@ -72,7 +72,7 @@
 
     async function handleUpload(event: Event) {
         const file = (event.target as HTMLInputElement).files?.[0];
-        if (!auth.token || !file) return;
+        if (!auth.user || !file) return;
         uploading = true;
         error = null;
         try {
@@ -106,7 +106,7 @@
     }
 
     $effect(() => {
-        if (auth.token) untrack(load);
+        if (auth.user) untrack(load);
     });
 
     $effect(() => {

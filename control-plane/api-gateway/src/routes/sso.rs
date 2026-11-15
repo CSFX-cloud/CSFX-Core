@@ -9,7 +9,7 @@ use entity::{identity_providers, IdentityProviders};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde::{Deserialize, Serialize};
 
-use super::users::AuthResponse;
+use super::users::session_parts;
 use crate::{
     auth::jwt::create_jwt,
     oidc::{self, binding, error::OidcError, flow},
@@ -177,15 +177,13 @@ async fn exchange(
         tracing::error!(error = %error, "failed to issue jwt");
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
+    let (session_cookie, session) = session_parts(token, false, false)?;
     let clear_exchange = binding::clear(&origin, binding::EXCHANGE_COOKIE);
     Ok((
-        AppendHeaders([(header::SET_COOKIE, clear_exchange)]),
-        Json(AuthResponse {
-            token,
-            user_id: user.id.to_string(),
-            username: user.name,
-            two_factor_enabled: false,
-            force_password_change: false,
-        }),
+        AppendHeaders([
+            (header::SET_COOKIE, session_cookie),
+            (header::SET_COOKIE, clear_exchange),
+        ]),
+        Json(session),
     ))
 }

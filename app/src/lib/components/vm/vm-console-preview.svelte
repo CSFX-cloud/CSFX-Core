@@ -6,12 +6,12 @@
 
     let { workload, onOpen }: { workload: Workload; onOpen: () => void } = $props();
 
-    const live = $derived(workload.status === "running" && !!auth.token);
+    const live = $derived(workload.status === "running" && !!auth.user);
     const glyph = serviceIcon("virtual-machines").svg;
 </script>
 
 <button class="vm-screen" type="button" aria-label="Open console" title={live ? "Open console" : "Console preview is available while the VM is running"} onclick={onOpen}>
-    {#if live && auth.token}
+    {#if live && auth.user}
         {#key workload.id}
             <div style="position: absolute; inset: 0; pointer-events: none">
                 <VncConsole workloadId={workload.id} viewOnly />

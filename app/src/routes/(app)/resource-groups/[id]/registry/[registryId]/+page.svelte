@@ -59,7 +59,7 @@
     }
 
     $effect(() => {
-        if (auth.token) untrack(load);
+        if (auth.user) untrack(load);
     });
 
     $effect(() => {

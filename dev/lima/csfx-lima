@@ -452,7 +452,7 @@ main() {
     build) build ;;
     reload) reload ;;
     watch) watch ;;
-    ui) build_ui ;;
+    ui) build_ui && on_all_nodes restart_units_for csfx-dashboard.service ;;
     switch) if [ $# -gt 0 ]; then rebuild_node "$1" switch; else on_all_nodes rebuild_node_with_action switch; fi ;;
     logs) on_node "${1:?node}" sudo journalctl -f ${2:+-u "$2"} ;;
     shell) limactl shell "$(instance "${1:?node}")" ;;

@@ -1,7 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+const baseUrl = 'http://localhost:4173';
+
 test.beforeEach(async ({ context }) => {
-	await context.addInitScript(() => localStorage.setItem('csfx_token', 'mock-token'));
+	await context.addCookies([{ name: 'auth_token', value: 'mock-token', url: baseUrl }]);
 });
 
 test('lists the nodes reported by the api', async ({ page }) => {
@@ -11,10 +13,8 @@ test('lists the nodes reported by the api', async ({ page }) => {
 	await expect(page.getByText('fra-node-02')).toBeVisible();
 });
 
-test('returns to the login form when the session is no longer valid', async ({ page }) => {
-	await page.route('**/api/validate-session', (route) =>
-		route.fulfill({ status: 401, json: { error: 'invalid token' } })
-	);
+test('returns to the login form when the session is no longer valid', async ({ page, context }) => {
+	await context.addCookies([{ name: 'auth_token', value: 'expired', url: baseUrl }]);
 	await page.goto('/nodes');
-	await expect(page).toHaveURL(/\/login$/);
+	await expect(page).toHaveURL(/\/login\?next=%2Fnodes$/);
 });

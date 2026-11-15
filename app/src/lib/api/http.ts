@@ -1,5 +1,5 @@
-import { goto } from '$app/navigation';
 import { auth } from '$lib/auth/store.svelte';
+import { loginUrl } from '$lib/auth/next-path';
 
 const API_BASE = '/api';
 
@@ -19,9 +19,11 @@ async function errorMessage(res: Response): Promise<string> {
     return typeof payload.error === 'string' ? payload.error : `Request failed: ${res.status}`;
 }
 
-function requestInit(method: HttpMethod, token: string | null, body: unknown, signal?: AbortSignal): RequestInit {
+const SAFE_METHODS: HttpMethod[] = ['GET'];
+
+function requestInit(method: HttpMethod, body: unknown, signal?: AbortSignal): RequestInit {
     const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (!SAFE_METHODS.includes(method)) headers['X-CSFX-CSRF'] = '1';
     if (body instanceof Blob) {
         headers['Content-Type'] = body.type;
         return { method, headers, body, signal };
@@ -32,11 +34,9 @@ function requestInit(method: HttpMethod, token: string | null, body: unknown, si
 }
 
 export async function request(method: HttpMethod, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
-    const token = auth.token;
-    const res = await fetch(`${API_BASE}${path}`, requestInit(method, token, body, signal));
-    if (res.status === 401 && token) {
-        auth.clearSession();
-        goto('/login');
+    const res = await fetch(`${API_BASE}${path}`, requestInit(method, body, signal));
+    if (res.status === 401 && auth.user) {
+        location.assign(loginUrl(location.pathname + location.search));
     }
     if (!res.ok) throw new ApiError(res.status, await errorMessage(res));
     return res;

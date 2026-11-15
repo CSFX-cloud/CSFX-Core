@@ -86,7 +86,7 @@
     export async function open(provider: IdentityProvider | null) {
         reset(provider);
         dialog?.open();
-        if (provider && auth.token) {
+        if (provider && auth.user) {
             try {
                 mappings = await listGroupMappings(provider.id);
             } catch (e) {

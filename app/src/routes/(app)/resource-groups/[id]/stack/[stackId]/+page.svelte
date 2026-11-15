@@ -68,12 +68,12 @@
 
     async function done() {
         await rg.load();
-        if (auth.token) stack = await getStack(stackId);
+        if (auth.user) stack = await getStack(stackId);
         tab = "logs";
     }
 
     onMount(async () => {
-        if (auth.token) stack = await getStack(stackId);
+        if (auth.user) stack = await getStack(stackId);
     });
 
     $effect(() => {

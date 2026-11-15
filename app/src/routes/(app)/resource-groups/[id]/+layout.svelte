@@ -15,7 +15,7 @@
     let pollInterval: ReturnType<typeof setInterval> | null = null;
 
     $effect(() => {
-        if (auth.token && !loadStarted) {
+        if (auth.user && !loadStarted) {
             loadStarted = true;
             rg.load();
         }

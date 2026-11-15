@@ -3,11 +3,12 @@
     import { Label } from "$lib/components/ui/label/index.js";
     import { CircleCheck } from "@lucide/svelte";
     import { goto } from "$app/navigation";
+    import { page } from "$app/state";
+    import { safeNextPath } from "$lib/auth/next-path";
     import { onDestroy, onMount } from "svelte";
     import * as InputOTP from "$lib/components/ui/input-otp/index.js";
     import { login } from "$lib/auth/api";
     import { pendingLogin } from "$lib/auth/pending-login";
-    import { auth } from "$lib/auth/store.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
     import { toast } from "svelte-sonner";
 
@@ -29,10 +30,9 @@
         try {
             const response = await login(credentials.username, credentials.password, otpValue);
             pendingLogin.clear();
-            auth.setSession(response);
             status = "success";
-            const target = response.force_password_change ? "/pw_change" : "/";
-            setTimeout(() => goto(target), 600);
+            const target = response.force_password_change ? "/pw_change" : safeNextPath(page.url.searchParams.get("next"));
+            setTimeout(() => goto(target, { invalidateAll: true }), 600);
         } catch {
             status = "idle";
             otpValue = "";

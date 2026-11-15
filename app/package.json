@@ -27,7 +27,7 @@
 		"@storybook/addon-svelte-csf": "latest",
 		"@storybook/addon-vitest": "^10.6.0",
 		"@storybook/sveltekit": "^10.6.0",
-		"@sveltejs/adapter-static": "^3.0.10",
+		"@sveltejs/adapter-node": "^5.5.8",
 		"@sveltejs/kit": "^2.57.0",
 		"@sveltejs/vite-plugin-svelte": "^7.0.0",
 		"@tailwindcss/vite": "^4.2.2",

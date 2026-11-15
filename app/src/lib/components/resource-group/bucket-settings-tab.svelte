@@ -91,7 +91,7 @@
     }
 
     $effect(() => {
-        if (auth.token) untrack(loadKeys);
+        if (auth.user) untrack(loadKeys);
     });
 </script>
 

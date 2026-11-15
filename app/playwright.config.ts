@@ -23,7 +23,7 @@ export default defineConfig({
 		},
 		{
 			command: `npm run dev -- --port ${appPort} --strictPort`,
-			env: { VITE_API_URL: `http://localhost:${apiPort}` },
+			env: { VITE_API_URL: `http://localhost:${apiPort}`, API_GATEWAY_URL: `http://localhost:${apiPort}` },
 			url: `http://localhost:${appPort}/login`,
 			reuseExistingServer: !process.env.CI,
 			timeout: 120_000

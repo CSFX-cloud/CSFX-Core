@@ -125,13 +125,12 @@ export function ssoStartUrl(slug: string): string {
 
 export const exchangeSsoCode = (code: string) => api<AuthResponse>('POST', '/auth/oidc/exchange', { code });
 
-export async function changePassword(oldPassword: string, newPassword: string): Promise<string> {
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
     const [old_password, new_password] = await encryptForServer(oldPassword, newPassword);
-    const body = await api<{ token: string }>('POST', '/change-password', { old_password, new_password });
-    return body.token;
+    await api('POST', '/change-password', { old_password, new_password });
 }
 
-export const validateSession = () => api<UserProfile>('GET', '/validate-session');
+export const logout = () => api('POST', '/logout');
 
 export async function changeEmail(newEmail: string, password: string): Promise<void> {
     const [encryptedPassword] = await encryptForServer(password);

@@ -32,7 +32,7 @@
     }
 
     $effect(() => {
-        if (auth.token) untrack(refresh);
+        if (auth.user) untrack(refresh);
     });
 </script>
 

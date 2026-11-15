@@ -166,7 +166,7 @@
     };
 
     $effect(() => {
-        if (!auth.token) return;
+        if (!auth.user) return;
         untrack(() => {
             loadNode();
             loadAlerts();
@@ -181,7 +181,7 @@
     });
 
     $effect(() => {
-        if (activeTab === "storage" && auth.token) loadDisks();
+        if (activeTab === "storage" && auth.user) loadDisks();
     });
 
     $effect(() => {

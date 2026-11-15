@@ -73,7 +73,7 @@
 
     $effect(() => {
         const agentId = container?.assigned_agent_id;
-        if (!agentId || !auth.token) return;
+        if (!agentId || !auth.user) return;
         getNode(agentId)
             .then((node) => (nodeName = node.hostname))
             .catch(() => (nodeName = null));
