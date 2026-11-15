@@ -133,10 +133,19 @@ pub fn pick_victim(candidates: &[workloads::Model], pressure: Pressure) -> Optio
         .iter()
         .filter(|workload| workload.status == "running")
         .filter(|workload| !has_volumes(workload))
+        .filter(|workload| !in_rollout(workload, candidates))
         .map(|workload| (qos_of(workload), usage(workload, pressure), workload.id))
         .filter(|(qos, _, _)| *qos != QosClass::Guaranteed)
         .min_by(|left, right| left.0.cmp(&right.0).then(right.1.total_cmp(&left.1)))
         .map(|(_, _, id)| id)
+}
+
+fn in_rollout(workload: &workloads::Model, all: &[workloads::Model]) -> bool {
+    workload.replaces_workload_id.is_some()
+        || workload.retire_after.is_some()
+        || all
+            .iter()
+            .any(|other| other.replaces_workload_id == Some(workload.id))
 }
 
 fn qos_of(workload: &workloads::Model) -> QosClass {
@@ -173,6 +182,10 @@ mod tests {
             cpu_usage_peak_percent: None,
             memory_usage_peak_bytes: None,
             env_vars: None,
+            secret_versions: None,
+            replaces_workload_id: None,
+            retire_after: None,
+            rollout_error: None,
             ports: None,
             volume_mounts: volumes.then(|| serde_json::json!([{ "volume_id": "v" }])),
             status: "running".to_string(),

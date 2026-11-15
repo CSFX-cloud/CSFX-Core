@@ -72,8 +72,8 @@
         </div>
         <div class="cx-field">
             <label class="cx-label" for="s-env">Environment variables</label>
-            <textarea class="rd-textarea" id="s-env" placeholder="KEY=value" aria-describedby="s-env-hint" bind:value={envText}></textarea>
-            <p class="cx-hint" id="s-env-hint">One KEY=value per line.</p>
+            <textarea class="rd-textarea" id="s-env" placeholder="KEY=value or KEY=vault://<vault-id>/<secret-name>" aria-describedby="s-env-hint" bind:value={envText}></textarea>
+            <p class="cx-hint" id="s-env-hint">One KEY=value per line. Reference a vault secret as KEY=vault://&lt;vault-id&gt;/&lt;secret-name&gt;; it is resolved at start. Plain values are shown masked as ********, keep them to leave a value unchanged.</p>
         </div>
         <div class="rd-row2">
             <div class="cx-field">

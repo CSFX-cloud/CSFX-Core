@@ -15,6 +15,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use shared::env_secrets;
 use site_builder::{detect::Mode, validate};
 use uuid::Uuid;
 
@@ -194,7 +195,7 @@ pub async fn get_site(
         .map(|row| EnvView {
             id: row.id,
             name: row.name,
-            value: row.value,
+            value: row.value.map(|_| env_secrets::MASK.to_string()),
             vault_secret: row.vault_secret,
             scope: row.scope,
         })
@@ -230,7 +231,7 @@ pub struct DetectRequest {
     git_token_secret: Option<String>,
 }
 
-async fn permitted(state: &AppState, claims: &Claims, resource: &str, action: &str) -> bool {
+pub async fn permitted(state: &AppState, claims: &Claims, resource: &str, action: &str) -> bool {
     let Some(org_id) = state.default_org_id else {
         return false;
     };
@@ -767,17 +768,27 @@ fn validate_env(request: &EnvRequest, site: &sites::Model) -> Result<String, Sit
     if request.vault_secret.is_some() && site.vault_id.is_none() {
         return Err(invalid("the site has no key vault to read secrets from"));
     }
+    if request
+        .value
+        .as_deref()
+        .is_some_and(|value| value.contains("vault://"))
+    {
+        return Err(invalid("use the vault secret field to reference a secret"));
+    }
     Ok(scope)
 }
 
 pub async fn add_env(
-    CanManageResourceGroups(_claims): CanManageResourceGroups,
+    CanManageResourceGroups(claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Path((group_id, site_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<EnvRequest>,
 ) -> Result<(StatusCode, Json<EnvView>), SiteError> {
     let site = load_site(&state, group_id, site_id).await?;
     let scope = validate_env(&request, &site)?;
+    if request.vault_secret.is_some() {
+        require_reveal(&state, &claims).await?;
+    }
     let existing = SiteEnvVars::find()
         .filter(site_env_vars::Column::SiteId.eq(site.id))
         .count(&state.db_conn)
@@ -796,11 +807,12 @@ pub async fn add_env(
             "this variable already exists for the scope",
         ));
     }
+    let env_id = Uuid::new_v4();
     let row = site_env_vars::ActiveModel {
-        id: Set(Uuid::new_v4()),
+        id: Set(env_id),
         site_id: Set(site.id),
         name: Set(request.name),
-        value: Set(request.value),
+        value: Set(service::seal_value(env_id, request.value)?),
         vault_secret: Set(request.vault_secret),
         scope: Set(scope),
         created_at: Set(Utc::now().naive_utc()),
@@ -810,7 +822,7 @@ pub async fn add_env(
     let view = EnvView {
         id: row.id,
         name: row.name,
-        value: row.value,
+        value: row.value.map(|_| env_secrets::MASK.to_string()),
         vault_secret: row.vault_secret,
         scope: row.scope,
     };

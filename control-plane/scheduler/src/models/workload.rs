@@ -249,6 +249,8 @@ pub struct CreateWorkloadRequest {
     pub spread_key: Option<String>,
     #[serde(default)]
     pub topology_spread: TopologySpread,
+    #[serde(skip)]
+    pub replaces: Option<Uuid>,
 }
 
 impl CreateWorkloadRequest {
@@ -348,6 +350,9 @@ pub struct WorkloadResponse {
     pub volume_mounts: Option<Vec<VolumeMount>>,
     pub resource_group_id: Option<Uuid>,
     pub stack_id: Option<Uuid>,
+    pub replaces_workload_id: Option<Uuid>,
+    pub retire_after: Option<DateTime<Utc>>,
+    pub rollout_error: Option<String>,
     pub service_name: Option<String>,
     pub restart_policy: RestartPolicy,
     pub max_restarts: Option<i32>,

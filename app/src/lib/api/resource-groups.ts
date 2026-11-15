@@ -141,6 +141,9 @@ export interface Workload {
     volume_usage: VolumeUsage[] | null;
     resource_group_id: string | null;
     stack_id: string | null;
+    replaces_workload_id?: string | null;
+    retire_after?: string | null;
+    rollout_error?: string | null;
     service_name: string | null;
     restart_policy: string;
     max_restarts: number | null;

@@ -148,6 +148,10 @@ pub struct AssignedWorkload {
     pub disk_bytes: i64,
     #[serde(default)]
     pub guest_ip: Option<String>,
+    #[serde(default)]
+    pub replaces_workload_id: Option<String>,
+    #[serde(default)]
+    pub env_unresolved: bool,
 }
 
 fn readable_ports<'de, D>(

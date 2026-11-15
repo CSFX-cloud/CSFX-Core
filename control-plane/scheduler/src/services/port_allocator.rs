@@ -27,11 +27,13 @@ async fn used_node_ports_on_agent(
     db: &DatabaseConnection,
     agent_id: Uuid,
     exclude_workload_id: Uuid,
+    replaced_workload_id: Option<Uuid>,
 ) -> Result<HashSet<u16>, DbErr> {
     let rows = workloads::Entity::find()
         .filter(workloads::Column::AssignedAgentId.eq(agent_id))
         .filter(workloads::Column::DesiredState.ne("stopped"))
         .filter(workloads::Column::Id.ne(exclude_workload_id))
+        .filter(workloads::Column::Id.ne(replaced_workload_id.unwrap_or(exclude_workload_id)))
         .all(db)
         .await?;
 
@@ -81,9 +83,10 @@ pub async fn validate_node_ports(
     db: &DatabaseConnection,
     agent_id: Uuid,
     workload_id: Uuid,
+    replaced_workload_id: Option<Uuid>,
     ports: &[PortMapping],
 ) -> Result<(), String> {
-    let used = used_node_ports_on_agent(db, agent_id, workload_id)
+    let used = used_node_ports_on_agent(db, agent_id, workload_id, replaced_workload_id)
         .await
         .map_err(|e| format!("failed to query used node ports: {}", e))?;
     ensure_requested_free(ports, &used)

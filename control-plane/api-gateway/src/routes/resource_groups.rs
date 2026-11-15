@@ -22,6 +22,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::env_secrets;
 use shared::workload_status::ACTIVE_STATUSES;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
@@ -763,7 +764,7 @@ pub async fn list_resource_group_workloads(
             )
         })?;
 
-    let workloads = Workloads::find()
+    let mut workloads = Workloads::find()
         .filter(workloads::Column::ResourceGroupId.eq(id))
         .all(&state.db_conn)
         .await
@@ -774,6 +775,14 @@ pub async fn list_resource_group_workloads(
                 Json(json!({ "error": "database error" })),
             )
         })?;
+
+    for workload in &mut workloads {
+        let context = env_secrets::workload_env(workload.id);
+        workload.env_vars = workload
+            .env_vars
+            .as_ref()
+            .and_then(|stored| env_secrets::redact(stored, &context));
+    }
 
     Ok((StatusCode::OK, Json(json!(workloads))))
 }

@@ -41,6 +41,7 @@ async fn main() {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("failed to install rustls crypto provider");
+    shared::env_secrets::init().expect("failed to load environment encryption key");
 
     let log_receiver = telemetry::init_tracing();
     tracing::info!("api-gateway starting");
@@ -67,6 +68,12 @@ async fn main() {
         }
     };
 
+    let site_env_db = db_conn.clone();
+    shared::env_secrets::spawn_backfill("site_env", move || {
+        let db = site_env_db.clone();
+        async move { api_gateway::site_service::seal_legacy_env(&db).await }
+    });
+
     let state = AppState {
         db_conn: db_conn.clone(),
         agent_db,
@@ -91,6 +98,7 @@ async fn main() {
     tracing::info!("starting ingress synchronization");
     ingress_sync::spawn(state.db_conn.clone());
     gateway_reconciler::spawn(state.clone());
+    api_gateway::secret_rotation::spawn(state.clone());
 
     let app = routes::create_router(state.clone())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))

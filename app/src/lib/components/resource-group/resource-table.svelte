@@ -108,6 +108,17 @@
         expandedStacks = next;
     }
 
+    function updateRole(workload: Workload): "new" | "old" | null {
+        if (workload.replaces_workload_id) return "new";
+        if (workload.retire_after) return "old";
+        return workloads.some((other) => other.replaces_workload_id === workload.id) ? "old" : null;
+    }
+
+    function updateLabel(workload: Workload): string | undefined {
+        const replaced = workloads.find((other) => other.id === workload.replaces_workload_id);
+        return replaced ? (replaced.service_name ?? replaced.name) : undefined;
+    }
+
     function workloadIcon(workload: Workload): string {
         if (gateways.some((gateway) => gateway.workload_id === workload.id)) return "api-gateway";
         return workload.runtime_class === "vm" ? "virtual-machines" : "docker-containers";
@@ -123,6 +134,8 @@
     <WorkloadRow
         {w}
         {indented}
+        update={updateRole(w)}
+        label={updateLabel(w)}
         href={workloadHref(base, w, gateways)}
         icon={workloadIcon(w)}
         nodeName={nodeName(w.assigned_agent_id)}

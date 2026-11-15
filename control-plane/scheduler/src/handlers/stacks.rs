@@ -30,10 +30,10 @@ pub async fn get_stack(State(state): State<AppState>, Path(id): Path<Uuid>) -> i
         Ok(Some(model)) => (
             StatusCode::OK,
             Json(serde_json::json!(StackResponse {
+                compose_source: crate::db::workload_stacks::display_source(&model),
                 id: model.id,
                 resource_group_id: model.resource_group_id,
                 name: model.name,
-                compose_source: model.compose_source,
                 status: model.status,
                 created_at: model.created_at.and_utc(),
                 updated_at: model.updated_at.map(|dt| dt.and_utc()),
@@ -74,6 +74,14 @@ pub async fn stop_stack(State(state): State<AppState>, Path(id): Path<Uuid>) -> 
     }
 }
 
+fn stack_error_status(message: &str) -> StatusCode {
+    if message == crate::services::scheduler::STACK_BUSY {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
 pub async fn restart_stack(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -81,7 +89,7 @@ pub async fn restart_stack(
     match state.scheduler.restart_stack(id).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            stack_error_status(&e),
             Json(serde_json::json!({ "error": e })),
         )
             .into_response(),
@@ -96,7 +104,7 @@ pub async fn redeploy_stack(
     match state.scheduler.redeploy_stack(id, &req.compose_yaml).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            stack_error_status(&e),
             Json(serde_json::json!({ "error": e })),
         )
             .into_response(),

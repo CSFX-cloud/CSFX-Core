@@ -23,6 +23,7 @@ pub mod rbac_service;
 pub mod recovery;
 pub mod role_grants;
 pub mod routes;
+pub mod secret_rotation;
 pub mod service_client;
 pub mod setup;
 pub mod site_client;
@@ -34,6 +35,7 @@ pub mod ttl_cache;
 pub mod utils;
 pub mod vault_service;
 pub mod vault_store;
+pub mod workload_secrets;
 pub mod zone_cert;
 
 use routes::registry::{

@@ -19,8 +19,11 @@
 
     let { stack, expanded, href, nodeName, onToggle, onRestart, onStop, onDelete }: Props = $props();
 
-    const status = $derived(stackStatus(stack.children));
-    const running = $derived(stack.children.filter((child) => child.status === "running").length);
+    const current = $derived(stack.children.filter((child) => !child.replaces_workload_id && !child.retire_after));
+    const updating = $derived(stack.children.some((child) => child.replaces_workload_id));
+    const failure = $derived(stack.children.find((child) => child.rollout_error)?.rollout_error ?? null);
+    const status = $derived(stackStatus(current));
+    const running = $derived(current.filter((child) => child.status === "running").length);
     const actions = $derived<MenuAction[]>([
         { label: "Restart stack", icon: RefreshCw, onselect: onRestart },
         { label: "Stop stack", icon: Square, onselect: onStop },
@@ -39,9 +42,11 @@
         </div>
     </td>
     <td>
-        <span class={badgeClass(status)} title="{running}/{stack.children.length} running">{statusLabel(status)}</span>
+        <span class={badgeClass(status)} title="{running}/{current.length} running">{statusLabel(status)}</span>
+        {#if updating}<span class="cx-badge cx-badge--warning" title="A new version is starting next to the running one.">Updating</span>{/if}
+        {#if failure}<span class="cx-badge cx-badge--danger" title={failure}>Update failed</span>{/if}
     </td>
-    <td class="cx-soft">{stack.children.length} services &middot; {running} running</td>
+    <td class="cx-soft">{current.length} services &middot; {running} running</td>
     <td class="cx-soft">{nodeName}</td>
     <td class="cx-num">{stack.children[0]?.created_at.slice(0, 10) ?? "—"}</td>
     <td><ActionMenu label="Actions for {stack.stack_name}" {actions} /></td>

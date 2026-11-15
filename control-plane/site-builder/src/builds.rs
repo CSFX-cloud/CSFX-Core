@@ -11,6 +11,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     Set, Statement,
 };
+use shared::env_secrets;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -69,8 +70,15 @@ fn candidate_of(deployment: &site_deployments::Model) -> Candidate {
 fn build_env_of(
     deployment: &site_deployments::Model,
 ) -> Option<Result<BTreeMap<String, String>, ServiceError>> {
-    let stored = deployment.build_env.clone()?;
-    Some(serde_json::from_value(stored).map_err(|error| ServiceError::Invalid(error.to_string())))
+    let stored = deployment.build_env.as_ref()?;
+    Some(
+        env_secrets::open(stored, &env_secrets::build_env(deployment.id))
+            .map_err(|error| ServiceError::Invalid(error.to_string()))
+            .and_then(|opened| {
+                serde_json::from_value(opened)
+                    .map_err(|error| ServiceError::Invalid(error.to_string()))
+            }),
+    )
 }
 
 fn trusted_image(
@@ -156,7 +164,9 @@ impl Builds {
         let mut active: site_deployments::ActiveModel = deployment.into();
         active.status = Set("building".to_string());
         active.workload_id = Set(Some(workload_id));
-        active.build_env = Set(Some(serde_json::json!(env)));
+        let sealed = env_secrets::seal(&serde_json::json!(env), &env_secrets::build_env(id))
+            .map_err(|error| ServiceError::Invalid(error.to_string()))?;
+        active.build_env = Set(Some(sealed));
         active.update(&self.db).await?;
         tracing::info!(deployment = %id, workload = %workload_id, "build started");
         Ok(())
@@ -353,6 +363,7 @@ impl Builds {
         SiteArtifacts::delete_by_id(id).exec(&self.db).await?;
         active.image_ref = Set(None);
         active.artifact_key = Set(None);
+        active.build_env = Set(None);
         active.update(&self.db).await?;
         tracing::info!(deployment = %id, "old deployment data removed");
         Ok(())
@@ -462,8 +473,15 @@ mod tests {
 
     #[test]
     fn persisted_env_survives_a_restart() {
+        unsafe { std::env::set_var(env_secrets::KEY_VARIABLE, "11".repeat(32)) };
         let env = BTreeMap::from([("API_KEY".to_string(), "secret".to_string())]);
-        let stored = deployment(Some(serde_json::json!(env)));
+        let sealed = env_secrets::seal(
+            &serde_json::json!(env),
+            &env_secrets::build_env(Uuid::from_u128(1)),
+        )
+        .unwrap();
+        assert!(!sealed.to_string().contains("secret"));
+        let stored = deployment(Some(sealed));
         assert_eq!(build_env_of(&stored).unwrap().unwrap(), env);
         assert!(build_env_of(&deployment(None)).is_none());
     }

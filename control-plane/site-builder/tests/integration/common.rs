@@ -49,6 +49,7 @@ pub fn install_crypto_provider() {
 }
 
 pub async fn migrated_database() -> DatabaseConnection {
+    unsafe { std::env::set_var(shared::env_secrets::KEY_VARIABLE, "11".repeat(32)) };
     install_crypto_provider();
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     MIGRATED

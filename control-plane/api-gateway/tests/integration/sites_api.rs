@@ -252,6 +252,16 @@ async fn environment_variables_validate_and_resolve_into_builds() {
 
     let (_, detail) = harness.get(&site_uri(group, &site)).await;
     assert_eq!(detail["env"][0]["name"], "API_URL");
+    assert_eq!(detail["env"][0]["value"], shared::env_secrets::MASK);
+    assert_eq!(created["value"], shared::env_secrets::MASK);
+    let stored = entity::SiteEnvVars::find()
+        .all(&harness.db)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|row| row.value)
+        .collect::<Vec<_>>();
+    assert!(stored.iter().all(|value| !value.contains("api.test")));
 
     let (status, _) = harness
         .post(

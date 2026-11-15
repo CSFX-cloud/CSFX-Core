@@ -6,18 +6,21 @@ use axum::{
     routing::{delete, get, patch, post},
     Router,
 };
-use sea_orm::EntityTrait;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{json, Value};
+use shared::env_secrets::VaultRef;
 use site_builder::images::{
     configured_registry_endpoints, mentions_site_repository, uses_site_registry, SITE_IMAGE_HOST,
 };
 use uuid::Uuid;
 
 use crate::{
+    auth::jwt::Claims,
     auth::rbac::{CanManageWorkloads, CanViewWorkloads},
     routes::paged_proxy::{proxy_list, with_query},
     service_client::ListTarget,
-    AppState,
+    site_service::SiteError,
+    workload_secrets, AppState,
 };
 
 const RESERVED_IMAGE_HOST_MESSAGE: &str = "this image host is reserved for web apps";
@@ -109,6 +112,75 @@ async fn stack_group(state: &AppState, id: Uuid) -> Option<Uuid> {
         .map(|stack| stack.resource_group_id)
 }
 
+fn unavailable(message: &'static str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "error": message })),
+    )
+}
+
+fn refs_of_rows(
+    rows: Vec<entity::workloads::Model>,
+) -> Result<Vec<VaultRef>, (StatusCode, Json<Value>)> {
+    let mut references = Vec::new();
+    for row in rows {
+        let Some(stored) = row.env_vars else {
+            continue;
+        };
+        let env = shared::env_secrets::open(&stored, &shared::env_secrets::workload_env(row.id))
+            .map_err(|_| unavailable("stored environment could not be read"))?;
+        references.extend(workload_secrets::refs_in_env(&env));
+    }
+    Ok(references)
+}
+
+async fn stored_refs(
+    state: &AppState,
+    column: entity::workloads::Column,
+    id: Uuid,
+) -> Result<Vec<VaultRef>, (StatusCode, Json<Value>)> {
+    let rows = entity::workloads::Entity::find()
+        .filter(column.eq(id))
+        .all(&state.db_conn)
+        .await
+        .map_err(|_| unavailable("workload lookup failed"))?;
+    refs_of_rows(rows)
+}
+
+async fn reject_invalid_secret_refs(
+    state: &AppState,
+    claims: &Claims,
+    body: &Option<Value>,
+    group: Option<Uuid>,
+    stored: Vec<VaultRef>,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let mut references = Vec::new();
+    if let Some(body) = body {
+        workload_secrets::reject_malformed_refs(&body["env_vars"]).map_err(secret_ref_error)?;
+        references.extend(workload_secrets::refs_in_env(&body["env_vars"]));
+        if let Some(yaml) = body["compose_yaml"].as_str() {
+            references.extend(workload_secrets::refs_in_yaml(yaml).map_err(secret_ref_error)?);
+        }
+    }
+    let spec_change = body.as_ref().is_some_and(|body| {
+        ["image", "env_vars", "ports", "compose_yaml"]
+            .iter()
+            .any(|field| !body[field].is_null())
+    });
+    workload_secrets::authorize(state, claims, group, &references, &stored, spec_change)
+        .await
+        .map_err(secret_ref_error)
+}
+
+fn secret_ref_error(error: SiteError) -> (StatusCode, Json<Value>) {
+    let status = match error {
+        SiteError::Invalid(_) | SiteError::NotFound => StatusCode::BAD_REQUEST,
+        SiteError::Forbidden => StatusCode::FORBIDDEN,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (status, Json(json!({ "error": error.to_string() })))
+}
+
 fn body_group(body: &Option<Value>) -> Option<Uuid> {
     body.as_ref()?["resource_group_id"]
         .as_str()
@@ -148,7 +220,7 @@ async fn proxy_to_scheduler(
 }
 
 pub async fn create_workload(
-    CanManageWorkloads(_claims): CanManageWorkloads,
+    CanManageWorkloads(claims): CanManageWorkloads,
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
@@ -156,6 +228,14 @@ pub async fn create_workload(
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
     reject_site_images(&body_json)?;
     reject_foreign_group_images(&body_json, body_group(&body_json))?;
+    reject_invalid_secret_refs(
+        &state,
+        &claims,
+        &body_json,
+        body_group(&body_json),
+        Vec::new(),
+    )
+    .await?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -195,7 +275,7 @@ pub async fn delete_workload(
 }
 
 pub async fn update_workload(
-    CanManageWorkloads(_claims): CanManageWorkloads,
+    CanManageWorkloads(claims): CanManageWorkloads,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
@@ -203,7 +283,10 @@ pub async fn update_workload(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
     reject_site_images(&body_json)?;
-    reject_foreign_group_images(&body_json, workload_group(&state, id).await)?;
+    let group = workload_group(&state, id).await;
+    reject_foreign_group_images(&body_json, group)?;
+    let stored = stored_refs(&state, entity::workloads::Column::Id, id).await?;
+    reject_invalid_secret_refs(&state, &claims, &body_json, group, stored).await?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -250,7 +333,7 @@ pub async fn restart_workload(
 }
 
 pub async fn create_stack(
-    CanManageWorkloads(_claims): CanManageWorkloads,
+    CanManageWorkloads(claims): CanManageWorkloads,
     State(state): State<AppState>,
     headers: HeaderMap,
     body: String,
@@ -258,6 +341,14 @@ pub async fn create_stack(
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
     reject_site_images(&body_json)?;
     reject_foreign_group_images(&body_json, body_group(&body_json))?;
+    reject_invalid_secret_refs(
+        &state,
+        &claims,
+        &body_json,
+        body_group(&body_json),
+        Vec::new(),
+    )
+    .await?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,
@@ -338,7 +429,7 @@ pub async fn restart_stack(
 }
 
 pub async fn redeploy_stack(
-    CanManageWorkloads(_claims): CanManageWorkloads,
+    CanManageWorkloads(claims): CanManageWorkloads,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
@@ -346,7 +437,10 @@ pub async fn redeploy_stack(
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
     let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
     reject_site_images(&body_json)?;
-    reject_foreign_group_images(&body_json, stack_group(&state, id).await)?;
+    let group = stack_group(&state, id).await;
+    reject_foreign_group_images(&body_json, group)?;
+    let stored = stored_refs(&state, entity::workloads::Column::StackId, id).await?;
+    reject_invalid_secret_refs(&state, &claims, &body_json, group, stored).await?;
     let header_map = header_vec(&headers);
     proxy_to_scheduler(
         &state,

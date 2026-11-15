@@ -1,6 +1,7 @@
 pub mod attachment_guard;
 pub mod bucket_bindings;
 pub mod compose_parser;
+pub mod compose_redact;
 pub mod etcd;
 pub mod gateway_notify;
 pub mod guest_ip;
@@ -8,5 +9,6 @@ pub mod image_resolver;
 pub mod placement;
 pub mod port_allocator;
 pub mod rightsizing;
+pub mod rolling;
 pub mod scheduler;
 pub mod stack_volumes;

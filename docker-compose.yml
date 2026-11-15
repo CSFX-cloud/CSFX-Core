@@ -74,6 +74,7 @@ services:
     <<: *rust-service
     container_name: csfx-api-gateway-dev
     environment:
+      CSFX_ENV_ENCRYPTION_KEY: ${CSFX_ENV_ENCRYPTION_KEY:-5c1f0a7e93b24d68a0e4c7b19d3f82a65e0b4c9d17a8f36e2b5d90c4a7e1f368}
       DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
       ETCD_ENDPOINTS: http://etcd:2379
       RUST_LOG: ${RUST_LOG:-debug}
@@ -155,6 +156,7 @@ services:
     <<: *rust-service
     container_name: csfx-site-builder-dev
     environment:
+      CSFX_ENV_ENCRYPTION_KEY: ${CSFX_ENV_ENCRYPTION_KEY:-5c1f0a7e93b24d68a0e4c7b19d3f82a65e0b4c9d17a8f36e2b5d90c4a7e1f368}
       DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
       SITE_BUILDER_PORT: "8007"
       SITE_EDGE_PORT: "8008"
@@ -188,6 +190,7 @@ services:
     <<: *rust-service
     container_name: csfx-scheduler-dev
     environment:
+      CSFX_ENV_ENCRYPTION_KEY: ${CSFX_ENV_ENCRYPTION_KEY:-5c1f0a7e93b24d68a0e4c7b19d3f82a65e0b4c9d17a8f36e2b5d90c4a7e1f368}
       DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
       ETCD_ENDPOINTS: http://etcd:2379
       SCHEDULER_PORT: "8002"

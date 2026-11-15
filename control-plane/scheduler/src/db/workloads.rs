@@ -1,10 +1,12 @@
 use chrono::Utc;
 use entity::entities::workloads;
+use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait,
     QueryFilter,
 };
-use std::collections::HashSet;
+use shared::env_secrets::{self, EnvSecretError};
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::models::workload::{
@@ -20,10 +22,12 @@ pub async fn create(
     req: &CreateWorkloadRequest,
     guest_ip: Option<String>,
 ) -> Result<workloads::Model, sea_orm::DbErr> {
+    let id = Uuid::new_v4();
     let env_vars = req
         .env_vars
         .as_ref()
-        .and_then(|e| serde_json::to_value(e).ok());
+        .map(|env| sealed_env(id, env))
+        .transpose()?;
     let ports = req
         .ports
         .as_ref()
@@ -34,7 +38,7 @@ pub async fn create(
         .and_then(|v| serde_json::to_value(v).ok());
 
     let model = workloads::ActiveModel {
-        id: Set(Uuid::new_v4()),
+        id: Set(id),
         name: Set(req.name.clone()),
         image: Set(req.image.clone()),
         cpu_millicores: Set(req.cpu_millicores),
@@ -58,6 +62,7 @@ pub async fn create(
         organization_id: Set(None),
         resource_group_id: Set(req.resource_group_id),
         stack_id: Set(req.stack_id),
+        replaces_workload_id: Set(req.replaces),
         service_name: Set(req.service_name.clone()),
         restart_policy: Set(req.restart_policy.as_str().to_string()),
         max_restarts: Set(req.max_restarts),
@@ -171,7 +176,9 @@ pub async fn update_spec(
         active.image = Set(image.clone());
     }
     if let Some(ref env_vars) = req.env_vars {
-        active.env_vars = Set(serde_json::to_value(env_vars).ok());
+        let merged = merged_env(workload_id, env_vars, workload.env_vars.as_ref())?;
+        active.env_vars = Set(Some(sealed_env(workload_id, &merged)?));
+        active.secret_versions = Set(None);
     }
     if let Some(ref ports) = req.ports {
         active.ports = Set(serde_json::to_value(ports).ok());
@@ -244,6 +251,35 @@ pub async fn get_pending(db: &DatabaseConnection) -> Result<Vec<workloads::Model
     workloads::Entity::find()
         .filter(workloads::Column::Status.eq(WorkloadStatus::Pending.as_str()))
         .filter(workloads::Column::AssignedAgentId.is_null())
+        .all(db)
+        .await
+}
+
+pub async fn replacement_for(
+    db: &DatabaseConnection,
+    workload_id: Uuid,
+) -> Result<Option<workloads::Model>, sea_orm::DbErr> {
+    workloads::Entity::find()
+        .filter(workloads::Column::ReplacesWorkloadId.eq(workload_id))
+        .one(db)
+        .await
+}
+
+pub async fn retiring_due(
+    db: &DatabaseConnection,
+    now: chrono::NaiveDateTime,
+) -> Result<Vec<workloads::Model>, sea_orm::DbErr> {
+    workloads::Entity::find()
+        .filter(workloads::Column::RetireAfter.lte(now))
+        .all(db)
+        .await
+}
+
+pub async fn replacements(
+    db: &DatabaseConnection,
+) -> Result<Vec<workloads::Model>, sea_orm::DbErr> {
+    workloads::Entity::find()
+        .filter(workloads::Column::ReplacesWorkloadId.is_not_null())
         .all(db)
         .await
 }
@@ -424,11 +460,71 @@ fn apply_auto_resources(workload: &workloads::Model, active: &mut workloads::Act
     active.memory_usage_peak_bytes = Set(None);
 }
 
-fn into_response(m: workloads::Model) -> WorkloadResponse {
-    let env_vars = m
+fn custom_error(error: EnvSecretError) -> sea_orm::DbErr {
+    sea_orm::DbErr::Custom(error.to_string())
+}
+
+fn sealed_env(
+    id: Uuid,
+    env: &HashMap<String, String>,
+) -> Result<serde_json::Value, sea_orm::DbErr> {
+    env_secrets::seal_map(env, &env_secrets::workload_env(id)).map_err(custom_error)
+}
+
+fn masked_env(id: Uuid, stored: Option<&serde_json::Value>) -> Option<HashMap<String, String>> {
+    let redacted = env_secrets::redact(stored?, &env_secrets::workload_env(id))?;
+    serde_json::from_value(redacted).ok()
+}
+
+pub(crate) fn merged_env(
+    id: Uuid,
+    submitted: &HashMap<String, String>,
+    stored: Option<&serde_json::Value>,
+) -> Result<HashMap<String, String>, sea_orm::DbErr> {
+    if !env_secrets::contains_mask(submitted) {
+        return Ok(submitted.clone());
+    }
+    let current = stored
+        .map(|value| env_secrets::open_map(value, &env_secrets::workload_env(id)))
+        .transpose()
+        .map_err(custom_error)?
+        .unwrap_or_default();
+    Ok(env_secrets::restore_masked(submitted.clone(), &current))
+}
+
+pub fn redacted(mut model: workloads::Model) -> workloads::Model {
+    model.env_vars = model
         .env_vars
         .as_ref()
-        .and_then(|e| serde_json::from_value(e.clone()).ok());
+        .and_then(|stored| env_secrets::redact(stored, &env_secrets::workload_env(model.id)));
+    model
+}
+
+pub async fn seal_legacy_env(db: &DatabaseConnection) -> Result<u64, sea_orm::DbErr> {
+    let rows = workloads::Entity::find()
+        .filter(Expr::cust("jsonb_typeof(env_vars::jsonb) = 'object'"))
+        .all(db)
+        .await?;
+    let mut sealed = 0;
+    for row in rows {
+        let Some(stored) = row.env_vars.as_ref() else {
+            continue;
+        };
+        let replacement =
+            env_secrets::seal(stored, &env_secrets::workload_env(row.id)).map_err(custom_error)?;
+        let applied = workloads::Entity::update_many()
+            .col_expr(workloads::Column::EnvVars, Expr::value(replacement))
+            .filter(workloads::Column::Id.eq(row.id))
+            .filter(workloads::Column::Generation.eq(row.generation))
+            .exec(db)
+            .await?;
+        sealed += applied.rows_affected;
+    }
+    Ok(sealed)
+}
+
+fn into_response(m: workloads::Model) -> WorkloadResponse {
+    let env_vars = masked_env(m.id, m.env_vars.as_ref());
     let ports = m
         .ports
         .as_ref()
@@ -465,6 +561,9 @@ fn into_response(m: workloads::Model) -> WorkloadResponse {
         volume_mounts,
         resource_group_id: m.resource_group_id,
         stack_id: m.stack_id,
+        replaces_workload_id: m.replaces_workload_id,
+        retire_after: m.retire_after.map(|time| time.and_utc()),
+        rollout_error: m.rollout_error,
         service_name: m.service_name,
         restart_policy: RestartPolicy::from_str(&m.restart_policy),
         max_restarts: m.max_restarts,
