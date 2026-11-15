@@ -3,6 +3,21 @@ import { api } from './http';
 export type SiteMode = 'static' | 'container';
 export type DeploymentStatus = 'queued' | 'building' | 'ready' | 'failed' | 'rolled_back';
 export type EnvScope = 'all' | 'production' | 'preview';
+export type BuildSize = 'small' | 'medium' | 'large';
+
+export const BUILD_SIZES: { id: BuildSize; label: string; spec: string }[] = [
+    { id: 'small', label: 'Small', spec: '2 vCPU, 2 GiB memory' },
+    { id: 'medium', label: 'Medium', spec: '4 vCPU, 8 GiB memory' },
+    { id: 'large', label: 'Large', spec: '8 vCPU, 16 GiB memory' }
+];
+
+export interface BuildPhases {
+    clone_ms: number | null;
+    install_ms: number | null;
+    build_ms: number | null;
+    image_ms: number | null;
+    upload_ms: number | null;
+}
 
 export interface Site {
     id: string;
@@ -18,6 +33,7 @@ export interface Site {
     output_dir: string | null;
     start_command: string | null;
     container_port: number | null;
+    build_size: BuildSize;
     vault_id: string | null;
     gateway_id: string | null;
     git_token_secret: string | null;
@@ -39,6 +55,7 @@ export interface DeploymentSummary {
     finished_at: string | null;
     current: boolean;
     expired: boolean;
+    build_phases: BuildPhases | null;
 }
 
 export interface Deployment extends Omit<DeploymentSummary, 'current' | 'expired'> {
@@ -149,6 +166,7 @@ export interface CreateSiteInput extends SourceInput {
     name: string;
     gateway_id?: string;
     preview_enabled?: boolean;
+    build_size?: BuildSize;
     mode?: SiteMode;
     framework?: string;
     install_command?: string;
@@ -161,7 +179,7 @@ export interface CreateSiteInput extends SourceInput {
 export type UpdateSiteInput = Partial<
     Pick<
         Site,
-        'production_branch' | 'root_dir' | 'framework' | 'install_command' | 'build_command' | 'output_dir' | 'start_command' | 'container_port' | 'vault_id' | 'git_token_secret' | 'gateway_id' | 'preview_enabled'
+        'production_branch' | 'root_dir' | 'framework' | 'install_command' | 'build_command' | 'output_dir' | 'start_command' | 'container_port' | 'vault_id' | 'git_token_secret' | 'gateway_id' | 'preview_enabled' | 'build_size'
     >
 >;
 

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { untrack } from "svelte";
-    import { updateSite, type SiteDetail } from "$lib/api/sites";
+    import { BUILD_SIZES, updateSite, type BuildSize, type SiteDetail } from "$lib/api/sites";
 
     type Props = { rgId: string; site: SiteDetail; onChanged: () => Promise<void>; onError: (message: string) => void };
 
@@ -16,6 +16,7 @@
     let startCommand = $state(initial.start_command ?? "");
     let containerPort = $state(initial.container_port ?? 3000);
     let previews = $state(initial.preview_enabled);
+    let buildSize = $state<BuildSize>(initial.build_size);
     let saving = $state(false);
 
     async function save() {
@@ -30,6 +31,7 @@
                 start_command: site.mode === "container" ? startCommand : undefined,
                 container_port: site.mode === "container" ? containerPort : undefined,
                 preview_enabled: previews,
+                build_size: buildSize,
             });
             await onChanged();
         } catch (e) {
@@ -87,6 +89,12 @@
                     <input class="cx-input" id="bp-port" type="number" min="1" max="65535" bind:value={containerPort} />
                 </div>
             {/if}
+            <div class="cx-field">
+                <label class="cx-label" for="bp-size">Build size</label>
+                <select class="cx-input" id="bp-size" bind:value={buildSize}>
+                    {#each BUILD_SIZES as size (size.id)}<option value={size.id}>{size.label}, {size.spec}</option>{/each}
+                </select>
+            </div>
         </div>
         {#if site.mode === "static"}
             <label class="cx-check"><input type="checkbox" bind:checked={previews} /> Preview every pull request</label>

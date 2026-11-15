@@ -2,7 +2,7 @@
     import { toneBadgeClass } from "$lib/utils/tone";
     import { promoteDeployment, type DeploymentSummary } from "$lib/api/sites";
     import { relativeTime } from "$lib/utils/dashboard";
-    import { buildDuration, deploymentStatus, shortSha } from "$lib/utils/site-status";
+    import { buildDuration, deploymentStatus, phaseSummary, shortSha } from "$lib/utils/site-status";
     import BuildLog from "./build-log.svelte";
 
     type Props = {
@@ -66,7 +66,12 @@
                         </td>
                         <td class="cx-soft">{deployment.environment === "production" ? "Production" : "Preview"}</td>
                         <td class="cx-soft">{relativeTime(deployment.created_at, Date.now())}</td>
-                        <td class="cx-num">{buildDuration(deployment.duration_ms)}</td>
+                        <td class="cx-num">
+                            <div class="rs-text">
+                                <span>{buildDuration(deployment.duration_ms)}</span>
+                                {#if deployment.build_phases}<span class="cx-soft">{phaseSummary(deployment.build_phases)}</span>{/if}
+                            </div>
+                        </td>
                         <td>
                             <div class="db-actions" style="justify-content: flex-end">
                                 <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={() => (selected = deployment.id)}>Build log</button>

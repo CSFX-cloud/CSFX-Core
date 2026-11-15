@@ -18,6 +18,7 @@ pub struct Model {
     pub output_dir: Option<String>,
     pub start_command: Option<String>,
     pub container_port: Option<i32>,
+    pub build_size: String,
     pub vault_id: Option<Uuid>,
     pub gateway_id: Option<Uuid>,
     pub git_token_secret: Option<String>,

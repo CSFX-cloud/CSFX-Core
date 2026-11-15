@@ -20,6 +20,30 @@ const LOG_LIMIT_CHARS: i32 = 2_000_000;
 const READY_CHANNEL_CAPACITY: usize = 64;
 const STALE_STATUSES: [&str; 2] = ["queued", "building"];
 
+const MAX_PHASE_MS: i64 = 24 * 60 * 60 * 1000;
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct BuildPhases {
+    pub clone_ms: Option<i64>,
+    pub install_ms: Option<i64>,
+    pub build_ms: Option<i64>,
+    pub image_ms: Option<i64>,
+    pub upload_ms: Option<i64>,
+}
+
+impl BuildPhases {
+    fn sanitized(self) -> Self {
+        let valid = |value: Option<i64>| value.filter(|ms| (0..=MAX_PHASE_MS).contains(ms));
+        Self {
+            clone_ms: valid(self.clone_ms),
+            install_ms: valid(self.install_ms),
+            build_ms: valid(self.build_ms),
+            image_ms: valid(self.image_ms),
+            upload_ms: valid(self.upload_ms),
+        }
+    }
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 pub struct Completion {
     pub success: bool,
@@ -27,6 +51,8 @@ pub struct Completion {
     pub commit_message: Option<String>,
     pub image_ref: Option<String>,
     pub error: Option<String>,
+    #[serde(default)]
+    pub phases: BuildPhases,
 }
 
 fn candidate_of(deployment: &site_deployments::Model) -> Candidate {
@@ -260,6 +286,7 @@ impl Builds {
         active.image_ref = Set(image);
         active.finished_at = Set(Some(now));
         active.duration_ms = Set(Some((now - started).num_milliseconds()));
+        active.build_phases = Set(Some(serde_json::json!(completion.phases.sanitized())));
         if let Some(sha) = completion.commit_sha {
             active.commit_sha = Set(sha);
         }
@@ -374,6 +401,7 @@ mod tests {
             workload_id: None,
             build_log: String::new(),
             build_env,
+            build_phases: None,
             duration_ms: None,
             created_at: Utc::now().naive_utc(),
             finished_at: None,
@@ -407,6 +435,29 @@ mod tests {
     fn container_images_need_a_report_and_a_job() {
         assert!(trusted_image(Mode::Container, &reported(None), &started()).is_err());
         assert!(trusted_image(Mode::Container, &reported(Some("x")), &deployment(None)).is_err());
+    }
+
+    #[test]
+    fn phase_timings_outside_a_sane_range_are_dropped() {
+        let phases = BuildPhases {
+            clone_ms: Some(1200),
+            install_ms: Some(-5),
+            build_ms: Some(MAX_PHASE_MS + 1),
+            image_ms: Some(0),
+            upload_ms: None,
+        }
+        .sanitized();
+        assert_eq!(phases.clone_ms, Some(1200));
+        assert_eq!(phases.install_ms, None);
+        assert_eq!(phases.build_ms, None);
+        assert_eq!(phases.image_ms, Some(0));
+    }
+
+    #[test]
+    fn completions_without_phases_still_parse() {
+        let completion: Completion =
+            serde_json::from_value(serde_json::json!({ "success": true })).unwrap();
+        assert!(completion.phases.clone_ms.is_none());
     }
 
     #[test]

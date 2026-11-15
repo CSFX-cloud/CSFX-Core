@@ -3,12 +3,14 @@
     import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
     import {
+        BUILD_SIZES,
         createSite,
         detectPackageManager,
         detectSite,
         FRAMEWORK_PRESETS,
         PACKAGE_MANAGERS,
         withPackageManager,
+        type BuildSize,
         type Detection,
         type PackageManager,
         type SiteMode,
@@ -18,9 +20,13 @@
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
+    import WizardSteps from "$lib/components/shell/wizard-steps.svelte";
+    import { repoLabel } from "$lib/utils/site-status";
 
     const DEFAULT_BRANCH = "main";
     const DEFAULT_PORT = 3000;
+    const STEPS = ["Repository", "Build and run", "Launch"];
+    const LAST_STEP = STEPS.length - 1;
 
     const rg = useResourceGroupState();
     const base = `/resource-groups/${rg.rgId}`;
@@ -44,6 +50,8 @@
     let startCommand = $state("");
     let containerPort = $state(DEFAULT_PORT);
     let previews = $state(true);
+    let buildSize = $state<BuildSize>("small");
+    let stepIndex = $state(0);
     let detection = $state<Detection | null>(null);
     let inspected = $state(false);
     let inspecting = $state(false);
@@ -55,6 +63,7 @@
     const usesPackageManager = $derived(FRAMEWORK_PRESETS.find((preset) => preset.framework === framework)?.install_command != null);
     const canInspect = $derived(repoUrl.trim().startsWith("http") && !inspecting);
     const canCreate = $derived(name.trim() !== "" && inspected && !creating);
+    const canContinue = $derived(stepIndex === 0 ? inspected : true);
 
     $effect(() => {
         breadcrumb.set(rg.group ? `${rg.group.name} / Add web app` : null);
@@ -146,6 +155,19 @@
         return value.trim() === "" ? undefined : value.trim();
     }
 
+    function back() {
+        error = null;
+        stepIndex = Math.max(stepIndex - 1, 0);
+    }
+
+    function advance() {
+        if (stepIndex < LAST_STEP) {
+            if (canContinue) stepIndex += 1;
+            return;
+        }
+        submit();
+    }
+
     async function submit() {
         if (!canCreate) return;
         creating = true;
@@ -160,6 +182,7 @@
                 git_token_secret: tokenSecret || undefined,
                 gateway_id: gatewayId || undefined,
                 preview_enabled: mode === "static" && previews,
+                build_size: buildSize,
                 mode,
                 framework: optional(framework),
                 install_command: optional(installCommand),
@@ -198,9 +221,12 @@
         style="display: grid; gap: 24px"
         onsubmit={(event) => {
             event.preventDefault();
-            submit();
+            advance();
         }}
     >
+        <WizardSteps steps={STEPS} current={stepIndex} label="Deploy a web app" />
+
+        {#if stepIndex === 0}
         <section class="cx-panel" aria-labelledby="wa-source">
             <div class="cx-panel__head">
                 <div>
@@ -257,8 +283,7 @@
                 {/if}
             </div>
         </section>
-
-        {#if inspected}
+        {:else if stepIndex === 1}
             <section class="cx-panel" aria-labelledby="wa-build">
                 <div class="cx-panel__head">
                     <div>
@@ -271,22 +296,6 @@
                     </div>
                 </div>
                 <div class="md__fields" style="padding: 0 24px 24px">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
-                        <div class="cx-field">
-                            <label class="cx-label" for="wa-name">Name</label>
-                            <input class="cx-input" id="wa-name" placeholder="shop-web" autocomplete="off" bind:value={name} />
-                            <p class="cx-hint">Lowercase letters, digits and hyphens.</p>
-                        </div>
-                        <div class="cx-field">
-                            <label class="cx-label" for="wa-gateway">API gateway (optional)</label>
-                            <select class="cx-input" id="wa-gateway" bind:value={gatewayId}>
-                                <option value="">None, served inside the resource group</option>
-                                {#each rg.gateways as gateway (gateway.id)}<option value={gateway.id}>{gateway.name}</option>{/each}
-                            </select>
-                            <p class="cx-hint">The site always gets an internal domain in this group. A gateway adds public hostnames and TLS.</p>
-                            <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={() => gatewayDialog?.open()}>Create API gateway</button>
-                        </div>
-                    </div>
                     <div class="cx-field" role="group" aria-labelledby="wa-framework">
                         <span class="cx-label" id="wa-framework">Framework</span>
                         <div style="display: flex; flex-wrap: wrap; gap: 8px">
@@ -327,7 +336,6 @@
                             <input class="cx-input" id="wa-output" placeholder="dist" autocomplete="off" bind:value={outputDir} />
                             <p class="cx-hint">Static sites need no start command or container. The built files are served as they are.</p>
                         </div>
-                        <label class="cx-check"><input type="checkbox" bind:checked={previews} /> Preview every pull request</label>
                     {:else}
                         <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px">
                             <div class="cx-field">
@@ -343,13 +351,64 @@
                     {/if}
                 </div>
             </section>
+        {:else}
+            <section class="cx-panel" aria-labelledby="wa-launch">
+                <div class="cx-panel__head">
+                    <div>
+                        <h2 class="cx-panel__title" id="wa-launch">Launch</h2>
+                        <p class="cx-panel__sub">Name the app, pick where it is served and how much the build may use.</p>
+                    </div>
+                </div>
+                <div class="md__fields" style="padding: 0 24px 24px">
+                    <dl class="wz-summary">
+                        <dt>Repository</dt><dd>{repoLabel(repoUrl.trim())}</dd>
+                        <dt>Branch</dt><dd>{branch.trim() || DEFAULT_BRANCH}{rootDir.trim() ? ` / ${rootDir.trim()}` : ""}</dd>
+                        <dt>Type</dt><dd>{mode === "static" ? "Static site" : "Container app"}{framework ? `, ${framework}` : ""}</dd>
+                        <dt>Build</dt><dd>{buildCommand.trim() || "No build command"}</dd>
+                    </dl>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
+                        <div class="cx-field">
+                            <label class="cx-label" for="wa-name">Name</label>
+                            <input class="cx-input" id="wa-name" placeholder="shop-web" autocomplete="off" bind:value={name} />
+                            <p class="cx-hint">Lowercase letters, digits and hyphens.</p>
+                        </div>
+                        <div class="cx-field">
+                            <label class="cx-label" for="wa-gateway">API gateway (optional)</label>
+                            <select class="cx-input" id="wa-gateway" bind:value={gatewayId}>
+                                <option value="">None, served inside the resource group</option>
+                                {#each rg.gateways as gateway (gateway.id)}<option value={gateway.id}>{gateway.name}</option>{/each}
+                            </select>
+                            <p class="cx-hint">The site always gets an internal domain in this group. A gateway adds public hostnames and TLS.</p>
+                            <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={() => gatewayDialog?.open()}>Create API gateway</button>
+                        </div>
+                    </div>
+                    <div class="cx-field">
+                        <label class="cx-label" for="wa-size">Build size</label>
+                        <select class="cx-input" id="wa-size" bind:value={buildSize}>
+                            {#each BUILD_SIZES as size (size.id)}<option value={size.id}>{size.label}, {size.spec}</option>{/each}
+                        </select>
+                        <p class="cx-hint">Larger builds finish big frameworks faster. You can change this later in the site settings.</p>
+                    </div>
+                    {#if mode === "static"}
+                        <label class="cx-check"><input type="checkbox" bind:checked={previews} /> Preview every pull request</label>
+                    {/if}
+                </div>
+            </section>
         {/if}
 
         {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 
         <div class="db-actions">
-            <a class="cx-btn cx-btn--ghost cx-btn--sm" href="{base}/add">Cancel</a>
-            <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={!canCreate} aria-busy={creating}>{creating ? "Deploying" : "Deploy"}</button>
+            {#if stepIndex === 0}
+                <a class="cx-btn cx-btn--ghost cx-btn--sm" href="{base}/add">Cancel</a>
+            {:else}
+                <button class="cx-btn cx-btn--ghost cx-btn--sm" type="button" onclick={back}>Back</button>
+            {/if}
+            {#if stepIndex < LAST_STEP}
+                <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={!canContinue}>Continue</button>
+            {:else}
+                <button class="cx-btn cx-btn--primary cx-btn--sm" type="submit" disabled={!canCreate} aria-busy={creating}>{creating ? "Deploying" : "Deploy"}</button>
+            {/if}
         </div>
     </form>
 </div>

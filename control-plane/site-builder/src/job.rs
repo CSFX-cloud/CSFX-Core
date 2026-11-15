@@ -7,13 +7,30 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-const BUILD_CPU_MILLICORES: i32 = 2000;
-const BUILD_MEMORY_BYTES: i64 = 2 * 1024 * 1024 * 1024;
-const BUILD_DISK_BYTES: i64 = 8 * 1024 * 1024 * 1024;
+const GIB: i64 = 1024 * 1024 * 1024;
 const RUNTIME_CPU_MILLICORES: i32 = 500;
 const RUNTIME_MEMORY_BYTES: i64 = 512 * 1024 * 1024;
 const RUNTIME_DISK_BYTES: i64 = 1024 * 1024 * 1024;
 const SHORT_ID_LENGTH: usize = 8;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildSize {
+    #[default]
+    Small,
+    Medium,
+    Large,
+}
+
+impl BuildSize {
+    fn resources(self) -> (i32, i64, i64) {
+        match self {
+            BuildSize::Small => (2000, 2 * GIB, 8 * GIB),
+            BuildSize::Medium => (4000, 8 * GIB, 16 * GIB),
+            BuildSize::Large => (8000, 16 * GIB, 32 * GIB),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BuildJob {
@@ -32,6 +49,8 @@ pub struct BuildJob {
     pub output_dir: Option<String>,
     pub start_command: Option<String>,
     pub container_port: Option<u16>,
+    #[serde(default)]
+    pub build_size: BuildSize,
     pub git_token: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
@@ -154,12 +173,13 @@ pub fn builder_name(site_name: &str, deployment_id: Uuid) -> String {
 }
 
 pub fn builder_request(config: &Config, job: &BuildJob) -> Value {
+    let (cpu_millicores, memory_bytes, disk_bytes) = job.build_size.resources();
     json!({
         "name": builder_name(&job.site_name, job.deployment_id),
         "image": config.builder_image,
-        "cpu_millicores": BUILD_CPU_MILLICORES,
-        "memory_bytes": BUILD_MEMORY_BYTES,
-        "disk_bytes": BUILD_DISK_BYTES,
+        "cpu_millicores": cpu_millicores,
+        "memory_bytes": memory_bytes,
+        "disk_bytes": disk_bytes,
         "env_vars": builder_environment(config, job),
         "resource_group_id": job.resource_group_id,
         "restart_policy": "never",
@@ -231,6 +251,7 @@ mod tests {
             output_dir: Some("dist".to_string()),
             start_command: None,
             container_port: Some(3000),
+            build_size: BuildSize::default(),
             git_token: Some("tok".to_string()),
             env: BTreeMap::from([("A".to_string(), "1".to_string())]),
         }
@@ -246,6 +267,31 @@ mod tests {
         portless.container_port = None;
         assert!(portless.validate(&config(Some("r:5000"))).is_err());
         assert!(job(Mode::Static).validate(&config(None)).is_ok());
+    }
+
+    #[test]
+    fn build_sizes_scale_the_builder_resources() {
+        let mut large = job(Mode::Static);
+        large.build_size = BuildSize::Large;
+        let request = builder_request(&config(None), &large);
+        assert_eq!(request["cpu_millicores"], 8000);
+        assert_eq!(request["memory_bytes"], 16 * GIB);
+        let default = builder_request(&config(None), &job(Mode::Static));
+        assert_eq!(default["cpu_millicores"], 2000);
+        assert_eq!(default["memory_bytes"], 2 * GIB);
+    }
+
+    #[test]
+    fn build_size_is_read_from_the_job_payload() {
+        let sizes: Vec<BuildSize> = ["small", "medium", "large"]
+            .iter()
+            .map(|name| serde_json::from_value(serde_json::json!(name)).unwrap())
+            .collect();
+        assert_eq!(
+            sizes,
+            [BuildSize::Small, BuildSize::Medium, BuildSize::Large]
+        );
+        assert!(serde_json::from_value::<BuildSize>(serde_json::json!("huge")).is_err());
     }
 
     #[test]
