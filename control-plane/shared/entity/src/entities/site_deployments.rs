@@ -19,6 +19,7 @@ pub struct Model {
     pub build_log: String,
     #[serde(skip_serializing)]
     pub build_env: Option<Json>,
+    pub build_phases: Option<Json>,
     pub duration_ms: Option<i64>,
     pub created_at: DateTime,
     pub finished_at: Option<DateTime>,
@@ -57,6 +58,7 @@ mod tests {
             workload_id: None,
             build_log: String::new(),
             build_env: Some(serde_json::json!({ "API_KEY": "secret" })),
+            build_phases: None,
             duration_ms: None,
             created_at: chrono::Utc::now().naive_utc(),
             finished_at: None,

@@ -78,6 +78,25 @@ pub struct Detected {
     pub port: Option<u16>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BuildSize {
+    #[default]
+    Small,
+    Medium,
+    Large,
+}
+
+impl BuildSize {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BuildSize::Small => "small",
+            BuildSize::Medium => "medium",
+            BuildSize::Large => "large",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Overrides {
     pub mode: Option<Mode>,
@@ -344,6 +363,7 @@ pub async fn build_job(
         "output_dir": site.output_dir,
         "start_command": site.start_command,
         "container_port": site.container_port,
+        "build_size": site.build_size,
         "git_token": git_token(state, site).await?,
         "env": env,
     }))
@@ -417,6 +437,17 @@ async fn mark_failed(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn build_sizes_round_trip_through_their_names() {
+        for size in [BuildSize::Small, BuildSize::Medium, BuildSize::Large] {
+            let parsed: BuildSize =
+                serde_json::from_value(serde_json::json!(size.as_str())).unwrap();
+            assert_eq!(parsed, size);
+        }
+        assert!(serde_json::from_value::<BuildSize>(serde_json::json!("huge")).is_err());
+        assert_eq!(BuildSize::default(), BuildSize::Small);
+    }
+
     use super::*;
 
     fn detected(mode: Mode) -> Detected {

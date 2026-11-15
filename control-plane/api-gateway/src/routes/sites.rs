@@ -74,6 +74,7 @@ pub struct DeploymentSummary {
     finished_at: Option<chrono::NaiveDateTime>,
     current: bool,
     expired: bool,
+    build_phases: Option<Value>,
 }
 
 fn summarize(model: site_deployments::Model, current: Option<Uuid>) -> DeploymentSummary {
@@ -92,6 +93,7 @@ fn summarize(model: site_deployments::Model, current: Option<Uuid>) -> Deploymen
         duration_ms: model.duration_ms,
         created_at: model.created_at,
         finished_at: model.finished_at,
+        build_phases: model.build_phases,
     }
 }
 
@@ -305,6 +307,7 @@ pub struct CreateSiteRequest {
     source: DetectRequest,
     gateway_id: Option<Uuid>,
     preview_enabled: Option<bool>,
+    build_size: Option<service::BuildSize>,
     #[serde(flatten)]
     overrides: Overrides,
 }
@@ -400,6 +403,9 @@ async fn insert_site(
         output_dir: Set(resolved.output_dir),
         start_command: Set(resolved.start_command),
         container_port: Set(resolved.container_port),
+        build_size: request
+            .build_size
+            .map_or(ActiveValue::NotSet, |size| Set(size.as_str().to_string())),
         vault_id: Set(request.source.vault_id),
         gateway_id: Set(request.gateway_id),
         git_token_secret: Set(request.source.git_token_secret.clone()),
@@ -540,6 +546,7 @@ pub struct UpdateSiteRequest {
     git_token_secret: Option<String>,
     gateway_id: Option<Uuid>,
     preview_enabled: Option<bool>,
+    build_size: Option<service::BuildSize>,
 }
 
 fn clearable(value: Option<String>) -> ActiveValue<Option<String>> {
@@ -612,6 +619,9 @@ pub async fn update_site(
     }
     if let Some(enabled) = request.preview_enabled {
         active.preview_enabled = Set(enabled);
+    }
+    if let Some(size) = request.build_size {
+        active.build_size = Set(size.as_str().to_string());
     }
     Ok(Json(active.update(&state.db_conn).await?))
 }
