@@ -24,14 +24,25 @@
 
     const POLL_INTERVAL_MS = 5000;
     const rg = useResourceGroupState();
-    const workloadId = $page.params.workloadId;
+    const workloadId = $derived($page.params.workloadId);
 
     let tab = $state<Tab>("logs");
     let actionError = $state<string | null>(null);
     let actionBusy = $state(false);
     let nodeName = $state<string | null>(null);
 
+    let knownName = $state<string | null>(null);
+
     const container = $derived(rg.workloads.find((workload) => workload.id === workloadId) ?? null);
+
+    $effect(() => {
+        if (container) {
+            knownName = container.name;
+            return;
+        }
+        const successor = knownName ? rg.workloads.find((workload) => workload.name === knownName) : null;
+        if (successor) goto(`/resource-groups/${rg.rgId}/container/${successor.id}`, { replaceState: true });
+    });
     const name = $derived(container?.service_name ?? container?.name ?? "");
     const stopped = $derived(container?.desired_state === "stopped" || container?.status === "stopped");
     const tabs = $derived<{ id: Tab; label: string }[]>([
@@ -119,6 +130,7 @@
         </WorkloadHero>
 
         {#if actionError}<p class="cx-hint cx-hint--error">{actionError}</p>{/if}
+        {#if container?.rollout_error}<p class="cx-hint cx-hint--error">{container.rollout_error}</p>{/if}
 
         <WorkloadTabs {tabs} active={tab} label="Container sections" onselect={(id) => (tab = id)} />
 

@@ -244,7 +244,8 @@
         {/if}
         <div class="cx-field md__span">
             <label class="cx-label" for="d-env">Environment Variables (KEY=VALUE, one per line)</label>
-            <textarea id="d-env" class="cx-input cx-mono" style="height: auto; padding: 10px 14px" rows={3} placeholder={"NODE_ENV=production\nPORT=3000"} bind:value={formEnv}></textarea>
+            <textarea id="d-env" class="cx-input cx-mono" style="height: auto; padding: 10px 14px" rows={3} placeholder={"NODE_ENV=production\nDB_PASSWORD=vault://<vault-id>/DB_PASSWORD"} aria-describedby="d-env-hint" bind:value={formEnv}></textarea>
+            <p class="cx-hint" id="d-env-hint">Store secrets in a vault and reference them as vault://&lt;vault-id&gt;/&lt;secret-name&gt;. The value is resolved when the workload starts. Plain values are stored encrypted and shown masked.</p>
         </div>
         {#if deployError}<p class="cx-hint cx-hint--error md__span">{deployError}</p>{/if}
         <div class="md__foot md__span">

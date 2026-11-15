@@ -16,17 +16,19 @@
         icon: string;
         nodeName: string;
         indented?: boolean;
+        update?: "new" | "old" | null;
+        label?: string;
         onRestart: () => void;
         onStop: () => void;
         onDelete: () => void;
     };
 
-    let { w, href, icon, nodeName, indented = false, onRestart, onStop, onDelete }: Props = $props();
+    let { w, href, icon, nodeName, indented = false, update = null, label, onRestart, onStop, onDelete }: Props = $props();
 
     const isVm = $derived(w.runtime_class === "vm");
     const details = $derived(isVm ? `${w.cpu_millicores / MILLICORES_PER_CORE} vCPU · ${formatBytes(w.memory_bytes)}` : containerDetails(w));
     const actions = $derived<MenuAction[]>([
-        { label: "Restart", icon: RefreshCw, onselect: onRestart },
+        { label: "Restart", icon: RefreshCw, onselect: onRestart, disabled: update !== null },
         { label: "Stop", icon: Square, onselect: onStop, disabled: w.desired_state === "stopped" },
         { label: "Delete", icon: Trash2, onselect: onDelete, danger: true },
     ]);
@@ -41,11 +43,19 @@
     <td>
         <div class="rs-name {indented ? 'rs-name--child' : ''}">
             <ServiceIcon name={icon} brand={icon === "api-gateway" ? null : knownWorkloadIcon(w.image, w.runtime_class)} />
-            <a class="rs-link" {href}>{w.service_name ?? w.name}</a>
+            <a class="rs-link" {href}>{label ?? w.service_name ?? w.name}</a>
         </div>
     </td>
     <td>
         <span class={badgeClass(w.status)}>{statusLabel(w.status)}</span>
+        {#if w.rollout_error}
+            <span class="cx-badge cx-badge--danger" title={w.rollout_error}>Update failed</span>
+        {/if}
+        {#if update === "new"}
+            <span class="cx-badge cx-badge--warning" title="This is the updated instance. Traffic switches to it once it has run stably, then the old instance is removed.">New version</span>
+        {:else if update === "old"}
+            <span class="cx-badge" title="This instance keeps serving until the new version is ready, then it is removed.">Old version</span>
+        {/if}
         {#if w.restart_count > 0}
             <span class="rs-restarts" title="Restarted {w.restart_count} time{w.restart_count === 1 ? '' : 's'}{w.max_restarts !== null ? ` (max ${w.max_restarts})` : ''}">
                 &#8635; {w.restart_count}
