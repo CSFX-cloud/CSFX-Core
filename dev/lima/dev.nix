@@ -49,6 +49,7 @@ in
     csfx-cp = {
       enable = true;
       dbUrl = "";
+      dashboard.assets = "/csfx-ui";
     };
     csfx-setup = {
       enable = true;
@@ -74,7 +75,6 @@ in
       (_: bin: { serviceConfig.ExecStart = lib.mkForce "${binDir}/${bin}"; })
       devUnits)
     {
-      csfx-api-gateway.environment.STATIC_DIR = lib.mkForce "/csfx-ui";
       csfx-site-builder.serviceConfig.EnvironmentFile = lib.mkAfter [ "-/etc/csfx/site-dev.env" ];
       csfx-updater.enable = lib.mkForce false;
       csfx-guest-init-link.serviceConfig.ExecStart = lib.mkForce "${pkgs.coreutils}/bin/install -m 0755 ${binDir}/csfx-guest-init /var/lib/csfx-agent/csfx-guest-init";
