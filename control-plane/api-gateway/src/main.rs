@@ -98,6 +98,7 @@ async fn main() {
     tracing::info!("starting ingress synchronization");
     ingress_sync::spawn(state.db_conn.clone());
     gateway_reconciler::spawn(state.clone());
+    api_gateway::secret_rotation::spawn(state.clone());
 
     let app = routes::create_router(state.clone())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
