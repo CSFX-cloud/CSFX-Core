@@ -41,17 +41,21 @@ pub fn short_id(id: Uuid) -> String {
     id.simple().to_string()[..SHORT_ID_LENGTH].to_string()
 }
 
-pub fn image_reference(registry: &str, job: &BuildJob) -> String {
+fn deployment_reference(registry: &str, site_id: Uuid, deployment_id: Uuid) -> String {
     format!(
         "{}/{}:{}",
         registry.trim_end_matches('/'),
-        job.site_id,
-        short_id(job.deployment_id)
+        site_id,
+        short_id(deployment_id)
     )
 }
 
-pub fn stored_reference(job: &BuildJob) -> String {
-    image_reference(SITE_IMAGE_HOST, job)
+pub fn image_reference(registry: &str, job: &BuildJob) -> String {
+    deployment_reference(registry, job.site_id, job.deployment_id)
+}
+
+pub fn stored_reference(site_id: Uuid, deployment_id: Uuid) -> String {
+    deployment_reference(SITE_IMAGE_HOST, site_id, deployment_id)
 }
 
 impl BuildJob {

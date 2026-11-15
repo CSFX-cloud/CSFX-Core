@@ -11,8 +11,8 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     Set, Statement,
 };
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 const LOG_LIMIT_CHARS: i32 = 2_000_000;
@@ -38,10 +38,17 @@ fn candidate_of(deployment: &site_deployments::Model) -> Candidate {
     }
 }
 
+fn build_env_of(
+    deployment: &site_deployments::Model,
+) -> Option<Result<BTreeMap<String, String>, ServiceError>> {
+    let stored = deployment.build_env.clone()?;
+    Some(serde_json::from_value(stored).map_err(|error| ServiceError::Invalid(error.to_string())))
+}
+
 fn trusted_image(
     mode: Mode,
     completion: &Completion,
-    job: Option<&BuildJob>,
+    deployment: &site_deployments::Model,
 ) -> Result<Option<String>, ServiceError> {
     if mode == Mode::Static {
         return Ok(None);
@@ -50,8 +57,10 @@ fn trusted_image(
     if completion.image_ref.is_none() {
         return Err(invalid("build produced no image"));
     }
-    let job = job.ok_or_else(|| invalid("build job state was lost"))?;
-    Ok(Some(stored_reference(job)))
+    if deployment.build_env.is_none() {
+        return Err(invalid("build job state was lost"));
+    }
+    Ok(Some(stored_reference(deployment.site_id, deployment.id)))
 }
 
 pub struct Builds {
@@ -59,7 +68,6 @@ pub struct Builds {
     pub config: Arc<Config>,
     pub scheduler: SchedulerClient,
     registry: Option<RegistryClient>,
-    pending: Mutex<HashMap<Uuid, BuildJob>>,
 }
 
 impl Builds {
@@ -74,7 +82,6 @@ impl Builds {
             config,
             scheduler,
             registry,
-            pending: Mutex::new(HashMap::new()),
         }
     }
 
@@ -93,7 +100,7 @@ impl Builds {
         job.validate(&self.config)?;
         let request = builder_request(&self.config, &job);
         match self.scheduler.create(&request).await {
-            Ok(workload_id) => self.mark_building(deployment, workload_id, job).await,
+            Ok(workload_id) => self.mark_building(deployment, workload_id, job.env).await,
             Err(error) => {
                 self.fail(deployment.id, &error.to_string()).await?;
                 Err(error)
@@ -105,30 +112,16 @@ impl Builds {
         &self,
         deployment: site_deployments::Model,
         workload_id: Uuid,
-        job: BuildJob,
+        env: BTreeMap<String, String>,
     ) -> Result<(), ServiceError> {
         let id = deployment.id;
         let mut active: site_deployments::ActiveModel = deployment.into();
         active.status = Set("building".to_string());
         active.workload_id = Set(Some(workload_id));
+        active.build_env = Set(Some(serde_json::json!(env)));
         active.update(&self.db).await?;
-        self.remember(id, job);
         tracing::info!(deployment = %id, workload = %workload_id, "build started");
         Ok(())
-    }
-
-    fn remember(&self, id: Uuid, job: BuildJob) {
-        self.pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(id, job);
-    }
-
-    pub fn recall(&self, id: Uuid) -> Option<BuildJob> {
-        self.pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&id)
     }
 
     pub async fn append_log(&self, id: Uuid, text: &str) -> Result<(), ServiceError> {
@@ -155,11 +148,11 @@ impl Builds {
         let mut active: site_deployments::ActiveModel = deployment.into();
         active.status = Set("failed".to_string());
         active.workload_id = Set(None);
+        active.build_env = Set(None);
         let now = Utc::now().naive_utc();
         active.finished_at = Set(Some(now));
         active.duration_ms = Set(Some((now - started).num_milliseconds()));
         active.update(&self.db).await?;
-        self.recall(id);
         self.release_builder(builder).await;
         tracing::warn!(deployment = %id, reason = %message, "build failed");
         Ok(())
@@ -215,19 +208,18 @@ impl Builds {
         let id = deployment.id;
         let site = crate::sites::load(&self.db, deployment.site_id).await?;
         let mode = crate::sites::mode_of(&site)?;
-        let job = self.recall(id);
         if mode == Mode::Static && !crate::artifacts::exists(&self.db, id).await? {
             return Err(ServiceError::Invalid(
                 "build produced no artifact".to_string(),
             ));
         }
-        let image = trusted_image(mode, &completion, job.as_ref())?;
+        let image = trusted_image(mode, &completion, &deployment)?;
+        let env = build_env_of(&deployment).transpose()?.unwrap_or_default();
         let builder = deployment.workload_id;
         let production = deployment.environment == "production";
         self.mark_ready(deployment, completion, mode, image).await?;
         self.release_builder(builder).await;
         if production {
-            let env = job.map(|job| job.env).unwrap_or_default();
             self.promote(id, env).await?;
         } else {
             crate::sites::ensure_preview_domain(self, id).await?;
@@ -250,6 +242,7 @@ impl Builds {
         let now = Utc::now().naive_utc();
         active.status = Set("ready".to_string());
         active.workload_id = Set(None);
+        active.build_env = Set(None);
         active.artifact_key = Set(key);
         active.image_ref = Set(image);
         active.finished_at = Set(Some(now));
@@ -351,25 +344,29 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    fn job() -> BuildJob {
-        BuildJob {
-            deployment_id: Uuid::from_u128(1),
+    fn deployment(build_env: Option<serde_json::Value>) -> site_deployments::Model {
+        site_deployments::Model {
+            id: Uuid::from_u128(1),
             site_id: Uuid::nil(),
-            resource_group_id: Uuid::nil(),
-            site_name: "shop".to_string(),
-            mode: Mode::Container,
-            repo_url: "https://example.com/a".to_string(),
+            commit_sha: String::new(),
+            commit_message: String::new(),
             branch: "main".to_string(),
-            root_dir: String::new(),
-            framework: None,
-            install_command: None,
-            build_command: None,
-            output_dir: None,
-            start_command: None,
-            container_port: Some(3000),
-            git_token: None,
-            env: BTreeMap::new(),
+            pull_request: None,
+            environment: "production".to_string(),
+            status: "building".to_string(),
+            artifact_key: None,
+            image_ref: None,
+            workload_id: None,
+            build_log: String::new(),
+            build_env,
+            duration_ms: None,
+            created_at: Utc::now().naive_utc(),
+            finished_at: None,
         }
+    }
+
+    fn started() -> site_deployments::Model {
+        deployment(Some(serde_json::json!({})))
     }
 
     fn reported(image: Option<&str>) -> Completion {
@@ -382,13 +379,9 @@ mod tests {
 
     #[test]
     fn container_images_ignore_the_value_reported_by_the_vm() {
-        let image = trusted_image(
-            Mode::Container,
-            &reported(Some("evil/other:1")),
-            Some(&job()),
-        )
-        .unwrap()
-        .unwrap();
+        let image = trusted_image(Mode::Container, &reported(Some("evil/other:1")), &started())
+            .unwrap()
+            .unwrap();
         assert_eq!(
             image,
             format!("sites.csfx.invalid/{}:00000000", Uuid::nil())
@@ -397,15 +390,22 @@ mod tests {
 
     #[test]
     fn container_images_need_a_report_and_a_job() {
-        let job = job();
-        assert!(trusted_image(Mode::Container, &reported(None), Some(&job)).is_err());
-        assert!(trusted_image(Mode::Container, &reported(Some("x")), None).is_err());
+        assert!(trusted_image(Mode::Container, &reported(None), &started()).is_err());
+        assert!(trusted_image(Mode::Container, &reported(Some("x")), &deployment(None)).is_err());
+    }
+
+    #[test]
+    fn persisted_env_survives_a_restart() {
+        let env = BTreeMap::from([("API_KEY".to_string(), "secret".to_string())]);
+        let stored = deployment(Some(serde_json::json!(env)));
+        assert_eq!(build_env_of(&stored).unwrap().unwrap(), env);
+        assert!(build_env_of(&deployment(None)).is_none());
     }
 
     #[test]
     fn static_builds_have_no_image() {
         assert_eq!(
-            trusted_image(Mode::Static, &reported(None), None).unwrap(),
+            trusted_image(Mode::Static, &reported(None), &deployment(None)).unwrap(),
             None
         );
     }

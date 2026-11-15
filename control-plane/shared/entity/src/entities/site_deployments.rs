@@ -17,6 +17,7 @@ pub struct Model {
     pub image_ref: Option<String>,
     pub workload_id: Option<Uuid>,
     pub build_log: String,
+    pub build_env: Option<Json>,
     pub duration_ms: Option<i64>,
     pub created_at: DateTime,
     pub finished_at: Option<DateTime>,
