@@ -5,9 +5,7 @@ pub struct Migration;
 
 const UP: &str = "ALTER TABLE workloads ADD COLUMN IF NOT EXISTS replaces_workload_id UUID; \
     ALTER TABLE workloads ADD COLUMN IF NOT EXISTS retire_after TIMESTAMP; \
-    ALTER TABLE workloads ADD COLUMN IF NOT EXISTS rollout_error TEXT; \
-    CREATE UNIQUE INDEX IF NOT EXISTS workloads_replaces_workload_id_key ON workloads (replaces_workload_id) \
-    WHERE replaces_workload_id IS NOT NULL;";
+    ALTER TABLE workloads ADD COLUMN IF NOT EXISTS rollout_error TEXT;";
 
 const DOWN: &str = "DROP INDEX IF EXISTS workloads_replaces_workload_id_key; \
     ALTER TABLE workloads DROP COLUMN IF EXISTS rollout_error; \

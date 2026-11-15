@@ -3,12 +3,21 @@ use sea_orm_migration::sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Sta
 pub struct ConcurrentIndex {
     pub name: &'static str,
     pub definition: &'static str,
+    pub unique: bool,
 }
 
-pub const CONCURRENT_INDEXES: &[ConcurrentIndex] = &[ConcurrentIndex {
-    name: "idx_logs_last_seen_at_id",
-    definition: "ON logs (last_seen_at, id)",
-}];
+pub const CONCURRENT_INDEXES: &[ConcurrentIndex] = &[
+    ConcurrentIndex {
+        name: "idx_logs_last_seen_at_id",
+        definition: "ON logs (last_seen_at, id)",
+        unique: false,
+    },
+    ConcurrentIndex {
+        name: "workloads_replaces_workload_id_key",
+        definition: "ON workloads (replaces_workload_id) WHERE replaces_workload_id IS NOT NULL",
+        unique: true,
+    },
+];
 
 async fn is_invalid(db: &DatabaseConnection, name: &str) -> Result<bool, DbErr> {
     let row = db
@@ -30,8 +39,13 @@ async fn build(db: &DatabaseConnection, index: &ConcurrentIndex) -> Result<(), D
         db.execute_unprepared(&format!("DROP INDEX CONCURRENTLY IF EXISTS {}", index.name))
             .await?;
     }
+    let kind = if index.unique {
+        "UNIQUE INDEX"
+    } else {
+        "INDEX"
+    };
     db.execute_unprepared(&format!(
-        "CREATE INDEX CONCURRENTLY IF NOT EXISTS {} {}",
+        "CREATE {kind} CONCURRENTLY IF NOT EXISTS {} {}",
         index.name, index.definition
     ))
     .await?;

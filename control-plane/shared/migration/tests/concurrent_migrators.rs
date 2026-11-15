@@ -58,7 +58,11 @@ async fn concurrent_indexes_are_idempotent_and_rebuild_invalid_ones() {
     let table = format!("concurrent_index_{}", Uuid::new_v4().simple());
     let name: &'static str = Box::leak(format!("{table}_idx").into_boxed_str());
     let definition: &'static str = Box::leak(format!("ON {table} (value)").into_boxed_str());
-    let indexes = [ConcurrentIndex { name, definition }];
+    let indexes = [ConcurrentIndex {
+        name,
+        definition,
+        unique: false,
+    }];
     db.execute_unprepared(&format!("CREATE TABLE {table} (value INT)"))
         .await
         .expect("create table");
