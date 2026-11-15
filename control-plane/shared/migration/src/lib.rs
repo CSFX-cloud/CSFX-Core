@@ -75,6 +75,8 @@ mod m20261116_060000_add_agent_rg_wg_ports;
 mod m20261117_000000_add_hotpath_indexes;
 mod m20261117_010000_add_site_build_env;
 mod m20261117_020000_add_site_build_size_and_phases;
+mod m20261117_030000_add_workload_secret_versions;
+mod m20261117_040000_add_workload_replaces;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -151,6 +153,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261117_000000_add_hotpath_indexes::Migration),
             Box::new(m20261117_010000_add_site_build_env::Migration),
             Box::new(m20261117_020000_add_site_build_size_and_phases::Migration),
+            Box::new(m20261117_030000_add_workload_secret_versions::Migration),
+            Box::new(m20261117_040000_add_workload_replaces::Migration),
         ]
     }
 }

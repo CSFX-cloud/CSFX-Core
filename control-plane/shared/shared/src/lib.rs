@@ -2,6 +2,7 @@ pub mod agent_auth;
 pub mod db;
 pub mod db_log_layer;
 pub mod env;
+pub mod env_secrets;
 pub mod leader;
 pub mod log_writer;
 pub mod logger;
@@ -9,6 +10,7 @@ pub mod ntfy;
 pub mod observability;
 pub mod pagination;
 pub mod qos;
+pub mod rollout;
 pub mod ssh_access;
 pub mod workload_status;
 

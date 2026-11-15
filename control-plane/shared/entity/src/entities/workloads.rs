@@ -19,6 +19,14 @@ pub struct Model {
     pub cpu_usage_peak_percent: Option<f64>,
     pub memory_usage_peak_bytes: Option<i64>,
     pub env_vars: Option<Json>,
+    #[serde(default, skip_serializing)]
+    pub secret_versions: Option<Json>,
+    #[serde(default)]
+    pub replaces_workload_id: Option<Uuid>,
+    #[serde(default)]
+    pub retire_after: Option<DateTime>,
+    #[serde(default)]
+    pub rollout_error: Option<String>,
     pub ports: Option<Json>,
     pub volume_mounts: Option<Json>,
     pub status: String,
