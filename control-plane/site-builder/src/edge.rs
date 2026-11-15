@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const HOST_TTL: Duration = Duration::from_secs(5);
+const MAX_CACHED_HOSTS: usize = 10_000;
 const MAX_CACHED_BYTES: usize = 512 * 1024 * 1024;
 const INDEX_FILE: &str = "index.html";
 const NOT_FOUND_FILE: &str = "404.html";
@@ -21,9 +22,10 @@ const REVALIDATE: &str = "public, max-age=0, must-revalidate";
 const IMMUTABLE_ASSET: &str = "public, max-age=3600";
 
 pub struct ArchiveCache {
-    entries: HashMap<Uuid, Arc<Archive>>,
+    entries: HashMap<Uuid, (Arc<Archive>, u64)>,
     bytes: usize,
     budget: usize,
+    clock: u64,
 }
 
 impl ArchiveCache {
@@ -32,11 +34,20 @@ impl ArchiveCache {
             entries: HashMap::new(),
             bytes: 0,
             budget,
+            clock: 0,
         }
     }
 
-    pub fn get(&self, id: &Uuid) -> Option<Arc<Archive>> {
-        self.entries.get(id).cloned()
+    fn tick(&mut self) -> u64 {
+        self.clock += 1;
+        self.clock
+    }
+
+    pub fn get(&mut self, id: &Uuid) -> Option<Arc<Archive>> {
+        let used = self.tick();
+        let (archive, last_used) = self.entries.get_mut(id)?;
+        *last_used = used;
+        Some(archive.clone())
     }
 
     pub fn insert(&mut self, id: Uuid, archive: Arc<Archive>) {
@@ -45,24 +56,55 @@ impl ArchiveCache {
             return;
         }
         while self.bytes + size > self.budget {
-            let Some(evicted) = self.entries.keys().next().copied() else {
+            let Some(evicted) = self.least_recently_used() else {
                 break;
             };
-            if let Some(removed) = self.entries.remove(&evicted) {
+            if let Some((removed, _)) = self.entries.remove(&evicted) {
                 self.bytes -= removed.size();
             }
         }
-        if let Some(replaced) = self.entries.insert(id, archive) {
+        let used = self.tick();
+        if let Some((replaced, _)) = self.entries.insert(id, (archive, used)) {
             self.bytes -= replaced.size();
         }
         self.bytes += size;
+    }
+
+    fn least_recently_used(&self) -> Option<Uuid> {
+        self.entries
+            .iter()
+            .min_by_key(|(_, (_, last_used))| *last_used)
+            .map(|(id, _)| *id)
+    }
+}
+
+#[derive(Default)]
+struct HostCache {
+    entries: HashMap<String, (Option<Resolved>, Instant)>,
+}
+
+impl HostCache {
+    fn get(&self, host: &str) -> Option<Option<Resolved>> {
+        let (resolved, stored) = self.entries.get(host)?;
+        (stored.elapsed() < HOST_TTL).then_some(*resolved)
+    }
+
+    fn insert(&mut self, host: String, resolved: Option<Resolved>) {
+        if self.entries.len() >= MAX_CACHED_HOSTS {
+            self.entries
+                .retain(|_, (_, stored)| stored.elapsed() < HOST_TTL);
+        }
+        if self.entries.len() >= MAX_CACHED_HOSTS {
+            self.entries.clear();
+        }
+        self.entries.insert(host, (resolved, Instant::now()));
     }
 }
 
 pub struct Edge {
     db: DatabaseConnection,
     archives: Mutex<ArchiveCache>,
-    hosts: Mutex<HashMap<String, (Option<Resolved>, Instant)>>,
+    hosts: Mutex<HostCache>,
     usage: UsageCounter,
 }
 
@@ -139,7 +181,7 @@ impl Edge {
         Self {
             db,
             archives: Mutex::new(ArchiveCache::new(MAX_CACHED_BYTES)),
-            hosts: Mutex::new(HashMap::new()),
+            hosts: Mutex::new(HostCache::default()),
             usage: UsageCounter::default(),
         }
     }
@@ -155,17 +197,15 @@ impl Edge {
         self.hosts
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(host.to_string(), (resolved, Instant::now()));
+            .insert(host.to_string(), resolved);
         Ok(resolved)
     }
 
     fn cached_host(&self, host: &str) -> Option<Option<Resolved>> {
-        let hosts = self
-            .hosts
+        self.hosts
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let (resolved, stored) = hosts.get(host)?;
-        (stored.elapsed() < HOST_TTL).then_some(*resolved)
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(host)
     }
 
     async fn resolve_host(
@@ -317,6 +357,46 @@ mod tests {
         cache.insert(Uuid::from_u128(1), sized(50));
         assert!(cache.get(&Uuid::from_u128(1)).is_none());
         assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
+    fn cache_evicts_the_least_recently_used_archive() {
+        let mut cache = ArchiveCache::new(100);
+        cache.insert(Uuid::from_u128(1), sized(40));
+        cache.insert(Uuid::from_u128(2), sized(40));
+        cache.get(&Uuid::from_u128(1));
+        cache.insert(Uuid::from_u128(3), sized(40));
+        assert!(cache.get(&Uuid::from_u128(1)).is_some());
+        assert!(cache.get(&Uuid::from_u128(2)).is_none());
+        assert!(cache.get(&Uuid::from_u128(3)).is_some());
+    }
+
+    #[test]
+    fn host_cache_stays_below_its_cap_under_a_flood_of_hosts() {
+        let mut cache = HostCache::default();
+        for index in 0..(MAX_CACHED_HOSTS * 3) {
+            cache.insert(format!("host-{index}.example"), None);
+            assert!(cache.entries.len() <= MAX_CACHED_HOSTS);
+        }
+    }
+
+    #[test]
+    fn host_cache_drops_expired_entries_before_clearing() {
+        let mut cache = HostCache::default();
+        let expired = Instant::now() - HOST_TTL * 2;
+        for index in 0..MAX_CACHED_HOSTS {
+            cache
+                .entries
+                .insert(format!("old-{index}"), (None, expired));
+        }
+        cache
+            .entries
+            .insert("fresh".to_string(), (None, Instant::now()));
+        cache.entries.remove("old-0");
+        cache.insert("new".to_string(), None);
+        assert!(cache.get("fresh").is_some());
+        assert!(cache.get("new").is_some());
+        assert_eq!(cache.entries.len(), 2);
     }
 
     #[test]
