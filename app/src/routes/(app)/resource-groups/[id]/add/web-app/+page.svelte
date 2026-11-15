@@ -64,7 +64,7 @@
     async function loadTokenNames() {
         tokenSecret = "";
         tokenNames = [];
-        if (!auth.token || !vaultId) return;
+        if (!auth.user || !vaultId) return;
         const secrets = await listSecrets(rg.rgId, vaultId).catch(() => []);
         tokenNames = secrets.filter((secret) => !secret.deleted).map((secret) => secret.name);
     }

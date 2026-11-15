@@ -42,7 +42,7 @@
     }
 
     $effect(() => {
-        if (auth.token) untrack(loadNodeNames);
+        if (auth.user) untrack(loadNodeNames);
     });
 
     $effect(() => {

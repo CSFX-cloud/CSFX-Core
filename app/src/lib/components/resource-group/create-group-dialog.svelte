@@ -31,7 +31,7 @@
     }
 
     export async function open() {
-        if (auth.token) cidr = await suggestCidr().catch(() => DEFAULT_CIDR);
+        if (auth.user) cidr = await suggestCidr().catch(() => DEFAULT_CIDR);
         dialog?.open();
     }
 

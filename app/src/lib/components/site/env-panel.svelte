@@ -22,7 +22,7 @@
 
     $effect(() => {
         const vaultId = site.vault_id;
-        if (!vaultId || !auth.token) return;
+        if (!vaultId || !auth.user) return;
         listSecrets(rgId, vaultId)
             .then((secrets) => (secretNames = secrets.filter((entry) => !entry.deleted).map((entry) => entry.name)))
             .catch(() => (secretNames = []));

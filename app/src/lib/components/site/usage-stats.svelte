@@ -19,7 +19,7 @@
     const buildMinutes = $derived(usage ? usage.build_minutes.toFixed(1) : "—");
 
     onMount(async () => {
-        if (!auth.token) return;
+        if (!auth.user) return;
         try {
             usage = await getSiteUsage(rgId, siteId, WINDOW_DAYS);
         } catch {

@@ -147,7 +147,7 @@
     });
 
     $effect(() => {
-        auth.token;
+        auth.user;
         kind;
         range;
         levels;

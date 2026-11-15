@@ -85,7 +85,7 @@
         });
 
     $effect(() => {
-        if (!auth.token) return;
+        if (!auth.user) return;
         const tasks: [() => Promise<void>, number][] = [
             [refreshLive, LIVE_INTERVAL_MS],
             [refreshNodes, SERVICES_INTERVAL_MS],
@@ -105,7 +105,7 @@
     });
 
     $effect(() => {
-        if (!auth.token) return;
+        if (!auth.user) return;
         void usageRange;
         untrack(refreshUsage);
         const timer = setInterval(refreshUsage, USAGE_INTERVAL_MS);

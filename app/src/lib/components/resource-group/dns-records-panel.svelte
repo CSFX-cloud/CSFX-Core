@@ -20,7 +20,7 @@
     const canSubmit = $derived(name.trim() !== "" && value.trim() !== "" && !busy);
 
     $effect(() => {
-        if (auth.token && !loadStarted) {
+        if (auth.user && !loadStarted) {
             loadStarted = true;
             untrack(refresh);
         }

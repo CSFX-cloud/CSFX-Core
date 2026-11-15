@@ -3,7 +3,6 @@
     import { goto } from "$app/navigation";
     import { page } from "$app/state";
     import { exchangeSsoCode } from "$lib/auth/api";
-    import { auth } from "$lib/auth/store.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
 
     onMount(async () => {
@@ -13,8 +12,8 @@
             return;
         }
         try {
-            auth.setSession(await exchangeSsoCode(code));
-            goto("/");
+            await exchangeSsoCode(code);
+            goto("/", { invalidateAll: true });
         } catch {
             goto("/login?sso_error=invalid_state");
         }

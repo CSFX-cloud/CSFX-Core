@@ -36,7 +36,7 @@
         scope = ALL_SECRETS;
         requiresApproval = false;
         dialog?.open();
-        if (auth.token) users = (await listUsers().catch(() => [])).map((user) => user.username);
+        if (auth.user) users = (await listUsers().catch(() => [])).map((user) => user.username);
     }
 
     function changeCapability(value: Capability) {

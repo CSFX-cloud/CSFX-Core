@@ -86,7 +86,7 @@
         if (!passwordValid) return;
         passwordSaving = true;
         try {
-            auth.setToken(await changePassword(oldPassword, newPassword));
+            await changePassword(oldPassword, newPassword);
             oldPassword = "";
             newPassword = "";
             confirmPassword = "";

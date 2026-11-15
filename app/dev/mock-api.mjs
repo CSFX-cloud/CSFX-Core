@@ -297,16 +297,24 @@ function readBody(request) {
     });
 }
 
-function send(response, status, body) {
-    response.writeHead(status, { "Content-Type": "application/json" });
+const SESSION_COOKIE = "auth_token=mock-token";
+const SET_SESSION_COOKIE = `${SESSION_COOKIE}; Path=/; HttpOnly; SameSite=Lax`;
+const CLEAR_SESSION_COOKIE = "auth_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+
+function send(response, status, body, headers = {}) {
+    response.writeHead(status, { "Content-Type": "application/json", ...headers });
     response.end(JSON.stringify(body));
+}
+
+function hasSession(request) {
+    return (request.headers.cookie ?? "").split(";").some((pair) => pair.trim() === SESSION_COOKIE);
 }
 
 function handleSetup(body, response) {
     if (setupCompleted) return send(response, 410, { error: "setup already completed" });
     if (body.setup_code !== SETUP_CODE) return send(response, 401, { error: "invalid setup code" });
     setupCompleted = true;
-    send(response, 200, { ...session(body.admin_email), recovery_key: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ" });
+    send(response, 200, { ...session(body.admin_email), recovery_key: "ABCD-EFGH-JKLM-NPQR-STUV-WXYZ" }, { "Set-Cookie": SET_SESSION_COOKIE });
 }
 
 function handleLogin(body, response) {
@@ -314,7 +322,7 @@ function handleLogin(body, response) {
     const needsCode = body.username === TOTP_USERNAME && body.two_factor_code !== TOTP_CODE;
     if (needsCode && body.two_factor_code === null) return send(response, 403, { error: "two factor required" });
     if (needsCode || password === "wrong") return send(response, 401, { error: "invalid credentials" });
-    send(response, 200, session(body.username));
+    send(response, 200, session(body.username), { "Set-Cookie": SET_SESSION_COOKIE });
 }
 
 const routes = {
@@ -334,8 +342,9 @@ const routes = {
     "GET /api/auth/providers": (_body, response) =>
         send(response, 200, [{ slug: "github", display_name: "GitHub" }]),
     "POST /api/login": handleLogin,
-    "GET /api/validate-session": (_body, response) =>
-        send(response, 200, {
+    "POST /api/logout": (_body, response) => send(response, 200, {}, { "Set-Cookie": CLEAR_SESSION_COOKIE }),
+    "GET /api/validate-session": (_body, response, _query, request) =>
+        !hasSession(request) ? send(response, 401, { error: "invalid token" }) : send(response, 200, {
             id: "00000000-0000-0000-0000-000000000001",
             username: "admin",
             email: "admin@local.com",
@@ -379,7 +388,7 @@ createServer(async (request, response) => {
     const path = request.url.split("?")[0];
     const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path) ?? groupRoute(request.method, path) ?? bucketRoute(request.method, path);
     if (!route) return send(response, 404, { error: "not found" });
-    route(await readBody(request), response, new URL(request.url, "http://localhost").searchParams);
+    route(await readBody(request), response, new URL(request.url, "http://localhost").searchParams, request);
 }).listen(PORT, () => {
     console.info(`[INFO] mock api listening port=${PORT} setup_code=${SETUP_CODE} totp_user=${TOTP_USERNAME} totp_code=${TOTP_CODE}`);
 });

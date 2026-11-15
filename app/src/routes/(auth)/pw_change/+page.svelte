@@ -19,12 +19,12 @@
     const canSubmit = $derived(newPassword.length >= 8 && newPassword === confirmPassword && status === "idle");
 
     async function handleSubmit() {
-        if (!canSubmit || !auth.token) return;
+        if (!canSubmit || !auth.user) return;
         status = "loading";
         try {
-            auth.setToken(await changePassword("", newPassword));
+            await changePassword("", newPassword);
             status = "success";
-            setTimeout(() => goto("/"), 600);
+            setTimeout(() => goto("/", { invalidateAll: true }), 600);
         } catch {
             status = "idle";
             toast.error("Failed to change password", {

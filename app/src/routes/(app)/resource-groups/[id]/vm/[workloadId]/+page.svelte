@@ -72,7 +72,7 @@
 
     $effect(() => {
         const agentId = workload?.assigned_agent_id;
-        if (!agentId || !auth.token) return;
+        if (!agentId || !auth.user) return;
         getNode(agentId)
             .then((node) => (nodeIp = node.ip_address))
             .catch(() => (nodeIp = null));
@@ -124,7 +124,7 @@
         {#if tab === "summary"}
             <VmSummaryTab {workload} {nodeIp} />
         {:else if tab === "console"}
-            {#if !running || !auth.token}
+            {#if !running || !auth.user}
                 <section class="cx-stage empty" aria-label="Console unavailable" style="min-height: 420px">
                     <div class="cx-stage__canvas"></div>
                     <div class="empty__in">

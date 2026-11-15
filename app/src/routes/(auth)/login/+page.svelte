@@ -13,8 +13,8 @@
         TwoFactorRequiredError,
         type SsoProvider,
     } from "$lib/auth/api";
+    import { safeNextPath } from "$lib/auth/next-path";
     import { pendingLogin } from "$lib/auth/pending-login";
-    import { auth } from "$lib/auth/store.svelte";
     import PasswordInput from "$lib/components/auth/password-input.svelte";
     import Spinner from "$lib/components/ui/spinner/spinner.svelte";
     import { toast } from "svelte-sonner";
@@ -68,15 +68,14 @@
         status = "loading";
         try {
             const response = await login(username, password);
-            auth.setSession(response);
             status = "success";
-            const target = response.force_password_change ? "/pw_change" : "/";
-            setTimeout(() => goto(target), 600);
+            const target = response.force_password_change ? "/pw_change" : safeNextPath(page.url.searchParams.get("next"));
+            setTimeout(() => goto(target, { invalidateAll: true }), 600);
         } catch (err) {
             status = "idle";
             if (err instanceof TwoFactorRequiredError) {
                 pendingLogin.set(err.username, err.password);
-                goto("/otp");
+                goto(`/otp${page.url.search}`);
             } else {
                 toast.error("Invalid credentials", {
                     description:

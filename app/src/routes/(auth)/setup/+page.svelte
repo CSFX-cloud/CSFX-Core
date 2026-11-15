@@ -15,7 +15,6 @@
         SetupError,
         type SetupStatus,
     } from "$lib/auth/api";
-    import { auth } from "$lib/auth/store.svelte";
 
     type Step = "verify" | "account" | "console" | "join" | "joining" | "done";
 
@@ -107,7 +106,6 @@
                 password,
                 consolePin,
             });
-            auth.setSession(result);
             recoveryKey = result.recovery_key;
             password = passwordRepeat = consolePin = consolePinRepeat = "";
             step = "done";
@@ -349,7 +347,7 @@
             <label class="cx-check">
                 <input type="checkbox" bind:checked={keyStored} /> I stored the recovery key
             </label>
-            <button class="cx-btn cx-btn--primary cx-btn--block" type="button" disabled={!keyStored} onclick={() => goto("/")}>
+            <button class="cx-btn cx-btn--primary cx-btn--block" type="button" disabled={!keyStored} onclick={() => goto("/", { invalidateAll: true })}>
                 Open dashboard <ChevronRight class="cx-i cx-chev" aria-hidden="true" />
             </button>
         </div>

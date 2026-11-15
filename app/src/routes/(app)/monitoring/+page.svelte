@@ -133,7 +133,7 @@
     });
 
     $effect(() => {
-        auth.token;
+        auth.user;
         load();
     });
 

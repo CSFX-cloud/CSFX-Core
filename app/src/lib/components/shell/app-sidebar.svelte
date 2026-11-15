@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { goto } from "$app/navigation";
+    import { logout } from "$lib/auth/api";
     import { page } from "$app/state";
     import { ArrowUpCircle, ChevronsUpDown, LogOut, Search } from "@lucide/svelte";
     import { getReleases, getUpdateStatus, type ReleaseEntry } from "$lib/api/system";
@@ -24,16 +24,16 @@
     }
 
     $effect(() => {
-        if (!auth.token) return;
+        if (!auth.user) return;
         loadVersions();
         const timer = setInterval(loadVersions, UPDATE_CHECK_INTERVAL_MS);
         return () => clearInterval(timer);
     });
 
-    function logout() {
+    async function signOut() {
         menuOpen = false;
-        auth.clearSession();
-        goto("/login");
+        await logout();
+        location.assign("/login");
     }
 
     function closeOnOutsideClick(event: MouseEvent) {
@@ -91,7 +91,7 @@
                         <SETTINGS_NAV.icon class="cx-i" aria-hidden="true" />{SETTINGS_NAV.title}
                     </a>
                     <div class="db-menu__separator" role="separator"></div>
-                    <button class="cx-side__item db-action" type="button" role="menuitem" onclick={logout}>
+                    <button class="cx-side__item db-action" type="button" role="menuitem" onclick={signOut}>
                         <LogOut class="cx-i" aria-hidden="true" />Log out
                     </button>
                 </div>

@@ -39,7 +39,7 @@
     }
 
     $effect(() => {
-        if (!auth.token) return;
+        if (!auth.user) return;
         untrack(refresh);
         const timer = setInterval(refreshStats, STATS_INTERVAL_MS);
         return () => clearInterval(timer);

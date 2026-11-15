@@ -41,7 +41,7 @@
 
     $effect(() => {
         const selected = range;
-        if (!auth.token) return;
+        if (!auth.user) return;
         const load = async () => {
             const points = await getUsageHistory(selected, node.id).catch(() => []);
             if (selected === range) usageHistory = points;
