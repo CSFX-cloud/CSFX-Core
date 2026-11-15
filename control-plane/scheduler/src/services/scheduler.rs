@@ -18,11 +18,17 @@ use crate::services::placement::{self, Demand, Strategy};
 use crate::services::{image_resolver, stack_volumes};
 
 const GUEST_IP_ATTEMPTS: usize = 5;
+pub(crate) const REPLACEMENT_EXISTS: &str = "an update of this workload is already in progress";
+pub const STACK_BUSY: &str = "a rollout is in progress for this stack";
+pub(crate) const NO_SURGE_TARGET: &str =
+    "no agent has room for a replacement next to the running workload";
 
 pub struct SchedulerService {
-    db: DatabaseConnection,
-    etcd: Arc<Mutex<EtcdClient>>,
+    pub(crate) db: DatabaseConnection,
+    pub(crate) etcd: Arc<Mutex<EtcdClient>>,
     strategy: Strategy,
+    pub(crate) ready_since:
+        std::sync::Mutex<HashMap<Uuid, (std::time::Instant, Option<chrono::NaiveDateTime>)>>,
 }
 
 impl SchedulerService {
@@ -30,7 +36,12 @@ impl SchedulerService {
         let strategy = Strategy::from_name(
             &std::env::var("SCHEDULER_STRATEGY").unwrap_or_else(|_| "spread".to_string()),
         );
-        Self { db, etcd, strategy }
+        Self {
+            db,
+            etcd,
+            strategy,
+            ready_since: std::sync::Mutex::new(HashMap::new()),
+        }
     }
 
     pub async fn schedule_replicas(
@@ -59,14 +70,38 @@ impl SchedulerService {
 
     pub async fn schedule(
         &self,
+        req: CreateWorkloadRequest,
+    ) -> Result<CreateWorkloadResponse, String> {
+        self.schedule_with(req, None).await
+    }
+
+    pub(crate) async fn schedule_with(
+        &self,
         mut req: CreateWorkloadRequest,
+        replacement: Option<Uuid>,
     ) -> Result<CreateWorkloadResponse, String> {
         req.validate()?;
         inject_bucket_env(&mut req).await;
         req.image = image_resolver::resolve(req.resource_group_id, &req.image).await;
+        req.replaces = replacement;
 
         let workload = self.create_with_guest_ip(&req).await?;
+        let workload_id = workload.id;
+        let placed = self.place(workload, req, replacement).await;
+        if placed.is_err() && replacement.is_some() {
+            if let Err(error) = crate::db::workloads::delete(&self.db, workload_id).await {
+                tracing::warn!(workload = %workload_id, error = %error, "replacement cleanup failed");
+            }
+        }
+        placed
+    }
 
+    async fn place(
+        &self,
+        workload: workloads::Model,
+        req: CreateWorkloadRequest,
+        replaced: Option<Uuid>,
+    ) -> Result<CreateWorkloadResponse, String> {
         let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
             .await
             .map_err(|e| format!("Failed to fetch agent resources: {}", e))?;
@@ -79,6 +114,9 @@ impl SchedulerService {
         let demand = demand_for(&workload, preferred.as_ref());
 
         let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) else {
+            if replaced.is_some() {
+                return Err(NO_SURGE_TARGET.to_string());
+            }
             log_unplaceable(&workload, &demand, &agents);
             return Ok(pending_response(workload.id));
         };
@@ -90,7 +128,7 @@ impl SchedulerService {
         crate::db::workloads::assign(&self.db, workload.id, agent_id)
             .await
             .map_err(|e| format!("Failed to assign workload: {}", e))?;
-        self.persist_node_ports(&workload, agent_id, req.ports)
+        self.persist_node_ports(&workload, agent_id, replaced, req.ports)
             .await?;
         self.record_placement(&workload, agent_id).await?;
 
@@ -198,9 +236,11 @@ impl SchedulerService {
         let workloads = crate::db::workloads::get_by_stack_id(&self.db, stack_id)
             .await
             .map_err(|e| format!("Failed to fetch stack workloads: {}", e))?;
+        ensure_stack_idle(&workloads)?;
 
         for workload in &workloads {
-            let model = crate::db::workloads::request_restart(&self.db, workload.id)
+            let model = self
+                .apply_restart(workload.id)
                 .await
                 .map_err(|e| format!("Failed to restart workload: {}", e))?;
             if let Some(agent_id) = model.assigned_agent_id {
@@ -223,6 +263,7 @@ impl SchedulerService {
         let existing = crate::db::workloads::get_by_stack_id(&self.db, stack_id)
             .await
             .map_err(|e| format!("Failed to fetch stack workloads: {}", e))?;
+        ensure_stack_idle(&existing)?;
 
         for service in &services {
             let Some(workload) = existing
@@ -241,7 +282,8 @@ impl SchedulerService {
                 volume_mounts: None,
             };
 
-            let model = crate::db::workloads::update_spec(&self.db, workload.id, &update)
+            let model = self
+                .apply_update(workload.id, &update)
                 .await
                 .map_err(|e| format!("Failed to update workload: {}", e))?;
             if let Some(agent_id) = model.assigned_agent_id {
@@ -321,6 +363,7 @@ impl SchedulerService {
             let guest_ip = self.next_guest_ip(group).await?;
             match crate::db::workloads::create(&self.db, req, Some(guest_ip)).await {
                 Ok(workload) => return Ok(workload),
+                Err(e) if is_replacement_conflict(&e) => return Err(REPLACEMENT_EXISTS.to_string()),
                 Err(e) if is_unique_violation(&e) => continue,
                 Err(e) => return Err(format!("Failed to persist workload: {}", e)),
             }
@@ -417,6 +460,7 @@ impl SchedulerService {
         &self,
         workload: &workloads::Model,
         agent_id: Uuid,
+        replaced: Option<Uuid>,
         ports: Option<Vec<crate::models::workload::PortMapping>>,
     ) -> Result<(), String> {
         let Some(ports) = ports else {
@@ -426,6 +470,7 @@ impl SchedulerService {
             &self.db,
             agent_id,
             workload.id,
+            replaced,
             &ports,
         )
         .await?;
@@ -477,7 +522,7 @@ impl SchedulerService {
         Ok(claimed)
     }
 
-    async fn record_placement(
+    pub(crate) async fn record_placement(
         &self,
         workload: &workloads::Model,
         agent_id: Uuid,
@@ -650,6 +695,22 @@ fn volume_ids_of(workload: &workloads::Model) -> Vec<Uuid> {
         .collect()
 }
 
+fn ensure_stack_idle(workloads: &[workloads::Model]) -> Result<(), String> {
+    let busy = workloads
+        .iter()
+        .any(|workload| workload.replaces_workload_id.is_some() || workload.retire_after.is_some());
+    if busy {
+        return Err(STACK_BUSY.to_string());
+    }
+    Ok(())
+}
+
+fn is_replacement_conflict(error: &sea_orm::DbErr) -> bool {
+    error
+        .to_string()
+        .contains("workloads_replaces_workload_id_key")
+}
+
 fn is_unique_violation(error: &sea_orm::DbErr) -> bool {
     matches!(
         error.sql_err(),
@@ -738,6 +799,7 @@ fn stack_service_request(
         replicas: None,
         spread_key: Some(stack_id.to_string()),
         topology_spread: TopologySpread::None,
+        replaces: None,
     }
 }
 

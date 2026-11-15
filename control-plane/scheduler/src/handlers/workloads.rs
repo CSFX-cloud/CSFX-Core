@@ -97,7 +97,11 @@ pub async fn stop_workload(
             if let Some(agent_id) = model.assigned_agent_id {
                 tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
             }
-            (StatusCode::OK, Json(serde_json::json!(model))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!(db::workloads::redacted(model))),
+            )
+                .into_response()
         }
         Err(sea_orm::DbErr::RecordNotFound(_)) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (
@@ -175,12 +179,16 @@ pub async fn update_workload(
     if let Err(response) = claim_requested_volumes(&state, id, &req).await {
         return response;
     }
-    match db::workloads::update_spec(&state.db, id, &req).await {
+    match state.scheduler.apply_update(id, &req).await {
         Ok(model) => {
             if let Some(agent_id) = model.assigned_agent_id {
                 tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
             }
-            (StatusCode::OK, Json(serde_json::json!(model))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!(db::workloads::redacted(model))),
+            )
+                .into_response()
         }
         Err(sea_orm::DbErr::RecordNotFound(_)) => StatusCode::NOT_FOUND.into_response(),
         Err(sea_orm::DbErr::RecordNotUpdated) => (
@@ -200,14 +208,25 @@ pub async fn restart_workload(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match db::workloads::request_restart(&state.db, id).await {
+    match state.scheduler.apply_restart(id).await {
         Ok(model) => {
             if let Some(agent_id) = model.assigned_agent_id {
                 tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
             }
-            (StatusCode::OK, Json(serde_json::json!(model))).into_response()
+            (
+                StatusCode::OK,
+                Json(serde_json::json!(db::workloads::redacted(model))),
+            )
+                .into_response()
         }
         Err(sea_orm::DbErr::RecordNotFound(_)) => StatusCode::NOT_FOUND.into_response(),
+        Err(sea_orm::DbErr::RecordNotUpdated) => (
+            StatusCode::CONFLICT,
+            Json(
+                serde_json::json!({ "error": "an update of this workload is already in progress" }),
+            ),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),

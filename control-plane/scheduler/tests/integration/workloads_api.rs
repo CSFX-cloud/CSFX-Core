@@ -181,7 +181,8 @@ async fn update_applies_spec_changes() {
     assert_eq!(updated["restart_policy"], "never");
     assert_eq!(updated["max_restarts"], 3);
     let workload = find_workload(&app, &id).await;
-    assert_eq!(workload["env_vars"]["MODE"], "test");
+    assert_eq!(workload["env_vars"]["MODE"], shared::env_secrets::MASK);
+    assert_eq!(updated["env_vars"]["MODE"], shared::env_secrets::MASK);
     assert_eq!(workload["ports"][0]["container_port"], 6379);
 }
 
@@ -268,4 +269,48 @@ async fn pages_through_ten_thousand_workloads_without_gaps() {
 
     let (status, _, _) = call_page(&app, "/workloads?cursor=garbage").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn stored_environment_is_encrypted_and_legacy_rows_are_sealed() {
+    use sea_orm::ActiveModelTrait;
+
+    let app = router().await;
+    let db = migrated_database().await;
+    let id = create_pending_workload(&app).await;
+    let (status, _) = call(
+        &app,
+        Method::PATCH,
+        &format!("/workloads/{}", id),
+        Some(json!({"env_vars": {"TOKEN": "hunter2"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let uuid = Uuid::parse_str(id.as_str()).unwrap();
+    let stored = workloads::Entity::find_by_id(uuid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!stored
+        .env_vars
+        .as_ref()
+        .unwrap()
+        .to_string()
+        .contains("hunter2"));
+
+    let mut legacy: workloads::ActiveModel = stored.into();
+    legacy.env_vars = Set(Some(json!({"TOKEN": "hunter2"})));
+    legacy.update(&db).await.unwrap();
+    scheduler::db::workloads::seal_legacy_env(&db)
+        .await
+        .unwrap();
+    let migrated = workloads::Entity::find_by_id(uuid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!migrated.env_vars.unwrap().to_string().contains("hunter2"));
 }

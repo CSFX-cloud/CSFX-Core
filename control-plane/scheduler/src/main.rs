@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use scheduler::{log_error, log_info, logger, server, services};
+use scheduler::{db as store, log_error, log_info, logger, server, services};
 
 const LEADER_KEY: &str = "/csfx/leaders/scheduler";
 
@@ -31,6 +31,25 @@ fn spawn_pending_retry(scheduler: Arc<services::scheduler::SchedulerService>, le
     });
 }
 
+fn spawn_replacement_reconcile(
+    scheduler: Arc<services::scheduler::SchedulerService>,
+    leader: LeaderLease,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            if !leader.is_leader() {
+                continue;
+            }
+            if let Err(e) = scheduler.reconcile_replacements().await {
+                log_error!("main", &format!("Replacement reconcile failed err={}", e));
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
@@ -44,12 +63,24 @@ async fn main() -> anyhow::Result<()> {
     log_info!("main", "CSFX Scheduler Service starting...");
     log_info!("main", &format!("Version: {}", env!("CARGO_PKG_VERSION")));
 
+    shared::env_secrets::init().expect("Failed to load environment encryption key");
+
     log_info!("main", "Connecting to database...");
     let db = shared::establish_connection()
         .await
         .expect("Failed to connect to database");
     log_info!("main", "Database connection established");
     shared::spawn_log_writer(log_receiver, db.clone());
+    let workload_db = db.clone();
+    shared::env_secrets::spawn_backfill("workload_env", move || {
+        let db = workload_db.clone();
+        async move { store::workloads::seal_legacy_env(&db).await }
+    });
+    let stack_db = db.clone();
+    shared::env_secrets::spawn_backfill("stack_sources", move || {
+        let db = stack_db.clone();
+        async move { store::workload_stacks::seal_legacy_sources(&db).await }
+    });
     shared::observability::spawn_pool_gauges("default", db.clone());
 
     let etcd_endpoints =
@@ -80,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
     let app = server::create_router(state.clone());
 
     let leader = LeaderLease::connect(LEADER_KEY).await?;
+    spawn_replacement_reconcile(state.scheduler.clone(), leader.clone());
     spawn_pending_retry(state.scheduler.clone(), leader);
 
     match state.scheduler.backfill_guest_ips().await {
