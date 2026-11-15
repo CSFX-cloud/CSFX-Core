@@ -21,6 +21,13 @@ impl<V: Clone> TtlCache<V> {
         (stored_at.elapsed() < self.ttl).then(|| value.clone())
     }
 
+    pub fn remove(&self, key: &str) {
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(key);
+    }
+
     pub fn insert(&self, key: &str, value: V) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let ttl = self.ttl;

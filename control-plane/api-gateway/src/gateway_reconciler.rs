@@ -2,6 +2,7 @@ use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
 use entity::entities::{ingress_gateways, workloads};
 use sea_orm::{ColumnTrait, DbErr, EntityTrait, QueryFilter};
 use serde_json::Value;
+use shared::env_secrets;
 use shared::leader::LeaderLease;
 use std::time::Duration;
 use tokio::time::{interval, sleep};
@@ -51,10 +52,18 @@ async fn find_orphan(
         .filter(workloads::Column::Name.eq(format!("gateway-{}", gateway.name)))
         .all(&state.db_conn)
         .await?;
-    Ok(candidates
-        .into_iter()
-        .find(|workload| serves_gateway(workload.env_vars.as_ref(), gateway))
-        .map(|workload| workload.id))
+    for workload in candidates {
+        let env = workload
+            .env_vars
+            .as_ref()
+            .map(|stored| env_secrets::open(stored, &env_secrets::workload_env(workload.id)))
+            .transpose()
+            .map_err(|error| DbErr::Custom(error.to_string()))?;
+        if serves_gateway(env.as_ref(), gateway) {
+            return Ok(Some(workload.id));
+        }
+    }
+    Ok(None)
 }
 
 fn serves_gateway(env_vars: Option<&Value>, gateway: &ingress_gateways::Model) -> bool {

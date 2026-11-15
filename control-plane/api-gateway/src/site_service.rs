@@ -11,9 +11,11 @@ use axum::{
 };
 use chrono::Utc;
 use entity::{site_deployments, sites, SiteEnvVars, Vaults};
+use sea_orm::sea_query::Expr;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, QueryFilter, Set};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use shared::env_secrets::{self, EnvSecretError};
 use site_builder::detect::Mode;
 use std::collections::BTreeMap;
 use thiserror::Error;
@@ -257,7 +259,7 @@ impl From<&sites::Model> for SecretSource {
     }
 }
 
-async fn source_vault(
+pub async fn source_vault(
     state: &AppState,
     source: &SecretSource,
 ) -> Result<entity::vaults::Model, SiteError> {
@@ -278,6 +280,8 @@ pub async fn fetch_secret(
     source: &SecretSource,
     name: &str,
 ) -> Result<String, SiteError> {
+    vault_store::validate_secret_name(name)
+        .map_err(|message| SiteError::Invalid(message.to_string()))?;
     let vault = source_vault(state, source).await?;
     let bao = vault_service::openbao(state)?;
     let outcome = vault_store::read_secret(bao, vault_service::scope_of(&vault), name, None).await;
@@ -318,6 +322,48 @@ pub fn secret_matches(expected: &str, presented: &str) -> bool {
     ring::hmac::verify(&key, PROBE, tag.as_ref()).is_ok()
 }
 
+fn secret_error(error: EnvSecretError) -> DbErr {
+    DbErr::Custom(error.to_string())
+}
+
+pub fn seal_value(id: Uuid, value: Option<String>) -> Result<Option<String>, DbErr> {
+    value
+        .map(|plain| {
+            env_secrets::seal_text(&plain, &env_secrets::site_env(id)).map_err(secret_error)
+        })
+        .transpose()
+}
+
+pub async fn seal_legacy_env(db: &sea_orm::DatabaseConnection) -> Result<u64, DbErr> {
+    let rows = SiteEnvVars::find()
+        .filter(entity::site_env_vars::Column::Value.not_like("enc:v1:%"))
+        .all(db)
+        .await?;
+    let mut sealed = 0;
+    for row in rows {
+        let Some(plain) = row
+            .value
+            .as_deref()
+            .filter(|text| !env_secrets::is_sealed_text(text))
+        else {
+            continue;
+        };
+        let replacement =
+            env_secrets::seal_text(plain, &env_secrets::site_env(row.id)).map_err(secret_error)?;
+        let applied = SiteEnvVars::update_many()
+            .col_expr(
+                entity::site_env_vars::Column::Value,
+                Expr::value(replacement),
+            )
+            .filter(entity::site_env_vars::Column::Id.eq(row.id))
+            .filter(entity::site_env_vars::Column::Value.eq(plain))
+            .exec(db)
+            .await?;
+        sealed += applied.rows_affected;
+    }
+    Ok(sealed)
+}
+
 pub async fn environment(
     state: &AppState,
     site: &sites::Model,
@@ -333,7 +379,8 @@ pub async fn environment(
         .filter(|row| scope_applies(&row.scope, target))
     {
         let value = match (row.value, row.vault_secret) {
-            (Some(value), _) => value,
+            (Some(value), _) => env_secrets::open_text(&value, &env_secrets::site_env(row.id))
+                .map_err(secret_error)?,
             (None, Some(secret)) => fetch_secret(state, &site.into(), &secret).await?,
             (None, None) => continue,
         };

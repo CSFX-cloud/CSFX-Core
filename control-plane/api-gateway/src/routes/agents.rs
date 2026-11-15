@@ -10,12 +10,15 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
+use shared::env_secrets;
 use shared::pagination::{cursor_headers, keyset_by_id, split_page, PageParams};
 use shared::workload_status::ACTIVE_STATUSES;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::auth::agent::AgentApiKey;
 use crate::auth::rbac::{CanManageSystem, CanViewAgents};
+use crate::workload_secrets;
 use crate::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -152,11 +155,51 @@ pub async fn get_agent_metrics_latest(
     Ok(Json(metric))
 }
 
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
+const RESOLVE_BUDGET: Duration = Duration::from_secs(20);
+
 #[derive(Debug, Serialize)]
 pub struct AssignedWorkloadResponse {
     #[serde(flatten)]
     pub workload: workloads::Model,
     pub resource_group_cidr: Option<String>,
+    pub env_unresolved: bool,
+}
+
+async fn prepare_env(state: &AppState, workload: &mut workloads::Model, deadline: Instant) -> bool {
+    let context = env_secrets::workload_env(workload.id);
+    let opened = workload
+        .env_vars
+        .as_ref()
+        .map(|stored| env_secrets::open(stored, &context))
+        .transpose();
+    match opened {
+        Ok(env) => workload.env_vars = env,
+        Err(error) => {
+            tracing::error!(workload = %workload.id, error = %error, "failed to decrypt workload environment");
+            workload.env_vars = None;
+            return true;
+        }
+    }
+    let budget = deadline
+        .saturating_duration_since(Instant::now())
+        .min(RESOLVE_TIMEOUT);
+    let resolved =
+        tokio::time::timeout(budget, workload_secrets::resolve_env(state, workload)).await;
+    match resolved {
+        Ok(Ok(env)) => {
+            workload.env_vars = env;
+            false
+        }
+        Ok(Err(error)) => {
+            tracing::error!(workload = %workload.id, error = %error, "workload secret could not be resolved");
+            true
+        }
+        Err(_) => {
+            tracing::error!(workload = %workload.id, "workload secret resolution timed out");
+            true
+        }
+    }
 }
 
 pub async fn get_self_workloads(
@@ -173,8 +216,10 @@ pub async fn get_self_workloads(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    let deadline = Instant::now() + RESOLVE_BUDGET;
     let mut response = Vec::with_capacity(rows.len());
-    for workload in rows {
+    for mut workload in rows {
+        let env_unresolved = prepare_env(&state, &mut workload, deadline).await;
         let resource_group_cidr = match workload.resource_group_id {
             Some(rg_id) => resource_groups::Entity::find_by_id(rg_id)
                 .one(&state.agent_db)
@@ -190,6 +235,7 @@ pub async fn get_self_workloads(
         response.push(AssignedWorkloadResponse {
             workload,
             resource_group_cidr,
+            env_unresolved,
         });
     }
 

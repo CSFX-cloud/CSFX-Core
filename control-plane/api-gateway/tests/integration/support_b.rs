@@ -328,6 +328,7 @@ fn builder_url() -> &'static str {
         let url = serve(Router::new().fallback(builder_handler));
         std::env::set_var("SITE_BUILDER_URL", &url);
         std::env::set_var("CSFX_SITE_SECRET", SITE_SECRET);
+        std::env::set_var(shared::env_secrets::KEY_VARIABLE, "11".repeat(32));
         url
     })
 }
