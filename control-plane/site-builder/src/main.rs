@@ -72,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Arc::new(config::Config::from_environment()?);
+    shared::env_secrets::init()?;
     let db = shared::establish_connection().await?;
     shared::observability::spawn_pool_gauges("default", db.clone());
     shared::observability::serve_metrics("127.0.0.1:9007").await;
