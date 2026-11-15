@@ -20,6 +20,7 @@ pub mod agent_logs;
 pub mod agent_proxy;
 pub mod agent_stream;
 pub mod agents;
+pub mod app_proxy;
 pub mod buckets;
 pub mod cluster;
 pub mod cluster_vip;
@@ -57,6 +58,12 @@ pub mod workloads;
 
 fn replenish_period(requests_per_second: u64) -> Duration {
     Duration::from_secs_f64(1.0 / requests_per_second.max(1) as f64)
+}
+
+fn static_service() -> ServeDir<tower_http::set_status::SetStatus<ServeFile>> {
+    let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "app/build".to_string());
+    let index_path = format!("{}/index.html", static_dir);
+    ServeDir::new(&static_dir).not_found_service(ServeFile::new(&index_path))
 }
 
 /// Creates the main application router and logs all registered routes.
@@ -147,7 +154,12 @@ pub fn create_router(state: AppState) -> Router<AppState> {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers(vec![AUTHORIZATION, ACCEPT, CONTENT_TYPE])
+        .allow_headers(vec![
+            AUTHORIZATION,
+            ACCEPT,
+            CONTENT_TYPE,
+            HeaderName::from_static("x-csfx-csrf"),
+        ])
         .expose_headers([HeaderName::from_static(
             shared::pagination::NEXT_CURSOR_HEADER,
         )])
@@ -217,16 +229,15 @@ pub fn create_router(state: AppState) -> Router<AppState> {
         .merge(update::routes())
         .merge(releases::routes());
 
-    let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "app/build".to_string());
-    let index_path = format!("{}/index.html", static_dir);
-
-    let serve_dir = ServeDir::new(&static_dir).not_found_service(ServeFile::new(&index_path));
-
     let router = Router::new()
         .merge(s3_proxy::object_data_router().layer(GovernorLayer::new(object_governor_config)))
         .logged_nest("/api", api_router)
-        .logged_nest("/api", internal_api_router)
-        .fallback_service(serve_dir)
+        .logged_nest("/api", internal_api_router);
+    let router = match std::env::var("APP_URL") {
+        Ok(app_url) => router.fallback(move |request| app_proxy::forward(app_url.clone(), request)),
+        Err(_) => router.fallback_service(static_service()),
+    };
+    let router = router
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|request: &Request<Body>| {

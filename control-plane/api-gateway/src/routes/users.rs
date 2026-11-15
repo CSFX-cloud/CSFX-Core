@@ -80,6 +80,29 @@ pub fn public_users_routes() -> Router<AppState> {
         .route("/public-key", get(get_public_key))
 }
 
+const SESSION_COOKIE: &str = "auth_token";
+
+fn session_cookie_builder(value: String) -> cookie::CookieBuilder<'static> {
+    Cookie::build((SESSION_COOKIE, value))
+        .path("/")
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
+}
+
+pub fn session_cookie(token: &str) -> String {
+    session_cookie_builder(token.to_string())
+        .build()
+        .to_string()
+}
+
+pub fn clear_session_cookie() -> String {
+    session_cookie_builder(String::new())
+        .max_age(cookie::time::Duration::ZERO)
+        .build()
+        .to_string()
+}
+
 pub fn session_parts(
     token: String,
     two_factor_enabled: bool,
@@ -87,12 +110,7 @@ pub fn session_parts(
 ) -> Result<(String, AuthResponse), StatusCode> {
     let token_data =
         crate::auth::jwt::verify_jwt(&token).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let cookie = Cookie::build(("auth_token", token.clone()))
-        .path("/")
-        .http_only(true)
-        .secure(true)
-        .same_site(SameSite::Strict)
-        .build();
+    let cookie = session_cookie(&token);
     let body = AuthResponse {
         token,
         user_id: token_data.claims.user_id.to_string(),
@@ -192,12 +210,15 @@ pub async fn login_user(
 pub async fn logout_user(
     AuthenticatedUser(claims): AuthenticatedUser,
     State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<impl IntoResponse, StatusCode> {
     let auth_service = AuthService::new(state.db_conn.clone());
     let exp_datetime = DateTime::from_timestamp(claims.exp, 0).unwrap_or_else(Utc::now);
 
     match auth_service.logout_user(claims.jti, exp_datetime).await {
-        Ok(_) => Ok(Json(json!({ "message": "Logged out successfully" }))),
+        Ok(_) => Ok((
+            [(header::SET_COOKIE, clear_session_cookie())],
+            Json(json!({ "message": "Logged out successfully" })),
+        )),
         Err(err) => {
             tracing::error!("Logout failed: {}", err);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -455,15 +476,16 @@ pub async fn change_password(
     AuthenticatedUser(claims): AuthenticatedUser,
     State(state): State<AppState>,
     Json(payload): Json<ChangePasswordRequest>,
-) -> Result<Json<Value>, StatusCode> {
+) -> Result<impl IntoResponse, StatusCode> {
     let auth_service = AuthService::new(state.db_conn.clone());
 
     match auth_service
         .change_password(claims.user_id, payload.old_password, payload.new_password)
         .await
     {
-        Ok(token) => Ok(Json(
-            json!({ "message": "Password changed successfully", "token": token }),
+        Ok(token) => Ok((
+            [(header::SET_COOKIE, session_cookie(&token))],
+            Json(json!({ "message": "Password changed successfully", "token": token })),
         )),
         Err(crate::auth_service::AuthError::InvalidCredentials) => Err(StatusCode::UNAUTHORIZED),
         Err(err) => {
@@ -542,5 +564,26 @@ pub async fn change_gravatar_email(
             tracing::error!("Failed to change gravatar email: {}", err);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
+    }
+}
+
+#[cfg(test)]
+mod cookie_tests {
+    use super::*;
+
+    #[test]
+    fn session_cookie_is_http_only_secure_and_lax() {
+        let cookie = session_cookie("token-value");
+        assert!(cookie.starts_with("auth_token=token-value"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Secure"));
+        assert!(cookie.contains("SameSite=Lax"));
+    }
+
+    #[test]
+    fn cleared_cookie_expires_immediately() {
+        let cookie = clear_session_cookie();
+        assert!(cookie.starts_with("auth_token=;"));
+        assert!(cookie.contains("Max-Age=0"));
     }
 }
