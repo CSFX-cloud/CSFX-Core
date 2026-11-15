@@ -507,12 +507,14 @@ async fn reconcile_tick(
     qemu.check_dhcp_liveness().await;
     cleanup_stale_resource_groups(client, api_key, firecracker, qemu).await;
 
+    let probes = readiness_probes(local_state).await;
     let statuses = build_container_statuses(
         firecracker,
         qemu,
         running_containers,
         vm_workload_ids,
         workload_phases,
+        &probes,
     )
     .await;
     push_workload_stats(client, api_key, firecracker, running_containers).await;
@@ -1143,6 +1145,10 @@ async fn start_or_restart_workload(
     service_dns_registry: &Arc<Mutex<HashMap<String, (String, String)>>>,
     rg_dns_registry: &rg_dns::RgDnsRegistry,
 ) -> bool {
+    if workload.env_unresolved {
+        warn!(workload_id = %workload.id, "Secrets could not be resolved, leaving the workload as it is");
+        return false;
+    }
     let existing_container_id = running_containers.lock().await.get(&workload.id).cloned();
     let restart_requested = workload.restart_requested;
 
@@ -1451,12 +1457,69 @@ async fn cleanup_stale_resource_groups(
     }
 }
 
+const READINESS_TIMEOUT: Duration = Duration::from_secs(1);
+const READINESS_GIVE_UP: Duration = Duration::from_secs(300);
+
+type ReadinessProbes = HashMap<String, (String, Vec<u16>)>;
+
+static PROBING_SINCE: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Instant>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+async fn readiness_probes(local_state: &local_state::LocalState) -> ReadinessProbes {
+    let workloads = local_state.workloads().await.unwrap_or_default();
+    let probes: ReadinessProbes = workloads
+        .into_iter()
+        .filter(|workload| workload.replaces_workload_id.is_some())
+        .filter_map(|workload| {
+            let ports: Vec<u16> = workload
+                .ports
+                .as_ref()?
+                .iter()
+                .filter(|port| port.protocol.unwrap_or_default() == spec::PortProtocol::Tcp)
+                .map(|port| port.container_port)
+                .collect();
+            (!ports.is_empty()).then_some(())?;
+            Some((workload.id, (workload.guest_ip?, ports)))
+        })
+        .collect();
+    PROBING_SINCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|id, _| probes.contains_key(id));
+    probes
+}
+
+fn probe_expired(workload_id: &str) -> bool {
+    PROBING_SINCE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(workload_id.to_string())
+        .or_insert_with(Instant::now)
+        .elapsed()
+        >= READINESS_GIVE_UP
+}
+
+async fn accepts_connections(address: &str, ports: &[u16]) -> bool {
+    for port in ports {
+        let attempt = tokio::time::timeout(
+            READINESS_TIMEOUT,
+            tokio::net::TcpStream::connect((address, *port)),
+        )
+        .await;
+        if matches!(attempt, Ok(Ok(_))) {
+            return true;
+        }
+    }
+    false
+}
+
 async fn build_container_statuses(
     firecracker: &firecracker::runtime::FirecrackerRuntime,
     qemu: &qemu::runtime::QemuRuntime,
     running_containers: &Arc<Mutex<HashMap<String, String>>>,
     vm_workload_ids: &Arc<Mutex<std::collections::HashSet<String>>>,
     workload_phases: &Arc<Mutex<HashMap<String, String>>>,
+    probes: &ReadinessProbes,
 ) -> Vec<client::ContainerStatus> {
     let containers = running_containers.lock().await.clone();
     let vm_ids = vm_workload_ids.lock().await.clone();
@@ -1469,13 +1532,20 @@ async fn build_container_statuses(
             firecracker
         };
 
-        let status = match runtime.inspect_status(container_id).await {
+        let mut status = match runtime.inspect_status(container_id).await {
             Ok(s) => s,
             Err(e) => {
                 warn!(workload_id = %workload_id, container_id = %container_id, error = %e, "Failed to inspect workload");
                 "failed".to_string()
             }
         };
+        if status == "running" {
+            if let Some((address, ports)) = probes.get(workload_id) {
+                if !accepts_connections(address, ports).await && !probe_expired(workload_id) {
+                    status = "starting".to_string();
+                }
+            }
+        }
 
         if status != "creating" {
             workload_phases.lock().await.remove(workload_id);
@@ -1649,6 +1719,19 @@ mod tests {
             ),
             qemu::runtime::QemuRuntime::new("k".to_string(), state, registry),
         )
+    }
+
+    #[tokio::test]
+    async fn readiness_accepts_any_listening_port_and_rejects_closed_ones() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let open = listener.local_addr().unwrap().port();
+        let closed = {
+            let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            probe.local_addr().unwrap().port()
+        };
+        assert!(accepts_connections("127.0.0.1", &[closed, open]).await);
+        assert!(!accepts_connections("127.0.0.1", &[closed]).await);
+        assert!(!probe_expired("fresh-workload"));
     }
 
     #[tokio::test]
@@ -1831,8 +1914,15 @@ mod tests {
             .await
             .insert("pending".to_string(), "pulling".to_string());
 
-        let mut statuses =
-            build_container_statuses(&firecracker, &qemu, &running, &vm_ids, &phases).await;
+        let mut statuses = build_container_statuses(
+            &firecracker,
+            &qemu,
+            &running,
+            &vm_ids,
+            &phases,
+            &HashMap::new(),
+        )
+        .await;
         statuses.sort_by(|left, right| left.workload_id.cmp(&right.workload_id));
 
         assert_eq!(statuses.len(), 3);
