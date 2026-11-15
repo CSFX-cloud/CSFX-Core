@@ -219,5 +219,5 @@ pub fn control_router(builds: Arc<Builds>) -> Router {
 }
 
 pub fn edge_router(edge: Arc<Edge>) -> Router {
-    Router::new().fallback(edge::serve).with_state(edge)
+    shared::observability::instrument(Router::new().fallback(edge::serve).with_state(edge))
 }

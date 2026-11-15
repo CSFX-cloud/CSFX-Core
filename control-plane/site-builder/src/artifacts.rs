@@ -1,22 +1,79 @@
+use crate::encoding::{self, Encoding};
 use crate::error::ServiceError;
+use axum::body::Bytes;
 use chrono::Utc;
 use entity::{site_artifacts, SiteArtifacts};
 use flate2::read::GzDecoder;
 use sea_orm::{sea_query::OnConflict, DatabaseConnection, EntityTrait, PaginatorTrait, Set};
 use std::collections::HashMap;
 use std::io::Read;
+use std::sync::Mutex;
 use uuid::Uuid;
 
 pub const MAX_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
 
+#[derive(Clone)]
+pub struct Variant {
+    pub data: Bytes,
+    pub etag: String,
+    pub encoding: Encoding,
+}
+
 pub struct Archive {
-    pub files: HashMap<String, Vec<u8>>,
+    pub files: HashMap<String, Bytes>,
+    variants: Mutex<HashMap<(String, Encoding), Variant>>,
 }
 
 impl Archive {
+    pub fn new(files: HashMap<String, Bytes>) -> Self {
+        Self {
+            files,
+            variants: Mutex::new(HashMap::new()),
+        }
+    }
+
     pub fn size(&self) -> usize {
-        self.files.values().map(Vec::len).sum()
+        self.files.values().map(Bytes::len).sum()
+    }
+
+    pub fn variant(&self, path: &str, encoding: Encoding) -> Option<Variant> {
+        let key = (path.to_string(), encoding);
+        if let Some(found) = self.remembered(&key) {
+            return Some(found);
+        }
+        let built = self.build_variant(path, encoding)?;
+        self.variants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(key, built.clone());
+        Some(built)
+    }
+
+    fn remembered(&self, key: &(String, Encoding)) -> Option<Variant> {
+        self.variants
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(key)
+            .cloned()
+    }
+
+    fn build_variant(&self, path: &str, encoding: Encoding) -> Option<Variant> {
+        let original = self.files.get(path)?;
+        let hash = encoding::content_hash(original);
+        let Some((data, token)) = encoding::compress(original, encoding).zip(encoding.token())
+        else {
+            return Some(Variant {
+                data: original.clone(),
+                etag: format!("\"{hash}\""),
+                encoding: Encoding::Identity,
+            });
+        };
+        Some(Variant {
+            data,
+            etag: format!("\"{hash}-{token}\""),
+            encoding,
+        })
     }
 }
 
@@ -100,9 +157,9 @@ pub fn unpack(content: &[u8]) -> Result<Archive, ServiceError> {
         if total > MAX_UNPACKED_BYTES {
             return Err(ServiceError::Archive("archive is too large".to_string()));
         }
-        files.insert(name, data);
+        files.insert(name, Bytes::from(data));
     }
-    Ok(Archive { files })
+    Ok(Archive::new(files))
 }
 
 #[cfg(test)]
@@ -129,8 +186,8 @@ mod tests {
     fn unpack_reads_regular_files_and_normalizes_paths() {
         let bytes = archive_with(&[("./index.html", b"hi"), ("assets/app.js", b"js")]);
         let archive = unpack(&bytes).unwrap();
-        assert_eq!(archive.files["index.html"], b"hi");
-        assert_eq!(archive.files["assets/app.js"], b"js");
+        assert_eq!(&archive.files["index.html"][..], b"hi");
+        assert_eq!(&archive.files["assets/app.js"][..], b"js");
     }
 
     #[test]

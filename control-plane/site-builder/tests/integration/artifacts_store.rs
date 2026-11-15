@@ -20,7 +20,7 @@ async fn artifacts_are_stored_replaced_and_loaded() {
         .unwrap();
     assert!(exists(&db, deployment.id).await.unwrap());
     let archive = load(&db, deployment.id).await.unwrap().unwrap();
-    assert_eq!(archive.files["index.html"], b"two!");
+    assert_eq!(&archive.files["index.html"][..], b"two!");
 }
 
 #[tokio::test]

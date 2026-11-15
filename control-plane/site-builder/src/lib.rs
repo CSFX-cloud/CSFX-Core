@@ -3,6 +3,8 @@ pub mod builds;
 pub mod config;
 pub mod detect;
 pub mod edge;
+pub mod edge_metrics;
+pub mod encoding;
 pub mod error;
 pub mod git;
 pub mod images;
