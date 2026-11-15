@@ -21,6 +21,19 @@ fn spawn_reaper(builds: Arc<builds::Builds>) {
     });
 }
 
+fn spawn_edge_warmer(builds: Arc<builds::Builds>, edge: Arc<edge::Edge>) {
+    let mut ready = builds.subscribe_ready();
+    tokio::spawn(async move {
+        loop {
+            match ready.recv().await {
+                Ok(deployment_id) => edge.warm(deployment_id).await,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    });
+}
+
 fn spawn_usage_flusher(edge: Arc<edge::Edge>, db: sea_orm::DatabaseConnection) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(USAGE_FLUSH_INTERVAL);
@@ -79,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
         registry_client,
     ));
     spawn_reaper(builds.clone());
+    let warm_source = builds.clone();
 
     let registry_state = registry::RegistryState {
         db: db.clone(),
@@ -90,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let control = listen(control_app, config.port, "control");
     let edge_state = Arc::new(edge::Edge::new(db.clone()));
+    spawn_edge_warmer(warm_source, edge_state.clone());
     spawn_usage_flusher(edge_state.clone(), db);
     let edge = listen(server::edge_router(edge_state), config.edge_port, "edge");
     tokio::try_join!(control, edge)?;

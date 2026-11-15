@@ -1,6 +1,9 @@
-use crate::artifacts::{self, Archive};
+use crate::artifacts::{self, Archive, Variant};
+use crate::edge_metrics;
+use crate::encoding::{self, Encoding};
 use crate::usage::UsageCounter;
 use axum::{
+    body::{Body, Bytes},
     extract::State,
     http::{header, HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
@@ -19,7 +22,8 @@ const MAX_CACHED_BYTES: usize = 512 * 1024 * 1024;
 const INDEX_FILE: &str = "index.html";
 const NOT_FOUND_FILE: &str = "404.html";
 const REVALIDATE: &str = "public, max-age=0, must-revalidate";
-const IMMUTABLE_ASSET: &str = "public, max-age=3600";
+const SHORT_LIVED_ASSET: &str = "public, max-age=3600";
+const FINGERPRINTED_ASSET: &str = "public, max-age=31536000, immutable";
 
 pub struct ArchiveCache {
     entries: HashMap<Uuid, (Arc<Archive>, u64)>,
@@ -116,7 +120,7 @@ struct Resolved {
 
 pub struct Located<'a> {
     pub path: &'a str,
-    pub data: &'a [u8],
+    pub data: &'a Bytes,
     pub status: StatusCode,
 }
 
@@ -171,6 +175,12 @@ fn fallback<'a>(archive: &'a Archive, trimmed: &str) -> Option<Located<'a>> {
 }
 
 impl Edge {
+    pub async fn warm(&self, deployment_id: Uuid) {
+        if let Err(error) = self.archive(deployment_id).await {
+            tracing::warn!(deployment = %deployment_id, error = %error, "edge warm-up failed");
+        }
+    }
+
     pub async fn flush_usage(&self) {
         if let Err(error) = self.usage.flush(&self.db).await {
             tracing::warn!(error = %error, "usage flush failed");
@@ -190,7 +200,9 @@ impl Edge {
         &self,
         host: &str,
     ) -> Result<Option<Resolved>, crate::error::ServiceError> {
-        if let Some(cached) = self.cached_host(host) {
+        let cached = self.cached_host(host);
+        edge_metrics::cache_lookup("host", cached.is_some());
+        if let Some(cached) = cached {
             return Ok(cached);
         }
         let resolved = self.resolve_host(host).await?;
@@ -242,12 +254,13 @@ impl Edge {
     }
 
     async fn archive(&self, id: Uuid) -> Result<Option<Arc<Archive>>, crate::error::ServiceError> {
-        if let Some(found) = self
+        let cached = self
             .archives
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(&id)
-        {
+            .get(&id);
+        edge_metrics::cache_lookup("archive", cached.is_some());
+        if let Some(found) = cached {
             return Ok(Some(found));
         }
         let Some(loaded) = artifacts::load(&self.db, id).await? else {
@@ -272,27 +285,98 @@ fn host_of(headers: &HeaderMap) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-fn respond(located: Located<'_>, deployment: Uuid) -> Response {
-    let mime = mime_guess::from_path(located.path).first_or_octet_stream();
-    let cache = if mime.subtype() == "html" {
+fn cache_policy(path: &str, html: bool) -> &'static str {
+    if html {
         REVALIDATE
+    } else if encoding::is_fingerprinted(path) {
+        FINGERPRINTED_ASSET
     } else {
-        IMMUTABLE_ASSET
+        SHORT_LIVED_ASSET
+    }
+}
+
+fn matches_etag(request: &HeaderMap, etag: &str) -> bool {
+    request
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .map(|candidate| candidate.trim().trim_start_matches("W/"))
+                .any(|candidate| candidate == "*" || candidate == etag)
+        })
+}
+
+fn variant_for(
+    archive: &Archive,
+    located: &Located<'_>,
+    request: &HeaderMap,
+    compressible: bool,
+) -> Variant {
+    let accepted = request
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|value| value.to_str().ok());
+    let wanted = if compressible {
+        encoding::negotiate(accepted)
+    } else {
+        Encoding::Identity
     };
-    (
-        located.status,
-        [
-            (header::CONTENT_TYPE, mime.essence_str().to_string()),
-            (header::CACHE_CONTROL, cache.to_string()),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
-            (
-                header::HeaderName::from_static("x-csfx-deployment"),
-                deployment.to_string(),
-            ),
-        ],
-        located.data.to_vec(),
-    )
-        .into_response()
+    archive
+        .variant(located.path, wanted)
+        .unwrap_or_else(|| Variant {
+            data: located.data.clone(),
+            etag: format!("\"{}\"", encoding::content_hash(located.data)),
+            encoding: Encoding::Identity,
+        })
+}
+
+fn respond(
+    archive: &Archive,
+    located: Located<'_>,
+    deployment: Uuid,
+    request: &HeaderMap,
+) -> Response {
+    let mime = mime_guess::from_path(located.path).first_or_octet_stream();
+    let compressible = encoding::is_compressible(&mime);
+    let variant = variant_for(archive, &located, request, compressible);
+    let status = if located.status == StatusCode::OK && matches_etag(request, &variant.etag) {
+        StatusCode::NOT_MODIFIED
+    } else {
+        located.status
+    };
+    if status != StatusCode::NOT_MODIFIED {
+        edge_metrics::content_served(variant.encoding, located.data.len(), variant.data.len());
+    }
+    let mut response = Response::new(if status == StatusCode::NOT_MODIFIED {
+        Body::empty()
+    } else {
+        Body::from(variant.data)
+    });
+    *response.status_mut() = status;
+    let headers = response.headers_mut();
+    let mut set = |name: header::HeaderName, value: &str| {
+        if let Ok(value) = value.parse() {
+            headers.insert(name, value);
+        }
+    };
+    set(header::CONTENT_TYPE, mime.essence_str());
+    set(
+        header::CACHE_CONTROL,
+        cache_policy(located.path, mime.subtype() == "html"),
+    );
+    set(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+    set(header::ETAG, &variant.etag);
+    set(
+        header::HeaderName::from_static("x-csfx-deployment"),
+        &deployment.to_string(),
+    );
+    if compressible {
+        set(header::VARY, "Accept-Encoding");
+    }
+    if let Some(token) = variant.encoding.token() {
+        set(header::CONTENT_ENCODING, token);
+    }
+    response
 }
 
 pub async fn serve(State(edge): State<Arc<Edge>>, headers: HeaderMap, uri: Uri) -> Response {
@@ -310,7 +394,7 @@ pub async fn serve(State(edge): State<Arc<Edge>>, headers: HeaderMap, uri: Uri) 
             Some(located) => {
                 edge.usage
                     .record(resolved.site_id, located.data.len(), Utc::now());
-                respond(located, resolved.deployment_id)
+                respond(&archive, located, resolved.deployment_id, &headers)
             }
             None => StatusCode::NOT_FOUND.into_response(),
         })
@@ -327,18 +411,19 @@ mod tests {
     use super::*;
 
     fn archive(names: &[&str]) -> Archive {
-        Archive {
-            files: names
+        Archive::new(
+            names
                 .iter()
-                .map(|n| (n.to_string(), n.as_bytes().to_vec()))
+                .map(|n| (n.to_string(), Bytes::from(n.as_bytes().to_vec())))
                 .collect(),
-        }
+        )
     }
 
     fn sized(bytes: usize) -> Arc<Archive> {
-        Arc::new(Archive {
-            files: HashMap::from([("index.html".to_string(), vec![0; bytes])]),
-        })
+        Arc::new(Archive::new(HashMap::from([(
+            "index.html".to_string(),
+            Bytes::from(vec![0; bytes]),
+        )])))
     }
 
     #[test]
@@ -431,6 +516,122 @@ mod tests {
         let spa = archive(&["index.html"]);
         assert_eq!(locate(&spa, "/dashboard/x").unwrap().status, StatusCode::OK);
         assert!(locate(&spa, "/missing.png").is_none());
+    }
+
+    fn site_with(files: &[(&str, Vec<u8>)]) -> Archive {
+        Archive::new(
+            files
+                .iter()
+                .map(|(name, data)| (name.to_string(), Bytes::from(data.clone())))
+                .collect(),
+        )
+    }
+
+    fn request_with(pairs: &[(header::HeaderName, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in pairs {
+            headers.insert(name.clone(), value.parse().unwrap());
+        }
+        headers
+    }
+
+    fn serve_path(site: &Archive, path: &str, request: &HeaderMap) -> Response {
+        respond(site, locate(site, path).unwrap(), Uuid::nil(), request)
+    }
+
+    fn header_of(response: &Response, name: header::HeaderName) -> Option<&str> {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+    }
+
+    fn script() -> Vec<u8> {
+        "console.log(1);\n".repeat(100).into_bytes()
+    }
+
+    #[test]
+    fn scripts_are_served_brotli_compressed_when_accepted() {
+        let site = site_with(&[("app.js", script())]);
+        let request = request_with(&[(header::ACCEPT_ENCODING, "gzip, br")]);
+        let response = serve_path(&site, "/app.js", &request);
+        assert_eq!(header_of(&response, header::CONTENT_ENCODING), Some("br"));
+        assert_eq!(header_of(&response, header::VARY), Some("Accept-Encoding"));
+    }
+
+    #[test]
+    fn clients_without_compression_get_the_original_bytes() {
+        let site = site_with(&[("app.js", script())]);
+        let response = serve_path(&site, "/app.js", &HeaderMap::new());
+        assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
+    }
+
+    #[test]
+    fn binary_files_are_never_compressed() {
+        let site = site_with(&[("logo.png", vec![7; 4096])]);
+        let request = request_with(&[(header::ACCEPT_ENCODING, "br, gzip")]);
+        let response = serve_path(&site, "/logo.png", &request);
+        assert!(response.headers().get(header::CONTENT_ENCODING).is_none());
+        assert!(response.headers().get(header::VARY).is_none());
+    }
+
+    #[test]
+    fn a_repeat_request_with_the_etag_gets_not_modified() {
+        let site = site_with(&[("app.js", script())]);
+        let first = serve_path(
+            &site,
+            "/app.js",
+            &request_with(&[(header::ACCEPT_ENCODING, "br")]),
+        );
+        let etag = header_of(&first, header::ETAG).unwrap().to_string();
+        let repeat = request_with(&[
+            (header::ACCEPT_ENCODING, "br"),
+            (header::IF_NONE_MATCH, &etag),
+        ]);
+        let second = serve_path(&site, "/app.js", &repeat);
+        assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(header_of(&second, header::ETAG), Some(etag.as_str()));
+    }
+
+    #[test]
+    fn a_changed_file_does_not_match_an_old_etag() {
+        let site = site_with(&[("app.js", script())]);
+        let request = request_with(&[(header::IF_NONE_MATCH, "\"stale\"")]);
+        assert_eq!(
+            serve_path(&site, "/app.js", &request).status(),
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn fingerprinted_assets_are_immutable_and_html_is_revalidated() {
+        let site = site_with(&[
+            ("_app/immutable/entry.js", script()),
+            ("static.js", script()),
+            ("index.html", b"<html></html>".to_vec()),
+        ]);
+        let none = HeaderMap::new();
+        let cache = |path| {
+            header_of(&serve_path(&site, path, &none), header::CACHE_CONTROL).map(str::to_string)
+        };
+        assert_eq!(
+            cache("/_app/immutable/entry.js").as_deref(),
+            Some(FINGERPRINTED_ASSET)
+        );
+        assert_eq!(cache("/static.js").as_deref(), Some(SHORT_LIVED_ASSET));
+        assert_eq!(cache("/").as_deref(), Some(REVALIDATE));
+    }
+
+    #[test]
+    fn error_pages_are_never_answered_with_not_modified() {
+        let site = site_with(&[("404.html", b"<html>missing</html>".to_vec())]);
+        let first = serve_path(&site, "/nope", &HeaderMap::new());
+        let etag = header_of(&first, header::ETAG).unwrap().to_string();
+        let repeat = request_with(&[(header::IF_NONE_MATCH, &etag)]);
+        assert_eq!(
+            serve_path(&site, "/nope", &repeat).status(),
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[test]

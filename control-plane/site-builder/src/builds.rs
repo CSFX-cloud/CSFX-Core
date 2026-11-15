@@ -13,9 +13,11 @@ use sea_orm::{
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 const LOG_LIMIT_CHARS: i32 = 2_000_000;
+const READY_CHANNEL_CAPACITY: usize = 64;
 const STALE_STATUSES: [&str; 2] = ["queued", "building"];
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -68,6 +70,7 @@ pub struct Builds {
     pub config: Arc<Config>,
     pub scheduler: SchedulerClient,
     registry: Option<RegistryClient>,
+    ready: broadcast::Sender<Uuid>,
 }
 
 impl Builds {
@@ -82,7 +85,16 @@ impl Builds {
             config,
             scheduler,
             registry,
+            ready: broadcast::channel(READY_CHANNEL_CAPACITY).0,
         }
+    }
+
+    pub fn subscribe_ready(&self) -> broadcast::Receiver<Uuid> {
+        self.ready.subscribe()
+    }
+
+    fn announce_ready(&self, id: Uuid) {
+        self.ready.send(id).ok();
     }
 
     pub async fn deployment(&self, id: Uuid) -> Result<site_deployments::Model, ServiceError> {
@@ -223,6 +235,7 @@ impl Builds {
             self.promote(id, env).await?;
         } else {
             crate::sites::ensure_preview_domain(self, id).await?;
+            self.announce_ready(id);
         }
         self.prune_site(site.id).await;
         tracing::info!(deployment = %id, "deployment ready");
@@ -262,7 +275,9 @@ impl Builds {
         id: Uuid,
         env: BTreeMap<String, String>,
     ) -> Result<(), ServiceError> {
-        crate::sites::promote(self, id, env).await
+        crate::sites::promote(self, id, env).await?;
+        self.announce_ready(id);
+        Ok(())
     }
 
     pub fn registry(&self) -> Option<&RegistryClient> {

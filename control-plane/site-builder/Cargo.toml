@@ -39,6 +39,9 @@ rcgen = { workspace = true }
 rsa = { workspace = true }
 serde_urlencoded = "0.7"
 flate2 = "1"
+brotli = "9"
+prometheus = { workspace = true }
+sha2 = { workspace = true }
 tar = "0.4"
 mime_guess = "2"
 
