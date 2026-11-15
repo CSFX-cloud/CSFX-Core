@@ -28,15 +28,15 @@
         { csfx.controlPlane.site-builder = siteBuilderPlaceholder; }
         (import "${csfx-infra}/versions.nix");
 
-      infraModules = map (name: "${csfx-infra}/modules/${name}.nix") [
-        "csfx-agent"
-        "csfx-cp"
-        "csfx-garage"
-        "csfx-setup"
-        "csfx-cluster"
-        "csfx-openbao"
-        "csfx-ingress"
-        "csfx-site-registry"
+      infraModules = map (path: "${csfx-infra}/modules/${path}.nix") [
+        "agent/csfx-agent"
+        "control-plane/csfx-cp"
+        "storage/csfx-garage"
+        "node/csfx-setup"
+        "cluster/csfx-cluster"
+        "cluster/csfx-openbao"
+        "control-plane/csfx-ingress"
+        "registry/csfx-site-registry"
       ];
 
       mkNode = hostName: singleNode: nixpkgs.lib.nixosSystem {
