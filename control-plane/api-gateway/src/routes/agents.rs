@@ -7,7 +7,8 @@ use axum::{
 };
 use entity::entities::{agent_metrics, agents, resource_groups, volumes, workloads};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
 };
 use serde::{Deserialize, Serialize};
 use shared::env_secrets;
@@ -350,6 +351,8 @@ pub async fn drain_agent(
         "node drain requested"
     );
 
+    fence_attached_volumes(&state, agent_id).await?;
+
     let path = format!("/internal/agents/{}/reschedule", agent_id);
     let body = serde_json::json!({ "workload_ids": workload_ids });
 
@@ -363,6 +366,37 @@ pub async fn drain_agent(
             .into_response()),
         Err(e) => {
             tracing::error!(error = %e, "failed to forward drain reschedule to scheduler");
+            Err(StatusCode::BAD_GATEWAY)
+        }
+    }
+}
+
+async fn fence_attached_volumes(state: &AppState, agent_id: Uuid) -> Result<(), StatusCode> {
+    let attached = volumes::Entity::find()
+        .filter(volumes::Column::AttachedToAgent.eq(agent_id))
+        .count(&state.db_conn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to count attached volumes for drain");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    if attached == 0 {
+        return Ok(());
+    }
+
+    let path = format!("/internal/agents/{}/detach-all", agent_id);
+    match state
+        .service_client
+        .forward_to_volume_manager(reqwest::Method::POST, &path, None, None)
+        .await
+    {
+        Ok((status, _)) if status.is_success() => Ok(()),
+        Ok((status, _)) => {
+            tracing::error!(agent_id = %agent_id, status = %status, "volume fencing rejected during drain");
+            Err(StatusCode::BAD_GATEWAY)
+        }
+        Err(e) => {
+            tracing::error!(agent_id = %agent_id, error = %e, "failed to fence volumes during drain");
             Err(StatusCode::BAD_GATEWAY)
         }
     }
