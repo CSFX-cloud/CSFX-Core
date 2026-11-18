@@ -84,7 +84,7 @@ pub struct LayoutRole {
 impl GarageClient {
     pub fn new(admin_url: String, admin_token: String) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: shared::http::client(shared::http::DEFAULT_TIMEOUT),
             admin_url,
             admin_token,
         }

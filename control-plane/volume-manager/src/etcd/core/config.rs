@@ -46,11 +46,7 @@ impl Default for EtcdConfig {
 impl EtcdConfig {
     /// Erstellt Config von Umgebungsvariablen
     pub fn from_env() -> Self {
-        let endpoints = std::env::var("ETCD_ENDPOINTS")
-            .unwrap_or_else(|_| "http://localhost:2379".to_string())
-            .split(',')
-            .map(|s| s.to_string())
-            .collect();
+        let endpoints = shared::etcd::endpoints_from_env();
 
         let namespace =
             std::env::var("ETCD_NAMESPACE").unwrap_or_else(|_| "/csfx/volume-manager".to_string());

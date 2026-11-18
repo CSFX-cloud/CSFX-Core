@@ -3,10 +3,13 @@ use reqwest::Client;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection, EntityTrait};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 const SETTINGS_KEY: &str = "notifications.ntfy";
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
+
+static CLIENT: LazyLock<Client> = LazyLock::new(|| crate::http::client(PUBLISH_TIMEOUT));
 const SEVERITIES: [&str; 3] = ["info", "warning", "critical"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,9 +86,8 @@ impl NtfyConfig {
         severity: &str,
     ) -> Result<(), NtfyError> {
         let url = format!("{}/{}", self.server_url.trim_end_matches('/'), self.topic);
-        let mut request = Client::new()
+        let mut request = CLIENT
             .post(url)
-            .timeout(PUBLISH_TIMEOUT)
             .header("Title", title)
             .header("Priority", priority(severity))
             .body(message.to_string());

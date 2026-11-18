@@ -1,18 +1,12 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
-use etcd_client::{Client, GetOptions};
+use etcd_client::GetOptions;
 use serde_json::json;
 
 use super::upstream;
 use crate::export::{engine::Exporter, ExportError};
 
-const DEFAULT_ENDPOINTS: &str = "http://localhost:2379";
-
 pub async fn export(exporter: &mut Exporter) -> Result<(), ExportError> {
-    let endpoints =
-        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| DEFAULT_ENDPOINTS.to_string());
-    let mut client = Client::connect(endpoints.split(',').collect::<Vec<_>>(), None)
-        .await
-        .map_err(upstream)?;
+    let mut client = shared::etcd::connect_from_env().await.map_err(upstream)?;
     let response = client
         .get("", Some(GetOptions::new().with_all_keys()))
         .await

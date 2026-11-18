@@ -28,7 +28,6 @@ use crate::{
 pub const ROLE_MASTER: &str = "master";
 const JOIN_WINDOW_MINUTES: i64 = 30;
 const PATRONI_MEMBER_KEY_PREFIX: &str = "/service/csfx/members/";
-const DEFAULT_ETCD_ENDPOINT: &str = "http://localhost:2379";
 
 #[derive(Serialize)]
 pub struct JoinBundle {
@@ -47,14 +46,10 @@ pub fn member_name(agent_id: Uuid) -> String {
 }
 
 async fn etcd_client() -> Result<Client, ApiError> {
-    let endpoints =
-        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| DEFAULT_ETCD_ENDPOINT.into());
-    Client::connect(endpoints.split(',').collect::<Vec<_>>(), None)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to connect to etcd");
-            error(StatusCode::SERVICE_UNAVAILABLE, "etcd unavailable")
-        })
+    shared::etcd::connect_from_env().await.map_err(|e| {
+        tracing::error!(error = %e, "failed to connect to etcd");
+        error(StatusCode::SERVICE_UNAVAILABLE, "etcd unavailable")
+    })
 }
 
 pub fn peer_url(tunnel_ip: &str) -> String {

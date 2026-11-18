@@ -44,7 +44,7 @@ impl S3Sink {
     pub fn new(config: S3Config) -> Self {
         Self {
             config,
-            http: reqwest::Client::new(),
+            http: shared::http::client(shared::http::DEFAULT_TIMEOUT),
         }
     }
 
