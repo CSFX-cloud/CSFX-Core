@@ -4,10 +4,10 @@ use uuid::Uuid;
 
 use crate::common::harness;
 
-const ADMIN_CASES: [(&str, &str, &str); 12] = [
+const ADMIN_CASES: [(&str, &str, &str); 13] = [
     ("POST", "/agents/pre-register", "/admin/agents/pre-register"),
     ("GET", "/agents/pending", "/admin/agents/pending"),
-    ("POST", "/agents/pending/{id}", "/admin/agents/pending/{id}"),
+    ("DELETE", "/agents/pending/{id}", "/admin/agents/pending/{id}"),
     ("POST", "/bootstrap-tokens", "/admin/bootstrap-tokens"),
     ("GET", "/bootstrap-tokens", "/admin/bootstrap-tokens"),
     (
@@ -15,9 +15,10 @@ const ADMIN_CASES: [(&str, &str, &str); 12] = [
         "/bootstrap-tokens/{id}/revoke",
         "/admin/bootstrap-tokens/{id}/revoke",
     ),
-    ("POST", "/tokens", "/admin/tokens"),
     ("GET", "/tokens", "/admin/tokens"),
     ("GET", "/agents", "/admin/agents"),
+    ("GET", "/agents/{id}", "/admin/agents/{id}"),
+    ("DELETE", "/agents/{id}", "/admin/agents/{id}"),
     ("GET", "/statistics", "/admin/statistics"),
     ("POST", "/agents/{id}/revoke", "/admin/agents/{id}/revoke"),
     (
@@ -27,7 +28,12 @@ const ADMIN_CASES: [(&str, &str, &str); 12] = [
     ),
 ];
 
-const VIEWER_ALLOWED: [&str; 3] = ["/agents", "/statistics", "/agents/{id}/endpoint"];
+const VIEWER_ALLOWED: [&str; 4] = [
+    "/agents",
+    "/agents/{id}",
+    "/statistics",
+    "/agents/{id}/endpoint",
+];
 
 const AGENT_CASES: [(&str, &str, &str); 5] = [
     ("POST", "/agents/register", "/agents/register"),

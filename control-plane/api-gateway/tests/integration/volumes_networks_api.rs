@@ -41,9 +41,10 @@ async fn volume_bodies_that_are_not_json_are_forwarded_empty() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn network_endpoints_reject_non_json_bodies() {
+async fn network_bodies_that_are_not_json_are_forwarded_to_the_controller() {
     for suffix in ["", "/net-1/policies", "/net-1/members"] {
-        let (status, _) = post_text(&format!("/api/networks{suffix}"), "not json").await;
-        assert!(status.is_client_error(), "{suffix}: {status}");
+        let (status, echoed) = post_text(&format!("/api/networks{suffix}"), "not json").await;
+        assert_eq!(status, StatusCode::OK, "{suffix}");
+        assert_eq!(echoed["path"], format!("/networks{suffix}"));
     }
 }
