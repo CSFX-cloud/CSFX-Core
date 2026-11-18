@@ -55,5 +55,6 @@ opentelemetry-semantic-conventions = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 
 [dev-dependencies]
+test-support = { path = "../shared/test-support" }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

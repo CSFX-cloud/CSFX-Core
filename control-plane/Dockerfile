@@ -34,8 +34,10 @@ COPY control-plane/site-builder/Cargo.toml ./control-plane/site-builder/
 COPY control-plane/shared/entity/Cargo.toml ./control-plane/shared/entity/
 COPY control-plane/shared/migration/Cargo.toml ./control-plane/shared/migration/
 COPY control-plane/shared/shared/Cargo.toml ./control-plane/shared/shared/
+COPY control-plane/shared/test-support/Cargo.toml ./control-plane/shared/test-support/
 COPY control-plane/csfx-migrate/Cargo.toml ./control-plane/csfx-migrate/
 COPY control-plane/csfx-updater/Cargo.toml ./control-plane/csfx-updater/
+COPY control-plane/csfx-release-notes/Cargo.toml ./control-plane/csfx-release-notes/
 
 RUN mkdir -p agent/src \
     agent/csfx-guest-init/src \
@@ -50,8 +52,10 @@ RUN mkdir -p agent/src \
     control-plane/shared/entity/src \
     control-plane/shared/migration/src \
     control-plane/shared/shared/src \
+    control-plane/shared/test-support/src \
     control-plane/csfx-migrate/src \
     control-plane/csfx-updater/src \
+    control-plane/csfx-release-notes/src \
     && echo "fn main() {}" > agent/src/main.rs \
     && echo "fn main() {}" > agent/csfx-guest-init/src/main.rs \
     && echo "fn main() {}" > control-plane/api-gateway/src/main.rs \
@@ -65,9 +69,12 @@ RUN mkdir -p agent/src \
     && echo "pub fn lib() {}" > control-plane/site-builder/src/lib.rs \
     && echo "fn main() {}" > control-plane/csfx-migrate/src/main.rs \
     && echo "fn main() {}" > control-plane/csfx-updater/src/main.rs \
+    && echo "fn main() {}" > control-plane/csfx-release-notes/src/main.rs \
+    && echo "pub fn lib() {}" > control-plane/csfx-release-notes/src/lib.rs \
     && echo "pub fn lib() {}" > control-plane/shared/entity/src/lib.rs \
     && echo "pub fn lib() {}" > control-plane/shared/migration/src/lib.rs \
     && echo "pub fn lib() {}" > control-plane/shared/shared/src/lib.rs
+    && echo "pub fn lib() {}" > control-plane/shared/test-support/src/lib.rs
 
 COPY control-plane/shared/ ./control-plane/shared/
 

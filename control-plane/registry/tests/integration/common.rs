@@ -6,7 +6,6 @@ use axum::extract::ConnectInfo;
 use axum::http::{Method, Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
-use migration::{Migrator, MigratorTrait};
 use rcgen::{
     BasicConstraints, CertificateParams, IsCa, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
 };
@@ -15,28 +14,12 @@ use registry::services::{
     api_keys::ApiKeyManager, bootstrap_tokens::BootstrapTokenManager, mgmt_ipam::MgmtIpamService,
     pki::PkiService, registry::AgentRegistry, tokens::TokenManager,
 };
-use sea_orm::{Database, DatabaseConnection};
+use sea_orm::DatabaseConnection;
 use serde_json::Value;
 use tower::ServiceExt;
 use uuid::Uuid;
 
 static CA_PEMS: OnceLock<(String, String)> = OnceLock::new();
-static MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
-
-pub async fn migrated_database() -> DatabaseConnection {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let db = Database::connect(&url)
-        .await
-        .expect("database must be reachable");
-    MIGRATED
-        .get_or_init(|| async {
-            Migrator::up(&db, None)
-                .await
-                .expect("migrations must apply");
-        })
-        .await;
-    db
-}
 
 fn ca_pems() -> &'static (String, String) {
     CA_PEMS.get_or_init(|| {
@@ -172,3 +155,5 @@ pub async fn call(
     )
     .await
 }
+
+pub use test_support::migrated_database;
