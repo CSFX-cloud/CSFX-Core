@@ -26,19 +26,6 @@ async fn main() -> anyhow::Result<()> {
     shared::spawn_log_writer(log_receiver, db.clone());
     shared::observability::spawn_pool_gauges("default", db.clone());
 
-    let etcd_endpoints = shared::etcd::endpoints_from_env();
-
-    log_info!(
-        "main",
-        &format!("Connecting to etcd endpoints={}", etcd_endpoints.join(","))
-    );
-    let etcd = etcd_client::Client::connect(&etcd_endpoints, None)
-        .await
-        .expect("Failed to connect to etcd");
-    log_info!("main", "etcd connection established");
-
-    let etcd = Arc::new(tokio::sync::Mutex::new(etcd));
-
     let ceph_manager = if std::env::var("CEPH_MON_HOSTS").is_ok() {
         let manager = ceph::ops::init_ceph().await?;
         log_info!("main", "Ceph storage initialized");
@@ -50,7 +37,6 @@ async fn main() -> anyhow::Result<()> {
 
     let volume_service = Arc::new(services::volume::VolumeService::new(
         db.clone(),
-        etcd.clone(),
         ceph_manager.clone(),
     ));
 
@@ -64,11 +50,7 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    let state = server::AppState {
-        db,
-        etcd,
-        volume_service,
-    };
+    let state = server::AppState { db, volume_service };
 
     let app = server::create_router(state);
 

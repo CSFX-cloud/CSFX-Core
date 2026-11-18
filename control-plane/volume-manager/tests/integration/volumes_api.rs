@@ -369,7 +369,7 @@ async fn detach_all_aborts_when_fencing_fails() {
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
 async fn service_get_volume_returns_none_for_unknown_id() {
-    let service = service(migrated_database().await, None).await;
+    let service = service(migrated_database().await, None);
     assert!(service.get_volume(Uuid::new_v4()).await.unwrap().is_none());
     assert!(service
         .list_snapshots(Uuid::new_v4())

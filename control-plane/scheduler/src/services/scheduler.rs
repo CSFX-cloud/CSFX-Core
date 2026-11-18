@@ -1,10 +1,6 @@
-use chrono::Utc;
 use entity::entities::workloads;
-use etcd_client::Client as EtcdClient;
 use sea_orm::DatabaseConnection;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::models::compose::{ComposeServiceSpec, CreateStackRequest, CreateStackResponse};
@@ -13,9 +9,12 @@ use crate::models::workload::{
     UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
 };
 use crate::services::compose_parser::{self, ComposeParseError};
-use crate::services::etcd::{delete_placement, put_placement, PlacementRecord};
 use crate::services::placement::{self, Demand, Strategy};
 use crate::services::{image_resolver, stack_volumes};
+
+pub(crate) fn notify_assigned(agent_id: Uuid) {
+    tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
+}
 
 const GUEST_IP_ATTEMPTS: usize = 5;
 pub(crate) const REPLACEMENT_EXISTS: &str = "an update of this workload is already in progress";
@@ -25,20 +24,18 @@ pub(crate) const NO_SURGE_TARGET: &str =
 
 pub struct SchedulerService {
     pub(crate) db: DatabaseConnection,
-    pub(crate) etcd: Arc<Mutex<EtcdClient>>,
     strategy: Strategy,
     pub(crate) ready_since:
         std::sync::Mutex<HashMap<Uuid, (std::time::Instant, Option<chrono::NaiveDateTime>)>>,
 }
 
 impl SchedulerService {
-    pub fn new(db: DatabaseConnection, etcd: Arc<Mutex<EtcdClient>>) -> Self {
+    pub fn new(db: DatabaseConnection) -> Self {
         let strategy = Strategy::from_name(
             &std::env::var("SCHEDULER_STRATEGY").unwrap_or_else(|_| "spread".to_string()),
         );
         Self {
             db,
-            etcd,
             strategy,
             ready_since: std::sync::Mutex::new(HashMap::new()),
         }
@@ -130,7 +127,7 @@ impl SchedulerService {
             .map_err(|e| format!("Failed to assign workload: {}", e))?;
         self.persist_node_ports(&workload, agent_id, replaced, req.ports)
             .await?;
-        self.record_placement(&workload, agent_id).await?;
+        notify_assigned(agent_id);
 
         crate::log_info!(
             "scheduler",
@@ -194,7 +191,6 @@ impl SchedulerService {
             .map_err(|e| format!("Failed to fetch stack workloads: {}", e))?;
 
         for workload in &workloads {
-            delete_placement(&self.etcd, workload.id).await?;
             shared::volumes::release_for_workload(&self.db, workload.id)
                 .await
                 .map_err(|e| format!("Failed to release workload volumes: {}", e))?;
@@ -491,7 +487,7 @@ impl SchedulerService {
         crate::db::workloads::assign(&self.db, workload.id, agent_id)
             .await
             .map_err(|e| format!("Failed to assign workload: {}", e))?;
-        self.record_placement(workload, agent_id).await?;
+        notify_assigned(agent_id);
         Ok(true)
     }
 
@@ -520,28 +516,6 @@ impl SchedulerService {
         }
 
         Ok(claimed)
-    }
-
-    pub(crate) async fn record_placement(
-        &self,
-        workload: &workloads::Model,
-        agent_id: Uuid,
-    ) -> Result<(), String> {
-        let record = PlacementRecord {
-            workload_id: workload.id,
-            agent_id,
-            image: workload.image.clone(),
-            cpu_millicores: workload.cpu_millicores,
-            memory_bytes: workload.memory_bytes,
-            disk_bytes: workload.disk_bytes,
-            scheduled_at: Utc::now().to_rfc3339(),
-            stack_id: workload.stack_id,
-            service_name: workload.service_name.clone(),
-            runtime_class: workload.runtime_class.clone(),
-        };
-        put_placement(&self.etcd, &record).await?;
-        tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
-        Ok(())
     }
 
     pub async fn list_workloads(
@@ -672,8 +646,6 @@ impl SchedulerService {
         shared::volumes::release_for_workload(&self.db, workload_id)
             .await
             .map_err(|e| format!("Failed to release workload volumes: {}", e))?;
-
-        delete_placement(&self.etcd, workload_id).await?;
 
         crate::log_info!(
             "scheduler",

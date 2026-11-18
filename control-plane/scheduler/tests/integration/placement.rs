@@ -9,12 +9,6 @@ use crate::common::{
     small_request, unique_name, Placing,
 };
 
-async fn placement_key_exists(fixture: &Placing, workload_id: Uuid) -> bool {
-    let key = format!("/csfx/placements/{workload_id}");
-    let response = fixture.etcd.lock().await.get(key, None).await.unwrap();
-    !response.kvs().is_empty()
-}
-
 fn request_with_ports(name: &str, node_port: u16) -> CreateWorkloadRequest {
     serde_json::from_value(json!({
         "name": name,
@@ -28,7 +22,7 @@ fn request_with_ports(name: &str, node_port: u16) -> CreateWorkloadRequest {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn schedulable_workloads_are_assigned_and_recorded() {
     let fixture = placing().await;
 
@@ -46,11 +40,10 @@ async fn schedulable_workloads_are_assigned_and_recorded() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.assigned_agent_id, Some(agent_id));
-    assert!(placement_key_exists(&fixture, response.workload_id).await);
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn requested_node_ports_are_kept_on_placement() {
     let fixture = placing().await;
     let node_port =
@@ -71,7 +64,7 @@ async fn requested_node_ports_are_kept_on_placement() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn replicas_are_all_placed() {
     let fixture = placing().await;
     let mut request = small_request(&unique_name("replicated"));
@@ -86,7 +79,7 @@ async fn replicas_are_all_placed() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn invalid_requests_never_reach_the_database() {
     let fixture = placing().await;
     let mut request = small_request(&unique_name("invalid"));
@@ -97,7 +90,7 @@ async fn invalid_requests_never_reach_the_database() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn deleting_a_workload_removes_its_placement() {
     let fixture = placing().await;
     let response = fixture
@@ -112,7 +105,6 @@ async fn deleting_a_workload_removes_its_placement() {
         .await
         .unwrap();
 
-    assert!(!placement_key_exists(&fixture, response.workload_id).await);
     assert!(workloads::get_by_id(&fixture.db, response.workload_id)
         .await
         .unwrap()
@@ -120,7 +112,7 @@ async fn deleting_a_workload_removes_its_placement() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn pending_workloads_are_placed_by_the_retry_loop() {
     let fixture = placing().await;
     let pending = workloads::create(&fixture.db, &small_request(&unique_name("retry")), None)
@@ -139,11 +131,10 @@ async fn pending_workloads_are_placed_by_the_retry_loop() {
         .unwrap()
         .unwrap();
     assert!(stored.assigned_agent_id.is_some());
-    assert!(placement_key_exists(&fixture, pending.id).await);
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn workloads_move_off_a_dead_agent() {
     let fixture = placing().await;
     let first = fixture
@@ -173,7 +164,7 @@ async fn workloads_move_off_a_dead_agent() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn rescheduling_an_unknown_workload_fails() {
     let fixture = placing().await;
 
@@ -187,7 +178,7 @@ async fn rescheduling_an_unknown_workload_fails() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn guest_ips_are_assigned_within_the_resource_group() {
     let fixture = placing().await;
     let group = insert_resource_group().await;
@@ -211,7 +202,7 @@ async fn guest_ips_are_assigned_within_the_resource_group() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn missing_guest_ips_are_backfilled() {
     let fixture = placing().await;
     let group = insert_resource_group().await;
@@ -232,7 +223,7 @@ async fn missing_guest_ips_are_backfilled() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn stacks_are_placed_updated_and_removed() {
     let fixture = placing().await;
     let group = insert_resource_group().await;
@@ -285,7 +276,7 @@ async fn stacks_are_placed_updated_and_removed() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn redeploying_an_unknown_stack_fails() {
     let fixture = placing().await;
 
@@ -307,7 +298,7 @@ async fn volume_state(fixture: &Placing, volume_id: Uuid) -> entity::entities::v
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn free_volumes_are_claimed_and_released_with_the_workload() {
     let fixture = placing().await;
     let volume = insert_volume(&fixture.db, None, None).await;
@@ -334,7 +325,7 @@ async fn free_volumes_are_claimed_and_released_with_the_workload() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn attached_volumes_pin_the_workload_to_their_agent() {
     let fixture = placing().await;
     let pinned_agent = insert_agent(&fixture.db).await;
@@ -350,7 +341,7 @@ async fn attached_volumes_pin_the_workload_to_their_agent() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn volumes_on_different_agents_conflict() {
     let fixture = placing().await;
     let first = insert_agent(&fixture.db).await;
@@ -370,7 +361,7 @@ async fn volumes_on_different_agents_conflict() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn volumes_held_by_another_workload_leave_the_workload_pending() {
     let fixture = placing().await;
     let agent = insert_agent(&fixture.db).await;

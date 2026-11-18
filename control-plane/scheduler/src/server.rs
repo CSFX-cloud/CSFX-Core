@@ -1,8 +1,6 @@
 use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
-use etcd_client::Client as EtcdClient;
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::{
     handlers::{internal, stacks, workloads},
@@ -12,7 +10,6 @@ use crate::{
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
-    pub etcd: Arc<Mutex<EtcdClient>>,
     pub scheduler: Arc<SchedulerService>,
 }
 

@@ -36,9 +36,6 @@ pub enum AuthError {
     TwoFactorRequired,
     #[error("Invalid 2FA code")]
     InvalidTwoFactorCode,
-    #[error("Password change required")]
-    #[allow(dead_code)]
-    PasswordChangeRequired,
 }
 
 pub type AuthResult<T> = Result<T, AuthError>;

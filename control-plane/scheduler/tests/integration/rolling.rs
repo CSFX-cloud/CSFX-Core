@@ -42,7 +42,7 @@ async fn fetch(db: &DatabaseConnection, id: Uuid) -> Option<workload_rows::Model
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn an_update_runs_next_to_the_old_instance_and_then_takes_over() {
     let fixture = placing().await;
     let old_id = running_workload(&fixture.service, &fixture.db).await;
@@ -94,7 +94,7 @@ async fn an_update_runs_next_to_the_old_instance_and_then_takes_over() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn a_failed_replacement_is_removed_and_reported_on_the_old_workload() {
     let fixture = placing().await;
     let old_id = running_workload(&fixture.service, &fixture.db).await;
@@ -118,7 +118,7 @@ async fn a_failed_replacement_is_removed_and_reported_on_the_old_workload() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn a_second_update_during_a_rollout_conflicts() {
     let fixture = placing().await;
     let old_id = running_workload(&fixture.service, &fixture.db).await;

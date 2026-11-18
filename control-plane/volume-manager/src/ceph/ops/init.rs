@@ -45,29 +45,13 @@ pub async fn init_ceph() -> Result<CephManager> {
     let pool_manager = PoolManager::new(client.clone());
 
     // Standard-Pools erstellen
-    let pools = vec![
-        CephPool {
-            name: config.default_pool.clone(),
-            pg_num: config.default_pg_num,
-            pgp_num: config.default_pg_num,
-            size: config.default_replication,
-            min_size: 2,
-        },
-        CephPool {
-            name: "csfx-postgres".to_string(),
-            pg_num: 64,
-            pgp_num: 64,
-            size: config.default_replication,
-            min_size: 2,
-        },
-        CephPool {
-            name: "csfx-metadata".to_string(),
-            pg_num: 32,
-            pgp_num: 32,
-            size: config.default_replication,
-            min_size: 2,
-        },
-    ];
+    let pools = vec![CephPool {
+        name: config.default_pool.clone(),
+        pg_num: config.default_pg_num,
+        pgp_num: config.default_pg_num,
+        size: config.default_replication,
+        min_size: 2,
+    }];
 
     for pool in pools {
         crate::log_debug!(
@@ -92,48 +76,4 @@ pub async fn init_ceph() -> Result<CephManager> {
         pool_manager,
         rbd_manager,
     })
-}
-
-/// Erstellt PostgreSQL Volumes auf dem Ceph-Cluster
-pub async fn create_postgres_volumes(ceph: &CephManager, node_count: u32) -> Result<Vec<String>> {
-    crate::log_info!(
-        "ceph_init",
-        &format!("Creating PostgreSQL volumes for {} nodes", node_count)
-    );
-
-    let mut volumes = Vec::new();
-
-    for i in 1..=node_count {
-        let volume_name = format!("postgres-node-{}", i);
-
-        let volume = crate::ceph::storage::types::CephVolume {
-            name: volume_name.clone(),
-            pool: "csfx-postgres".to_string(),
-            size_mb: 10240, // 10 GB
-            features: vec!["layering".to_string(), "exclusive-lock".to_string()],
-        };
-
-        // Erstelle Volume falls nicht vorhanden
-        if !ceph
-            .rbd_manager
-            .image_exists(&volume.pool, &volume.name)
-            .await?
-        {
-            ceph.rbd_manager.create_image(&volume).await?;
-            volumes.push(volume_name);
-        } else {
-            crate::log_info!(
-                "ceph_init",
-                &format!("Volume '{}' already exists", volume_name)
-            );
-            volumes.push(volume_name);
-        }
-    }
-
-    crate::log_info!(
-        "ceph_init",
-        &format!("Created {} PostgreSQL volumes", volumes.len())
-    );
-
-    Ok(volumes)
 }

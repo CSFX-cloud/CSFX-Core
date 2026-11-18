@@ -1,12 +1,8 @@
-use uuid::Uuid;
 use volume_manager::ceph::core::CephConfig;
-use volume_manager::ceph::ops::init::create_postgres_volumes;
 use volume_manager::ceph::ops::init_ceph;
-use volume_manager::etcd::init::init_cluster;
-use volume_manager::etcd::EtcdConfig;
 use volume_manager::models::volume::{SnapshotStatus, VolumeStatus};
 
-use crate::common::{ceph_manager, install_fake_ceph};
+use crate::common::install_fake_ceph;
 
 #[test]
 fn volume_status_round_trips_through_strings() {
@@ -45,18 +41,7 @@ fn ceph_config_defaults_and_helpers() {
     );
 }
 
-#[test]
-fn etcd_config_prefixes_keys() {
-    let config = EtcdConfig {
-        namespace: "/ns/".to_string(),
-        ..EtcdConfig::default()
-    };
-    assert_eq!(config.prefixed_key("/a/b"), "/ns/a/b");
-    assert_eq!(config.prefixed_key("c"), "/ns/c");
-}
-
 #[tokio::test]
-#[ignore = "requires etcd via ETCD_ENDPOINTS"]
 async fn environment_driven_initialisation() {
     install_fake_ceph();
     std::env::set_var("CEPH_MON_HOSTS", "mon1:6789,mon2:6789");
@@ -74,24 +59,4 @@ async fn environment_driven_initialisation() {
 
     let manager = init_ceph().await.unwrap();
     assert!(manager.client.is_available().await);
-    let created = create_postgres_volumes(&ceph_manager(), 2).await.unwrap();
-    assert_eq!(created, vec!["postgres-node-1", "postgres-node-2"]);
-
-    let namespace = format!("/csfx-test/init-{}", Uuid::new_v4());
-    std::env::set_var("ETCD_NAMESPACE", &namespace);
-    std::env::set_var("NODE_ID", "node-init");
-    std::env::set_var("HOSTNAME", "init-host");
-    std::env::set_var("NODE_IP", "10.1.1.1");
-    assert_eq!(EtcdConfig::from_env().namespace, namespace);
-    let data = init_cluster().await.unwrap();
-    assert_eq!(data.node_id, "node-init");
-    assert!(data.leader_election.is_leader());
-    let nodes = data.state_manager.list_nodes().await.unwrap();
-    assert_eq!(nodes[0].hostname, "init-host");
-    assert!(data
-        .health_checker
-        .find_offline_nodes(nodes)
-        .await
-        .is_empty());
-    data.leader_election.resign().await.unwrap();
 }

@@ -27,7 +27,6 @@ thiserror = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 chrono = { workspace = true, features = ["serde"] }
 sea-orm = { workspace = true }
-etcd-client = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
 opentelemetry = { workspace = true }
@@ -37,6 +36,7 @@ opentelemetry-semantic-conventions = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 
 [dev-dependencies]
+test-support = { path = "../shared/test-support" }
 migration = { path = "../shared/migration" }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

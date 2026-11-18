@@ -2,26 +2,17 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use axum::body::Body;
-use axum::http::{Method, Request, StatusCode};
 use axum::Router;
 use chrono::Utc;
 use entity::entities::agents;
-use http_body_util::BodyExt;
-use migration::{Migrator, MigratorTrait};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database, DatabaseConnection};
-use serde_json::Value;
-use tokio::sync::Mutex;
-use tower::ServiceExt;
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
 use uuid::Uuid;
 use volume_manager::ceph::core::{CephClient, CephConfig};
 use volume_manager::ceph::ops::CephManager;
 use volume_manager::ceph::storage::{PoolManager, RbdManager};
-use volume_manager::etcd::{EtcdClient, EtcdConfig};
 use volume_manager::server::{create_router, AppState};
 use volume_manager::services::volume::VolumeService;
 
-static MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 static FAKE_BIN: OnceLock<PathBuf> = OnceLock::new();
 
 const FAKE_CEPH: &str = r#"#!/bin/sh
@@ -96,63 +87,15 @@ pub fn ceph_manager() -> CephManager {
     }
 }
 
-pub async fn migrated_database() -> DatabaseConnection {
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .ok();
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let db = Database::connect(&url)
-        .await
-        .expect("database must be reachable");
-    MIGRATED
-        .get_or_init(|| async {
-            Migrator::up(&db, None)
-                .await
-                .expect("migrations must apply");
-        })
-        .await;
-    db
-}
-
-pub fn etcd_endpoints() -> Vec<String> {
-    std::env::var("ETCD_ENDPOINTS")
-        .expect("ETCD_ENDPOINTS must be set")
-        .split(',')
-        .map(str::to_string)
-        .collect()
-}
-
-pub async fn raw_etcd() -> Arc<Mutex<etcd_client::Client>> {
-    let client = etcd_client::Client::connect(etcd_endpoints(), None)
-        .await
-        .expect("etcd must be reachable");
-    Arc::new(Mutex::new(client))
-}
-
-pub async fn etcd_wrapper() -> Arc<EtcdClient> {
-    let config = EtcdConfig {
-        endpoints: etcd_endpoints(),
-        namespace: format!("/csfx-test/vm-{}", Uuid::new_v4()),
-        ..EtcdConfig::default()
-    };
-    let client = EtcdClient::new(config);
-    client.connect().await.expect("etcd must connect");
-    Arc::new(client)
-}
-
-pub async fn service(db: DatabaseConnection, ceph: Option<CephManager>) -> Arc<VolumeService> {
-    Arc::new(VolumeService::new(db, raw_etcd().await, ceph.map(Arc::new)))
+pub fn service(db: DatabaseConnection, ceph: Option<CephManager>) -> Arc<VolumeService> {
+    Arc::new(VolumeService::new(db, ceph.map(Arc::new)))
 }
 
 pub async fn router(with_ceph: bool) -> Router {
     let db = migrated_database().await;
     let ceph = with_ceph.then(ceph_manager);
-    let volume_service = service(db.clone(), ceph).await;
-    create_router(AppState {
-        db,
-        etcd: raw_etcd().await,
-        volume_service,
-    })
+    let volume_service = service(db.clone(), ceph);
+    create_router(AppState { db, volume_service })
 }
 
 pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
@@ -194,22 +137,4 @@ pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
     id
 }
 
-pub async fn call(
-    app: &Router,
-    method: Method,
-    uri: &str,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let payload = body.map_or_else(Body::empty, |value| Body::from(value.to_string()));
-    let request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .body(payload)
-        .unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    (status, json)
-}
+pub use test_support::{call, migrated_database};

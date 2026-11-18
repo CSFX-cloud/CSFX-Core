@@ -18,7 +18,9 @@ use crate::models::workload::{
     UpdateWorkloadRequest, WorkloadStatus,
 };
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
-use crate::services::scheduler::{SchedulerService, NO_SURGE_TARGET, REPLACEMENT_EXISTS};
+use crate::services::scheduler::{
+    notify_assigned, SchedulerService, NO_SURGE_TARGET, REPLACEMENT_EXISTS,
+};
 
 const READY_HOLD: Duration = Duration::from_secs(10);
 const MAX_REPLACEMENT_AGE_SECONDS: i64 = 600;
@@ -438,13 +440,8 @@ impl SchedulerService {
         {
             tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
         }
-        if let (Some(agent_id), Some(updated)) = (
-            new.assigned_agent_id,
-            crate::db::workloads::get_by_id(&self.db, replacement_id)
-                .await
-                .map_err(|e| e.to_string())?,
-        ) {
-            self.record_placement(&updated, agent_id).await?;
+        if let Some(agent_id) = new.assigned_agent_id {
+            notify_assigned(agent_id);
         }
         tracing::info!(workload = %replacement_id, replaced = %replaced_id, "replacement took over");
         Ok(true)
