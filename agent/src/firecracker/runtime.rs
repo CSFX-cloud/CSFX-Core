@@ -195,10 +195,9 @@ struct VmHandle {
     tap_device: String,
     vsock_cid: u32,
     resource_group_id: Option<String>,
-    guest_ip: Option<String>,
     cgroup_path: PathBuf,
     metrics_path: PathBuf,
-    previous_cpu_sample: Mutex<Option<(std::time::Instant, u64)>>,
+    previous_cpu_sample: Arc<Mutex<Option<(std::time::Instant, u64)>>>,
 }
 
 struct GuestNetwork {
@@ -475,8 +474,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
                 tap_device,
                 vsock_cid,
                 resource_group_id: spec.resource_group_id.clone(),
-                guest_ip,
-                previous_cpu_sample: Mutex::new(None),
+                previous_cpu_sample: Arc::default(),
             },
         );
 
@@ -571,20 +569,20 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 
     async fn stats(&self, workload_handle: &str) -> Result<crate::runtime::ContainerStats> {
-        let (cpu_usage_percent, memory_usage_bytes, metrics_path, chroot_dir) = {
+        let (cgroup_path, previous_cpu_sample, metrics_path, chroot_dir) = {
             let handles = self.handles.lock().await;
             let Some(handle) = handles.get(workload_handle) else {
                 return Ok(crate::runtime::ContainerStats::default());
             };
-            let cpu_usage_percent = read_cpu_usage_percent(handle).await;
-            let memory_usage_bytes = read_memory_usage_bytes(&handle.cgroup_path).await;
             (
-                cpu_usage_percent,
-                memory_usage_bytes,
+                handle.cgroup_path.clone(),
+                Arc::clone(&handle.previous_cpu_sample),
                 handle.metrics_path.clone(),
                 handle.chroot_dir.clone(),
             )
         };
+        let cpu_usage_percent = read_cpu_usage_percent(&cgroup_path, &previous_cpu_sample).await;
+        let memory_usage_bytes = read_memory_usage_bytes(&cgroup_path).await;
 
         let (network_rx_bytes, network_tx_bytes) = read_network_bytes(&metrics_path).await.unzip();
         let volume_usage = read_volume_usage(&chroot_dir, workload_handle).await;
@@ -596,17 +594,6 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
             network_tx_bytes,
             volume_usage,
         })
-    }
-
-    async fn service_network_ip(
-        &self,
-        workload_handle: &str,
-        _network_name: &str,
-    ) -> Result<Option<String>> {
-        let handles = self.handles.lock().await;
-        Ok(handles
-            .get(workload_handle)
-            .and_then(|h| h.guest_ip.clone()))
     }
 
     async fn list_managed_workloads(&self) -> Result<Vec<(String, String)>> {
@@ -649,8 +636,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
                 tap_device: sidecar.tap_device,
                 vsock_cid: sidecar.vsock_cid,
                 resource_group_id: sidecar.resource_group_id,
-                guest_ip: sidecar.guest_ip,
-                previous_cpu_sample: Mutex::new(None),
+                previous_cpu_sample: Arc::default(),
             };
 
             self.handles
@@ -665,11 +651,14 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 }
 
-async fn read_cpu_usage_percent(handle: &VmHandle) -> Option<f64> {
-    let usage_usec = read_cgroup_u64(&handle.cgroup_path, "cpu.stat", "usage_usec").await?;
+async fn read_cpu_usage_percent(
+    cgroup_path: &Path,
+    previous_sample: &Mutex<Option<(std::time::Instant, u64)>>,
+) -> Option<f64> {
+    let usage_usec = read_cgroup_u64(cgroup_path, "cpu.stat", "usage_usec").await?;
     let now = std::time::Instant::now();
 
-    let mut previous = handle.previous_cpu_sample.lock().await;
+    let mut previous = previous_sample.lock().await;
     let percent = match *previous {
         Some((previous_time, previous_usage)) => {
             let elapsed_usec = now.duration_since(previous_time).as_micros() as u64;
@@ -1602,10 +1591,9 @@ mod tests {
             tap_device: "fctap1".to_string(),
             vsock_cid: cid,
             resource_group_id: None,
-            guest_ip: Some("10.0.0.3".to_string()),
             cgroup_path: dir.join("cgroup"),
             metrics_path: dir.join("metrics.fifo"),
-            previous_cpu_sample: Mutex::new(None),
+            previous_cpu_sample: Arc::default(),
         }
     }
 
@@ -1672,7 +1660,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_and_network_follow_the_tracked_handles() {
+    async fn status_follows_the_tracked_handles() {
         let runtime = runtime();
         let dir = temp_dir();
         assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
@@ -1682,19 +1670,6 @@ mod tests {
             .await
             .insert("w".to_string(), handle("w", 1, &dir));
         assert_eq!(runtime.inspect_status("w").await.unwrap(), "running");
-        assert_eq!(
-            runtime
-                .service_network_ip("w", "n")
-                .await
-                .unwrap()
-                .as_deref(),
-            Some("10.0.0.3")
-        );
-        assert!(runtime
-            .service_network_ip("x", "n")
-            .await
-            .unwrap()
-            .is_none());
         runtime
             .handles
             .lock()
@@ -1870,7 +1845,6 @@ mod tests {
             env_vars: None,
             ports,
             volume_mounts: None,
-            service_name: None,
             resource_group_id: None,
             resource_group_cidr: cidr.map(str::to_string),
             guest_ip: None,

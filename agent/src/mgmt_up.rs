@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use tracing::info;
 
-use crate::{config, wg_identity, wireguard, MGMT_WG_PORT};
+use crate::config::MGMT_WG_PORT;
+use crate::{config, wg_identity, wireguard};
 
 pub async fn run() -> Result<()> {
     let tunnel_ip = config::load_config()?

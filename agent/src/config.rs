@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use uuid::Uuid;
 
+pub const MGMT_WG_PORT: u16 = 51820;
 const STATE_DIR: &str = "/var/lib/csfx-agent";
 const CREDENTIALS_FILE: &str = "/var/lib/csfx-agent/credentials";
 const CONFIG_FILE: &str = "/var/lib/csfx-agent/config.json";

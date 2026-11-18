@@ -1359,7 +1359,7 @@ mod tests {
                 Uuid::new_v4(),
                 "key",
                 Some(statuses),
-                Some(crate::system::collect_metrics()),
+                Some(crate::system::LiveMetricsCollector::new().sample()),
             )
             .await
             .unwrap();
