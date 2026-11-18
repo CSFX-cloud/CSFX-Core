@@ -50,10 +50,7 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    let state = server::AppState {
-        db,
-        volume_service,
-    };
+    let state = server::AppState { db, volume_service };
 
     let app = server::create_router(state);
 
