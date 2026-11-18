@@ -7,7 +7,11 @@ use crate::common::harness;
 const ADMIN_CASES: [(&str, &str, &str); 13] = [
     ("POST", "/agents/pre-register", "/admin/agents/pre-register"),
     ("GET", "/agents/pending", "/admin/agents/pending"),
-    ("DELETE", "/agents/pending/{id}", "/admin/agents/pending/{id}"),
+    (
+        "DELETE",
+        "/agents/pending/{id}",
+        "/admin/agents/pending/{id}",
+    ),
     ("POST", "/bootstrap-tokens", "/admin/bootstrap-tokens"),
     ("GET", "/bootstrap-tokens", "/admin/bootstrap-tokens"),
     (
