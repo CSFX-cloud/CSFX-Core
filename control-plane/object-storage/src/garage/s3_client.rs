@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use aws_credential_types::Credentials;
 use aws_sigv4::http_request::{
-    sign, PercentEncodingMode, SignableBody, SignableRequest, SignatureLocation, SigningSettings,
+    sign, PayloadChecksumKind, PercentEncodingMode, SignableBody, SignableRequest,
+    SignatureLocation, SigningSettings,
 };
 use aws_sigv4::sign::v4;
 use percent_encoding::AsciiSet;
@@ -213,6 +214,86 @@ impl S3Client {
         Ok(())
     }
 
+    async fn send_signed(
+        &self,
+        method: reqwest::Method,
+        bucket: &str,
+        key: &str,
+        access_key_id: &str,
+        secret_access_key: &str,
+        body: Vec<u8>,
+    ) -> Result<reqwest::Response> {
+        let url = format!("{}/{}/{}", self.s3_url, bucket, encode_key(key));
+        let identity = Self::identity(access_key_id, secret_access_key);
+        let mut settings = SigningSettings::default();
+        settings.payload_checksum_kind = PayloadChecksumKind::XAmzSha256;
+        settings.percent_encoding_mode = PercentEncodingMode::Single;
+        let params = Self::signing_params(&identity, settings)?;
+        let signable = SignableRequest::new(
+            method.as_str(),
+            &url,
+            std::iter::empty(),
+            SignableBody::Bytes(&body),
+        )
+        .context("failed to build signable request")?;
+        let (instructions, _) = sign(signable, &params.into())
+            .context("failed to sign request")?
+            .into_parts();
+        let mut request = self.http.request(method.clone(), &url);
+        for (name, value) in instructions.headers() {
+            request = request.header(name, value);
+        }
+        let response = request
+            .body(body)
+            .send()
+            .await
+            .with_context(|| format!("{method} object request failed"))?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        let status = response.status();
+        let detail = response.text().await.unwrap_or_default();
+        anyhow::bail!("{} object failed status={} body={}", method, status, detail)
+    }
+
+    pub async fn get_object(
+        &self,
+        bucket: &str,
+        access_key_id: &str,
+        secret_access_key: &str,
+        key: &str,
+    ) -> Result<reqwest::Response> {
+        self.send_signed(
+            reqwest::Method::GET,
+            bucket,
+            key,
+            access_key_id,
+            secret_access_key,
+            Vec::new(),
+        )
+        .await
+    }
+
+    pub async fn put_object(
+        &self,
+        bucket: &str,
+        access_key_id: &str,
+        secret_access_key: &str,
+        key: &str,
+        body: Vec<u8>,
+    ) -> Result<()> {
+        self.send_signed(
+            reqwest::Method::PUT,
+            bucket,
+            key,
+            access_key_id,
+            secret_access_key,
+            body,
+        )
+        .await
+        .map(drop)
+    }
+
     pub fn presign_url(
         &self,
         method: &str,
@@ -271,7 +352,9 @@ fn parse_list_objects_xml(body: &str) -> Result<ListObjectsResult> {
     for segment in body.split("<Contents>").skip(1) {
         let end = segment.find("</Contents>").unwrap_or(segment.len());
         let entry = &segment[..end];
-        let key = extract_xml_tag(entry, "Key").unwrap_or_default();
+        let key = extract_xml_tag(entry, "Key")
+            .map(|raw| unescape_xml(&raw))
+            .unwrap_or_default();
         let size = extract_xml_tag(entry, "Size")
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
@@ -304,4 +387,43 @@ fn extract_xml_tag(input: &str, tag: &str) -> Option<String> {
     let start = input.find(&open)? + open.len();
     let end = input[start..].find(&close)? + start;
     Some(input[start..end].to_string())
+}
+
+fn encode_key(key: &str) -> String {
+    key.split('/')
+        .map(|segment| percent_encoding::utf8_percent_encode(segment, SIGV4_UNRESERVED).to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn unescape_xml(input: &str) -> String {
+    input
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_keys_are_unescaped() {
+        let body = "<ListBucketResult><Contents><Key>a&amp;b&lt;c&gt;/d&quot;e&apos;f</Key><Size>3</Size><LastModified>x</LastModified></Contents></ListBucketResult>";
+        let result = parse_list_objects_xml(body).unwrap();
+        assert_eq!(result.objects[0].key, "a&b<c>/d\"e'f");
+    }
+
+    #[test]
+    fn keys_keep_their_slashes_and_encode_segments() {
+        assert_eq!(encode_key("dir/a b/c&d.txt"), "dir/a%20b/c%26d.txt");
+        assert_eq!(encode_key("flat"), "flat");
+    }
+
+    #[test]
+    fn ampersand_entities_are_not_double_decoded() {
+        assert_eq!(unescape_xml("&amp;lt;"), "&lt;");
+    }
 }

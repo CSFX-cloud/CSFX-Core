@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod crypto;
 pub mod db;
 pub mod garage;

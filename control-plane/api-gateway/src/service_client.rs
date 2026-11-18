@@ -3,6 +3,8 @@ use reqwest::{Client, RequestBuilder, StatusCode};
 use shared::observability::{current_request_id, REQUEST_ID_HEADER};
 use std::time::Duration;
 
+const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(300);
+
 #[derive(Clone, Copy)]
 pub enum ListTarget {
     Scheduler,
@@ -48,6 +50,7 @@ fn with_forwarded_headers(
 #[derive(Clone)]
 pub struct ServiceClient {
     client: Client,
+    stream_client: Client,
     registry_url: String,
     scheduler_url: String,
     volume_manager_url: String,
@@ -81,8 +84,15 @@ impl ServiceClient {
             .build()
             .expect("Failed to create HTTP client");
 
+        let stream_client = Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(STREAM_READ_TIMEOUT)
+            .build()
+            .expect("Failed to create streaming HTTP client");
+
         Self {
             client,
+            stream_client,
             registry_url,
             scheduler_url,
             volume_manager_url,
@@ -90,6 +100,50 @@ impl ServiceClient {
             sdn_controller_url,
             object_storage_url,
         }
+    }
+
+    async fn stream_to(
+        &self,
+        base_url: &str,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<reqwest::Body>,
+    ) -> Result<reqwest::Response> {
+        let url = format!("{base_url}{path}");
+        let mut request = with_forwarded_headers(self.stream_client.request(method, &url), None);
+        if let Some(body) = body {
+            request = request.body(body);
+        }
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("streaming request to {url} failed"))?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        let status = response.status();
+        let detail = response.text().await.unwrap_or_default();
+        Err(anyhow::anyhow!("{url} answered {status}: {detail}"))
+    }
+
+    pub async fn stream_object_storage(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<reqwest::Body>,
+    ) -> Result<reqwest::Response> {
+        self.stream_to(&self.object_storage_url, method, path, body)
+            .await
+    }
+
+    pub async fn stream_volume_manager(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<reqwest::Body>,
+    ) -> Result<reqwest::Response> {
+        self.stream_to(&self.volume_manager_url, method, path, body)
+            .await
     }
 
     pub async fn forward_list(

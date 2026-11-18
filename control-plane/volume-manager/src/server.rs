@@ -25,6 +25,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health_check))
         .route("/volumes", axum::routing::post(volumes::create_volume))
         .route("/volumes", get(volumes::list_volumes))
+        .route(
+            "/volumes/import",
+            axum::routing::post(volumes::import_volume),
+        )
+        .route("/volumes/{id}/export", get(volumes::export_volume))
         .route("/volumes/{id}", get(volumes::get_volume))
         .route(
             "/volumes/{id}",

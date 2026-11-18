@@ -26,12 +26,12 @@ impl From<String> for ServiceError {
     }
 }
 
-const IMAGE_FEATURES: [&str; 2] = ["layering", "exclusive-lock"];
+pub(crate) const IMAGE_FEATURES: [&str; 2] = ["layering", "exclusive-lock"];
 
 pub struct VolumeService {
-    db: DatabaseConnection,
+    pub(crate) db: DatabaseConnection,
     _etcd: Arc<Mutex<EtcdClient>>,
-    ceph: Option<Arc<CephManager>>,
+    pub(crate) ceph: Option<Arc<CephManager>>,
 }
 
 impl VolumeService {
@@ -73,7 +73,11 @@ impl VolumeService {
         self.mark(model.id, VolumeStatus::Available).await
     }
 
-    async fn mark(&self, id: Uuid, status: VolumeStatus) -> Result<VolumeResponse, String> {
+    pub(crate) async fn mark(
+        &self,
+        id: Uuid,
+        status: VolumeStatus,
+    ) -> Result<VolumeResponse, String> {
         let model = db::set_status(&self.db, id, status)
             .await
             .map_err(|e| e.to_string())?;

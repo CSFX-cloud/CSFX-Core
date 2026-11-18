@@ -26,6 +26,7 @@ pub mod cluster;
 pub mod cluster_vip;
 pub mod dns_records;
 pub mod events;
+pub mod exports;
 pub mod identity_providers;
 pub mod image_resolution;
 pub mod ingress;
@@ -206,6 +207,7 @@ pub fn create_router(state: AppState) -> Router<AppState> {
         .merge(logs::logs_routes())
         .merge(topology::topology_routes())
         .merge(settings::settings_routes())
+        .merge(exports::exports_routes())
         .merge(s3_proxy::s3_proxy_routes())
         .layer(axum::middleware::from_fn(crate::audit::audit_user_actions))
         .layer(axum::middleware::from_fn_with_state(

@@ -1,8 +1,9 @@
 use super::types::*;
 use crate::ceph::core::error::CephError;
-use crate::ceph::core::CephClient;
+use crate::ceph::core::{CephClient, CephProcess};
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::process::Stdio;
 
 pub struct RbdManager {
     client: CephClient,
@@ -127,6 +128,40 @@ impl RbdManager {
             .await
             .context("Failed to list RBD images")?;
         serde_json::from_str(&output).context("Invalid RBD image list output")
+    }
+
+    pub async fn export_stream(
+        &self,
+        pool: &str,
+        image: &str,
+        snapshot: &str,
+    ) -> Result<CephProcess> {
+        let cmd = CephCommand::new("export")
+            .arg("--no-progress")
+            .arg(format!("{}/{}@{}", pool, image, snapshot))
+            .arg("-");
+        self.client
+            .spawn_rbd(cmd, Stdio::null(), Stdio::piped())
+            .await
+            .context("Failed to start RBD export")
+    }
+
+    pub async fn import_stream(
+        &self,
+        pool: &str,
+        image: &str,
+        features: &[&str],
+    ) -> Result<CephProcess> {
+        let cmd = CephCommand::new("import")
+            .arg("--no-progress")
+            .arg("--image-feature")
+            .arg(features.join(","))
+            .arg("-")
+            .arg(format!("{}/{}", pool, image));
+        self.client
+            .spawn_rbd(cmd, Stdio::piped(), Stdio::null())
+            .await
+            .context("Failed to start RBD import")
     }
 
     pub async fn purge_snapshots(&self, pool: &str, image: &str) -> Result<()> {

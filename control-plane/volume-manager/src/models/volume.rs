@@ -68,6 +68,14 @@ pub struct CreateVolumeRequest {
     pub resource_group_id: Option<Uuid>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportVolumeQuery {
+    pub name: String,
+    pub size_gb: i32,
+    pub pool: Option<String>,
+    pub resource_group_id: Option<Uuid>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResizeVolumeRequest {
     pub size_gb: i32,

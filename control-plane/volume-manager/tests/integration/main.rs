@@ -5,4 +5,5 @@ mod etcd_core;
 mod etcd_ha;
 mod etcd_state;
 mod patroni;
+mod transfer_api;
 mod volumes_api;
