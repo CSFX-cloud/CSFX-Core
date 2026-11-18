@@ -95,10 +95,7 @@ pub async fn router(with_ceph: bool) -> Router {
     let db = migrated_database().await;
     let ceph = with_ceph.then(ceph_manager);
     let volume_service = service(db.clone(), ceph);
-    create_router(AppState {
-        db,
-        volume_service,
-    })
+    create_router(AppState { db, volume_service })
 }
 
 pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
@@ -139,6 +136,5 @@ pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
     .expect("agent must be inserted");
     id
 }
-
 
 pub use test_support::{call, migrated_database};

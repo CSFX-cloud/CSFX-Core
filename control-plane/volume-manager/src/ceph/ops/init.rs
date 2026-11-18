@@ -45,15 +45,13 @@ pub async fn init_ceph() -> Result<CephManager> {
     let pool_manager = PoolManager::new(client.clone());
 
     // Standard-Pools erstellen
-    let pools = vec![
-        CephPool {
-            name: config.default_pool.clone(),
-            pg_num: config.default_pg_num,
-            pgp_num: config.default_pg_num,
-            size: config.default_replication,
-            min_size: 2,
-        },
-    ];
+    let pools = vec![CephPool {
+        name: config.default_pool.clone(),
+        pg_num: config.default_pg_num,
+        pgp_num: config.default_pg_num,
+        size: config.default_replication,
+        min_size: 2,
+    }];
 
     for pool in pools {
         crate::log_debug!(
