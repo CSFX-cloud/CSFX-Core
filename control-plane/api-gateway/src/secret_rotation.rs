@@ -1,3 +1,4 @@
+use crate::service_client::Service;
 use crate::{
     openbao::OpenBaoError,
     site_service::{source_vault, SiteError},
@@ -237,7 +238,7 @@ async fn restart(state: &AppState, workload_id: Uuid) -> Result<(), SiteError> {
     let path = format!("/workloads/{workload_id}/restart");
     match state
         .service_client
-        .forward_to_scheduler(reqwest::Method::POST, &path, None, None)
+        .call_json(Service::Scheduler, reqwest::Method::POST, &path, None)
         .await
     {
         Ok((status, _)) if status.is_success() => Ok(()),

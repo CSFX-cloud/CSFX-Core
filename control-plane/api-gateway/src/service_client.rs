@@ -1,52 +1,89 @@
-use anyhow::{Context, Result};
-use reqwest::{Client, RequestBuilder, StatusCode};
+use anyhow::{bail, Context, Result};
+use axum::{
+    body::Bytes,
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
+    response::{IntoResponse, Response},
+};
+use reqwest::Client;
 use shared::observability::{current_request_id, REQUEST_ID_HEADER};
 use std::time::Duration;
 
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
-#[derive(Clone, Copy)]
-pub enum ListTarget {
+const FORWARDED_REQUEST_HEADERS: [header::HeaderName; 3] = [
+    header::ACCEPT,
+    header::ACCEPT_LANGUAGE,
+    header::CONTENT_TYPE,
+];
+
+#[derive(Clone, Copy, Debug)]
+pub enum Service {
+    Registry,
     Scheduler,
     VolumeManager,
     FailoverController,
+    SdnController,
     ObjectStorage,
 }
 
-pub struct ListReply {
+pub struct Upstream {
     pub status: StatusCode,
-    pub body: Option<serde_json::Value>,
-    pub next_cursor: Option<String>,
+    pub headers: HeaderMap,
+    pub body: Bytes,
 }
 
-const SKIPPED_HEADERS: [&str; 5] = [
-    "content-length",
-    "host",
-    "content-type",
-    "transfer-encoding",
-    "x-request-id",
-];
+impl Upstream {
+    pub fn json(&self) -> Option<serde_json::Value> {
+        serde_json::from_slice(&self.body).ok()
+    }
+}
 
-fn with_forwarded_headers(
-    mut request: RequestBuilder,
-    headers: Option<Vec<(String, String)>>,
-) -> RequestBuilder {
-    for (key, value) in headers.into_iter().flatten() {
-        if SKIPPED_HEADERS
-            .iter()
-            .any(|skipped| key.eq_ignore_ascii_case(skipped))
-        {
-            continue;
+impl IntoResponse for Upstream {
+    fn into_response(self) -> Response {
+        (self.status, self.headers, self.body).into_response()
+    }
+}
+
+fn request_headers(source: &HeaderMap, has_body: bool) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for name in FORWARDED_REQUEST_HEADERS {
+        if let Some(value) = source.get(&name) {
+            headers.insert(name, value.clone());
         }
-        request = request.header(key, value);
     }
-    match current_request_id() {
-        Some(id) => request.header(REQUEST_ID_HEADER.clone(), id),
-        None => request,
+    if has_body && !headers.contains_key(header::CONTENT_TYPE) {
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
     }
+    if let Some(id) = current_request_id() {
+        headers.insert(REQUEST_ID_HEADER.clone(), id);
+    }
+    headers
 }
 
-/// HTTP Client for internal service-to-service communication
+fn response_headers(source: &HeaderMap) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    for name in [
+        header::CONTENT_TYPE,
+        header::HeaderName::from_static(shared::pagination::NEXT_CURSOR_HEADER),
+    ] {
+        if let Some(value) = source.get(&name) {
+            headers.insert(name, value.clone());
+        }
+    }
+    headers
+}
+
+fn reject_traversal(path: &str) -> Result<()> {
+    let route = path.split_once('?').map_or(path, |(route, _)| route);
+    if route.split('/').any(|segment| segment == "..") {
+        bail!("path traversal rejected path={route}");
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct ServiceClient {
     client: Client,
@@ -102,15 +139,30 @@ impl ServiceClient {
         }
     }
 
+    fn base_url(&self, service: Service) -> &str {
+        match service {
+            Service::Registry => &self.registry_url,
+            Service::Scheduler => &self.scheduler_url,
+            Service::VolumeManager => &self.volume_manager_url,
+            Service::FailoverController => &self.failover_controller_url,
+            Service::SdnController => &self.sdn_controller_url,
+            Service::ObjectStorage => &self.object_storage_url,
+        }
+    }
+
     async fn stream_to(
         &self,
-        base_url: &str,
-        method: reqwest::Method,
+        service: Service,
+        method: Method,
         path: &str,
         body: Option<reqwest::Body>,
     ) -> Result<reqwest::Response> {
-        let url = format!("{base_url}{path}");
-        let mut request = with_forwarded_headers(self.stream_client.request(method, &url), None);
+        reject_traversal(path)?;
+        let url = format!("{}{path}", self.base_url(service));
+        let mut request = self
+            .stream_client
+            .request(method, &url)
+            .headers(request_headers(&HeaderMap::new(), false));
         if let Some(body) = body {
             request = request.body(body);
         }
@@ -128,334 +180,82 @@ impl ServiceClient {
 
     pub async fn stream_object_storage(
         &self,
-        method: reqwest::Method,
+        method: Method,
         path: &str,
         body: Option<reqwest::Body>,
     ) -> Result<reqwest::Response> {
-        self.stream_to(&self.object_storage_url, method, path, body)
+        self.stream_to(Service::ObjectStorage, method, path, body)
             .await
     }
 
     pub async fn stream_volume_manager(
         &self,
-        method: reqwest::Method,
+        method: Method,
         path: &str,
         body: Option<reqwest::Body>,
     ) -> Result<reqwest::Response> {
-        self.stream_to(&self.volume_manager_url, method, path, body)
+        self.stream_to(Service::VolumeManager, method, path, body)
             .await
     }
 
-    pub async fn forward_list(
+    pub async fn forward(
         &self,
-        target: ListTarget,
-        path_and_query: &str,
-        headers: Vec<(String, String)>,
-    ) -> Result<ListReply> {
-        let base = match target {
-            ListTarget::Scheduler => &self.scheduler_url,
-            ListTarget::VolumeManager => &self.volume_manager_url,
-            ListTarget::FailoverController => &self.failover_controller_url,
-            ListTarget::ObjectStorage => &self.object_storage_url,
-        };
-        let request = with_forwarded_headers(
-            self.client.get(format!("{}{}", base, path_and_query)),
-            Some(headers),
-        );
+        service: Service,
+        method: Method,
+        path: &str,
+        headers: &HeaderMap,
+        body: impl Into<Bytes>,
+    ) -> Result<Upstream> {
+        reject_traversal(path)?;
+        let body = body.into();
+        let url = format!("{}{path}", self.base_url(service));
+        tracing::debug!(service = ?service, method = %method, url = %url, "forwarding request");
+        let mut request = self
+            .client
+            .request(method, &url)
+            .headers(request_headers(headers, !body.is_empty()));
+        if !body.is_empty() {
+            request = request.body(body);
+        }
         let response = request
             .send()
             .await
-            .context("Failed to send list request to service")?;
+            .with_context(|| format!("request to {url} failed"))?;
         let status = response.status();
-        let next_cursor = response
-            .headers()
-            .get(shared::pagination::NEXT_CURSOR_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string);
+        let headers = response_headers(response.headers());
         let body = response
-            .text()
+            .bytes()
             .await
-            .ok()
-            .filter(|text| !text.is_empty())
-            .and_then(|text| serde_json::from_str(&text).ok());
-        Ok(ListReply {
+            .with_context(|| format!("reading response from {url} failed"))?;
+        Ok(Upstream {
             status,
+            headers,
             body,
-            next_cursor,
         })
     }
 
-    /// Forward a request to the registry service
-    pub async fn forward_to_registry(
+    /// Health check for registry service
+    pub async fn call_json(
         &self,
-        method: reqwest::Method,
+        service: Service,
+        method: Method,
         path: &str,
         body: Option<serde_json::Value>,
-        headers: Option<Vec<(String, String)>>,
     ) -> Result<(StatusCode, Option<serde_json::Value>)> {
-        let url = format!("{}{}", self.registry_url, path);
-
-        tracing::debug!("Forwarding {} request to: {}", method, url);
-
-        let mut request = match method {
-            reqwest::Method::GET => self.client.get(&url),
-            reqwest::Method::POST => self.client.post(&url),
-            reqwest::Method::PUT => self.client.put(&url),
-            reqwest::Method::DELETE => self.client.delete(&url),
-            reqwest::Method::PATCH => self.client.patch(&url),
-            _ => {
-                return Err(anyhow::anyhow!("Unsupported HTTP method"));
-            }
-        };
-
-        request = with_forwarded_headers(request, headers);
-
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-
-        let response = request
-            .send()
-            .await
-            .context("Failed to send request to registry service")?;
-
-        let status = response.status();
-        let body_text = response.text().await.ok();
-
-        let json_body = body_text.and_then(|text| {
-            if text.is_empty() {
-                None
-            } else {
-                serde_json::from_str(&text).ok()
-            }
-        });
-
-        Ok((status, json_body))
+        let body = body.map_or_else(Bytes::new, |value| Bytes::from(value.to_string()));
+        let upstream = self
+            .forward(service, method, path, &HeaderMap::new(), body)
+            .await?;
+        let json = upstream.json();
+        Ok((upstream.status, json))
     }
 
-    /// Health check for registry service
     pub async fn check_registry_health(&self) -> bool {
         let url = format!("{}/health", self.registry_url);
         match self.client.get(&url).send().await {
             Ok(response) => response.status().is_success(),
             Err(_) => false,
         }
-    }
-
-    pub async fn forward_to_scheduler(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        body: Option<serde_json::Value>,
-        headers: Option<Vec<(String, String)>>,
-    ) -> Result<(StatusCode, Option<serde_json::Value>)> {
-        let url = format!("{}{}", self.scheduler_url, path);
-
-        tracing::debug!("Forwarding {} request to scheduler: {}", method, url);
-
-        let mut request = match method {
-            reqwest::Method::GET => self.client.get(&url),
-            reqwest::Method::POST => self.client.post(&url),
-            reqwest::Method::DELETE => self.client.delete(&url),
-            reqwest::Method::PATCH => self.client.patch(&url),
-            _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
-        };
-
-        request = with_forwarded_headers(request, headers);
-
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-
-        let response = request
-            .send()
-            .await
-            .context("Failed to send request to scheduler service")?;
-
-        let status = response.status();
-        let body_text = response.text().await.ok();
-        let json_body = body_text.and_then(|text| {
-            if text.is_empty() {
-                None
-            } else {
-                serde_json::from_str(&text).ok()
-            }
-        });
-
-        Ok((status, json_body))
-    }
-
-    pub async fn forward_to_volume_manager(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        body: Option<serde_json::Value>,
-        headers: Option<Vec<(String, String)>>,
-    ) -> Result<(StatusCode, Option<serde_json::Value>)> {
-        let url = format!("{}{}", self.volume_manager_url, path);
-
-        tracing::debug!("Forwarding {} request to volume-manager: {}", method, url);
-
-        let mut request = match method {
-            reqwest::Method::GET => self.client.get(&url),
-            reqwest::Method::POST => self.client.post(&url),
-            reqwest::Method::DELETE => self.client.delete(&url),
-            _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
-        };
-
-        request = with_forwarded_headers(request, headers);
-
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-
-        let response = request
-            .send()
-            .await
-            .context("Failed to send request to volume-manager service")?;
-
-        let status = response.status();
-        let body_text = response.text().await.ok();
-        let json_body = body_text.and_then(|text| {
-            if text.is_empty() {
-                None
-            } else {
-                serde_json::from_str(&text).ok()
-            }
-        });
-
-        Ok((status, json_body))
-    }
-
-    pub async fn forward_to_failover_controller(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        body: Option<serde_json::Value>,
-        headers: Option<Vec<(String, String)>>,
-    ) -> Result<(StatusCode, Option<serde_json::Value>)> {
-        let url = format!("{}{}", self.failover_controller_url, path);
-
-        tracing::debug!(
-            "Forwarding {} request to failover-controller: {}",
-            method,
-            url
-        );
-
-        let mut request = match method {
-            reqwest::Method::GET => self.client.get(&url),
-            reqwest::Method::POST => self.client.post(&url),
-            reqwest::Method::DELETE => self.client.delete(&url),
-            _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
-        };
-
-        request = with_forwarded_headers(request, headers);
-
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-
-        let response = request
-            .send()
-            .await
-            .context("Failed to send request to failover-controller service")?;
-
-        let status = response.status();
-        let body_text = response.text().await.ok();
-        let json_body = body_text.and_then(|text| {
-            if text.is_empty() {
-                None
-            } else {
-                serde_json::from_str(&text).ok()
-            }
-        });
-
-        Ok((status, json_body))
-    }
-
-    pub async fn forward_to_sdn_controller(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        body: Option<serde_json::Value>,
-        headers: Option<Vec<(String, String)>>,
-    ) -> Result<(StatusCode, Option<serde_json::Value>)> {
-        let url = format!("{}{}", self.sdn_controller_url, path);
-
-        tracing::debug!("Forwarding {} request to sdn-controller: {}", method, url);
-
-        let mut request = match method {
-            reqwest::Method::GET => self.client.get(&url),
-            reqwest::Method::POST => self.client.post(&url),
-            reqwest::Method::DELETE => self.client.delete(&url),
-            _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
-        };
-
-        request = with_forwarded_headers(request, headers);
-
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-
-        let response = request
-            .send()
-            .await
-            .context("Failed to send request to sdn-controller service")?;
-
-        let status = response.status();
-        let body_text = response.text().await.ok();
-        let json_body = body_text.and_then(|text| {
-            if text.is_empty() {
-                None
-            } else {
-                serde_json::from_str(&text).ok()
-            }
-        });
-
-        Ok((status, json_body))
-    }
-
-    pub async fn forward_to_object_storage(
-        &self,
-        method: reqwest::Method,
-        path: &str,
-        body: Option<serde_json::Value>,
-        headers: Option<Vec<(String, String)>>,
-    ) -> Result<(StatusCode, Option<serde_json::Value>)> {
-        let url = format!("{}{}", self.object_storage_url, path);
-
-        tracing::debug!("Forwarding {} request to object-storage: {}", method, url);
-
-        let mut request = match method {
-            reqwest::Method::GET => self.client.get(&url),
-            reqwest::Method::POST => self.client.post(&url),
-            reqwest::Method::PATCH => self.client.patch(&url),
-            reqwest::Method::DELETE => self.client.delete(&url),
-            _ => return Err(anyhow::anyhow!("Unsupported HTTP method")),
-        };
-
-        request = with_forwarded_headers(request, headers);
-
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-
-        let response = request
-            .send()
-            .await
-            .context("Failed to send request to object-storage service")?;
-
-        let status = response.status();
-        let body_text = response.text().await.ok();
-        let json_body = body_text.and_then(|text| {
-            if text.is_empty() {
-                None
-            } else {
-                serde_json::from_str(&text).ok()
-            }
-        });
-
-        Ok((status, json_body))
     }
 }
 
@@ -470,7 +270,6 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::extract::Request;
-    use axum::http::HeaderMap;
     use axum::routing::get;
     use axum::{Json, Router};
     use http_body_util::BodyExt;
@@ -505,21 +304,17 @@ mod tests {
         let handler = move |request: Request| {
             let client = client.clone();
             async move {
-                let headers = request
-                    .headers()
-                    .iter()
-                    .map(|(name, value)| {
-                        (
-                            name.to_string(),
-                            value.to_str().unwrap_or_default().to_string(),
-                        )
-                    })
-                    .collect();
-                let (_, body) = client
-                    .forward_to_registry(reqwest::Method::GET, "/echo", None, Some(headers))
+                let upstream = client
+                    .forward(
+                        Service::Registry,
+                        Method::GET,
+                        "/echo",
+                        request.headers(),
+                        Bytes::new(),
+                    )
                     .await
                     .unwrap();
-                Json(body.unwrap())
+                Json(upstream.json().unwrap())
             }
         };
         shared::observability::instrument(Router::new().route("/forward", get(handler)))
@@ -568,11 +363,65 @@ mod tests {
         let mut client = client();
         client.registry_url = spawn_mock_registry().await;
 
-        let (_, body) = client
-            .forward_to_registry(reqwest::Method::GET, "/echo", None, None)
+        let upstream = client
+            .forward(
+                Service::Registry,
+                Method::GET,
+                "/echo",
+                &HeaderMap::new(),
+                Bytes::new(),
+            )
             .await
             .unwrap();
 
-        assert_eq!(body.unwrap()["ids"], json!([]));
+        assert_eq!(upstream.json().unwrap()["ids"], json!([]));
+    }
+
+    async fn echo_text(headers: HeaderMap, body: String) -> (StatusCode, String) {
+        let has_credentials =
+            headers.contains_key("authorization") || headers.contains_key("cookie");
+        (StatusCode::IM_A_TEAPOT, format!("{has_credentials}:{body}"))
+    }
+
+    #[tokio::test]
+    async fn any_method_and_non_json_body_pass_through_without_credentials() {
+        let router = Router::new().route("/echo", axum::routing::put(echo_text));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut client = client();
+        client.registry_url = url;
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret".parse().unwrap());
+        headers.insert("cookie", "session=1".parse().unwrap());
+
+        let upstream = client
+            .forward(
+                Service::Registry,
+                Method::PUT,
+                "/echo",
+                &headers,
+                "plain text",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(upstream.status, StatusCode::IM_A_TEAPOT);
+        assert_eq!(upstream.body, Bytes::from("false:plain text"));
+    }
+
+    #[tokio::test]
+    async fn path_traversal_is_rejected() {
+        let result = client()
+            .forward(
+                Service::Registry,
+                Method::GET,
+                "/admin/../secrets",
+                &HeaderMap::new(),
+                Bytes::new(),
+            )
+            .await;
+
+        assert!(result.is_err());
     }
 }

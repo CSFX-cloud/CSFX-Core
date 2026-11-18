@@ -1,3 +1,4 @@
+use crate::service_client::Service;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -254,11 +255,11 @@ pub async fn push_self_workload_stats(
     payload.insert("agent_id".to_string(), serde_json::json!(agent.agent_id));
     match state
         .service_client
-        .forward_to_scheduler(
+        .call_json(
+            Service::Scheduler,
             reqwest::Method::POST,
             "/internal/workloads/stats",
             Some(body_json),
-            None,
         )
         .await
     {
@@ -281,7 +282,7 @@ pub async fn ack_self_workload_restart(
     let body = serde_json::json!({ "agent_id": agent.agent_id });
     match state
         .service_client
-        .forward_to_scheduler(reqwest::Method::POST, &path, Some(body), None)
+        .call_json(Service::Scheduler, reqwest::Method::POST, &path, Some(body))
         .await
     {
         Ok((status, _)) => Ok(StatusCode::from_u16(status.as_u16())
@@ -358,7 +359,7 @@ pub async fn drain_agent(
 
     match state
         .service_client
-        .forward_to_scheduler(reqwest::Method::POST, &path, Some(body), None)
+        .call_json(Service::Scheduler, reqwest::Method::POST, &path, Some(body))
         .await
     {
         Ok((status, _)) => Ok(StatusCode::from_u16(status.as_u16())

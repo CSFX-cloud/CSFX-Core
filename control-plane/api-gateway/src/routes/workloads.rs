@@ -1,8 +1,8 @@
 use axum::{
-    body::Body,
+    body::Bytes,
     extract::{Path, RawQuery, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    http::{HeaderMap, Method, StatusCode},
+    response::{Json, Response},
     routing::{delete, get, patch, post},
     Router,
 };
@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::{
     auth::jwt::Claims,
     auth::rbac::{CanManageWorkloads, CanViewWorkloads},
-    routes::paged_proxy::{proxy_list, with_query},
-    service_client::ListTarget,
+    routes::proxy::{proxy, with_query, ProxyError},
+    service_client::Service,
     site_service::SiteError,
     workload_secrets, AppState,
 };
@@ -187,64 +187,54 @@ fn body_group(body: &Option<Value>) -> Option<Uuid> {
         .and_then(|raw| Uuid::parse_str(raw).ok())
 }
 
-async fn proxy_to_scheduler(
+async fn scheduler(
     state: &AppState,
-    method: reqwest::Method,
+    method: Method,
     path: &str,
-    body: Option<serde_json::Value>,
-    headers: Option<Vec<(String, String)>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    match state
-        .service_client
-        .forward_to_scheduler(method, path, body, headers)
-        .await
-    {
-        Ok((status, Some(body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to scheduler: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": "Scheduler service unavailable", "details": e.to_string() })),
-            ))
-        }
-    }
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    proxy(state, Service::Scheduler, method, path, headers, body).await
+}
+
+fn parsed(body: &Bytes) -> Option<Value> {
+    serde_json::from_slice(body).ok()
+}
+
+async fn validate_new_spec(
+    state: &AppState,
+    claims: &Claims,
+    body: &Bytes,
+) -> Result<(), ProxyError> {
+    let body = parsed(body);
+    reject_site_images(&body)?;
+    reject_foreign_group_images(&body, body_group(&body))?;
+    reject_invalid_secret_refs(state, claims, &body, body_group(&body), Vec::new()).await
+}
+
+async fn validate_spec_update(
+    state: &AppState,
+    claims: &Claims,
+    body: &Bytes,
+    group: Option<Uuid>,
+    column: entity::workloads::Column,
+    id: Uuid,
+) -> Result<(), ProxyError> {
+    let body = parsed(body);
+    reject_site_images(&body)?;
+    reject_foreign_group_images(&body, group)?;
+    let stored = stored_refs(state, column, id).await?;
+    reject_invalid_secret_refs(state, claims, &body, group, stored).await
 }
 
 pub async fn create_workload(
     CanManageWorkloads(claims): CanManageWorkloads,
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    reject_site_images(&body_json)?;
-    reject_foreign_group_images(&body_json, body_group(&body_json))?;
-    reject_invalid_secret_refs(
-        &state,
-        &claims,
-        &body_json,
-        body_group(&body_json),
-        Vec::new(),
-    )
-    .await?;
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::POST,
-        "/workloads",
-        body_json,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    validate_new_spec(&state, &claims, &body).await?;
+    scheduler(&state, Method::POST, "/workloads", &headers, body).await
 }
 
 pub async fn list_workloads(
@@ -252,9 +242,9 @@ pub async fn list_workloads(
     State(state): State<AppState>,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Response, ProxyError> {
     let path = with_query("/workloads", query);
-    proxy_list(&state, ListTarget::Scheduler, &path, &headers).await
+    scheduler(&state, Method::GET, &path, &headers, Bytes::new()).await
 }
 
 pub async fn delete_workload(
@@ -262,16 +252,9 @@ pub async fn delete_workload(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::DELETE,
-        &format!("/workloads/{}", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/workloads/{id}");
+    scheduler(&state, Method::DELETE, &path, &headers, Bytes::new()).await
 }
 
 pub async fn update_workload(
@@ -279,23 +262,13 @@ pub async fn update_workload(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    reject_site_images(&body_json)?;
+    body: Bytes,
+) -> Result<Response, ProxyError> {
     let group = workload_group(&state, id).await;
-    reject_foreign_group_images(&body_json, group)?;
-    let stored = stored_refs(&state, entity::workloads::Column::Id, id).await?;
-    reject_invalid_secret_refs(&state, &claims, &body_json, group, stored).await?;
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::PATCH,
-        &format!("/workloads/{}", id),
-        body_json,
-        Some(header_map),
-    )
-    .await
+    let column = entity::workloads::Column::Id;
+    validate_spec_update(&state, &claims, &body, group, column, id).await?;
+    let path = format!("/workloads/{id}");
+    scheduler(&state, Method::PATCH, &path, &headers, body).await
 }
 
 pub async fn stop_workload(
@@ -303,16 +276,9 @@ pub async fn stop_workload(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::POST,
-        &format!("/workloads/{}/stop", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/workloads/{id}/stop");
+    scheduler(&state, Method::POST, &path, &headers, Bytes::new()).await
 }
 
 pub async fn restart_workload(
@@ -320,44 +286,19 @@ pub async fn restart_workload(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::POST,
-        &format!("/workloads/{}/restart", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/workloads/{id}/restart");
+    scheduler(&state, Method::POST, &path, &headers, Bytes::new()).await
 }
 
 pub async fn create_stack(
     CanManageWorkloads(claims): CanManageWorkloads,
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    reject_site_images(&body_json)?;
-    reject_foreign_group_images(&body_json, body_group(&body_json))?;
-    reject_invalid_secret_refs(
-        &state,
-        &claims,
-        &body_json,
-        body_group(&body_json),
-        Vec::new(),
-    )
-    .await?;
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::POST,
-        "/workload-stacks",
-        body_json,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    validate_new_spec(&state, &claims, &body).await?;
+    scheduler(&state, Method::POST, "/workload-stacks", &headers, body).await
 }
 
 pub async fn get_stack(
@@ -365,16 +306,9 @@ pub async fn get_stack(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::GET,
-        &format!("/workload-stacks/{}", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/workload-stacks/{id}");
+    scheduler(&state, Method::GET, &path, &headers, Bytes::new()).await
 }
 
 pub async fn delete_stack(
@@ -382,16 +316,9 @@ pub async fn delete_stack(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::DELETE,
-        &format!("/workload-stacks/{}", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/workload-stacks/{id}");
+    scheduler(&state, Method::DELETE, &path, &headers, Bytes::new()).await
 }
 
 pub async fn stop_stack(
@@ -399,16 +326,9 @@ pub async fn stop_stack(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::POST,
-        &format!("/workload-stacks/{}/stop", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/workload-stacks/{id}/stop");
+    scheduler(&state, Method::POST, &path, &headers, Bytes::new()).await
 }
 
 pub async fn restart_stack(
@@ -416,16 +336,9 @@ pub async fn restart_stack(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::POST,
-        &format!("/workload-stacks/{}/restart", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/workload-stacks/{id}/restart");
+    scheduler(&state, Method::POST, &path, &headers, Bytes::new()).await
 }
 
 pub async fn redeploy_stack(
@@ -433,30 +346,13 @@ pub async fn redeploy_stack(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    reject_site_images(&body_json)?;
+    body: Bytes,
+) -> Result<Response, ProxyError> {
     let group = stack_group(&state, id).await;
-    reject_foreign_group_images(&body_json, group)?;
-    let stored = stored_refs(&state, entity::workloads::Column::StackId, id).await?;
-    reject_invalid_secret_refs(&state, &claims, &body_json, group, stored).await?;
-    let header_map = header_vec(&headers);
-    proxy_to_scheduler(
-        &state,
-        reqwest::Method::PATCH,
-        &format!("/workload-stacks/{}", id),
-        body_json,
-        Some(header_map),
-    )
-    .await
-}
-
-fn header_vec(headers: &HeaderMap) -> Vec<(String, String)> {
-    headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect()
+    let column = entity::workloads::Column::StackId;
+    validate_spec_update(&state, &claims, &body, group, column, id).await?;
+    let path = format!("/workload-stacks/{id}");
+    scheduler(&state, Method::PATCH, &path, &headers, body).await
 }
 
 pub fn workloads_routes() -> Router<AppState> {

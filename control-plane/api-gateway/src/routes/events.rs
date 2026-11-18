@@ -1,53 +1,36 @@
 use axum::{
-    body::Body,
+    body::Bytes,
     extract::{Path, RawQuery, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    http::{HeaderMap, Method},
+    response::Response,
     routing::{delete, get, post},
     Router,
 };
-use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageSystem, CanViewAgents},
-    routes::paged_proxy::{proxy_list, with_query},
-    service_client::ListTarget,
+    routes::proxy::{proxy, with_query, ProxyError},
+    service_client::Service,
     AppState,
 };
 
-async fn proxy_to_failover(
+async fn failover(
     state: &AppState,
-    method: reqwest::Method,
+    method: Method,
     path: &str,
-    body: Option<serde_json::Value>,
-    headers: Option<Vec<(String, String)>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    match state
-        .service_client
-        .forward_to_failover_controller(method, path, body, headers)
-        .await
-    {
-        Ok((status, Some(body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to failover-controller: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(
-                    json!({ "error": "Failover controller unavailable", "details": e.to_string() }),
-                ),
-            ))
-        }
-    }
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    proxy(
+        state,
+        Service::FailoverController,
+        method,
+        path,
+        headers,
+        body,
+    )
+    .await
 }
 
 pub async fn list_events(
@@ -55,9 +38,9 @@ pub async fn list_events(
     State(state): State<AppState>,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Response, ProxyError> {
     let path = with_query("/events", query);
-    proxy_list(&state, ListTarget::FailoverController, &path, &headers).await
+    failover(&state, Method::GET, &path, &headers, Bytes::new()).await
 }
 
 pub async fn resolve_event(
@@ -65,19 +48,9 @@ pub async fn resolve_event(
     State(state): State<AppState>,
     Path(event_id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-    proxy_to_failover(
-        &state,
-        reqwest::Method::POST,
-        &format!("/events/{}/resolve", event_id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/events/{event_id}/resolve");
+    failover(&state, Method::POST, &path, &headers, Bytes::new()).await
 }
 
 pub async fn set_maintenance(
@@ -85,20 +58,10 @@ pub async fn set_maintenance(
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
-    Json(body): Json<serde_json::Value>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-    proxy_to_failover(
-        &state,
-        reqwest::Method::POST,
-        &format!("/agents/{}/maintenance", agent_id),
-        Some(body),
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    let path = format!("/agents/{agent_id}/maintenance");
+    failover(&state, Method::POST, &path, &headers, body).await
 }
 
 pub async fn clear_maintenance(
@@ -106,19 +69,9 @@ pub async fn clear_maintenance(
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-    proxy_to_failover(
-        &state,
-        reqwest::Method::DELETE,
-        &format!("/agents/{}/maintenance", agent_id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/agents/{agent_id}/maintenance");
+    failover(&state, Method::DELETE, &path, &headers, Bytes::new()).await
 }
 
 pub fn events_routes() -> Router<AppState> {
