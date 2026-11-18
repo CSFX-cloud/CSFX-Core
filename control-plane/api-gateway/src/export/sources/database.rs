@@ -5,6 +5,7 @@ use super::process::command_stream;
 use crate::export::{engine::Exporter, ExportError};
 
 const DEFAULT_PORT: &str = "5432";
+const PG_DUMP_VARIABLE: &str = "CSFX_PG_DUMP";
 
 #[derive(Debug, PartialEq)]
 struct Connection {
@@ -61,7 +62,8 @@ fn parse(url: &str) -> Result<Connection, ExportError> {
 }
 
 fn dump_command(connection: &Connection) -> Command {
-    let mut command = Command::new("pg_dump");
+    let binary = std::env::var(PG_DUMP_VARIABLE).unwrap_or_else(|_| "pg_dump".to_string());
+    let mut command = Command::new(binary);
     command
         .args(["--format=custom", "--no-owner", "--no-acl"])
         .env("PGHOST", &connection.host)

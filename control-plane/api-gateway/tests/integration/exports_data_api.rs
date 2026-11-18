@@ -281,11 +281,21 @@ async fn resource_group_scope_requires_an_existing_group() {
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+fn install_fake_pg_dump(root: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(root).unwrap();
+    let script = root.join("pg_dump");
+    std::fs::write(&script, "#!/bin/sh\nprintf PGDMP\nhead -c 5000 /dev/zero\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::set_var("CSFX_PG_DUMP", &script);
+}
+
 #[tokio::test]
-#[ignore = "requires postgres via DATABASE_URL, pg_dump on PATH and etcd via ETCD_ENDPOINTS"]
+#[ignore = "requires postgres via DATABASE_URL and etcd via ETCD_ENDPOINTS"]
 async fn database_and_etcd_artifacts_are_captured() {
     let _harness = harness().await;
     let root = std::env::temp_dir().join(format!("csfx-full-{}", Uuid::new_v4()));
+    install_fake_pg_dump(&root);
     let export_id = Uuid::new_v4();
     let target = Target {
         sink: Sink::Local(root.clone()),
