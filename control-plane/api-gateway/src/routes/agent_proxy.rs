@@ -1,6 +1,7 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::service_client::Service;
 use axum::{
     body::Body,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -131,11 +132,11 @@ pub(crate) async fn fetch_proxy_ticket(
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
     let (status, body) = state
         .service_client
-        .forward_to_registry(
+        .call_json(
+            Service::Registry,
             reqwest::Method::POST,
             "/internal/agent-proxy-ticket",
             Some(json!({ "agent_id": agent_id, "workload_id": workload_id })),
-            None,
         )
         .await
         .map_err(|e| {

@@ -25,6 +25,7 @@ pub const ADMIN_PASSWORD: &str = "correct-horse-battery";
 
 static MIGRATED: OnceCell<Uuid> = OnceCell::const_new();
 static BACKEND: OnceLock<String> = OnceLock::new();
+static REQUESTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
 pub struct Harness {
     pub app: Router,
@@ -38,12 +39,26 @@ pub struct Harness {
 async fn echo(request: Request<Body>) -> Json<Value> {
     let (parts, body) = request.into_parts();
     let bytes = body.collect().await.unwrap().to_bytes();
+    REQUESTS
+        .lock()
+        .unwrap()
+        .push(format!("{} {}", parts.method, parts.uri.path()));
     Json(json!({
         "method": parts.method.as_str(),
         "path": parts.uri.path(),
         "query": parts.uri.query(),
         "body": serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
     }))
+}
+
+pub fn recorded_requests(containing: &str) -> Vec<String> {
+    REQUESTS
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request.contains(containing))
+        .cloned()
+        .collect()
 }
 
 fn backend_url() -> &'static str {

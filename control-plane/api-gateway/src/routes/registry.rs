@@ -1,857 +1,118 @@
 use axum::{
-    body::Body,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
-    routing::{get, post},
+    body::Bytes,
+    extract::{RawPathParams, State},
+    http::{HeaderMap, Method, StatusCode, Uri},
+    response::{IntoResponse, Json, Response},
+    routing::{get, on, MethodFilter},
     Router,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::json;
-use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageSystem, CanViewAgents},
+    routes::proxy::{proxy, ProxyError},
+    service_client::Service,
     AppState,
 };
 
-// ==================== Request/Response Schemas for OpenAPI ====================
+const GATEWAY_PREFIX: &str = "/registry";
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct PreRegisterAgentRequest {
-    /// Name of the agent to pre-register
-    pub name: String,
-    /// Hostname of the agent
-    pub hostname: String,
-    /// Expected OS type (e.g., "NixOS", "Ubuntu")
-    pub expected_os_type: Option<String>,
-    /// Expected architecture (e.g., "x86_64", "aarch64")
-    pub expected_architecture: Option<String>,
-    /// Optional metadata tags
-    pub tags: Option<std::collections::HashMap<String, String>>,
-    /// Token time-to-live in hours (default: 24)
-    pub ttl_hours: Option<i64>,
+#[derive(Clone, Copy)]
+enum Access {
+    Manage,
+    View,
+    Open,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct PreRegisterAgentResponse {
-    /// Pre-registered agent ID
-    pub agent_id: String,
-    /// Registration token for agent to use
-    pub registration_token: String,
-    /// Token expiration timestamp
-    pub token_expires_at: String,
-    /// Success message
-    pub message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct RegisterAgentRequest {
-    /// Registration token received during pre-registration
-    pub registration_token: String,
-    /// Agent name (must match pre-registration)
-    pub name: String,
-    /// Agent hostname (must match pre-registration)
-    pub hostname: String,
-    /// Operating system type
-    pub os_type: String,
-    /// Operating system version
-    pub os_version: String,
-    /// System architecture
-    pub architecture: String,
-    /// Agent software version
-    pub agent_version: String,
-    /// Optional metadata tags
-    pub tags: Option<std::collections::HashMap<String, String>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct RegisterAgentResponse {
-    /// Registered agent ID
-    pub agent_id: String,
-    /// API key for subsequent authentication
-    pub api_key: String,
-    /// Success message
-    pub message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct HeartbeatRequest {
-    /// Optional agent status update
-    pub status: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct AgentStatistics {
-    /// Total number of agents
-    pub total: usize,
-    /// Number of online agents
-    pub online: usize,
-    /// Number of offline agents
-    pub offline: usize,
-    /// Number of degraded agents
-    pub degraded: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct ErrorResponse {
-    /// Error message
-    pub error: String,
-}
-
-// ==================== API Endpoints ====================
-
-/// Pre-register agent (Admin only) - NEW WORKFLOW
-#[utoipa::path(
-    post,
-    path = "/registry/admin/agents/pre-register",
-    request_body = PreRegisterAgentRequest,
-    responses(
-        (status = 200, description = "Agent pre-registered successfully", body = PreRegisterAgentResponse),
-        (status = 400, description = "Invalid request", body = ErrorResponse),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
+const ROUTES: [(Method, &str, Access); 18] = [
+    (Method::POST, "/admin/agents/pre-register", Access::Manage),
+    (Method::GET, "/admin/agents/pending", Access::Manage),
+    (Method::DELETE, "/admin/agents/pending/{id}", Access::Manage),
+    (Method::POST, "/admin/bootstrap-tokens", Access::Manage),
+    (Method::GET, "/admin/bootstrap-tokens", Access::Manage),
+    (
+        Method::POST,
+        "/admin/bootstrap-tokens/{id}/revoke",
+        Access::Manage,
     ),
-    tag = "Registry - Admin",
-    security(
-        ("bearer_auth" = [])
-    )
-)]
-pub async fn pre_register_agent(
-    CanManageSystem(_claims): CanManageSystem,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = if body.is_empty() {
-        None
-    } else {
-        serde_json::from_str(&body).ok()
-    };
-
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::POST,
-            "/admin/agents/pre-register",
-            body_json,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// List pending (pre-registered) agents (Admin only)
-#[utoipa::path(
-    get,
-    path = "/registry/admin/agents/pending",
-    responses(
-        (status = 200, description = "List of pending agents retrieved successfully"),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
+    (Method::GET, "/admin/tokens", Access::Manage),
+    (Method::GET, "/admin/agents", Access::View),
+    (Method::GET, "/admin/agents/{id}", Access::View),
+    (Method::DELETE, "/admin/agents/{id}", Access::Manage),
+    (Method::GET, "/admin/statistics", Access::View),
+    (Method::POST, "/admin/agents/{id}/revoke", Access::Manage),
+    (Method::GET, "/admin/agents/{id}/endpoint", Access::View),
+    (Method::GET, "/pki/crl", Access::Open),
+    (Method::POST, "/agents/register", Access::Open),
+    (Method::POST, "/agents/{id}/heartbeat", Access::Open),
+    (Method::POST, "/agents/{id}/certificate", Access::Open),
+    (
+        Method::POST,
+        "/agents/{id}/rotate-certificate",
+        Access::Open,
     ),
-    tag = "Registry - Admin",
-    security(
-        ("bearer_auth" = [])
-    )
-)]
-pub async fn list_pending_agents(
-    CanManageSystem(_claims): CanManageSystem,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
+];
 
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::GET,
-            "/admin/agents/pending",
-            None,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// Delete pending agent (Admin only)
-#[utoipa::path(
-    post,
-    path = "/registry/admin/agents/pending/{id}",
-    params(
-        ("id" = String, Path, description = "Agent ID")
-    ),
-    responses(
-        (status = 204, description = "Pending agent deleted successfully"),
-        (status = 404, description = "Agent not found", body = ErrorResponse),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
-    ),
-    tag = "Registry - Admin",
-    security(
-        ("bearer_auth" = [])
-    )
-)]
-pub async fn delete_pending_agent(
-    CanManageSystem(_claims): CanManageSystem,
-    State(state): State<AppState>,
-    Path(agent_id): Path<Uuid>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::POST,
-            &format!("/admin/agents/pending/{}", agent_id),
-            None,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// Create token (Admin only) - DEPRECATED
-#[deprecated(note = "Use pre_register_agent instead")]
-#[utoipa::path(
-    post,
-    path = "/registry/admin/tokens",
-    responses(
-        (status = 400, description = "Endpoint deprecated - use pre_register_agent", body = ErrorResponse),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
-    ),
-    tag = "Registry - Admin (Deprecated)",
-    security(
-        ("bearer_auth" = [])
-    )
-)]
-pub async fn create_token(
-    CanManageSystem(_claims): CanManageSystem,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = if body.is_empty() {
-        None
-    } else {
-        serde_json::from_str(&body).ok()
-    };
-
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::POST,
-            "/admin/tokens",
-            body_json,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// List tokens (Admin only)
-#[utoipa::path(
-    get,
-    path = "/registry/admin/tokens",
-    responses(
-        (status = 200, description = "List of tokens retrieved successfully"),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
-    ),
-    tag = "Registry - Admin",
-    security(
-        ("bearer_auth" = [])
-    )
-)]
-pub async fn list_tokens(
-    CanManageSystem(_claims): CanManageSystem,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::GET,
-            "/admin/tokens",
-            None,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// Register agent
-#[utoipa::path(
-    post,
-    path = "/registry/agents/register",
-    request_body = RegisterAgentRequest,
-    responses(
-        (status = 200, description = "Agent registered successfully", body = RegisterAgentResponse),
-        (status = 401, description = "Invalid registration token", body = ErrorResponse),
-        (status = 403, description = "Agent name or hostname mismatch", body = ErrorResponse),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
-    ),
-    tag = "Registry - Agent"
-)]
-pub async fn register_agent(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = if body.is_empty() {
-        None
-    } else {
-        serde_json::from_str(&body).ok()
-    };
-
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::POST,
-            "/agents/register",
-            body_json,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// Agent heartbeat
-#[utoipa::path(
-    post,
-    path = "/registry/agents/{id}/heartbeat",
-    params(
-        ("id" = String, Path, description = "Agent ID")
-    ),
-    request_body = HeartbeatRequest,
-    responses(
-        (status = 200, description = "Heartbeat recorded successfully"),
-        (status = 401, description = "Invalid or missing API key", body = ErrorResponse),
-        (status = 403, description = "Agent ID mismatch", body = ErrorResponse),
-        (status = 404, description = "Agent not found", body = ErrorResponse),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
-    ),
-    tag = "Registry - Agent",
-    security(
-        ("api_key" = [])
-    )
-)]
-pub async fn agent_heartbeat(
-    State(state): State<AppState>,
-    Path(agent_id): Path<Uuid>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = if body.is_empty() {
-        None
-    } else {
-        serde_json::from_str(&body).ok()
-    };
-
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::POST,
-            &format!("/agents/{}/heartbeat", agent_id),
-            body_json,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// List all agents (Admin)
-#[utoipa::path(
-    get,
-    path = "/registry/admin/agents",
-    responses(
-        (status = 200, description = "List of agents retrieved successfully"),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
-    ),
-    tag = "Registry - Admin",
-    security(
-        ("bearer_auth" = [])
-    )
-)]
-pub async fn list_agents_admin(
-    CanViewAgents(_claims): CanViewAgents,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::GET,
-            "/admin/agents",
-            None,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// Get registry statistics
-#[utoipa::path(
-    get,
-    path = "/registry/admin/statistics",
-    responses(
-        (status = 200, description = "Statistics retrieved successfully", body = AgentStatistics),
-        (status = 502, description = "Registry service unavailable", body = ErrorResponse)
-    ),
-    tag = "Registry - Admin",
-    security(
-        ("bearer_auth" = [])
-    )
-)]
-pub async fn get_statistics(
-    CanViewAgents(_claims): CanViewAgents,
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    match state
-        .service_client
-        .forward_to_registry(
-            reqwest::Method::GET,
-            "/admin/statistics",
-            None,
-            Some(header_map),
-        )
-        .await
-    {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
-    }
-}
-
-/// Revoke agent certificate (Admin only)
-pub async fn revoke_certificate(
-    CanManageSystem(_claims): CanManageSystem,
-    State(state): State<AppState>,
-    Path(agent_id): Path<Uuid>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    proxy_to_registry(
-        &state,
-        reqwest::Method::POST,
-        &format!("/admin/agents/{}/revoke", agent_id),
-        body_json,
-        Some(header_map),
-    )
-    .await
-}
-
-/// Get agent mTLS endpoint info (Admin only)
-pub async fn get_agent_endpoint(
-    CanViewAgents(_claims): CanViewAgents,
-    State(state): State<AppState>,
-    Path(agent_id): Path<Uuid>,
-    headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    proxy_to_registry(
-        &state,
-        reqwest::Method::GET,
-        &format!("/admin/agents/{}/endpoint", agent_id),
-        None,
-        Some(header_map),
-    )
-    .await
-}
-
-/// Get CRL (public)
-pub async fn get_crl(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    proxy_to_registry(&state, reqwest::Method::GET, "/pki/crl", None, None).await
-}
-
-/// Issue certificate for agent
-pub async fn issue_certificate(
-    State(state): State<AppState>,
-    Path(agent_id): Path<Uuid>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    proxy_to_registry(
-        &state,
-        reqwest::Method::POST,
-        &format!("/agents/{}/certificate", agent_id),
-        body_json,
-        Some(header_map),
-    )
-    .await
-}
-
-/// Rotate agent certificate
-pub async fn rotate_certificate(
-    State(state): State<AppState>,
-    Path(agent_id): Path<Uuid>,
-    headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-
-    proxy_to_registry(
-        &state,
-        reqwest::Method::POST,
-        &format!("/agents/{}/rotate-certificate", agent_id),
-        body_json,
-        Some(header_map),
-    )
-    .await
-}
-
-async fn proxy_to_registry(
+async fn passthrough(
     state: &AppState,
-    method: reqwest::Method,
-    path: &str,
-    body: Option<serde_json::Value>,
-    headers: Option<Vec<(String, String)>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    match state
-        .service_client
-        .forward_to_registry(method, path, body, headers)
-        .await
+    method: Method,
+    uri: &Uri,
+    params: RawPathParams,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    if params
+        .iter()
+        .any(|(_, value)| Uuid::parse_str(value).is_err())
     {
-        Ok((status, Some(response_body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(response_body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to registry: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": "Registry service unavailable",
-                    "details": e.to_string()
-                })),
-            ))
-        }
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "path identifiers must be UUIDs" })),
+        ));
     }
+    let path = uri
+        .path_and_query()
+        .map_or(uri.path(), |value| value.as_str());
+    let upstream = path.strip_prefix(GATEWAY_PREFIX).unwrap_or(path);
+    proxy(state, Service::Registry, method, upstream, headers, body).await
 }
 
-pub async fn create_bootstrap_token(
+async fn manage(
     CanManageSystem(_claims): CanManageSystem,
     State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    params: RawPathParams,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-    proxy_to_registry(
-        &state,
-        reqwest::Method::POST,
-        "/admin/bootstrap-tokens",
-        body_json,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    passthrough(&state, method, &uri, params, &headers, body).await
 }
 
-pub async fn list_bootstrap_tokens(
-    CanManageSystem(_claims): CanManageSystem,
+async fn view(
+    CanViewAgents(_claims): CanViewAgents,
     State(state): State<AppState>,
+    method: Method,
+    uri: Uri,
+    params: RawPathParams,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-    proxy_to_registry(
-        &state,
-        reqwest::Method::GET,
-        "/admin/bootstrap-tokens",
-        None,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    passthrough(&state, method, &uri, params, &headers, body).await
 }
 
-pub async fn revoke_bootstrap_token(
-    CanManageSystem(_claims): CanManageSystem,
+async fn open(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    method: Method,
+    uri: Uri,
+    params: RawPathParams,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map: Vec<(String, String)> = headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect();
-    proxy_to_registry(
-        &state,
-        reqwest::Method::POST,
-        &format!("/admin/bootstrap-tokens/{}/revoke", id),
-        None,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    passthrough(&state, method, &uri, params, &headers, body).await
 }
 
-/// Registry health check
-#[utoipa::path(
-    get,
-    path = "/registry/health",
-    responses(
-        (status = 200, description = "Registry service is healthy"),
-        (status = 503, description = "Registry service is unavailable")
-    ),
-    tag = "Registry - Health"
-)]
 pub async fn registry_health(State(state): State<AppState>) -> impl IntoResponse {
     if state.service_client.check_registry_health().await {
         (StatusCode::OK, Json(json!({"status": "healthy"})))
@@ -864,56 +125,68 @@ pub async fn registry_health(State(state): State<AppState>) -> impl IntoResponse
 }
 
 pub fn registry_routes() -> Router<AppState> {
-    Router::new()
-        // Admin routes - Pre-Registration (NEW WORKFLOW)
-        .route(
-            "/registry/admin/agents/pre-register",
-            post(pre_register_agent),
-        )
-        .route("/registry/admin/agents/pending", get(list_pending_agents))
-        .route(
-            "/registry/admin/agents/pending/{id}",
-            post(delete_pending_agent),
-        )
-        // Admin routes - Bootstrap Token Management
-        .route(
-            "/registry/admin/bootstrap-tokens",
-            post(create_bootstrap_token),
-        )
-        .route(
-            "/registry/admin/bootstrap-tokens",
-            get(list_bootstrap_tokens),
-        )
-        .route(
-            "/registry/admin/bootstrap-tokens/{id}/revoke",
-            post(revoke_bootstrap_token),
-        )
-        // Admin routes - Token Management (DEPRECATED)
-        .route("/registry/admin/tokens", post(create_token))
-        .route("/registry/admin/tokens", get(list_tokens))
-        // Admin routes - Agent Management
-        .route("/registry/admin/agents", get(list_agents_admin))
-        .route("/registry/admin/statistics", get(get_statistics))
-        // Admin routes - PKI
-        .route(
-            "/registry/admin/agents/{id}/revoke",
-            post(revoke_certificate),
-        )
-        .route(
-            "/registry/admin/agents/{id}/endpoint",
-            get(get_agent_endpoint),
-        )
-        // Public PKI
-        .route("/registry/pki/crl", get(get_crl))
-        // Agent routes
-        .route("/registry/agents/register", post(register_agent))
-        .route("/registry/agents/{id}/heartbeat", post(agent_heartbeat))
-        // Agent - certificate management
-        .route("/registry/agents/{id}/certificate", post(issue_certificate))
-        .route(
-            "/registry/agents/{id}/rotate-certificate",
-            post(rotate_certificate),
-        )
-        // Health check
-        .route("/registry/health", get(registry_health))
+    let router = ROUTES
+        .iter()
+        .fold(Router::new(), |router, (method, path, access)| {
+            let filter = MethodFilter::try_from(method.clone()).expect("supported method");
+            let route = match access {
+                Access::Manage => on(filter, manage),
+                Access::View => on(filter, view),
+                Access::Open => on(filter, open),
+            };
+            router.route(&format!("{GATEWAY_PREFIX}{path}"), route)
+        });
+    router.route("/registry/health", get(registry_health))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REGISTRY_SERVER: &str = include_str!("../../../registry/src/server.rs");
+
+    fn normalized(path: &str) -> String {
+        let mut result = String::new();
+        let mut depth = 0;
+        for character in path.chars() {
+            match character {
+                '{' => {
+                    depth += 1;
+                    result.push_str("{}");
+                }
+                '}' => depth -= 1,
+                _ if depth == 0 => result.push(character),
+                _ => {}
+            }
+        }
+        result
+    }
+
+    fn registry_routes_declared() -> Vec<(String, &'static str)> {
+        let mut declared = Vec::new();
+        for chunk in REGISTRY_SERVER.split(".route(").skip(1) {
+            let path = chunk.split('"').nth(1).expect("route path");
+            let rest = chunk.split('"').skip(2).collect::<Vec<_>>().join("\"");
+            for method in ["get", "post", "put", "patch", "delete"] {
+                if rest.contains(&format!(" {method}(")) || rest.contains(&format!("\n{method}(")) {
+                    declared.push((normalized(path), method));
+                }
+            }
+        }
+        declared
+    }
+
+    #[test]
+    fn every_gateway_route_targets_an_existing_registry_route() {
+        let declared = registry_routes_declared();
+        for (method, path, _) in ROUTES.iter() {
+            let wanted = (normalized(path), method.as_str().to_ascii_lowercase());
+            assert!(
+                declared.iter().any(|(declared_path, declared_method)| {
+                    *declared_path == wanted.0 && *declared_method == wanted.1
+                }),
+                "registry has no route for {method} {path}"
+            );
+        }
+    }
 }

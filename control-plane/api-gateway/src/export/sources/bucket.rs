@@ -1,3 +1,4 @@
+use crate::service_client::Service;
 use entity::Buckets;
 use reqwest::Method;
 use sea_orm::EntityTrait;
@@ -81,7 +82,12 @@ fn create_request(row: &Value) -> Value {
 async fn create(state: &AppState, row: &Value) -> Result<Uuid, ExportError> {
     let (status, body) = state
         .service_client
-        .forward_to_object_storage(Method::POST, "/buckets", Some(create_request(row)), None)
+        .call_json(
+            Service::ObjectStorage,
+            Method::POST,
+            "/buckets",
+            Some(create_request(row)),
+        )
         .await
         .map_err(upstream)?;
     let id = body
@@ -97,7 +103,12 @@ async fn create(state: &AppState, row: &Value) -> Result<Uuid, ExportError> {
 async fn discard(state: &AppState, bucket_id: Uuid) {
     let result = state
         .service_client
-        .forward_to_object_storage(Method::DELETE, &format!("/buckets/{bucket_id}"), None, None)
+        .call_json(
+            Service::ObjectStorage,
+            Method::DELETE,
+            &format!("/buckets/{bucket_id}"),
+            None,
+        )
         .await;
     if let Err(error) = result {
         tracing::warn!(bucket_id = %bucket_id, error = %error, "failed to remove partially restored bucket");

@@ -1,78 +1,37 @@
 use axum::{
-    body::Body,
+    body::Bytes,
     extract::{Path, RawQuery, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Json},
+    http::{HeaderMap, Method},
+    response::Response,
     routing::{delete, get, post},
     Router,
 };
-use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageVolumes, CanViewVolumes},
-    routes::paged_proxy::{proxy_list, with_query},
-    service_client::ListTarget,
+    routes::proxy::{proxy, with_query, ProxyError},
+    service_client::Service,
     AppState,
 };
 
-async fn proxy_to_volume_manager(
+async fn volume_manager(
     state: &AppState,
-    method: reqwest::Method,
+    method: Method,
     path: &str,
-    body: Option<serde_json::Value>,
-    headers: Option<Vec<(String, String)>>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    match state
-        .service_client
-        .forward_to_volume_manager(method, path, body, headers)
-        .await
-    {
-        Ok((status, Some(body))) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Json(body)).into_response())
-        }
-        Ok((status, None)) => {
-            let axum_status =
-                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            Ok((axum_status, Body::empty()).into_response())
-        }
-        Err(e) => {
-            tracing::error!("Failed to forward request to volume-manager: {}", e);
-            Err((
-                StatusCode::BAD_GATEWAY,
-                Json(
-                    json!({ "error": "Volume Manager service unavailable", "details": e.to_string() }),
-                ),
-            ))
-        }
-    }
-}
-
-fn header_vec(headers: &HeaderMap) -> Vec<(String, String)> {
-    headers
-        .iter()
-        .filter_map(|(k, v)| v.to_str().ok().map(|val| (k.to_string(), val.to_string())))
-        .collect()
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    proxy(state, Service::VolumeManager, method, path, headers, body).await
 }
 
 pub async fn create_volume(
     CanManageVolumes(_claims): CanManageVolumes,
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::POST,
-        "/volumes",
-        body_json,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    volume_manager(&state, Method::POST, "/volumes", &headers, body).await
 }
 
 pub async fn list_volumes(
@@ -80,9 +39,9 @@ pub async fn list_volumes(
     State(state): State<AppState>,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Response, ProxyError> {
     let path = with_query("/volumes", query);
-    proxy_list(&state, ListTarget::VolumeManager, &path, &headers).await
+    volume_manager(&state, Method::GET, &path, &headers, Bytes::new()).await
 }
 
 pub async fn get_volume(
@@ -90,16 +49,9 @@ pub async fn get_volume(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::GET,
-        &format!("/volumes/{}", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/volumes/{id}");
+    volume_manager(&state, Method::GET, &path, &headers, Bytes::new()).await
 }
 
 pub async fn delete_volume(
@@ -107,16 +59,9 @@ pub async fn delete_volume(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::DELETE,
-        &format!("/volumes/{}", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/volumes/{id}");
+    volume_manager(&state, Method::DELETE, &path, &headers, Bytes::new()).await
 }
 
 pub async fn attach_volume(
@@ -124,18 +69,10 @@ pub async fn attach_volume(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::POST,
-        &format!("/volumes/{}/attach", id),
-        body_json,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    let path = format!("/volumes/{id}/attach");
+    volume_manager(&state, Method::POST, &path, &headers, body).await
 }
 
 pub async fn resize_volume(
@@ -143,18 +80,10 @@ pub async fn resize_volume(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::POST,
-        &format!("/volumes/{}/resize", id),
-        body_json,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    let path = format!("/volumes/{id}/resize");
+    volume_manager(&state, Method::POST, &path, &headers, body).await
 }
 
 pub async fn detach_volume(
@@ -162,16 +91,9 @@ pub async fn detach_volume(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::POST,
-        &format!("/volumes/{}/detach", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/volumes/{id}/detach");
+    volume_manager(&state, Method::POST, &path, &headers, Bytes::new()).await
 }
 
 pub async fn create_snapshot(
@@ -179,18 +101,10 @@ pub async fn create_snapshot(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-    body: String,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let body_json: Option<serde_json::Value> = serde_json::from_str(&body).ok();
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::POST,
-        &format!("/volumes/{}/snapshots", id),
-        body_json,
-        Some(header_map),
-    )
-    .await
+    body: Bytes,
+) -> Result<Response, ProxyError> {
+    let path = format!("/volumes/{id}/snapshots");
+    volume_manager(&state, Method::POST, &path, &headers, body).await
 }
 
 pub async fn list_snapshots(
@@ -198,16 +112,9 @@ pub async fn list_snapshots(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let header_map = header_vec(&headers);
-    proxy_to_volume_manager(
-        &state,
-        reqwest::Method::GET,
-        &format!("/volumes/{}/snapshots", id),
-        None,
-        Some(header_map),
-    )
-    .await
+) -> Result<Response, ProxyError> {
+    let path = format!("/volumes/{id}/snapshots");
+    volume_manager(&state, Method::GET, &path, &headers, Bytes::new()).await
 }
 
 pub fn volumes_routes() -> Router<AppState> {

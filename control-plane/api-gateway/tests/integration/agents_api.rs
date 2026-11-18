@@ -7,7 +7,7 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
-use crate::common::{harness, Harness};
+use crate::common::{harness, recorded_requests, Harness};
 use crate::support_a::{
     insert_agent, insert_api_key, insert_group, insert_metrics, insert_volume, insert_workload,
     keyed, serve, update_agent, WorkloadSpec,
@@ -151,6 +151,48 @@ async fn drain_cordons_the_agent_and_reschedules() {
     let missing = format!("/api/agents/{}/drain", Uuid::new_v4());
     let (status, _) = harness.admin(Method::POST, &missing, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn drain_without_volumes_skips_fencing() {
+    let harness = harness().await;
+    let agent = worker(&harness).await;
+    let (status, _) = harness
+        .admin(
+            Method::POST,
+            &format!("/api/agents/{}/drain", agent.id),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        recorded_requests(&agent.id.to_string()),
+        vec![format!("POST /internal/agents/{}/reschedule", agent.id)]
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
+async fn drain_fences_attached_volumes_before_rescheduling() {
+    let harness = harness().await;
+    let agent = worker(&harness).await;
+    insert_volume(&harness.db, Some(agent.id), None).await;
+    let (status, _) = harness
+        .admin(
+            Method::POST,
+            &format!("/api/agents/{}/drain", agent.id),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        recorded_requests(&agent.id.to_string()),
+        vec![
+            format!("POST /internal/agents/{}/detach-all", agent.id),
+            format!("POST /internal/agents/{}/reschedule", agent.id),
+        ]
+    );
 }
 
 #[tokio::test]

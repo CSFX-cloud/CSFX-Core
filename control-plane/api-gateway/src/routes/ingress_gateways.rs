@@ -1,3 +1,4 @@
+use crate::service_client::Service;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -336,7 +337,12 @@ async fn schedule_workload(
     let body = workload_request(name, request, group_id, env);
     let (status, response) = state
         .service_client
-        .forward_to_scheduler(reqwest::Method::POST, "/workloads", Some(body), None)
+        .call_json(
+            Service::Scheduler,
+            reqwest::Method::POST,
+            "/workloads",
+            Some(body),
+        )
         .await
         .map_err(|e| {
             error(
@@ -399,7 +405,7 @@ pub async fn remove_workload(state: &AppState, workload_id: Uuid) -> Result<(), 
     let path = format!("/workloads/{workload_id}");
     let (status, _) = state
         .service_client
-        .forward_to_scheduler(reqwest::Method::DELETE, &path, None, None)
+        .call_json(Service::Scheduler, reqwest::Method::DELETE, &path, None)
         .await
         .map_err(|e| {
             error(

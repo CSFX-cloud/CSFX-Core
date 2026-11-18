@@ -13,6 +13,7 @@ pub mod pagination;
 pub mod qos;
 pub mod rollout;
 pub mod ssh_access;
+pub mod volumes;
 pub mod workload_status;
 
 pub use db::establish_connection;

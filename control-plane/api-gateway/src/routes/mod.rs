@@ -35,7 +35,7 @@ pub mod logs;
 pub mod masters;
 pub mod networks;
 pub mod organizations;
-pub mod paged_proxy;
+pub mod proxy;
 pub mod registries;
 pub mod registry;
 pub mod releases;

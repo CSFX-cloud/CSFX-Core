@@ -1,3 +1,4 @@
+use crate::service_client::Service;
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -653,7 +654,7 @@ async fn remove_workload(state: &AppState, workload: Uuid) -> Result<(), SiteErr
     let path = format!("/workloads/{workload}");
     let (status, _) = state
         .service_client
-        .forward_to_scheduler(reqwest::Method::DELETE, &path, None, None)
+        .call_json(Service::Scheduler, reqwest::Method::DELETE, &path, None)
         .await
         .map_err(|error| {
             tracing::error!(workload = %workload, error = %error, "site workload removal failed");
