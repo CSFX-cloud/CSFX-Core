@@ -372,6 +372,9 @@ const routes = {
     "GET /api/permissions": (_body, response) => send(response, 200, [{ id: "p1", resource: "agents", action: "view", description: null }, { id: "p2", resource: "agents", action: "manage", description: null }]),
     "GET /api/identity-providers": (_body, response) => send(response, 200, PROVIDERS),
     "GET /api/events": (_body, response) => send(response, 200, EVENTS),
+    "GET /api/admin/export-targets": (_body, response) => send(response, 200, EXPORT_TARGETS),
+    "GET /api/exports": (_body, response) => send(response, 200, EXPORTS),
+    "POST /api/exports": (body, response) => send(response, 202, { id: startExport(body).id }),
     "GET /api/workloads": (_body, response) => send(response, 200, WORKLOADS),
     "GET /api/volumes": (_body, response) => send(response, 200, VOLUMES),
     "GET /api/buckets": (_body, response) => send(response, 200, BUCKETS),
@@ -384,9 +387,74 @@ const routes = {
     },
 };
 
+const EXPORT_TARGETS = [
+    { name: "offsite", kind: "s3", location: "https://s3.example.com/backups/csfx/prod", encrypted: true, default: true },
+    { name: "local", kind: "local", location: "/var/lib/csfx-cp/exports", encrypted: false, default: false },
+];
+
+const EXPORT_MANIFEST = {
+    csfx_version: "0.2.2",
+    created_at: "2026-11-18T10:00:00Z",
+    consistency: "crash",
+    encryption: {},
+    artifacts: [
+        { name: "config/organization.json", kind: "table", source_id: null, bytes: 1204, sha256: "ab" },
+        { name: "config/user.json", kind: "table", source_id: null, bytes: 3380, sha256: "cd" },
+        { name: "database/postgres.dump", kind: "database", source_id: null, bytes: 438848, sha256: "ef" },
+    ],
+};
+
+const EXPORTS = [
+    { id: "3f7a0c52-1d0e-4b7c-9d20-6a1e2f3b4c5d", scope_kind: "config", scope_id: null, status: "completed", manifest: EXPORT_MANIFEST, error: null, created_by: null, created_at: "2026-11-18T10:00:00Z", finished_at: "2026-11-18T10:00:02Z" },
+    { id: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d", scope_kind: "volume", scope_id: "v1", status: "failed", manifest: null, error: "upstream service failed: ceph is not configured", created_by: null, created_at: "2026-11-17T21:30:00Z", finished_at: "2026-11-17T21:30:01Z" },
+];
+
+const EXPORT_COMPLETION_DELAY_MS = 4000;
+
+function startExport(body) {
+    const record = {
+        id: crypto.randomUUID(),
+        scope_kind: body.scope.kind,
+        scope_id: body.scope.id,
+        status: "running",
+        manifest: null,
+        error: null,
+        created_by: null,
+        created_at: new Date().toISOString(),
+        finished_at: null,
+    };
+    EXPORTS.unshift(record);
+    setTimeout(() => {
+        record.status = "completed";
+        record.manifest = EXPORT_MANIFEST;
+        record.finished_at = new Date().toISOString();
+    }, EXPORT_COMPLETION_DELAY_MS);
+    return record;
+}
+
+function backupRoute(method, path) {
+    const target = path.match(/^\/api\/admin\/export-targets\/([^/]+)(\/test)?$/);
+    if (target && method === "PUT") {
+        return (body, response) => {
+            const view = { name: decodeURIComponent(target[1]), kind: body.kind, location: body.path ?? `${body.endpoint}/${body.bucket}/${body.prefix}`, encrypted: body.passphrase !== null, default: body.default };
+            EXPORT_TARGETS.push(view);
+            send(response, 200, view);
+        };
+    }
+    if (target && method === "DELETE") {
+        return (_body, response) => {
+            EXPORT_TARGETS.splice(0, EXPORT_TARGETS.length, ...EXPORT_TARGETS.filter((item) => item.name !== decodeURIComponent(target[1])));
+            response.writeHead(204).end();
+        };
+    }
+    if (target && method === "POST") return (_body, response) => response.writeHead(204).end();
+    if (method === "POST" && /^\/api\/exports\/[^/]+\/restore$/.test(path)) return (_body, response) => send(response, 200, {});
+    return null;
+}
+
 createServer(async (request, response) => {
     const path = request.url.split("?")[0];
-    const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path) ?? groupRoute(request.method, path) ?? bucketRoute(request.method, path);
+    const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path) ?? groupRoute(request.method, path) ?? bucketRoute(request.method, path) ?? backupRoute(request.method, path);
     if (!route) return send(response, 404, { error: "not found" });
     route(await readBody(request), response, new URL(request.url, "http://localhost").searchParams, request);
 }).listen(PORT, () => {
