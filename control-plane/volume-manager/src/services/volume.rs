@@ -1,9 +1,7 @@
 use crate::log_info;
 use entity::entities::volumes;
-use etcd_client::Client as EtcdClient;
 use sea_orm::DatabaseConnection;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::ceph::ops::CephManager;
@@ -30,21 +28,12 @@ pub(crate) const IMAGE_FEATURES: [&str; 2] = ["layering", "exclusive-lock"];
 
 pub struct VolumeService {
     pub(crate) db: DatabaseConnection,
-    _etcd: Arc<Mutex<EtcdClient>>,
     pub(crate) ceph: Option<Arc<CephManager>>,
 }
 
 impl VolumeService {
-    pub fn new(
-        db: DatabaseConnection,
-        etcd: Arc<Mutex<EtcdClient>>,
-        ceph: Option<Arc<CephManager>>,
-    ) -> Self {
-        Self {
-            db,
-            _etcd: etcd,
-            ceph,
-        }
+    pub fn new(db: DatabaseConnection, ceph: Option<Arc<CephManager>>) -> Self {
+        Self { db, ceph }
     }
 
     pub async fn create_volume(&self, req: CreateVolumeRequest) -> Result<VolumeResponse, String> {

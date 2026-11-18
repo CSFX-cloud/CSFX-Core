@@ -43,7 +43,7 @@ async fn eventually_logged(log: &PathBuf, needle: &str) -> bool {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn export_streams_the_image_and_removes_its_snapshot() {
     let log = scratch("rbd-log");
     std::env::set_var("FAKE_RBD_LOG", &log);
@@ -88,7 +88,7 @@ async fn export_streams_the_image_and_removes_its_snapshot() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn export_of_an_unknown_volume_is_not_found() {
     let app = router(true).await;
     let (status, _) = raw(
@@ -102,7 +102,7 @@ async fn export_of_an_unknown_volume_is_not_found() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn import_creates_an_available_volume_from_the_stream() {
     let received = scratch("rbd-import");
     std::env::set_var("FAKE_RBD_IMPORT_BYTES", &received);
@@ -124,7 +124,7 @@ async fn import_creates_an_available_volume_from_the_stream() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres and etcd"]
+#[ignore = "requires postgres"]
 async fn failed_import_leaves_no_volume_behind() {
     let app = router(true).await;
     let name = format!("failimport-{}", Uuid::new_v4().simple());

@@ -16,10 +16,7 @@ entity = { path = "../shared/entity" }
 # Async runtime
 tokio = { workspace = true }
 futures-util = { workspace = true }
-async-trait = { workspace = true }
 
-# etcd
-etcd-client = { workspace = true }
 
 # Web framework
 axum = { version = "0.8", features = ["macros"] }
@@ -35,9 +32,6 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# HTTP Client for Patroni
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "webpki-roots"] }
-ring = { workspace = true }
 rustls = { workspace = true }
 
 # Utilities
@@ -53,6 +47,7 @@ opentelemetry-semantic-conventions = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 
 [dev-dependencies]
+test-support = { path = "../shared/test-support" }
 migration = { path = "../shared/migration" }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
