@@ -366,9 +366,7 @@ async fn connect_with_retry() -> (LeaderLease, Client) {
 }
 
 async fn connect() -> anyhow::Result<(LeaderLease, Client)> {
-    let endpoints =
-        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://localhost:2379".into());
-    let client = Client::connect(endpoints.split(',').collect::<Vec<_>>(), None).await?;
+    let client = shared::etcd::connect_from_env().await?;
     let leader = LeaderLease::connect(LEADER_KEY).await?;
     Ok((leader, client))
 }

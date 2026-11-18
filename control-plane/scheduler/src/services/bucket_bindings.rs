@@ -5,6 +5,11 @@ use crate::models::workload::BucketBinding;
 const OBJECT_STORAGE_URL_ENV: &str = "OBJECT_STORAGE_URL";
 const DEFAULT_OBJECT_STORAGE_URL: &str = "http://localhost:8006";
 
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| shared::http::client(shared::http::DEFAULT_TIMEOUT))
+}
+
 fn base_url() -> String {
     std::env::var(OBJECT_STORAGE_URL_ENV).unwrap_or_else(|_| DEFAULT_OBJECT_STORAGE_URL.to_string())
 }
@@ -15,7 +20,7 @@ pub async fn resolve_env_vars(
     bindings: &[BucketBinding],
 ) -> HashMap<String, String> {
     let mut env = HashMap::new();
-    let client = reqwest::Client::new();
+    let client = http_client();
     let base = base_url();
 
     for (index, binding) in bindings.iter().enumerate() {

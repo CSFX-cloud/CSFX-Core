@@ -111,20 +111,6 @@ impl RgDnsRegistry {
 
         write_zone_file(resource_group_id, &desired).await
     }
-
-    pub async fn remove(&self, resource_group_id: &str, service_name: &str) -> Result<()> {
-        let mut records = self.records.lock().await;
-        let snapshot = match records.get_mut(resource_group_id) {
-            Some(rg_records) => {
-                rg_records.remove(service_name);
-                rg_records.clone()
-            }
-            None => return Ok(()),
-        };
-        drop(records);
-
-        write_zone_file(resource_group_id, &snapshot).await
-    }
 }
 
 fn is_platform_record(name: &str) -> bool {

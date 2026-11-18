@@ -12,16 +12,16 @@ const FIRST_SITE_OCTET: u8 = 101;
 pub const DEFAULT_SITE: &str = "default";
 
 pub struct MgmtIpamService {
-    etcd_endpoints: String,
+    etcd_endpoints: Vec<String>,
 }
 
 impl MgmtIpamService {
-    pub fn new(etcd_endpoints: String) -> Self {
+    pub fn new(etcd_endpoints: Vec<String>) -> Self {
         Self { etcd_endpoints }
     }
 
     pub async fn allocate(&self, agent_id: Uuid, site_id: &str) -> Result<String> {
-        let mut client = Client::connect([self.etcd_endpoints.as_str()], None)
+        let mut client = shared::etcd::connect(&self.etcd_endpoints)
             .await
             .context("failed to connect to etcd")?;
         let base = site_base(&mut client, site_id).await?;
@@ -46,7 +46,7 @@ impl MgmtIpamService {
     }
 
     pub async fn release(&self, ip: &str) -> Result<()> {
-        let mut client = Client::connect([self.etcd_endpoints.as_str()], None)
+        let mut client = shared::etcd::connect(&self.etcd_endpoints)
             .await
             .context("failed to connect to etcd")?;
 
@@ -134,8 +134,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires etcd via ETCD_ENDPOINTS"]
     async fn concurrent_agents_of_a_new_site_share_one_block() {
-        let endpoints = std::env::var("ETCD_ENDPOINTS").expect("ETCD_ENDPOINTS must be set");
-        let service = MgmtIpamService::new(endpoints);
+        let service = MgmtIpamService::new(shared::etcd::endpoints_from_env());
         let site = format!("site-{}", Uuid::new_v4());
         let (first, second) = tokio::join!(
             service.allocate(Uuid::new_v4(), &site),

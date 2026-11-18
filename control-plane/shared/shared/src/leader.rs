@@ -7,7 +7,6 @@ use tokio::time::{sleep, timeout, Instant};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-const DEFAULT_ETCD_ENDPOINTS: &str = "http://localhost:2379";
 const LEASE_TTL_SECONDS: i64 = 10;
 const RENEW_INTERVAL: Duration = Duration::from_secs(2);
 const RENEW_TIMEOUT: Duration = Duration::from_secs(2);
@@ -67,9 +66,7 @@ impl LeaderLease {
     }
 
     pub async fn connect(key: &str) -> Result<Self> {
-        let endpoints =
-            std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| DEFAULT_ETCD_ENDPOINTS.to_string());
-        let etcd = Client::connect(endpoints.split(',').collect::<Vec<_>>(), None)
+        let etcd = crate::etcd::connect_from_env()
             .await
             .context("failed to connect to etcd")?;
         Ok(Self::new(etcd, key, Uuid::new_v4().to_string()).spawn())

@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::sync::{LazyLock, Mutex};
 use sysinfo::{Disks, Networks, System};
 
 pub struct SystemInfo {
@@ -22,8 +21,6 @@ pub struct SystemMetrics {
     pub network_tx_bytes: u64,
     pub uptime_seconds: u64,
 }
-
-static SHARED_SYSTEM: LazyLock<Mutex<System>> = LazyLock::new(|| Mutex::new(fresh_system()));
 
 fn fresh_system() -> System {
     let mut sys = System::new();
@@ -229,46 +226,6 @@ fn read_machine_id() -> Option<String> {
     (!id.is_empty()).then(|| id.to_string())
 }
 
-pub fn collect_metrics() -> SystemMetrics {
-    let mut sys = SHARED_SYSTEM
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    sys.refresh_cpu_usage();
-    sys.refresh_memory();
-
-    let cpu_usage_percent = sys.global_cpu_usage();
-    let cpu_cores = sys.cpus().len() as u32;
-    let memory_total_bytes = sys.total_memory();
-    let memory_used_bytes = sys.used_memory();
-
-    let disks = Disks::new_with_refreshed_list();
-    let (disk_total_bytes, disk_used_bytes) =
-        disks.iter().fold((0u64, 0u64), |(total, used), d| {
-            (
-                total + d.total_space(),
-                used + (d.total_space() - d.available_space()),
-            )
-        });
-
-    let networks = Networks::new_with_refreshed_list();
-    let (network_rx_bytes, network_tx_bytes) =
-        networks.iter().fold((0u64, 0u64), |(rx, tx), (_, data)| {
-            (rx + data.total_received(), tx + data.total_transmitted())
-        });
-
-    SystemMetrics {
-        cpu_usage_percent,
-        cpu_cores,
-        memory_total_bytes,
-        memory_used_bytes,
-        disk_total_bytes,
-        disk_used_bytes,
-        network_rx_bytes,
-        network_tx_bytes,
-        uptime_seconds: System::uptime(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,11 +261,10 @@ mod tests {
 
     #[test]
     fn real_metrics_describe_this_machine() {
-        let metrics = collect_metrics();
-        assert!(metrics.cpu_cores > 0);
-        assert!(metrics.memory_total_bytes >= metrics.memory_used_bytes);
         let mut collector = LiveMetricsCollector::new();
         let sample = collector.sample();
+        assert!(sample.cpu_cores > 0);
+        assert!(sample.memory_total_bytes >= sample.memory_used_bytes);
         assert!(sample.memory_total_bytes > 0);
         assert!(serde_json::to_string(&sample)
             .unwrap()

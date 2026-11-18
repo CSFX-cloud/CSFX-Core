@@ -7,6 +7,8 @@ use axum::{
 };
 use csfx_release_notes::ReleaseNotes;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use crate::auth::rbac::CanManageSystem;
 use crate::routes::update::is_valid_version;
@@ -15,6 +17,12 @@ use crate::AppState;
 const RELEASES_API: &str = "https://api.github.com/repos/CSFX-cloud/CSFX-Core/releases";
 const DEFAULT_RELEASE_BASE_URL: &str = "https://github.com/CSFX-cloud/CSFX-Infra/releases";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| shared::http::client(FETCH_TIMEOUT))
+}
 
 #[derive(Deserialize)]
 struct GithubRelease {
@@ -80,7 +88,7 @@ fn release_download_base(base_url: &str, version: &str) -> String {
 }
 
 async fn fetch_release_notes(url: &str) -> Result<ReleaseNotes, StatusCode> {
-    let resp = reqwest::Client::new()
+    let resp = client()
         .get(url)
         .header("User-Agent", "csfx-api-gateway")
         .send()
@@ -147,8 +155,7 @@ async fn list_releases(
 }
 
 async fn fetch_github_releases() -> Result<Vec<GithubRelease>, StatusCode> {
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = client()
         .get(RELEASES_API)
         .header("User-Agent", "csfx-api-gateway")
         .header("Accept", "application/vnd.github+json")

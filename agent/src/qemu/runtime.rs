@@ -781,7 +781,6 @@ mod tests {
             env_vars: None,
             ports: None,
             volume_mounts: None,
-            service_name: None,
             resource_group_id: None,
             resource_group_cidr: None,
             guest_ip: None,

@@ -3,6 +3,8 @@ pub mod db;
 pub mod db_log_layer;
 pub mod env;
 pub mod env_secrets;
+pub mod etcd;
+pub mod http;
 pub mod leader;
 pub mod log_writer;
 pub mod logger;

@@ -48,14 +48,6 @@ pub trait Runtime: Send + Sync {
     async fn stop_workload(&self, workload_handle: &str) -> Result<()>;
     async fn stats(&self, workload_handle: &str) -> Result<ContainerStats>;
 
-    async fn service_network_ip(
-        &self,
-        _workload_handle: &str,
-        _network_name: &str,
-    ) -> Result<Option<String>> {
-        Ok(None)
-    }
-
     async fn list_managed_workloads(&self) -> Result<Vec<(String, String)>> {
         Ok(Vec::new())
     }

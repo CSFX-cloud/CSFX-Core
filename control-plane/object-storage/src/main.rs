@@ -37,9 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let public_s3_url = std::env::var("GARAGE_PUBLIC_S3_URL").unwrap_or_else(|_| s3_url.clone());
     let s3_client = garage::S3Client::new(s3_url, public_s3_url);
 
-    let etcd_url =
-        std::env::var("ETCD_URL").unwrap_or_else(|_| "http://localhost:2379".to_string());
-    let etcd = etcd_client::Client::connect([etcd_url.as_str()], None)
+    let etcd = shared::etcd::connect_from_env()
         .await
         .expect("Failed to connect to etcd");
     log_info!("main", "etcd connection established");

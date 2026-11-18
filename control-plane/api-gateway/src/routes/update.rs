@@ -47,14 +47,10 @@ pub fn routes() -> Router<AppState> {
 }
 
 async fn etcd_client() -> Result<Client, StatusCode> {
-    let endpoints = env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://etcd:2379".to_string());
-
-    Client::connect([endpoints.as_str()], None)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to connect to etcd");
-            StatusCode::SERVICE_UNAVAILABLE
-        })
+    shared::etcd::connect_from_env().await.map_err(|e| {
+        tracing::error!(error = %e, "failed to connect to etcd");
+        StatusCode::SERVICE_UNAVAILABLE
+    })
 }
 
 async fn trigger_update(

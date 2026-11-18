@@ -45,7 +45,7 @@ impl S3Client {
         Self {
             s3_url,
             public_s3_url,
-            http: reqwest::Client::new(),
+            http: shared::http::client(shared::http::DEFAULT_TIMEOUT),
         }
     }
 

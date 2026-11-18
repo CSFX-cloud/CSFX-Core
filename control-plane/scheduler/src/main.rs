@@ -83,15 +83,13 @@ async fn main() -> anyhow::Result<()> {
     });
     shared::observability::spawn_pool_gauges("default", db.clone());
 
-    let etcd_endpoints =
-        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://localhost:2379".to_string());
-    let etcd_endpoints: Vec<&str> = etcd_endpoints.split(',').collect();
+    let etcd_endpoints = shared::etcd::endpoints_from_env();
 
     log_info!(
         "main",
         &format!("Connecting to etcd endpoints={}", etcd_endpoints.join(","))
     );
-    let etcd = etcd_client::Client::connect(etcd_endpoints, None)
+    let etcd = etcd_client::Client::connect(&etcd_endpoints, None)
         .await
         .expect("Failed to connect to etcd");
     log_info!("main", "etcd connection established");
