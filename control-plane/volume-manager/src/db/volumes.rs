@@ -2,8 +2,8 @@ use chrono::Utc;
 use entity::entities::{volume_snapshots, volumes};
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
-    ModelTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait,
+    QueryFilter,
 };
 use shared::pagination::{keyset_by_id, PageParams};
 use uuid::Uuid;
@@ -123,37 +123,9 @@ pub async fn attach(
     agent_id: Uuid,
     workload_id: Option<Uuid>,
 ) -> Result<Option<volumes::Model>, sea_orm::DbErr> {
-    let attached = volumes::Entity::update_many()
-        .col_expr(volumes::Column::AttachedToAgent, Expr::value(agent_id))
-        .col_expr(
-            volumes::Column::AttachedToWorkload,
-            Expr::value(workload_id),
-        )
-        .col_expr(
-            volumes::Column::Status,
-            Expr::value(VolumeStatus::InUse.as_str()),
-        )
-        .col_expr(
-            volumes::Column::UpdatedAt,
-            Expr::value(Utc::now().naive_utc()),
-        )
-        .filter(volumes::Column::Id.eq(volume_id))
-        .filter(volumes::Column::Status.is_in([
-            VolumeStatus::Available.as_str(),
-            VolumeStatus::InUse.as_str(),
-        ]))
-        .filter(
-            Condition::any()
-                .add(volumes::Column::AttachedToAgent.is_null())
-                .add(volumes::Column::AttachedToAgent.eq(agent_id)),
-        )
-        .exec(db)
-        .await?;
-
-    if attached.rows_affected == 0 {
+    if !shared::volumes::claim(db, &[volume_id], agent_id, workload_id).await? {
         return Ok(None);
     }
-
     volumes::Entity::find_by_id(volume_id).one(db).await
 }
 
@@ -161,19 +133,13 @@ pub async fn detach(
     db: &DatabaseConnection,
     volume_id: Uuid,
 ) -> Result<volumes::Model, sea_orm::DbErr> {
-    let volume = volumes::Entity::find_by_id(volume_id)
+    if !shared::volumes::release(db, volume_id).await? {
+        return Err(sea_orm::DbErr::RecordNotFound(volume_id.to_string()));
+    }
+    volumes::Entity::find_by_id(volume_id)
         .one(db)
         .await?
-        .ok_or(sea_orm::DbErr::RecordNotFound(volume_id.to_string()))?;
-
-    let mut active: volumes::ActiveModel = volume.into();
-    active.attached_to_agent = Set(None);
-    active.attached_to_workload = Set(None);
-    active.mapped_device = Set(None);
-    active.status = Set(VolumeStatus::Available.as_str().to_string());
-    active.updated_at = Set(Some(Utc::now().naive_utc()));
-
-    active.update(db).await
+        .ok_or(sea_orm::DbErr::RecordNotFound(volume_id.to_string()))
 }
 
 pub async fn resize(

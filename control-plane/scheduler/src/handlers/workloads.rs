@@ -142,7 +142,7 @@ async fn claim_requested_volumes(
         return Ok(());
     };
     let volume_ids: Vec<Uuid> = mounts.iter().map(|mount| mount.volume_id).collect();
-    match db::volumes::claim(&state.db, &volume_ids, agent_id, workload_id).await {
+    match shared::volumes::claim(&state.db, &volume_ids, agent_id, Some(workload_id)).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(error_response(
             StatusCode::CONFLICT,
