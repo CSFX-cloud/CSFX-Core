@@ -1,6 +1,6 @@
 <script lang="ts">
     import type { Component, Snippet } from "svelte";
-    import { Bell, KeyRound, Network, FileText, ScrollText, ShieldCheck, SlidersHorizontal, User, Users, Download } from "@lucide/svelte";
+    import { Bell, KeyRound, Network, FileText, ScrollText, ShieldCheck, SlidersHorizontal, User, Users, Download, Archive } from "@lucide/svelte";
     import { page } from "$app/state";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
 
@@ -28,6 +28,7 @@
                 { href: `${BASE}/patch-notes`, label: "Patch notes", icon: FileText },
                 { href: `${BASE}/logs`, label: "Logs", icon: ScrollText },
                 { href: `${BASE}/notifications`, label: "Notifications", icon: Bell },
+                { href: `${BASE}/backups`, label: "Backups", icon: Archive },
             ],
         },
         {
