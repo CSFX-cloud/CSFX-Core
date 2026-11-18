@@ -3,6 +3,7 @@ pub mod manifest;
 pub mod pipeline;
 pub mod s3;
 pub mod sink;
+pub mod target;
 
 use axum::body::Bytes;
 use futures_util::Stream;
