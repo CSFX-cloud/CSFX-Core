@@ -39,10 +39,6 @@ pub mod vault_store;
 pub mod workload_secrets;
 pub mod zone_cert;
 
-use routes::registry::{
-    AgentStatistics, ErrorResponse as RegistryErrorResponse, HeartbeatRequest,
-    PreRegisterAgentRequest, PreRegisterAgentResponse, RegisterAgentRequest, RegisterAgentResponse,
-};
 use routes::users::{AuthResponse, LoginRequest, PublicKeyResponse, UserProfileResponse};
 
 #[derive(OpenApi)]
@@ -58,16 +54,6 @@ use routes::users::{AuthResponse, LoginRequest, PublicKeyResponse, UserProfileRe
         routes::users::disable_2fa,
         routes::users::change_password,
         routes::users::change_email,
-        routes::registry::pre_register_agent,
-        routes::registry::list_pending_agents,
-        routes::registry::delete_pending_agent,
-        routes::registry::list_tokens,
-        routes::registry::list_agents_admin,
-        routes::registry::get_statistics,
-        routes::registry::register_agent,
-        routes::registry::agent_heartbeat,
-        routes::registry::registry_health,
-        routes::registry::create_token,
     ),
     components(
         schemas(
@@ -75,22 +61,11 @@ use routes::users::{AuthResponse, LoginRequest, PublicKeyResponse, UserProfileRe
             AuthResponse,
             PublicKeyResponse,
             UserProfileResponse,
-            PreRegisterAgentRequest,
-            PreRegisterAgentResponse,
-            RegisterAgentRequest,
-            RegisterAgentResponse,
-            HeartbeatRequest,
-            AgentStatistics,
-            RegistryErrorResponse,
         )
     ),
     tags(
         (name = "Authentication", description = "User authentication and session management"),
         (name = "Encryption", description = "RSA public key for password encryption"),
-        (name = "Registry - Admin", description = "Agent registry administration"),
-        (name = "Registry - Agent", description = "Agent registration and heartbeat"),
-        (name = "Registry - Health", description = "Registry service health check"),
-        (name = "Registry - Admin (Deprecated)", description = "Deprecated token-based registration"),
         (name = "Agents", description = "Agent listing and metrics"),
         (name = "Volumes", description = "Volume lifecycle management (proxied to volume-manager)"),
         (name = "Workloads", description = "Workload scheduling (proxied to scheduler)"),
