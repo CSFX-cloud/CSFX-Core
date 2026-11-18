@@ -21,7 +21,6 @@ impl Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Scheduled,
-    Pulling,
     Creating,
     Starting,
     Failed,
@@ -31,7 +30,6 @@ impl Phase {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Scheduled => "scheduled",
-            Self::Pulling => "pulling",
             Self::Creating => "creating",
             Self::Starting => "starting",
             Self::Failed => "failed",
@@ -192,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn stale_entries_exclude_desired_workloads() {
         let table = WorkloadTable::default();
-        table.set_phase("keep", Phase::Pulling).await;
+        table.set_phase("keep", Phase::Creating).await;
         table.set_phase("drop", Phase::Failed).await;
 
         let desired: HashSet<&str> = HashSet::from(["keep"]);

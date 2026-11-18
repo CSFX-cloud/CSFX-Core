@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 use tracing::{info, warn};
+
+use crate::cmd;
 
 const PEER_CACHE_FILE: &str = "/var/lib/csfx-agent/mgmt-peers.json";
 
@@ -22,13 +23,13 @@ pub async fn ensure_mgmt_interface(
 ) -> Result<()> {
     let iface = MGMT_INTERFACE_NAME;
 
-    if !interface_exists(iface).await? {
-        run_ip(&["link", "add", "dev", iface, "type", "wireguard"]).await?;
+    if !cmd::link_exists(iface).await? {
+        cmd::ip(&["link", "add", "dev", iface, "type", "wireguard"]).await?;
         set_private_key(iface, private_key_b64).await?;
-        run_wg(&["set", iface, "listen-port", &listen_port.to_string()]).await?;
+        cmd::wg(&["set", iface, "listen-port", &listen_port.to_string()]).await?;
     }
     ensure_address(iface, tunnel_ip).await?;
-    run_ip(&["link", "set", "up", "dev", iface]).await?;
+    cmd::ip(&["link", "set", "up", "dev", iface]).await?;
 
     info!(iface = %iface, tunnel_ip = %tunnel_ip, "Management WireGuard interface ready");
 
@@ -37,16 +38,11 @@ pub async fn ensure_mgmt_interface(
 
 async fn ensure_address(iface: &str, tunnel_ip: &str) -> Result<()> {
     let wanted = format!("{}/32", tunnel_ip);
-    let output = Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "dev", iface])
-        .output()
-        .await
-        .context("failed to execute ip addr show")?;
-    if has_address(&String::from_utf8_lossy(&output.stdout), &wanted) {
+    if cmd::address_assigned(iface, &wanted).await? {
         return Ok(());
     }
-    run_ip(&["address", "flush", "dev", iface]).await?;
-    run_ip(&["address", "add", &wanted, "dev", iface]).await
+    cmd::ip(&["address", "flush", "dev", iface]).await?;
+    cmd::ip(&["address", "add", &wanted, "dev", iface]).await
 }
 
 pub fn save_peer_cache(peers: &[Peer]) -> Result<()> {
@@ -73,16 +69,7 @@ pub async fn apply_mgmt_peers(peers: &[Peer]) -> Result<()> {
 }
 
 pub fn rg_interface_name(resource_group_id: &str) -> String {
-    const FNV_OFFSET_BASIS: u32 = 0x811c9dc5;
-    const FNV_PRIME: u32 = 0x01000193;
-
-    let mut hash = FNV_OFFSET_BASIS;
-    for byte in resource_group_id.as_bytes() {
-        hash ^= *byte as u32;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-
-    format!("wgrg{:08x}", hash)
+    format!("wgrg{:08x}", crate::spec::fnv1a32(resource_group_id))
 }
 
 pub fn udp_port_is_free(port: u16) -> bool {
@@ -106,10 +93,10 @@ pub async fn ensure_interface(
     listen_port: u16,
 ) -> Result<String> {
     let iface = rg_interface_name(resource_group_id);
-    let created = !interface_exists(&iface).await?;
+    let created = !cmd::link_exists(&iface).await?;
 
     if created {
-        run_ip(&["link", "add", "dev", &iface, "type", "wireguard"]).await?;
+        cmd::ip(&["link", "add", "dev", &iface, "type", "wireguard"]).await?;
     }
     if let Err(error) = configure_interface(&iface, private_key_b64, listen_port).await {
         if created {
@@ -127,31 +114,12 @@ pub async fn ensure_interface(
 
 async fn configure_interface(iface: &str, private_key_b64: &str, listen_port: u16) -> Result<()> {
     set_private_key(iface, private_key_b64).await?;
-    run_wg(&["set", iface, "listen-port", &listen_port.to_string()]).await?;
-    run_ip(&["link", "set", "up", "dev", iface]).await
+    cmd::wg(&["set", iface, "listen-port", &listen_port.to_string()]).await?;
+    cmd::ip(&["link", "set", "up", "dev", iface]).await
 }
 
 pub async fn set_route(iface: &str, cidr: &str) -> Result<()> {
-    let output = Command::new("ip")
-        .args(["route", "add", cidr, "dev", iface])
-        .output()
-        .await
-        .context("failed to execute ip route add")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("File exists") {
-            return Ok(());
-        }
-        anyhow::bail!(
-            "ip route add failed cidr={} iface={} stderr={}",
-            cidr,
-            iface,
-            stderr
-        );
-    }
-
-    Ok(())
+    cmd::ip(&["route", "add", cidr, "dev", iface]).await
 }
 
 pub async fn sync_host_routes(
@@ -161,37 +129,21 @@ pub async fn sync_host_routes(
     let current = list_host_routes(iface).await?;
 
     for stale in current.difference(desired) {
-        run_ip(&["route", "del", &format!("{}/32", stale), "dev", iface]).await?;
+        cmd::ip(&["route", "del", &format!("{}/32", stale), "dev", iface]).await?;
     }
 
     let added: Vec<String> = desired.difference(&current).cloned().collect();
     for address in &added {
-        run_ip(&["route", "replace", &format!("{}/32", address), "dev", iface]).await?;
+        cmd::ip(&["route", "replace", &format!("{}/32", address), "dev", iface]).await?;
     }
 
     Ok(added)
 }
 
 async fn list_host_routes(iface: &str) -> Result<std::collections::HashSet<String>> {
-    let output = Command::new("ip")
-        .args(["-4", "route", "show", "dev", iface])
-        .output()
-        .await
-        .context("failed to execute ip route show")?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "ip route show failed iface={} stderr={}",
-            iface,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    Ok(parse_host_routes(&String::from_utf8_lossy(&output.stdout)))
-}
-
-fn has_address(listing: &str, wanted: &str) -> bool {
-    listing.split_whitespace().any(|field| field == wanted)
+    Ok(parse_host_routes(
+        &cmd::stdout("ip", &["-4", "route", "show", "dev", iface]).await?,
+    ))
 }
 
 fn parse_host_routes(listing: &str) -> std::collections::HashSet<String> {
@@ -234,22 +186,8 @@ fn peer_arguments(iface: &str, peer: &Peer) -> Vec<String> {
 }
 
 pub async fn remove_interface(iface: &str) -> Result<()> {
-    let output = Command::new("ip")
-        .args(["link", "delete", "dev", iface])
-        .output()
-        .await
-        .context("failed to execute ip link delete")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("Cannot find device") {
-            return Ok(());
-        }
-        anyhow::bail!("ip link delete failed iface={} stderr={}", iface, stderr);
-    }
-
+    cmd::delete_link(iface).await?;
     info!(iface = %iface, "WireGuard interface removed");
-
     Ok(())
 }
 
@@ -257,7 +195,7 @@ pub async fn set_peers(iface: &str, peers: &[Peer]) -> Result<()> {
     for peer in peers {
         let args = peer_arguments(iface, peer);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        run_wg(&arg_refs).await?;
+        cmd::wg(&arg_refs).await?;
     }
 
     Ok(())
@@ -269,7 +207,7 @@ pub async fn reconcile_peers(iface: &str, peers: &[Peer]) -> Result<()> {
         peers.iter().map(|p| p.public_key.as_str()).collect();
 
     for stale_key in current.iter().filter(|k| !desired.contains(k.as_str())) {
-        run_wg(&["set", iface, "peer", stale_key, "remove"]).await?;
+        cmd::wg(&["set", iface, "peer", stale_key, "remove"]).await?;
         info!(iface = %iface, public_key = %stale_key, "Removed stale WireGuard peer");
     }
 
@@ -277,28 +215,9 @@ pub async fn reconcile_peers(iface: &str, peers: &[Peer]) -> Result<()> {
 }
 
 async fn list_peer_public_keys(iface: &str) -> Result<Vec<String>> {
-    let output = Command::new("wg")
-        .args(["show", iface, "peers"])
-        .output()
-        .await
-        .context("failed to execute wg show peers")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("wg show peers failed iface={} stderr={}", iface, stderr);
-    }
-
-    Ok(parse_peer_keys(&String::from_utf8_lossy(&output.stdout)))
-}
-
-async fn interface_exists(iface: &str) -> Result<bool> {
-    let output = Command::new("ip")
-        .args(["link", "show", iface])
-        .output()
-        .await
-        .context("failed to execute ip link show")?;
-
-    Ok(output.status.success())
+    Ok(parse_peer_keys(
+        &cmd::stdout("wg", &["show", iface, "peers"]).await?,
+    ))
 }
 
 async fn set_private_key(iface: &str, private_key_b64: &str) -> Result<()> {
@@ -322,36 +241,6 @@ async fn set_private_key(iface: &str, private_key_b64: &str) -> Result<()> {
 
     if !status.success() {
         anyhow::bail!("wg set private-key failed iface={}", iface);
-    }
-
-    Ok(())
-}
-
-async fn run_ip(args: &[&str]) -> Result<()> {
-    let output = Command::new("ip")
-        .args(args)
-        .output()
-        .await
-        .context("failed to execute ip")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("ip command failed args={:?} stderr={}", args, stderr);
-    }
-
-    Ok(())
-}
-
-async fn run_wg(args: &[&str]) -> Result<()> {
-    let output = Command::new("wg")
-        .args(args)
-        .output()
-        .await
-        .context("failed to execute wg")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("wg command failed args={:?} stderr={}", args, stderr);
     }
 
     Ok(())
@@ -383,15 +272,6 @@ mod tests {
         assert_eq!(parsed[0].public_key, "key");
         assert!(parsed[0].endpoint.is_none());
         assert_eq!(parsed[0].allowed_ips, "10.0.0.1/32");
-    }
-
-    #[test]
-    fn address_is_matched_as_a_whole_field() {
-        let listing = "5: wgmgmt0    inet 10.100.0.7/32 scope global wgmgmt0";
-        assert!(has_address(listing, "10.100.0.7/32"));
-        assert!(!has_address(listing, "10.100.0.7/3"));
-        assert!(!has_address(listing, "10.100.0.8/32"));
-        assert!(!has_address("", "10.100.0.7/32"));
     }
 
     #[test]
@@ -515,9 +395,7 @@ mod tests {
 
         assert!(error.is_err());
         let name = rg_interface_name("rg-1");
-        assert!(tools
-            .calls("ip")
-            .contains(&format!("link delete dev {name}")));
+        assert!(tools.calls("ip").contains(&format!("link delete {name}")));
         assert!(!tools
             .calls("ip")
             .iter()
@@ -566,7 +444,7 @@ mod tests {
 
         let error = reconcile_peers("wg0", &[]).await.unwrap_err().to_string();
 
-        assert!(error.contains("wg show peers failed"));
+        assert!(error.contains("wg command failed"));
     }
 
     #[tokio::test]
@@ -597,7 +475,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("ip route add failed"));
+        assert!(error.contains("ip command failed"));
     }
 
     #[tokio::test]
@@ -628,7 +506,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("ip route show failed"));
+        assert!(error.contains("ip command failed"));
     }
 
     #[tokio::test]
@@ -636,7 +514,7 @@ mod tests {
         {
             let tools = FakeTools::install(&[("ip", SUCCEEDING)]);
             remove_interface("wg0").await.unwrap();
-            assert_eq!(tools.calls("ip"), vec!["link delete dev wg0".to_string()]);
+            assert_eq!(tools.calls("ip"), vec!["link delete wg0".to_string()]);
         }
         {
             let _tools =
@@ -651,12 +529,12 @@ mod tests {
     async fn failing_commands_surface_their_arguments() {
         let _tools = FakeTools::install(&[("ip", "exit 1"), ("wg", "exit 1")]);
 
-        assert!(run_ip(&["link", "show"])
+        assert!(cmd::ip(&["link", "show"])
             .await
             .unwrap_err()
             .to_string()
             .contains("ip command failed"));
-        assert!(run_wg(&["show"])
+        assert!(cmd::wg(&["show"])
             .await
             .unwrap_err()
             .to_string()

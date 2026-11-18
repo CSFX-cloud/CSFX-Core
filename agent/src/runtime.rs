@@ -40,7 +40,6 @@ pub struct ContainerStats {
 
 #[async_trait::async_trait]
 pub trait Runtime: Send + Sync {
-    async fn pull_image(&self, image: &str) -> Result<()>;
     async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String>;
     async fn inspect_status(&self, workload_handle: &str) -> Result<String>;
     fn logs(&self, workload_handle: &str) -> LogStream;

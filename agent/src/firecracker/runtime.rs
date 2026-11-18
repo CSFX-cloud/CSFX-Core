@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -16,6 +16,7 @@ use crate::firecracker::site_registry::SiteRegistry;
 use crate::rg_dns_process::RgDnsProcessSupervisor;
 use crate::runtime::{ExecSession, LogStream, VolumeUsage};
 use crate::spec::WorkloadSpec;
+use crate::vm_host::{self, process_gid, process_uid};
 
 const JAILER_BASE_DIR: &str = "/var/lib/csfx-agent/firecracker";
 const GUEST_KERNEL_PATH: &str = "/var/lib/csfx-agent/vmlinux";
@@ -38,14 +39,6 @@ const GRACEFUL_STOP_POLL_INTERVAL: std::time::Duration = std::time::Duration::fr
 fn firecracker_bin_path() -> String {
     std::env::var("CSFX_FIRECRACKER_BIN_PATH")
         .unwrap_or_else(|_| DEFAULT_FIRECRACKER_BIN_PATH.to_string())
-}
-
-fn process_uid() -> u32 {
-    unsafe { libc::getuid() }
-}
-
-fn process_gid() -> u32 {
-    unsafe { libc::getgid() }
 }
 
 fn next_free_cid_on_host() -> u32 {
@@ -239,23 +232,7 @@ impl FirecrackerRuntime {
     }
 
     pub async fn reconcile_once(&self) -> Vec<(String, String)> {
-        if self.reconciled.swap(true, Ordering::SeqCst) {
-            return Vec::new();
-        }
-
-        match crate::runtime::Runtime::list_managed_workloads(self).await {
-            Ok(recovered) => {
-                info!(
-                    count = recovered.len(),
-                    "Reconciled running microvms from disk state"
-                );
-                recovered
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to reconcile firecracker workloads from disk state");
-                Vec::new()
-            }
-        }
+        vm_host::recover_once(self, &self.reconciled, "microvm").await
     }
 
     async fn ensure_rg_network(
@@ -263,27 +240,20 @@ impl FirecrackerRuntime {
         resource_group_id: &str,
         resource_group_cidr: Option<&str>,
     ) -> Result<String> {
-        let iface = crate::rg_network::ensure_bridge(
+        let iface = crate::rg_network::ensure_group(
+            &self.local_state,
             resource_group_id,
             resource_group_cidr,
+            &self.wg_private_key_b64,
             &self.rg_dns_registry,
         )
-        .await
-        .context("Failed to ensure resource group bridge")?;
+        .await?;
 
         if let Some(cidr) = resource_group_cidr {
             self.dns_supervisor
                 .ensure_running(resource_group_id, cidr)
                 .await
                 .context("Failed to ensure resource group dns process")?;
-
-            crate::wireguard::ensure_rg_interface(
-                &self.local_state,
-                resource_group_id,
-                &self.wg_private_key_b64,
-            )
-            .await
-            .context("Failed to bring up resource group WireGuard interface")?;
         }
 
         Ok(iface)
@@ -314,27 +284,12 @@ impl FirecrackerRuntime {
 
     pub async fn teardown_rg_network(&self, resource_group_id: &str) -> Result<()> {
         self.dns_supervisor.stop(resource_group_id).await;
-
-        crate::rg_network::teardown_bridge(resource_group_id)
-            .await
-            .context("Failed to tear down resource group bridge")?;
-
-        let wg_iface = crate::wireguard::rg_interface_name(resource_group_id);
-        crate::wireguard::remove_interface(&wg_iface)
-            .await
-            .context("Failed to remove resource group WireGuard interface")?;
-        self.local_state.release_wg_port(resource_group_id).await;
-
-        Ok(())
+        crate::rg_network::teardown_group(&self.local_state, resource_group_id).await
     }
 }
 
 #[async_trait::async_trait]
 impl crate::runtime::Runtime for FirecrackerRuntime {
-    async fn pull_image(&self, _image: &str) -> Result<()> {
-        Ok(())
-    }
-
     async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
         debug!(workload_id = %spec.workload_id, image = %spec.image, stage = "start_workload", "Starting workload deploy");
 
@@ -388,7 +343,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
                 )
                 .await
                 .context("Failed to allocate resource group ip address")?;
-                let prefix = cidr.split('/').nth(1).unwrap_or("24").to_string();
+                let prefix = crate::spec::cidr_prefix(cidr);
                 let gateway = crate::spec::second_host_ip(cidr);
                 let dns = crate::spec::second_host_ip(cidr);
                 Some(GuestNetwork {
@@ -452,7 +407,7 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
             resource_group_id: spec.resource_group_id.clone(),
             guest_ip: guest_ip.clone(),
         };
-        write_sidecar_metadata(&chroot_dir, &sidecar)
+        vm_host::write_sidecar(&chroot_dir, &sidecar)
             .await
             .context("Failed to write vm sidecar metadata")?;
 
@@ -546,10 +501,9 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
             .status()
             .await;
 
-        let _ = Command::new("ip")
-            .args(["link", "delete", &handle.tap_device])
-            .status()
-            .await;
+        if let Err(e) = vm_host::remove_tap(&handle.tap_device).await {
+            warn!(workload_id = %handle.workload_id, error = %e, "Failed to delete tap device");
+        }
 
         if let Err(e) = remove_chroot_dir_privileged(&handle.chroot_dir).await {
             warn!(workload_id = %handle.workload_id, error = %e, "Failed to clean up jailer chroot directory");
@@ -615,7 +569,8 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
                 continue;
             };
 
-            let Some(sidecar) = read_sidecar_metadata(&chroot_dir).await else {
+            let Some(sidecar) = vm_host::read_sidecar::<VmSidecarMetadata>(&chroot_dir).await
+            else {
                 let _ = remove_chroot_dir_privileged(&chroot_dir).await;
                 continue;
             };
@@ -845,10 +800,9 @@ async fn abort_failed_jailer(jailer_id: &str, tap_device: &str) {
         .status()
         .await;
 
-    let _ = Command::new("ip")
-        .args(["link", "delete", tap_device])
-        .status()
-        .await;
+    if let Err(e) = vm_host::remove_tap(tap_device).await {
+        warn!(tap_device = %tap_device, error = %e, "Failed to delete tap device");
+    }
 }
 
 async fn spawn_jailer(
@@ -934,31 +888,31 @@ fn unit_slug(path: &Path) -> String {
         .collect()
 }
 
-async fn remove_chroot_dir_privileged(path: &Path) -> Result<()> {
-    let unit = format!("csfx-jailer-cleanup-{}", unit_slug(path));
-
+async fn run_privileged(unit: &str, program: &str, args: &[&str]) -> Result<()> {
     let status = Command::new("systemd-run")
-        .args([
-            "--pipe",
-            "--wait",
-            "--collect",
-            "--uid=0",
-            "--gid=0",
-            &format!("--unit={unit}"),
-            "rm",
-            "-rf",
-            "--",
-        ])
-        .arg(path)
+        .args(["--pipe", "--wait", "--collect", "--uid=0", "--gid=0"])
+        .arg(format!("--unit={unit}"))
+        .arg(format!(
+            "--setenv=PATH={}",
+            std::env::var("PATH").unwrap_or_default()
+        ))
+        .arg(program)
+        .args(args)
         .status()
         .await
-        .context("Failed to spawn privileged chroot cleanup")?;
+        .with_context(|| format!("Failed to spawn privileged {program}"))?;
 
-    if !status.success() {
-        anyhow::bail!("privileged cleanup of chroot directory {:?} failed", path);
-    }
-
+    anyhow::ensure!(status.success(), "privileged {program} failed");
     Ok(())
+}
+
+async fn remove_chroot_dir_privileged(path: &Path) -> Result<()> {
+    let unit = format!("csfx-jailer-cleanup-{}", unit_slug(path));
+    let target = path.to_string_lossy();
+
+    run_privileged(&unit, "rm", &["-rf", "--", &target])
+        .await
+        .with_context(|| format!("privileged cleanup of chroot directory {:?} failed", path))
 }
 
 async fn stage_kernel_into_jail(vm_root_dir: &Path) -> Result<()> {
@@ -1067,25 +1021,6 @@ struct VmSidecarMetadata {
     guest_ip: Option<String>,
 }
 
-fn sidecar_metadata_path(chroot_dir: &Path) -> PathBuf {
-    chroot_dir.join("csfx-meta.json")
-}
-
-async fn write_sidecar_metadata(chroot_dir: &Path, metadata: &VmSidecarMetadata) -> Result<()> {
-    let payload = serde_json::to_vec(metadata).context("Failed to serialize sidecar metadata")?;
-    tokio::fs::write(sidecar_metadata_path(chroot_dir), payload)
-        .await
-        .context("Failed to write sidecar metadata file")?;
-    Ok(())
-}
-
-async fn read_sidecar_metadata(chroot_dir: &Path) -> Option<VmSidecarMetadata> {
-    let content = tokio::fs::read(sidecar_metadata_path(chroot_dir))
-        .await
-        .ok()?;
-    serde_json::from_slice(&content).ok()
-}
-
 async fn shutdown_guest(handle: &VmHandle) -> Result<()> {
     let jailer_id = jailer_id_in(&handle.chroot_dir);
     let api_socket = jailer_vm_root_dir(&handle.chroot_dir, &jailer_id).join(API_SOCKET_NAME);
@@ -1174,7 +1109,7 @@ async fn configure_and_boot_vm(
         stage = "create_tap_device",
         "Creating tap device"
     );
-    create_tap_device(&boot_config.tap_device, bridge_iface, jailer_uid).await?;
+    vm_host::create_tap(&boot_config.tap_device, bridge_iface, jailer_uid).await?;
 
     let client = FirecrackerApiClient::new(boot_config.api_socket.clone());
 
@@ -1388,34 +1323,22 @@ async fn stage_block_device_into_jail(
     let jailer_gid = process_gid();
     let target_path = vm_root_dir.join(jail_device_name);
 
-    let status = Command::new("systemd-run")
-        .args(["--pipe", "--wait", "--collect", "--uid=0", "--gid=0"])
-        .arg(format!(
-            "--unit=csfx-jailer-mknod-{}",
-            unit_slug(&target_path)
-        ))
-        .arg(format!(
-            "--setenv=PATH={}",
-            std::env::var("PATH").unwrap_or_default()
-        ))
-        .args(["/bin/sh", "-c"])
-        .arg(format!(
-            "rm -f {target} && mknod {target} b {major} {minor} && chown {uid}:{gid} {target}",
-            target = target_path.to_string_lossy(),
-            major = major,
-            minor = minor,
-            uid = jailer_uid,
-            gid = jailer_gid,
-        ))
-        .status()
-        .await
-        .context("Failed to spawn privileged mknod for volume device")?;
+    let slug = unit_slug(&target_path);
+    let target = target_path.to_string_lossy();
+    let owner = format!("{jailer_uid}:{jailer_gid}");
+    let (major, minor) = (major.to_string(), minor.to_string());
 
-    if !status.success() {
-        anyhow::bail!(
-            "privileged mknod failed for volume device {:?}",
-            target_path
-        );
+    let steps: [(&str, &str, Vec<&str>); 3] = [
+        ("rm", "rm", vec!["-f", &target]),
+        ("mknod", "mknod", vec![&target, "b", &major, &minor]),
+        ("chown", "chown", vec![&owner, &target]),
+    ];
+    for (step, program, args) in steps {
+        run_privileged(&format!("csfx-jailer-{step}-{slug}"), program, &args)
+            .await
+            .with_context(|| {
+                format!("privileged staging of volume device {target_path:?} failed")
+            })?;
     }
 
     Ok(())
@@ -1478,53 +1401,6 @@ async fn configure_mmds(
     Ok(())
 }
 
-async fn create_tap_device(
-    tap_device: &str,
-    bridge_iface: Option<&str>,
-    owner_uid: u32,
-) -> Result<()> {
-    let uid_arg = owner_uid.to_string();
-    let status = Command::new("ip")
-        .args([
-            "tuntap", "add", "dev", tap_device, "mode", "tap", "user", &uid_arg,
-        ])
-        .status()
-        .await
-        .context("Failed to execute ip tuntap add")?;
-
-    if !status.success() {
-        anyhow::bail!("failed to create tap device {}", tap_device);
-    }
-
-    if let Some(bridge) = bridge_iface {
-        let status = Command::new("ip")
-            .args(["link", "set", "dev", tap_device, "master", bridge])
-            .status()
-            .await
-            .context("Failed to execute ip link set master")?;
-
-        if !status.success() {
-            anyhow::bail!(
-                "failed to attach tap device {} to bridge {}",
-                tap_device,
-                bridge
-            );
-        }
-    }
-
-    let status = Command::new("ip")
-        .args(["link", "set", "dev", tap_device, "up"])
-        .status()
-        .await
-        .context("Failed to execute ip link set up")?;
-
-    if !status.success() {
-        anyhow::bail!("failed to bring up tap device {}", tap_device);
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1544,8 +1420,10 @@ mod tests {
             guest_ip: Some("10.0.0.3".to_string()),
         };
 
-        write_sidecar_metadata(&dir, &metadata).await.unwrap();
-        let read_back = read_sidecar_metadata(&dir).await.unwrap();
+        vm_host::write_sidecar(&dir, &metadata).await.unwrap();
+        let read_back = vm_host::read_sidecar::<VmSidecarMetadata>(&dir)
+            .await
+            .unwrap();
 
         assert_eq!(read_back.workload_id, metadata.workload_id);
         assert_eq!(read_back.vsock_cid, metadata.vsock_cid);
@@ -1560,7 +1438,9 @@ mod tests {
     #[tokio::test]
     async fn missing_sidecar_metadata_returns_none() {
         let dir = std::env::temp_dir().join(format!("csfx-sidecar-test-{}", uuid::Uuid::new_v4()));
-        assert!(read_sidecar_metadata(&dir).await.is_none());
+        assert!(vm_host::read_sidecar::<VmSidecarMetadata>(&dir)
+            .await
+            .is_none());
     }
 
     fn temp_dir() -> PathBuf {
@@ -1733,7 +1613,6 @@ mod tests {
     #[tokio::test]
     async fn unsupported_lifecycle_calls_are_noops() {
         let runtime = runtime();
-        runtime.pull_image("img").await.unwrap();
         runtime.stop_workload("missing").await.unwrap();
         runtime.check_dns_liveness().await;
         assert!(runtime.exec("missing").await.is_err());
@@ -1953,50 +1832,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tap_devices_are_created_attached_and_raised() {
-        let tools = FakeTools::install(&[("ip", "exit 0")]);
-
-        create_tap_device("fctap1", Some("br0"), 60001)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            tools.calls("ip"),
-            vec![
-                "tuntap add dev fctap1 mode tap user 60001".to_string(),
-                "link set dev fctap1 master br0".to_string(),
-                "link set dev fctap1 up".to_string(),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn tap_device_failures_name_the_failing_step() {
-        {
-            let _tools = FakeTools::install(&[("ip", r#"case "$*" in tuntap*) exit 1;; esac"#)]);
-            let error = create_tap_device("fctap1", None, 0)
-                .await
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("failed to create tap device fctap1"));
-        }
-        {
-            let _tools = FakeTools::install(&[("ip", r#"case "$*" in *master*) exit 1;; esac"#)]);
-            let error = create_tap_device("fctap1", Some("br0"), 0)
-                .await
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("failed to attach tap device fctap1 to bridge br0"));
-        }
-        let _tools = FakeTools::install(&[("ip", r#"case "$*" in *" up") exit 1;; esac"#)]);
-        let error = create_tap_device("fctap1", None, 0)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("failed to bring up tap device fctap1"));
-    }
-
-    #[tokio::test]
     async fn chroot_directories_are_removed_through_a_transient_unit() {
         {
             let tools = FakeTools::install(&[("systemd-run", "exit 0")]);
@@ -2061,6 +1896,8 @@ mod tests {
     #[tokio::test]
     async fn sidecar_metadata_is_absent_for_unwritten_directories() {
         let dir = std::env::temp_dir().join(format!("csfx-no-sidecar-{}", uuid::Uuid::new_v4()));
-        assert!(read_sidecar_metadata(&dir).await.is_none());
+        assert!(vm_host::read_sidecar::<VmSidecarMetadata>(&dir)
+            .await
+            .is_none());
     }
 }

@@ -2,7 +2,9 @@ mod agent_stream;
 mod arp;
 mod backoff;
 mod bootstrap;
+mod cidr;
 mod client;
+mod cmd;
 mod config;
 mod disks;
 mod endpoint;
@@ -38,6 +40,7 @@ mod system;
 mod testing;
 mod update_watch;
 mod vip_sync;
+mod vm_host;
 mod wg_identity;
 mod wireguard;
 

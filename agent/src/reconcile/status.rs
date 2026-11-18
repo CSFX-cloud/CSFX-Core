@@ -185,7 +185,7 @@ mod tests {
             .await;
         reconciler
             .workloads
-            .set_phase("pending", Phase::Pulling)
+            .set_phase("pending", Phase::Scheduled)
             .await;
 
         let mut statuses = reconciler.container_statuses().await;
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(statuses[0].status, "failed");
         assert_eq!(statuses[1].status, "failed");
         assert_eq!(statuses[2].workload_id, "pending");
-        assert_eq!(statuses[2].status, "pulling");
+        assert_eq!(statuses[2].status, "scheduled");
         assert!(statuses[2].container_id.is_empty());
         assert_eq!(reconciler.workloads.pending().await.len(), 1);
     }
