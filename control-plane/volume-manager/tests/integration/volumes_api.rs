@@ -168,6 +168,43 @@ async fn attach_and_detach_volume() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
+async fn a_volume_held_by_one_workload_cannot_be_attached_for_another() {
+    let app = router(false).await;
+    let agent = insert_agent(&migrated_database().await).await;
+    let volume = create(&app, &unique("held")).await;
+    let holder = Uuid::new_v4();
+
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        &path(&volume, "/attach"),
+        Some(json!({ "agent_id": agent, "workload_id": holder })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _) = call(
+        &app,
+        Method::POST,
+        &path(&volume, "/attach"),
+        Some(json!({ "agent_id": agent, "workload_id": Uuid::new_v4() })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let (status, again) = call(
+        &app,
+        Method::POST,
+        &path(&volume, "/attach"),
+        Some(json!({ "agent_id": agent, "workload_id": holder })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(again["attached_to_workload"], holder.to_string());
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
 async fn attach_with_unknown_agent_fails() {
     let app = router(false).await;
     let volume = create(&app, &unique("bad-agent")).await;

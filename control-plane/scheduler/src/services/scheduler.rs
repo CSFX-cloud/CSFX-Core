@@ -195,7 +195,7 @@ impl SchedulerService {
 
         for workload in &workloads {
             delete_placement(&self.etcd, workload.id).await?;
-            crate::db::volumes::release_for_workload(&self.db, workload.id)
+            shared::volumes::release_for_workload(&self.db, workload.id)
                 .await
                 .map_err(|e| format!("Failed to release workload volumes: {}", e))?;
         }
@@ -505,7 +505,7 @@ impl SchedulerService {
             return Ok(true);
         }
 
-        let claimed = crate::db::volumes::claim(&self.db, &volume_ids, agent_id, workload.id)
+        let claimed = shared::volumes::claim(&self.db, &volume_ids, agent_id, Some(workload.id))
             .await
             .map_err(|e| format!("Failed to claim volumes: {}", e))?;
 
@@ -669,7 +669,7 @@ impl SchedulerService {
             .await
             .map_err(|e| format!("Failed to delete workload: {}", e))?;
 
-        crate::db::volumes::release_for_workload(&self.db, workload_id)
+        shared::volumes::release_for_workload(&self.db, workload_id)
             .await
             .map_err(|e| format!("Failed to release workload volumes: {}", e))?;
 
