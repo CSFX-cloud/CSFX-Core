@@ -1,5 +1,9 @@
 pub mod bucket;
 pub mod config;
+pub mod database;
+pub mod etcd;
+pub mod full;
+pub mod process;
 pub mod resource_group;
 pub mod volume;
 pub mod workload;
