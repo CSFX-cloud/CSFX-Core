@@ -14,12 +14,7 @@ const DEFAULT_VOLUME_SIZE_GB: i32 = 5;
 
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(CREATE_TIMEOUT)
-            .build()
-            .unwrap_or_default()
-    })
+    CLIENT.get_or_init(|| shared::http::client(CREATE_TIMEOUT))
 }
 
 pub fn volume_name(stack_name: &str, mount: &ComposeVolumeMount) -> String {

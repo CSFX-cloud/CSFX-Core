@@ -22,10 +22,14 @@ async fn main() -> anyhow::Result<()> {
     log_info!("main", "Database connection established");
     shared::spawn_log_writer(log_receiver, db.clone());
 
-    let etcd_url =
-        std::env::var("ETCD_URL").unwrap_or_else(|_| "http://localhost:2379".to_string());
-    log_info!("main", &format!("Connecting to etcd url={}", etcd_url));
-    let etcd = etcd_client::Client::connect([etcd_url.as_str()], None)
+    log_info!(
+        "main",
+        &format!(
+            "Connecting to etcd endpoints={}",
+            shared::etcd::endpoints_from_env().join(",")
+        )
+    );
+    let etcd = shared::etcd::connect_from_env()
         .await
         .expect("Failed to connect to etcd");
     log_info!("main", "etcd connection established");

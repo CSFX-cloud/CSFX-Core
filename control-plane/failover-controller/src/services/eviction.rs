@@ -30,7 +30,7 @@ impl EvictionService {
 
         Self {
             db,
-            http: Client::new(),
+            http: shared::http::client(shared::http::DEFAULT_TIMEOUT),
             scheduler_url,
             last_eviction: Mutex::default(),
         }
