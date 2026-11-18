@@ -15,6 +15,7 @@ entity = { path = "../shared/entity" }
 
 # Async runtime
 tokio = { workspace = true }
+futures-util = { workspace = true }
 async-trait = { workspace = true }
 
 # etcd

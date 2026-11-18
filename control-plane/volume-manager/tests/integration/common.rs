@@ -36,8 +36,13 @@ esac
 "#;
 
 const FAKE_RBD: &str = r#"#!/bin/sh
+[ -n "$FAKE_RBD_LOG" ] && echo "$*" >> "$FAKE_RBD_LOG"
 case "$*" in
 *failcmd*) echo "boom" >&2; exit 1;;
+*" export "*failexport*) echo "export broke" >&2; exit 1;;
+*" export "*) yes csfx | head -c 2500000;;
+*" import "*failimport*) cat >/dev/null; echo "import broke" >&2; exit 1;;
+*" import "*) cat | wc -c > "$FAKE_RBD_IMPORT_BYTES";;
 *" info "*missing*) echo "rbd: error opening image: (2) No such file or directory" >&2; exit 2;;
 *" create "*failcreate*) echo "no space" >&2; exit 1;;
 *" rm "*failrm*) echo "busy" >&2; exit 1;;

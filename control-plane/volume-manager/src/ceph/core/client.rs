@@ -3,14 +3,40 @@ use super::error::CephError;
 use crate::ceph::storage::types::*;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
+use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command as AsyncCommand;
-use tokio::sync::Semaphore;
+use tokio::process::{Child, Command as AsyncCommand};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_CONCURRENT_CLI_CALLS: usize = 8;
 
 static CLI_PERMITS: Semaphore = Semaphore::const_new(MAX_CONCURRENT_CLI_CALLS);
+
+pub struct CephProcess {
+    pub child: Child,
+    program: String,
+    _permit: SemaphorePermit<'static>,
+}
+
+impl CephProcess {
+    pub async fn finish(mut self) -> Result<()> {
+        let mut stderr = String::new();
+        if let Some(mut pipe) = self.child.stderr.take() {
+            tokio::io::AsyncReadExt::read_to_string(&mut pipe, &mut stderr).await?;
+        }
+        let status = self.child.wait().await?;
+        if status.success() {
+            return Ok(());
+        }
+        Err(CephError::CommandExit {
+            program: self.program,
+            code: status.code(),
+            stderr,
+        }
+        .into())
+    }
+}
 
 #[derive(Clone)]
 pub struct CephClient {
@@ -30,13 +56,7 @@ impl CephClient {
         self.run("rbd", cmd, false).await
     }
 
-    async fn run(&self, program: &str, cmd: CephCommand, json_output: bool) -> Result<String> {
-        let cmd_vec = cmd.to_vec();
-        crate::log_debug!(
-            "ceph_client",
-            &format!("Executing {} command: {}", program, cmd_vec.join(" "))
-        );
-
+    fn command(&self, program: &str, args: Vec<String>, json_output: bool) -> AsyncCommand {
         let mut command = AsyncCommand::new(program);
         command.arg("-m").arg(self.config.mon_host_string());
         if let Some(ref keyring) = self.config.keyring_path {
@@ -45,11 +65,45 @@ impl CephClient {
         command
             .arg("--name")
             .arg(format!("client.{}", self.config.client_name));
-        command.args(cmd_vec);
+        command.args(args);
         if json_output {
             command.arg("--format").arg("json");
         }
+        command
+    }
 
+    pub async fn spawn_rbd(
+        &self,
+        cmd: CephCommand,
+        stdin: Stdio,
+        stdout: Stdio,
+    ) -> Result<CephProcess> {
+        let permit = CLI_PERMITS
+            .acquire()
+            .await
+            .context("Ceph CLI semaphore closed")?;
+        let mut command = self.command("rbd", cmd.to_vec(), false);
+        command
+            .stdin(stdin)
+            .stdout(stdout)
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let child = command.spawn().context("Failed to spawn rbd")?;
+        Ok(CephProcess {
+            child,
+            program: "rbd".to_string(),
+            _permit: permit,
+        })
+    }
+
+    async fn run(&self, program: &str, cmd: CephCommand, json_output: bool) -> Result<String> {
+        let cmd_vec = cmd.to_vec();
+        crate::log_debug!(
+            "ceph_client",
+            &format!("Executing {} command: {}", program, cmd_vec.join(" "))
+        );
+
+        let mut command = self.command(program, cmd_vec, json_output);
         command.kill_on_drop(true);
 
         let _permit = CLI_PERMITS

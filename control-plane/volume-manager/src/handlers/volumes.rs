@@ -1,6 +1,7 @@
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header::CONTENT_TYPE, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -8,7 +9,8 @@ use shared::pagination::{cursor_headers, split_page, PageParams};
 use uuid::Uuid;
 
 use crate::models::volume::{
-    AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest, ResizeVolumeRequest,
+    AttachVolumeRequest, CreateSnapshotRequest, CreateVolumeRequest, ImportVolumeQuery,
+    ResizeVolumeRequest,
 };
 use crate::server::AppState;
 use crate::services::volume::ServiceError;
@@ -162,4 +164,44 @@ fn service_error_response(error: ServiceError) -> axum::response::Response {
         ServiceError::Internal(message) => (StatusCode::INTERNAL_SERVER_ERROR, message),
     };
     (status, Json(serde_json::json!({ "error": message }))).into_response()
+}
+
+pub async fn export_volume(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match state.volume_service.export_volume(id).await {
+        Ok(Some(stream)) => (
+            [(CONTENT_TYPE, "application/octet-stream")],
+            Body::from_stream(stream),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "volume not found" })),
+        )
+            .into_response(),
+        Err(e) => service_error_response(e),
+    }
+}
+
+pub async fn import_volume(
+    State(state): State<AppState>,
+    Query(query): Query<ImportVolumeQuery>,
+    body: Body,
+) -> impl IntoResponse {
+    let request = CreateVolumeRequest {
+        name: query.name,
+        size_gb: query.size_gb,
+        pool: query.pool,
+        resource_group_id: query.resource_group_id,
+    };
+    match state
+        .volume_service
+        .import_volume(request, body.into_data_stream())
+        .await
+    {
+        Ok(volume) => (StatusCode::CREATED, Json(serde_json::json!(volume))).into_response(),
+        Err(e) => service_error_response(e),
+    }
 }
