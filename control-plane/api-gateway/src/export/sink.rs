@@ -307,40 +307,4 @@ mod tests {
             ));
         }
     }
-
-    #[tokio::test]
-    #[ignore = "requires an S3 endpoint in CSFX_TEST_S3_*"]
-    async fn multipart_upload_round_trips_through_s3() {
-        use crate::export::{crypto::ExportKey, pipeline};
-        rustls::crypto::ring::default_provider()
-            .install_default()
-            .ok();
-        let var = |name: &str| std::env::var(name).expect(name);
-        let sink = Sink::s3(S3Config {
-            endpoint: var("CSFX_TEST_S3_ENDPOINT"),
-            region: "us-east-1".to_string(),
-            bucket: var("CSFX_TEST_S3_BUCKET"),
-            prefix: "csfx/multipart".to_string(),
-            access_key_id: var("CSFX_TEST_S3_KEY"),
-            secret_access_key: var("CSFX_TEST_S3_SECRET"),
-        });
-        let payload: Vec<u8> = (0..(PART_SIZE * 2 + 12_345) as u32 as usize)
-            .map(|n| (n % 251) as u8)
-            .collect();
-        let (key, _) = ExportKey::create("multipart passphrase").unwrap();
-        let id = Uuid::new_v4();
-        let stored = pipeline::store(
-            &sink,
-            id,
-            "big/blob.bin",
-            Some(&key),
-            pipeline::once(payload.clone()),
-        )
-        .await
-        .unwrap();
-        let source = sink.open(id, "big/blob.bin").await.unwrap();
-        let opened = pipeline::verified(source, Some(&key), stored.sha256, "blob".to_string());
-        assert_eq!(pipeline::collect(opened).await.unwrap(), payload);
-        sink.remove(id, "big/blob.bin").await.unwrap();
-    }
 }

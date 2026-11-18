@@ -8,6 +8,8 @@ mod common;
 mod core_b_api;
 mod exports_api;
 mod exports_data_api;
+mod exports_sink_api;
+mod fake_s3;
 mod idp_api;
 mod ingress_api;
 mod logs_api;

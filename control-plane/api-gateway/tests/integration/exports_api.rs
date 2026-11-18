@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
 use crate::common::{harness, Harness};
+use crate::fake_s3::FakeS3;
 
 const PASSPHRASE: &str = "correct horse battery";
 
@@ -121,18 +122,18 @@ async fn config_export_round_trips_and_detects_tampering() {
 }
 
 #[tokio::test]
-#[ignore = "requires postgres via DATABASE_URL and an S3 endpoint in CSFX_TEST_S3_*"]
+#[ignore = "requires postgres via DATABASE_URL"]
 async fn config_export_round_trips_through_s3() {
     let harness = harness().await;
-    let var = |name: &str| std::env::var(name).expect(name);
+    let (endpoint, fake) = FakeS3::start().await;
     let body = json!({
         "kind": "s3",
-        "endpoint": var("CSFX_TEST_S3_ENDPOINT"),
+        "endpoint": endpoint,
         "region": "us-east-1",
-        "bucket": var("CSFX_TEST_S3_BUCKET"),
+        "bucket": "backups",
         "prefix": "csfx/test",
-        "access_key_id": var("CSFX_TEST_S3_KEY"),
-        "secret_access_key": var("CSFX_TEST_S3_SECRET"),
+        "access_key_id": "key",
+        "secret_access_key": "secret",
         "passphrase": PASSPHRASE,
         "default": true,
     });
@@ -143,6 +144,9 @@ async fn config_export_round_trips_through_s3() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (id, row) = export(&harness, json!({ "kind": "config" }), Some("remote")).await;
     assert_eq!(row["status"], "completed", "{row}");
+    assert!(fake
+        .keys()
+        .contains(&format!("/backups/csfx/test/{id}/manifest.json")));
     assert_eq!(
         restore(&harness, &id, Some("remote"), None).await,
         StatusCode::OK
