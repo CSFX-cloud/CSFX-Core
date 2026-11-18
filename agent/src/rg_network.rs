@@ -1,16 +1,51 @@
 use anyhow::{Context, Result};
-use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
-use tokio::process::Command;
 use tracing::{info, warn};
 
+use crate::cidr::Cidr;
+use crate::cmd;
 use crate::rg_dns::RgDnsRegistry;
-use crate::spec::{rg_bridge_iface_name, second_host_ip};
+use crate::spec::{cidr_prefix, rg_bridge_iface_name, second_host_ip};
 
 const RG_REGISTRY_DIR: &str = "/var/lib/csfx-agent/rg-networks";
 pub const S3_SERVICE_NAME: &str = "s3";
 pub const PLATFORM_SERVICE_NAME: &str = "csfx";
 const S3_DNAT_PORT: u16 = 3900;
+
+pub async fn ensure_group(
+    local_state: &crate::local_state::LocalState,
+    resource_group_id: &str,
+    cidr: Option<&str>,
+    wg_private_key_b64: &str,
+    rg_dns_registry: &RgDnsRegistry,
+) -> Result<String> {
+    let iface = ensure_bridge(resource_group_id, cidr, rg_dns_registry)
+        .await
+        .context("Failed to ensure resource group bridge")?;
+
+    if cidr.is_some() {
+        crate::wireguard::ensure_rg_interface(local_state, resource_group_id, wg_private_key_b64)
+            .await
+            .context("Failed to bring up resource group WireGuard interface")?;
+    }
+    Ok(iface)
+}
+
+pub async fn teardown_group(
+    local_state: &crate::local_state::LocalState,
+    resource_group_id: &str,
+) -> Result<()> {
+    teardown_bridge(resource_group_id)
+        .await
+        .context("Failed to tear down resource group bridge")?;
+
+    let wg_iface = crate::wireguard::rg_interface_name(resource_group_id);
+    crate::wireguard::remove_interface(&wg_iface)
+        .await
+        .context("Failed to remove resource group WireGuard interface")?;
+    local_state.release_wg_port(resource_group_id).await;
+    Ok(())
+}
 
 pub async fn ensure_bridge(
     resource_group_id: &str,
@@ -38,14 +73,14 @@ async fn ensure_bridge_in(
 
     write_registry_entry(registry_dir, resource_group_id, cidr).await?;
 
-    let exists = interface_exists(&iface).await?;
+    let exists = cmd::link_exists(&iface).await?;
     if let Some(range) = tenant_range {
-        if !exists || !has_ipv4_address(&iface).await? {
+        if !exists || !cmd::has_ipv4_address(&iface).await? {
             ensure_range_is_unrouted(range).await?;
         }
     }
     if !exists {
-        run_ip(&["link", "add", "name", &iface, "type", "bridge"]).await?;
+        cmd::ip(&["link", "add", "name", &iface, "type", "bridge"]).await?;
     }
 
     if let Some(gateway) = cidr.and_then(second_host_ip) {
@@ -102,8 +137,7 @@ impl Bridge {
     fn gateway(&self) -> Option<(String, String)> {
         let cidr = self.cidr.as_deref()?;
         let gateway = second_host_ip(cidr)?;
-        let prefix = cidr.split('/').nth(1).unwrap_or("24").to_string();
-        Some((gateway, prefix))
+        Some((gateway, cidr_prefix(cidr)))
     }
 
     fn rules(&self) -> crate::nftables::BridgeRules {
@@ -151,7 +185,7 @@ async fn reconcile_in(registry_dir: &Path) -> Result<()> {
             }
         }
         enable_proxy_arp(bridge).await?;
-        run_ip(&["link", "set", "dev", &bridge.iface, "up"]).await?;
+        cmd::ip(&["link", "set", "dev", &bridge.iface, "up"]).await?;
     }
 
     Ok(())
@@ -162,64 +196,32 @@ async fn repair_address(bridge: &Bridge) -> Result<()> {
         return Ok(());
     };
     let address = format!("{gateway}/{prefix}");
-    if address_assigned(&bridge.iface, &address).await? {
+    if cmd::address_assigned(&bridge.iface, &address).await? {
         return Ok(());
     }
-    run_ip(&["addr", "add", &address, "dev", &bridge.iface]).await
+    cmd::ip(&["addr", "add", &address, "dev", &bridge.iface]).await
 }
 
-async fn address_assigned(iface: &str, address: &str) -> Result<bool> {
-    let output = Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "dev", iface])
-        .output()
-        .await
-        .context("failed to execute ip addr show")?;
-    Ok(output.status.success()
-        && String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .any(|field| field == address))
-}
-
-const PRIVATE_RANGES: [(u32, u8); 3] = [(0x0A000000, 8), (0xAC100000, 12), (0xC0A80000, 16)];
+const PRIVATE_RANGES: [Cidr; 3] = [
+    Cidr::new(0x0A000000, 8),
+    Cidr::new(0xAC100000, 12),
+    Cidr::new(0xC0A80000, 16),
+];
 const MIN_TENANT_PREFIX: u8 = 16;
 const MAX_TENANT_PREFIX: u8 = 29;
 
-fn parse_cidr(cidr: &str) -> Result<(u32, u8)> {
-    let (address, prefix) = cidr.split_once('/').context("cidr has no prefix")?;
-    let address: Ipv4Addr = address.parse().context("cidr address is invalid")?;
-    let prefix: u8 = prefix.parse().context("cidr prefix is invalid")?;
-    anyhow::ensure!(prefix <= 32, "cidr prefix is out of range");
-    let address = u32::from(address);
-    anyhow::ensure!(
-        address & prefix_mask(prefix) == address,
-        "cidr has host bits set"
-    );
-    Ok((address, prefix))
-}
-
-fn prefix_mask(prefix: u8) -> u32 {
-    u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0)
-}
-
-fn overlaps(first: (u32, u8), second: (u32, u8)) -> bool {
-    let mask = prefix_mask(first.1.min(second.1));
-    first.0 & mask == second.0 & mask
-}
-
-fn ensure_tenant_range(cidr: &str) -> Result<(u32, u8)> {
-    let parsed = parse_cidr(cidr)?;
-    let private = PRIVATE_RANGES
-        .iter()
-        .any(|range| parsed.1 >= range.1 && overlaps(*range, parsed));
+fn ensure_tenant_range(cidr: &str) -> Result<Cidr> {
+    let parsed = Cidr::parse_network(cidr)?;
+    let private = PRIVATE_RANGES.iter().any(|range| range.encloses(parsed));
     anyhow::ensure!(private, "cidr {cidr} is not inside a private range");
     anyhow::ensure!(
-        (MIN_TENANT_PREFIX..=MAX_TENANT_PREFIX).contains(&parsed.1),
+        (MIN_TENANT_PREFIX..=MAX_TENANT_PREFIX).contains(&parsed.prefix()),
         "cidr {cidr} prefix is outside /{MIN_TENANT_PREFIX}../{MAX_TENANT_PREFIX}"
     );
     Ok(parsed)
 }
 
-fn routed_destinations(listing: &str) -> Result<Vec<(u32, u8)>> {
+fn routed_destinations(listing: &str) -> Result<Vec<Cidr>> {
     let routes: Vec<serde_json::Value> =
         serde_json::from_str(listing).context("failed to parse ip route listing")?;
     Ok(routes
@@ -232,22 +234,16 @@ fn routed_destinations(listing: &str) -> Result<Vec<(u32, u8)>> {
             } else {
                 format!("{destination}/32")
             };
-            parse_cidr(&destination).ok()
+            Cidr::parse_network(&destination).ok()
         })
         .collect())
 }
 
-async fn ensure_range_is_unrouted(range: (u32, u8)) -> Result<()> {
-    let output = Command::new("ip")
-        .args(["-j", "-4", "route", "show", "table", "all"])
-        .output()
-        .await
-        .context("failed to execute ip")?;
-    anyhow::ensure!(output.status.success(), "ip route listing failed");
-    let listing = String::from_utf8_lossy(&output.stdout);
+async fn ensure_range_is_unrouted(range: Cidr) -> Result<()> {
+    let listing = cmd::stdout("ip", &["-j", "-4", "route", "show", "table", "all"]).await?;
     let taken = routed_destinations(&listing)?
         .into_iter()
-        .any(|destination| overlaps(destination, range));
+        .any(|destination| destination.overlaps(range));
     anyhow::ensure!(!taken, "cidr collides with an existing host route");
     Ok(())
 }
@@ -271,7 +267,7 @@ pub async fn announce_remote_guest(resource_group_id: &str, guest_ip: &str) -> R
         .parse()
         .with_context(|| format!("invalid guest ip {}", guest_ip))?;
 
-    run_ip(&["neigh", "flush", "to", guest_ip, "dev", &iface]).await?;
+    cmd::ip(&["neigh", "flush", "to", guest_ip, "dev", &iface]).await?;
     crate::arp::announce(&iface, address)
 }
 
@@ -282,18 +278,7 @@ pub async fn teardown_bridge(resource_group_id: &str) -> Result<()> {
 async fn teardown_in(registry_dir: &Path, resource_group_id: &str) -> Result<()> {
     let iface = rg_bridge_iface_name(resource_group_id);
 
-    let output = Command::new("ip")
-        .args(["link", "delete", &iface])
-        .output()
-        .await
-        .context("failed to execute ip link delete")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.contains("Cannot find device") {
-            anyhow::bail!("ip link delete failed iface={} stderr={}", iface, stderr);
-        }
-    }
+    cmd::delete_link(&iface).await?;
 
     remove_registry_entry(registry_dir, resource_group_id).await;
     crate::nftables::remove_bridge_dnat(&iface).await?;
@@ -305,34 +290,42 @@ async fn teardown_in(registry_dir: &Path, resource_group_id: &str) -> Result<()>
 }
 
 pub async fn list_rg_ids() -> Result<Vec<String>> {
-    Ok(list_bridges(Path::new(RG_REGISTRY_DIR))
+    let links = cmd::existing_links();
+    Ok(registered_ids(Path::new(RG_REGISTRY_DIR))
         .await?
         .into_iter()
-        .map(|bridge| bridge.resource_group_id)
+        .filter(|id| links.contains(&rg_bridge_iface_name(id)))
         .collect())
 }
 
-async fn list_bridges(registry_dir: &Path) -> Result<Vec<Bridge>> {
+async fn registered_ids(registry_dir: &Path) -> Result<Vec<String>> {
     let mut entries = match tokio::fs::read_dir(registry_dir).await {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e).context("failed to read resource group registry directory"),
     };
 
-    let mut bridges = Vec::new();
+    let mut ids = Vec::new();
     while let Some(entry) = entries
         .next_entry()
         .await
         .context("failed to read resource group registry entry")?
     {
-        let Some(id) = entry.file_name().to_str().map(str::to_string) else {
-            continue;
-        };
+        if let Some(id) = entry.file_name().to_str() {
+            ids.push(id.to_string());
+        }
+    }
+    Ok(ids)
+}
+
+async fn list_bridges(registry_dir: &Path) -> Result<Vec<Bridge>> {
+    let mut bridges = Vec::new();
+    for id in registered_ids(registry_dir).await? {
         let iface = rg_bridge_iface_name(&id);
-        if !interface_exists(&iface).await? {
+        if !cmd::link_exists(&iface).await? {
             continue;
         }
-        let cidr = tokio::fs::read_to_string(entry.path())
+        let cidr = tokio::fs::read_to_string(registry_entry_path(registry_dir, &id))
             .await
             .ok()
             .map(|content| content.trim().to_string())
@@ -371,43 +364,6 @@ async fn write_registry_entry(
 
 async fn remove_registry_entry(registry_dir: &Path, resource_group_id: &str) {
     let _ = tokio::fs::remove_file(registry_entry_path(registry_dir, resource_group_id)).await;
-}
-
-async fn has_ipv4_address(iface: &str) -> Result<bool> {
-    let output = Command::new("ip")
-        .args(["-4", "-o", "addr", "show", "dev", iface])
-        .output()
-        .await
-        .context("failed to execute ip addr show")?;
-    Ok(output.status.success() && !output.stdout.is_empty())
-}
-
-async fn interface_exists(iface: &str) -> Result<bool> {
-    let output = Command::new("ip")
-        .args(["link", "show", iface])
-        .output()
-        .await
-        .context("failed to execute ip link show")?;
-
-    Ok(output.status.success())
-}
-
-async fn run_ip(args: &[&str]) -> Result<()> {
-    let output = Command::new("ip")
-        .args(args)
-        .output()
-        .await
-        .context("failed to execute ip")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("File exists") {
-            return Ok(());
-        }
-        anyhow::bail!("ip command failed args={:?} stderr={}", args, stderr);
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -451,9 +407,15 @@ mod tests {
         let behaviour = format!("echo '{routes}'");
         let tools = FakeTools::install(&[("ip", behaviour.as_str())]);
 
-        assert!(ensure_range_is_unrouted((0xC0A80100, 24)).await.is_err());
-        assert!(ensure_range_is_unrouted((0x0A640000, 16)).await.is_err());
-        assert!(ensure_range_is_unrouted((0x0A650000, 24)).await.is_ok());
+        assert!(ensure_range_is_unrouted(Cidr::new(0xC0A80100, 24))
+            .await
+            .is_err());
+        assert!(ensure_range_is_unrouted(Cidr::new(0x0A640000, 16))
+            .await
+            .is_err());
+        assert!(ensure_range_is_unrouted(Cidr::new(0x0A650000, 24))
+            .await
+            .is_ok());
         assert!(tools
             .calls("ip")
             .iter()
@@ -488,30 +450,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("ip link delete failed"));
-    }
-
-    #[tokio::test]
-    async fn existing_addresses_and_links_are_not_an_error() {
-        {
-            let _tools =
-                FakeTools::install(&[("ip", "echo 'RTNETLINK answers: File exists' >&2\nexit 2")]);
-            run_ip(&["link", "add", "name", "br0", "type", "bridge"])
-                .await
-                .unwrap();
-        }
-        let _tools = FakeTools::install(&[("ip", "echo 'bad' >&2\nexit 2")]);
-        assert!(run_ip(&["link", "add"]).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn interface_existence_follows_the_exit_status() {
-        {
-            let _tools = FakeTools::install(&[("ip", "exit 0")]);
-            assert!(interface_exists("br0").await.unwrap());
-        }
-        let _tools = FakeTools::install(&[("ip", "exit 1")]);
-        assert!(!interface_exists("br0").await.unwrap());
+        assert!(error.contains("ip command failed"));
     }
 
     #[tokio::test]

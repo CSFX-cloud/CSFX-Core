@@ -1,3 +1,4 @@
+use crate::cidr::Cidr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -95,55 +96,35 @@ pub fn second_host_ip(cidr: &str) -> Option<String> {
 }
 
 pub fn nth_host_ip(cidr: &str, offset: u32) -> Option<String> {
-    let parts: Vec<&str> = cidr.split('/').collect();
-    if parts.len() != 2 {
-        return None;
-    }
-    let octets: Vec<u8> = parts[0].split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() != 4 {
-        return None;
-    }
-    let n = u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]);
-    let host = n + offset;
-    let [a, b, c, d] = host.to_be_bytes();
-    Some(format!("{}.{}.{}.{}", a, b, c, d))
+    Some(Cidr::parse(cidr)?.nth_host(offset)?.to_string())
+}
+
+pub fn cidr_prefix(cidr: &str) -> String {
+    Cidr::parse(cidr).map_or(24, Cidr::prefix).to_string()
 }
 
 pub fn cidr_host_count(cidr: &str) -> Option<u32> {
-    let prefix: u32 = cidr.split('/').nth(1)?.parse().ok()?;
-    if prefix > 32 {
-        return None;
-    }
-    Some(1u32 << (32 - prefix))
+    Some(Cidr::parse(cidr)?.host_count())
+}
+
+pub fn fnv1a32(input: &str) -> u32 {
+    const OFFSET_BASIS: u32 = 0x811c9dc5;
+    const PRIME: u32 = 0x01000193;
+
+    input.bytes().fold(OFFSET_BASIS, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(PRIME)
+    })
 }
 
 pub const WG_PORT_START: u16 = 49152;
 pub const WG_PORT_END: u16 = 65535;
 
 pub fn rg_wireguard_port(resource_group_id: &str) -> u16 {
-    const FNV_OFFSET_BASIS: u32 = 0x811c9dc5;
-    const FNV_PRIME: u32 = 0x01000193;
-
-    let mut hash = FNV_OFFSET_BASIS;
-    for byte in resource_group_id.as_bytes() {
-        hash ^= *byte as u32;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-
-    WG_PORT_START + (hash % (WG_PORT_END - WG_PORT_START) as u32) as u16
+    WG_PORT_START + (fnv1a32(resource_group_id) % (WG_PORT_END - WG_PORT_START) as u32) as u16
 }
 
 pub fn rg_bridge_iface_name(resource_group_id: &str) -> String {
-    const FNV_OFFSET_BASIS: u32 = 0x811c9dc5;
-    const FNV_PRIME: u32 = 0x01000193;
-
-    let mut hash = FNV_OFFSET_BASIS;
-    for byte in resource_group_id.as_bytes() {
-        hash ^= *byte as u32;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-
-    format!("csfxrg{:08x}", hash)
+    format!("csfxrg{:08x}", fnv1a32(resource_group_id))
 }
 
 #[cfg(test)]
@@ -230,6 +211,13 @@ mod tests {
         assert_eq!(cidr_host_count("10.0.0.0/33"), None);
         assert_eq!(cidr_host_count("10.0.0.0"), None);
         assert_eq!(cidr_host_count("10.0.0.0/x"), None);
+    }
+
+    #[test]
+    fn fnv1a32_matches_the_reference_vectors() {
+        assert_eq!(fnv1a32(""), 0x811c9dc5);
+        assert_eq!(fnv1a32("a"), 0xe40c292c);
+        assert_eq!(fnv1a32("foobar"), 0xbf9cf968);
     }
 
     #[test]

@@ -179,14 +179,6 @@ impl Reconciler {
 
     async fn launch(&self, runtime: &dyn Runtime, workload: client::AssignedWorkload) -> bool {
         let workload_id = workload.id.clone();
-        self.workloads.set_phase(&workload_id, Phase::Pulling).await;
-
-        if let Err(e) = runtime.pull_image(&workload.image).await {
-            warn!(workload_id = %workload_id, error = %e, "Failed to pull image");
-            self.workloads.clear_phase(&workload_id).await;
-            return false;
-        }
-
         if self.restart_budget_exhausted(&workload).await {
             self.workloads.set_phase(&workload_id, Phase::Failed).await;
             return false;

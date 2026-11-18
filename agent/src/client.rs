@@ -35,16 +35,16 @@ pub struct AssignedVolume {
 }
 
 #[derive(Debug, Serialize)]
-struct RegisterRequest<'a> {
-    registration_token: &'a str,
-    name: &'a str,
-    hostname: &'a str,
-    os_type: &'a str,
-    os_version: &'a str,
-    architecture: &'a str,
-    agent_version: &'a str,
-    machine_id: Option<&'a str>,
-    csr_pem: &'a str,
+pub struct RegisterRequest<'a> {
+    pub registration_token: &'a str,
+    pub name: &'a str,
+    pub hostname: &'a str,
+    pub os_type: &'a str,
+    pub os_version: &'a str,
+    pub architecture: &'a str,
+    pub agent_version: &'a str,
+    pub machine_id: Option<&'a str>,
+    pub csr_pem: &'a str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -417,36 +417,14 @@ impl ApiClient {
         *self.wg_tunnel_ip.write().await = Some(ip);
     }
 
-    pub async fn register(
-        &self,
-        token: &str,
-        name: &str,
-        hostname: &str,
-        os_type: &str,
-        os_version: &str,
-        architecture: &str,
-        machine_id: Option<&str>,
-        csr_pem: &str,
-    ) -> Result<RegisterResponse> {
+    pub async fn register(&self, body: &RegisterRequest<'_>) -> Result<RegisterResponse> {
         let url = format!("{}/api/registry/agents/register", self.gateway_url);
-
-        let body = RegisterRequest {
-            registration_token: token,
-            name,
-            hostname,
-            os_type,
-            os_version,
-            architecture,
-            agent_version: env!("CARGO_PKG_VERSION"),
-            machine_id,
-            csr_pem,
-        };
 
         loop {
             let resp = self
                 .client
                 .post(&url)
-                .json(&body)
+                .json(body)
                 .send()
                 .await
                 .context("Failed to send registration request")?;
@@ -1304,13 +1282,24 @@ mod tests {
             }),
         );
         let client = serve(app).await;
-        let response = client
-            .register("t", "n", "h", "linux", "1", "x86_64", Some("mid"), "csr")
-            .await
-            .unwrap();
+        let response = client.register(&registration(Some("mid"))).await.unwrap();
         assert_eq!(response.api_key, "secret");
         assert_eq!(response.wg_tunnel_ip.as_deref(), Some("10.9.0.5"));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    fn registration(machine_id: Option<&str>) -> RegisterRequest<'_> {
+        RegisterRequest {
+            registration_token: "t",
+            name: "n",
+            hostname: "h",
+            os_type: "linux",
+            os_version: "1",
+            architecture: "x86_64",
+            agent_version: "0.0.0",
+            machine_id,
+            csr_pem: "csr",
+        }
     }
 
     #[tokio::test]
@@ -1318,7 +1307,7 @@ mod tests {
         let client =
             serve(Router::new().fallback(|| async { (StatusCode::FORBIDDEN, "denied") })).await;
         let error = client
-            .register("t", "n", "h", "linux", "1", "x86_64", None, "csr")
+            .register(&registration(None))
             .await
             .unwrap_err()
             .to_string();

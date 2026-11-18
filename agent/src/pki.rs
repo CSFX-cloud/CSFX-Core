@@ -8,18 +8,16 @@ const CERT_FILE: &str = "/var/lib/csfx-agent/agent.crt";
 const CA_FILE: &str = "/var/lib/csfx-agent/ca.crt";
 
 pub struct AgentPki {
-    key_pem: String,
     csr_pem: String,
 }
 
 impl AgentPki {
     pub fn load_or_generate() -> Result<Self> {
         if Path::new(KEY_FILE).exists() && Path::new(CSR_FILE).exists() {
-            let key_pem = std::fs::read_to_string(KEY_FILE).context("Failed to read agent key")?;
             let csr_pem = std::fs::read_to_string(CSR_FILE).context("Failed to read agent CSR")?;
 
             tracing::info!("PKI: loaded existing keypair and CSR");
-            return Ok(Self { key_pem, csr_pem });
+            return Ok(Self { csr_pem });
         }
 
         Self::generate()
@@ -47,15 +45,11 @@ impl AgentPki {
 
         tracing::info!("PKI: generated new ECDSA keypair and CSR");
 
-        Ok(Self { key_pem, csr_pem })
+        Ok(Self { csr_pem })
     }
 
     pub fn csr_pem(&self) -> &str {
         &self.csr_pem
-    }
-
-    pub fn key_pem(&self) -> &str {
-        &self.key_pem
     }
 
     pub fn has_certificate() -> bool {
@@ -87,10 +81,6 @@ impl AgentPki {
 
     pub fn load_ca_pem() -> Result<String> {
         std::fs::read_to_string(CA_FILE).context("Failed to read CA certificate")
-    }
-
-    pub fn load_key_pem() -> Result<String> {
-        std::fs::read_to_string(KEY_FILE).context("Failed to read agent key")
     }
 }
 

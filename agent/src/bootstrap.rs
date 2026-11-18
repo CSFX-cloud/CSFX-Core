@@ -194,6 +194,13 @@ fn spawn_inbound_server(
         info!("CSFX_AGENT_PORT not set, agent inbound server disabled");
         return;
     };
+    let ca_key = match server::load_ca_key() {
+        Ok(key) => Arc::new(key),
+        Err(e) => {
+            error!(error = %e, "agent inbound server disabled, trusted CA unavailable");
+            return;
+        }
+    };
     let server_state = server::ServerState {
         firecracker: runtimes.firecracker.clone(),
         qemu: runtimes.qemu.clone(),
@@ -201,6 +208,7 @@ fn spawn_inbound_server(
         agent_id,
         api_client: api_client.clone(),
         api_key: api_key.to_string(),
+        ca_key,
     };
     tokio::spawn(async move {
         if let Err(e) = server::run(server_state, port).await {
@@ -269,17 +277,19 @@ async fn register(
         "Registering with registry"
     );
 
+    let request = client::RegisterRequest {
+        registration_token: &token,
+        name: &info.hostname,
+        hostname: &info.hostname,
+        os_type: &info.os_type,
+        os_version: &info.os_version,
+        architecture: &info.architecture,
+        agent_version: env!("CARGO_PKG_VERSION"),
+        machine_id: info.machine_id.as_deref(),
+        csr_pem: agent_pki.csr_pem(),
+    };
     let resp = client
-        .register(
-            &token,
-            &info.hostname,
-            &info.hostname,
-            &info.os_type,
-            &info.os_version,
-            &info.architecture,
-            info.machine_id.as_deref(),
-            agent_pki.csr_pem(),
-        )
+        .register(&request)
         .await
         .context("Registration request failed")?;
 

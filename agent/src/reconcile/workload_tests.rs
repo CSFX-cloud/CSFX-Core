@@ -10,7 +10,6 @@ use crate::state::{Kind, Phase, WorkloadEntry};
 
 struct ScriptedRuntime {
     status: Option<&'static str>,
-    pull_fails: bool,
     start_fails: bool,
     stop_fails: bool,
     started: Mutex<Vec<WorkloadSpec>>,
@@ -21,7 +20,6 @@ impl ScriptedRuntime {
     fn new() -> Self {
         Self {
             status: Some("running"),
-            pull_fails: false,
             start_fails: false,
             stop_fails: false,
             started: Mutex::new(Vec::new()),
@@ -39,13 +37,6 @@ impl ScriptedRuntime {
 
 #[async_trait::async_trait]
 impl Runtime for ScriptedRuntime {
-    async fn pull_image(&self, _image: &str) -> Result<()> {
-        if self.pull_fails {
-            anyhow::bail!("registry unreachable");
-        }
-        Ok(())
-    }
-
     async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
         if self.start_fails {
             anyhow::bail!("boot failed");
@@ -211,7 +202,7 @@ async fn removed_workloads_are_dropped_and_assigned_ones_kept() {
     }
     state
         .workloads
-        .set_phase("pending-gone", Phase::Pulling)
+        .set_phase("pending-gone", Phase::Scheduled)
         .await;
 
     state.reap_stale(&[workload("keep", "always", None)]).await;
@@ -303,22 +294,6 @@ async fn workloads_wait_until_their_volumes_are_mounted() {
     let mounts = spec.volume_mounts.unwrap();
     assert_eq!(mounts[0].device_path, "/dev/rbd0");
     assert_eq!(mounts[0].mount_path, "/data");
-}
-
-#[tokio::test]
-async fn image_pull_failures_clear_the_phase() {
-    let state = fixture().await;
-    let mut runtime = ScriptedRuntime::new();
-    runtime.pull_fails = true;
-
-    assert!(
-        !state
-            .start_or_restart(&runtime, workload_with(serde_json::json!({})))
-            .await
-    );
-
-    assert!(state.workloads.pending().await.is_empty());
-    assert!(state.workloads.running().await.is_empty());
 }
 
 #[tokio::test]

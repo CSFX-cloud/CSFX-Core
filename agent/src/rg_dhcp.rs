@@ -40,9 +40,11 @@ pub fn mac_address_for_workload(workload_id: &str) -> String {
     )
 }
 
+type Reservations = HashMap<String, HashMap<String, (String, String)>>;
+
 pub struct RgDhcpSupervisor {
     processes: Mutex<HashMap<String, Child>>,
-    reservations: Mutex<HashMap<String, HashMap<String, (String, String)>>>,
+    reservations: Mutex<Reservations>,
 }
 
 impl Default for RgDhcpSupervisor {

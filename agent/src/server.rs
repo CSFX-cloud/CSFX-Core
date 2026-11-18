@@ -13,8 +13,7 @@ use ring::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1};
 use serde::Deserialize;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{info, warn};
 
 use crate::pki::AgentPki;
@@ -35,6 +34,7 @@ pub struct ServerState {
     pub agent_id: uuid::Uuid,
     pub api_client: Arc<crate::client::ApiClient>,
     pub api_key: String,
+    pub ca_key: Arc<Vec<u8>>,
 }
 
 pub async fn run(state: ServerState, port: u16) -> Result<()> {
@@ -94,7 +94,12 @@ struct TicketClaims {
     expires_at: i64,
 }
 
-fn verify_ticket(headers: &HeaderMap, workload_id: &str, expected_agent_id: &str) -> Result<()> {
+fn verify_ticket(
+    headers: &HeaderMap,
+    scope: &str,
+    expected_agent_id: &str,
+    ca_key: &[u8],
+) -> Result<()> {
     let raw = headers
         .get(TICKET_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -111,17 +116,14 @@ fn verify_ticket(headers: &HeaderMap, workload_id: &str, expected_agent_id: &str
         .decode(signature_b64)
         .context("invalid ticket signature encoding")?;
 
-    let ca_pem = AgentPki::load_ca_pem().context("failed to load trusted CA certificate")?;
-    let public_key_bytes = extract_ca_public_key(&ca_pem)?;
-
-    let verifier = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &public_key_bytes);
+    let verifier = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, ca_key);
     verifier
         .verify(&payload_bytes, &signature)
         .map_err(|_| anyhow!("proxy ticket signature verification failed"))?;
 
     let claims = parse_claims(&payload_bytes)?;
 
-    if claims.workload_id != workload_id {
+    if claims.workload_id != scope {
         return Err(anyhow!("proxy ticket workload_id mismatch"));
     }
     if claims.agent_id != expected_agent_id {
@@ -159,6 +161,27 @@ fn parse_claims(payload_bytes: &[u8]) -> Result<TicketClaims> {
     })
 }
 
+pub fn load_ca_key() -> Result<Vec<u8>> {
+    let ca_pem = AgentPki::load_ca_pem().context("failed to load trusted CA certificate")?;
+    extract_ca_public_key(&ca_pem)
+}
+
+fn authorize(
+    state: &ServerState,
+    addr: &SocketAddr,
+    headers: &HeaderMap,
+    scope: &str,
+) -> Result<(), (StatusCode, String)> {
+    if !is_internal_source(addr) {
+        warn!(source = %addr, "rejected agent inbound request from non-internal source");
+        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
+    }
+    verify_ticket(headers, scope, &state.agent_id.to_string(), &state.ca_key).map_err(|e| {
+        warn!(scope = %scope, error = %e, "rejected request with invalid proxy ticket");
+        (StatusCode::UNAUTHORIZED, e.to_string())
+    })
+}
+
 fn extract_ca_public_key(ca_pem: &str) -> Result<Vec<u8>> {
     let (_, pem) =
         x509_parser::pem::parse_x509_pem(ca_pem.as_bytes()).context("failed to parse CA PEM")?;
@@ -179,15 +202,7 @@ async fn logs_handler(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     info!(workload_id = %workload_id, source = %addr, "log stream request received");
 
-    if !is_internal_source(&addr) {
-        warn!(source = %addr, "rejected agent inbound request from non-internal source");
-        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
-    }
-
-    verify_ticket(&headers, &workload_id, &state.agent_id.to_string()).map_err(|e| {
-        warn!(workload_id = %workload_id, error = %e, "rejected request with invalid proxy ticket");
-        (StatusCode::UNAUTHORIZED, e.to_string())
-    })?;
+    authorize(&state, &addr, &headers, &workload_id)?;
 
     let container_id = state.workloads.handle(&workload_id).await.ok_or_else(|| {
         warn!(workload_id = %workload_id, "log stream requested for workload not running here");
@@ -218,15 +233,7 @@ async fn exec_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    if !is_internal_source(&addr) {
-        warn!(source = %addr, "rejected agent inbound request from non-internal source");
-        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
-    }
-
-    verify_ticket(&headers, &workload_id, &state.agent_id.to_string()).map_err(|e| {
-        warn!(workload_id = %workload_id, error = %e, "rejected request with invalid proxy ticket");
-        (StatusCode::UNAUTHORIZED, e.to_string())
-    })?;
+    authorize(&state, &addr, &headers, &workload_id)?;
 
     let container_id = state.workloads.handle(&workload_id).await.ok_or((
         StatusCode::NOT_FOUND,
@@ -245,45 +252,40 @@ async fn handle_exec_socket(socket: WebSocket, state: ServerState, container_id:
         }
     };
 
-    let mut output = exec_session.output;
-    let mut input = exec_session.input;
+    pump(socket, exec_session.output, exec_session.input, true).await;
+    info!(container_id = %container_id, "exec session closed");
+}
 
+async fn pump<R, W>(socket: WebSocket, mut guest_read: R, mut guest_write: W, accept_text: bool)
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let (mut ws_sink, mut ws_stream) = socket.split();
 
     let output_task = tokio::spawn(async move {
         let mut buf = [0u8; 4096];
-        loop {
-            match output.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    if ws_sink
-                        .send(Message::Binary(buf[..n].to_vec().into()))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(_) => break,
+        while let Ok(read) = guest_read.read(&mut buf).await {
+            if read == 0 {
+                break;
+            }
+            let frame = Message::Binary(buf[..read].to_vec().into());
+            if ws_sink.send(frame).await.is_err() {
+                break;
             }
         }
     });
 
     let input_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_stream.next().await {
-            match msg {
-                Message::Binary(data) => {
-                    if input.write_all(&data).await.is_err() {
-                        break;
-                    }
-                }
-                Message::Text(text) => {
-                    if input.write_all(text.as_bytes()).await.is_err() {
-                        break;
-                    }
-                }
+        while let Some(Ok(message)) = ws_stream.next().await {
+            let written = match message {
+                Message::Binary(data) => guest_write.write_all(&data).await,
+                Message::Text(text) if accept_text => guest_write.write_all(text.as_bytes()).await,
                 Message::Close(_) => break,
-                _ => {}
+                _ => continue,
+            };
+            if written.is_err() {
+                break;
             }
         }
     });
@@ -292,8 +294,6 @@ async fn handle_exec_socket(socket: WebSocket, state: ServerState, container_id:
         _ = output_task => {}
         _ = input_task => {}
     }
-
-    info!(container_id = %container_id, "exec session closed");
 }
 
 async fn vnc_handler(
@@ -303,15 +303,7 @@ async fn vnc_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    if !is_internal_source(&addr) {
-        warn!(source = %addr, "rejected agent inbound request from non-internal source");
-        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
-    }
-
-    verify_ticket(&headers, &workload_id, &state.agent_id.to_string()).map_err(|e| {
-        warn!(workload_id = %workload_id, error = %e, "rejected request with invalid proxy ticket");
-        (StatusCode::UNAUTHORIZED, e.to_string())
-    })?;
+    authorize(&state, &addr, &headers, &workload_id)?;
 
     let vnc_socket_path = state
         .qemu
@@ -335,47 +327,8 @@ async fn handle_vnc_socket(
         }
     };
 
-    let (mut vnc_read, mut vnc_write) = stream.into_split();
-    let (mut ws_sink, mut ws_stream) = socket.split();
-
-    let output_task = tokio::spawn(async move {
-        let mut buf = [0u8; 4096];
-        loop {
-            match vnc_read.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    if ws_sink
-                        .send(Message::Binary(buf[..n].to_vec().into()))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    let input_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_stream.next().await {
-            match msg {
-                Message::Binary(data) => {
-                    if vnc_write.write_all(&data).await.is_err() {
-                        break;
-                    }
-                }
-                Message::Close(_) => break,
-                _ => {}
-            }
-        }
-    });
-
-    tokio::select! {
-        _ = output_task => {}
-        _ = input_task => {}
-    }
-
+    let (vnc_read, vnc_write) = stream.into_split();
+    pump(socket, vnc_read, vnc_write, false).await;
     info!(workload_id = %workload_id, "vnc session closed");
 }
 
@@ -385,13 +338,7 @@ async fn metrics_stream_handler(
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    if !is_internal_source(&addr) {
-        warn!(source = %addr, "rejected agent inbound request from non-internal source");
-        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
-    }
-
-    verify_ticket(&headers, METRICS_TICKET_SCOPE, &state.agent_id.to_string())
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    authorize(&state, &addr, &headers, METRICS_TICKET_SCOPE)?;
 
     Ok(ws.on_upgrade(handle_metrics_socket))
 }
@@ -453,13 +400,7 @@ async fn disks_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<crate::disks::DiskInfo>>, (StatusCode, String)> {
-    if !is_internal_source(&addr) {
-        warn!(source = %addr, "rejected agent inbound request from non-internal source");
-        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
-    }
-
-    verify_ticket(&headers, DISKS_TICKET_SCOPE, &state.agent_id.to_string())
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    authorize(&state, &addr, &headers, DISKS_TICKET_SCOPE)?;
 
     Ok(Json(crate::disks::collect_disks().await))
 }
@@ -470,16 +411,15 @@ fn authorize_export(
     state: &ServerState,
     workload_id: &str,
 ) -> Result<(), (StatusCode, String)> {
-    if !is_internal_source(addr) {
-        warn!(source = %addr, "rejected agent inbound request from non-internal source");
-        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
-    }
     if uuid::Uuid::parse_str(workload_id).is_err() {
         return Err((StatusCode::BAD_REQUEST, "invalid workload id".to_string()));
     }
-    let scope = format!("{EXPORT_TICKET_PREFIX}{workload_id}");
-    verify_ticket(headers, &scope, &state.agent_id.to_string())
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))
+    authorize(
+        state,
+        addr,
+        headers,
+        &format!("{EXPORT_TICKET_PREFIX}{workload_id}"),
+    )
 }
 
 fn export_failure(workload_id: &str, error: anyhow::Error) -> (StatusCode, String) {
@@ -571,20 +511,12 @@ async fn power_handler(
     headers: HeaderMap,
     Json(req): Json<PowerRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    if !is_internal_source(&addr) {
-        warn!(source = %addr, "rejected agent inbound request from non-internal source");
-        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
-    }
-
-    verify_ticket(&headers, POWER_TICKET_SCOPE, &state.agent_id.to_string())
-        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
+    authorize(&state, &addr, &headers, POWER_TICKET_SCOPE)?;
 
     let verb = req.action.systemctl_verb();
     info!(agent_id = %state.agent_id, action = verb, "power action requested");
 
-    let output = Command::new("systemctl")
-        .args([verb, "-i"])
-        .output()
+    let output = crate::cmd::run("systemctl", &[verb, "-i"])
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -634,6 +566,7 @@ mod tests {
                 .unwrap(),
             ),
             api_key: "key".to_string(),
+            ca_key: Arc::new(Vec::new()),
         }
     }
 
@@ -694,13 +627,13 @@ mod tests {
     #[test]
     fn tickets_without_a_valid_shape_are_rejected() {
         let mut headers = HeaderMap::new();
-        assert!(verify_ticket(&headers, "w", "a").is_err());
+        assert!(verify_ticket(&headers, "w", "a", &[]).is_err());
         headers.insert(TICKET_HEADER, "nodot".parse().unwrap());
-        assert!(verify_ticket(&headers, "w", "a").is_err());
+        assert!(verify_ticket(&headers, "w", "a", &[]).is_err());
         headers.insert(TICKET_HEADER, "!!!.???".parse().unwrap());
-        assert!(verify_ticket(&headers, "w", "a").is_err());
+        assert!(verify_ticket(&headers, "w", "a", &[]).is_err());
         headers.insert(TICKET_HEADER, "YQ.Yg".parse().unwrap());
-        assert!(verify_ticket(&headers, "w", "a").is_err());
+        assert!(verify_ticket(&headers, "w", "a", &[]).is_err());
     }
 
     #[test]

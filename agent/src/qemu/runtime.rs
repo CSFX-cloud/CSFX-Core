@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 use crate::qemu::qmp::QmpClient;
 use crate::rg_dhcp::{mac_address_for_workload, RgDhcpSupervisor};
 use crate::spec::WorkloadSpec;
+use crate::vm_host::{self, process_gid, process_uid};
 
 const VM_STATE_DIR: &str = "/var/lib/csfx-agent/qemu";
 const DEFAULT_QEMU_BIN_PATH: &str = "/usr/bin/qemu-system-x86_64";
@@ -20,14 +21,6 @@ const MIN_MEMORY_MIB: i64 = 512;
 
 fn qemu_bin_path() -> String {
     std::env::var("CSFX_QEMU_BIN_PATH").unwrap_or_else(|_| DEFAULT_QEMU_BIN_PATH.to_string())
-}
-
-fn process_uid() -> u32 {
-    unsafe { libc::getuid() }
-}
-
-fn process_gid() -> u32 {
-    unsafe { libc::getgid() }
 }
 
 fn vm_dir(workload_id: &str) -> PathBuf {
@@ -113,23 +106,7 @@ impl QemuRuntime {
     }
 
     pub async fn reconcile_once(&self) -> Vec<(String, String)> {
-        if self.reconciled.swap(true, Ordering::SeqCst) {
-            return Vec::new();
-        }
-
-        match crate::runtime::Runtime::list_managed_workloads(self).await {
-            Ok(recovered) => {
-                info!(
-                    count = recovered.len(),
-                    "Reconciled running vms from disk state"
-                );
-                recovered
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to reconcile qemu workloads from disk state");
-                Vec::new()
-            }
-        }
+        vm_host::recover_once(self, &self.reconciled, "vm").await
     }
 
     async fn ensure_rg_network(
@@ -137,50 +114,24 @@ impl QemuRuntime {
         resource_group_id: &str,
         resource_group_cidr: Option<&str>,
     ) -> Result<String> {
-        let iface = crate::rg_network::ensure_bridge(
+        crate::rg_network::ensure_group(
+            &self.local_state,
             resource_group_id,
             resource_group_cidr,
+            &self.wg_private_key_b64,
             &self.rg_dns_registry,
         )
         .await
-        .context("Failed to ensure resource group bridge")?;
-
-        if resource_group_cidr.is_some() {
-            crate::wireguard::ensure_rg_interface(
-                &self.local_state,
-                resource_group_id,
-                &self.wg_private_key_b64,
-            )
-            .await
-            .context("Failed to bring up resource group WireGuard interface")?;
-        }
-
-        Ok(iface)
     }
 
     pub async fn teardown_rg_network(&self, resource_group_id: &str) -> Result<()> {
         self.dhcp_supervisor.stop(resource_group_id).await;
-
-        crate::rg_network::teardown_bridge(resource_group_id)
-            .await
-            .context("Failed to tear down resource group bridge")?;
-
-        let wg_iface = crate::wireguard::rg_interface_name(resource_group_id);
-        crate::wireguard::remove_interface(&wg_iface)
-            .await
-            .context("Failed to remove resource group WireGuard interface")?;
-        self.local_state.release_wg_port(resource_group_id).await;
-
-        Ok(())
+        crate::rg_network::teardown_group(&self.local_state, resource_group_id).await
     }
 }
 
 #[async_trait::async_trait]
 impl crate::runtime::Runtime for QemuRuntime {
-    async fn pull_image(&self, _image: &str) -> Result<()> {
-        Ok(())
-    }
-
     async fn start_workload(&self, spec: &WorkloadSpec) -> Result<String> {
         let vm_spec = spec
             .vm_spec
@@ -192,7 +143,7 @@ impl crate::runtime::Runtime for QemuRuntime {
             .await
             .context("Failed to create vm state directory")?;
 
-        write_sidecar_metadata(
+        vm_host::write_sidecar(
             &dir,
             &VmSidecarMetadata {
                 resource_group_id: spec.resource_group_id.clone(),
@@ -255,7 +206,7 @@ impl crate::runtime::Runtime for QemuRuntime {
         }
 
         let tap_device = format!("{}{}", TAP_DEVICE_PREFIX, short_id(&spec.workload_id));
-        create_tap_device(&tap_device, bridge_iface.as_deref(), process_uid()).await?;
+        vm_host::create_tap(&tap_device, bridge_iface.as_deref(), process_uid()).await?;
 
         let qmp_socket_path = dir.join(QMP_SOCKET_NAME);
         let vnc_socket_path = dir.join(VNC_SOCKET_NAME);
@@ -274,7 +225,7 @@ impl crate::runtime::Runtime for QemuRuntime {
 
         if let Err(e) = boot_result {
             stop_unit(&spec.workload_id).await;
-            let _ = remove_tap_device(&tap_device).await;
+            let _ = vm_host::remove_tap(&tap_device).await;
             return Err(e);
         }
 
@@ -319,14 +270,14 @@ impl crate::runtime::Runtime for QemuRuntime {
         stop_unit(workload_handle).await;
 
         let tap_device = format!("{}{}", TAP_DEVICE_PREFIX, short_id(workload_handle));
-        if let Err(e) = remove_tap_device(&tap_device).await {
+        if let Err(e) = vm_host::remove_tap(&tap_device).await {
             warn!(workload_id = %workload_handle, error = %e, "Failed to remove tap device");
         }
 
         let dir = vm_dir(workload_handle);
         let resource_group_id = match handle {
             Some(handle) => handle.resource_group_id,
-            None => read_sidecar_metadata(&dir)
+            None => vm_host::read_sidecar::<VmSidecarMetadata>(&dir)
                 .await
                 .and_then(|sidecar| sidecar.resource_group_id),
         };
@@ -374,7 +325,7 @@ impl crate::runtime::Runtime for QemuRuntime {
                 continue;
             }
 
-            let sidecar = read_sidecar_metadata(&dir).await;
+            let sidecar = vm_host::read_sidecar::<VmSidecarMetadata>(&dir).await;
 
             let handle = VmHandle {
                 qmp_socket_path: dir.join(QMP_SOCKET_NAME),
@@ -423,23 +374,6 @@ async fn is_unit_active(unit: &str) -> bool {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct VmSidecarMetadata {
     resource_group_id: Option<String>,
-}
-
-fn sidecar_metadata_path(dir: &Path) -> PathBuf {
-    dir.join("csfx-meta.json")
-}
-
-async fn write_sidecar_metadata(dir: &Path, metadata: &VmSidecarMetadata) -> Result<()> {
-    let payload = serde_json::to_vec(metadata).context("Failed to serialize sidecar metadata")?;
-    tokio::fs::write(sidecar_metadata_path(dir), payload)
-        .await
-        .context("Failed to write sidecar metadata file")?;
-    Ok(())
-}
-
-async fn read_sidecar_metadata(dir: &Path) -> Option<VmSidecarMetadata> {
-    let content = tokio::fs::read(sidecar_metadata_path(dir)).await.ok()?;
-    serde_json::from_slice(&content).ok()
 }
 
 async fn ensure_iso_cached(workload_id: &str, iso_url: &str) -> Result<PathBuf> {
@@ -535,70 +469,6 @@ async fn ensure_boot_disk(path: &str, size_bytes: i64) -> Result<()> {
 
     if !status.success() {
         anyhow::bail!("qemu-img create failed for boot disk {}", path);
-    }
-
-    Ok(())
-}
-
-async fn create_tap_device(
-    tap_device: &str,
-    bridge_iface: Option<&str>,
-    owner_uid: u32,
-) -> Result<()> {
-    let uid_arg = owner_uid.to_string();
-    let output = Command::new("ip")
-        .args([
-            "tuntap", "add", "dev", tap_device, "mode", "tap", "user", &uid_arg,
-        ])
-        .output()
-        .await
-        .context("Failed to execute ip tuntap add")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.contains("File exists") {
-            anyhow::bail!("failed to create tap device {}: {}", tap_device, stderr);
-        }
-    }
-
-    if let Some(bridge) = bridge_iface {
-        let status = Command::new("ip")
-            .args(["link", "set", "dev", tap_device, "master", bridge])
-            .status()
-            .await
-            .context("Failed to execute ip link set master")?;
-
-        if !status.success() {
-            anyhow::bail!(
-                "failed to attach tap device {} to bridge {}",
-                tap_device,
-                bridge
-            );
-        }
-    }
-
-    let status = Command::new("ip")
-        .args(["link", "set", "dev", tap_device, "up"])
-        .status()
-        .await
-        .context("Failed to execute ip link set up")?;
-
-    if !status.success() {
-        anyhow::bail!("failed to bring up tap device {}", tap_device);
-    }
-
-    Ok(())
-}
-
-async fn remove_tap_device(tap_device: &str) -> Result<()> {
-    let status = Command::new("ip")
-        .args(["link", "delete", tap_device])
-        .status()
-        .await
-        .context("Failed to execute ip link delete")?;
-
-    if !status.success() {
-        anyhow::bail!("failed to delete tap device {}", tap_device);
     }
 
     Ok(())
@@ -820,21 +690,6 @@ mod tests {
         assert!(boot_disk_path(id).ends_with(&format!("{id}/boot.img")));
         assert!(iso_cache_path(id).ends_with("install.iso"));
         assert!(!qemu_bin_path().is_empty());
-        assert_eq!(process_uid(), unsafe { libc::getuid() });
-        assert_eq!(process_gid(), unsafe { libc::getgid() });
-    }
-
-    #[tokio::test]
-    async fn sidecar_metadata_round_trips() {
-        let dir = temp_dir();
-        assert!(read_sidecar_metadata(&dir).await.is_none());
-        let metadata = VmSidecarMetadata {
-            resource_group_id: Some("rg".to_string()),
-        };
-        write_sidecar_metadata(&dir, &metadata).await.unwrap();
-        let read = read_sidecar_metadata(&dir).await.unwrap();
-        assert_eq!(read.resource_group_id.as_deref(), Some("rg"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[tokio::test]
@@ -909,7 +764,6 @@ mod tests {
     #[tokio::test]
     async fn trivial_runtime_operations_have_defaults() {
         let runtime = runtime();
-        runtime.pull_image("img").await.unwrap();
         runtime.check_dhcp_liveness().await;
         assert!(runtime.exec("w").await.is_err());
         let stats = runtime.stats("w").await.unwrap();
@@ -924,81 +778,6 @@ mod tests {
     }
 
     use crate::testing::FakeTools;
-
-    #[tokio::test]
-    async fn tap_devices_are_created_attached_and_raised() {
-        let tools = FakeTools::install(&[("ip", "exit 0")]);
-
-        create_tap_device("qtap1", Some("br0"), 77).await.unwrap();
-
-        assert_eq!(
-            tools.calls("ip"),
-            vec![
-                "tuntap add dev qtap1 mode tap user 77".to_string(),
-                "link set dev qtap1 master br0".to_string(),
-                "link set dev qtap1 up".to_string(),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn tap_devices_without_a_bridge_skip_attachment() {
-        let tools = FakeTools::install(&[("ip", "exit 0")]);
-
-        create_tap_device("qtap1", None, 0).await.unwrap();
-
-        assert_eq!(tools.calls("ip").len(), 2);
-    }
-
-    #[tokio::test]
-    async fn existing_tap_devices_are_tolerated() {
-        let _tools = FakeTools::install(&[(
-            "ip",
-            r#"case "$*" in tuntap*) echo 'ioctl: File exists' >&2; exit 1;; esac"#,
-        )]);
-
-        create_tap_device("qtap1", None, 0).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn tap_device_failures_name_the_failing_step() {
-        {
-            let _tools = FakeTools::install(&[(
-                "ip",
-                r#"case "$*" in tuntap*) echo 'Operation not permitted' >&2; exit 1;; esac"#,
-            )]);
-            let error = create_tap_device("qtap1", None, 0)
-                .await
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("failed to create tap device qtap1"));
-        }
-        {
-            let _tools = FakeTools::install(&[("ip", r#"case "$*" in *master*) exit 1;; esac"#)]);
-            let error = create_tap_device("qtap1", Some("br0"), 0)
-                .await
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("failed to attach tap device qtap1 to bridge br0"));
-        }
-        let _tools = FakeTools::install(&[("ip", r#"case "$*" in *" up") exit 1;; esac"#)]);
-        let error = create_tap_device("qtap1", None, 0)
-            .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("failed to bring up tap device qtap1"));
-    }
-
-    #[tokio::test]
-    async fn tap_devices_are_removed_by_name() {
-        {
-            let tools = FakeTools::install(&[("ip", "exit 0")]);
-            remove_tap_device("qtap1").await.unwrap();
-            assert_eq!(tools.calls("ip"), vec!["link delete qtap1".to_string()]);
-        }
-        let _tools = FakeTools::install(&[("ip", "exit 1")]);
-        assert!(remove_tap_device("qtap1").await.is_err());
-    }
 
     #[tokio::test]
     async fn units_are_stopped_by_their_derived_name() {
