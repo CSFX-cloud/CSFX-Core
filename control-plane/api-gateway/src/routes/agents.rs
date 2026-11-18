@@ -388,7 +388,7 @@ async fn fence_attached_volumes(state: &AppState, agent_id: Uuid) -> Result<(), 
     let path = format!("/internal/agents/{}/detach-all", agent_id);
     match state
         .service_client
-        .forward_to_volume_manager(reqwest::Method::POST, &path, None, None)
+        .call_json(Service::VolumeManager, reqwest::Method::POST, &path, None)
         .await
     {
         Ok((status, _)) if status.is_success() => Ok(()),
