@@ -3,10 +3,6 @@ use std::sync::Arc;
 
 use registry::{log_error, log_info, logger, server, services};
 
-const LEADER_KEY: &str = "/csfx/leaders/registry-health";
-const DEGRADED_AFTER_SECS: i64 = 50;
-const OFFLINE_AFTER_SECS: i64 = 90;
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     rustls::crypto::ring::default_provider()
@@ -91,23 +87,6 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
-    let leader = shared::leader::LeaderLease::connect(LEADER_KEY).await?;
-    let health_check_handle = {
-        let registry = agent_registry.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
-            loop {
-                interval.tick().await;
-                if !leader.is_leader() {
-                    continue;
-                }
-                registry
-                    .check_agent_health(DEGRADED_AFTER_SECS, OFFLINE_AFTER_SECS)
-                    .await;
-            }
-        })
-    };
-
     let app = server::create_router(state);
 
     shared::observability::spawn_pool_gauges("default", db_conn.clone());
@@ -140,9 +119,6 @@ async fn main() -> anyhow::Result<()> {
         }
         _ = token_cleanup_handle => {
             log_error!("main", "Token cleanup task stopped unexpectedly");
-        }
-        _ = health_check_handle => {
-            log_error!("main", "Health check task stopped unexpectedly");
         }
         _ = tokio::signal::ctrl_c() => {
             log_info!("main", "Shutdown signal received");
