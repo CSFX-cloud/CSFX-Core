@@ -6,6 +6,7 @@ mod cluster_api;
 mod cluster_vip_api;
 mod common;
 mod core_b_api;
+mod exports_api;
 mod idp_api;
 mod ingress_api;
 mod logs_api;
