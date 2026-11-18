@@ -1,3 +1,4 @@
+use crate::service_client::Service;
 use axum::{
     extract::{Path, State},
     http::{header::HOST, HeaderMap, StatusCode},
@@ -95,7 +96,7 @@ async fn forward_to_registry(
 ) -> Result<Option<Value>, ApiError> {
     let (status, response) = state
         .service_client
-        .forward_to_registry(method, path, body, None)
+        .call_json(Service::Registry, method, path, body)
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "registry request failed");

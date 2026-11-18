@@ -396,32 +396,6 @@ impl AgentRegistry {
         Ok(())
     }
 
-    pub async fn check_agent_health(&self, degraded_seconds: i64, offline_seconds: i64) -> usize {
-        if let Err(e) =
-            crate::db::agents::mark_degraded_by_timeout(&self.db, degraded_seconds).await
-        {
-            crate::log_error!("agent_registry", &format!("Failed to mark degraded: {}", e));
-        }
-        match crate::db::agents::mark_offline_by_timeout(&self.db, offline_seconds).await {
-            Ok(marked_offline) => {
-                if marked_offline > 0 {
-                    crate::log_info!(
-                        "agent_registry",
-                        &format!("Health check: {} agents marked offline", marked_offline)
-                    );
-                }
-                marked_offline as usize
-            }
-            Err(e) => {
-                crate::log_error!(
-                    "agent_registry",
-                    &format!("Failed to check agent health: {}", e)
-                );
-                0
-            }
-        }
-    }
-
     pub async fn get_statistics(&self) -> AgentStatistics {
         match crate::db::agents::get_statistics(&self.db).await {
             Ok((total, online, offline, degraded)) => AgentStatistics {
