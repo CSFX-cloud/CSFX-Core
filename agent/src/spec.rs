@@ -44,7 +44,6 @@ pub struct WorkloadSpec {
     pub env_vars: Option<HashMap<String, String>>,
     pub ports: Option<Vec<PortMapping>>,
     pub volume_mounts: Option<Vec<VolumeMount>>,
-    pub service_name: Option<String>,
     pub resource_group_id: Option<String>,
     pub resource_group_cidr: Option<String>,
     pub guest_ip: Option<String>,
@@ -89,10 +88,6 @@ pub struct VmSpec {
     pub boot_disk_path: String,
     pub boot_disk_size_bytes: i64,
     pub iso_url: Option<String>,
-}
-
-pub fn rg_network_name(resource_group_id: &str) -> String {
-    format!("csfx-rg-{}", resource_group_id)
 }
 
 pub fn second_host_ip(cidr: &str) -> Option<String> {
@@ -185,7 +180,6 @@ mod tests {
             env_vars: None,
             ports: None,
             volume_mounts: None,
-            service_name: None,
             resource_group_id: None,
             resource_group_cidr: None,
             guest_ip: None,
@@ -240,7 +234,6 @@ mod tests {
 
     #[test]
     fn resource_group_names_are_deterministic() {
-        assert_eq!(rg_network_name("abc"), "csfx-rg-abc");
         assert_eq!(rg_bridge_iface_name("abc"), rg_bridge_iface_name("abc"));
         assert_ne!(rg_bridge_iface_name("abc"), rg_bridge_iface_name("abd"));
         assert!(rg_bridge_iface_name("abc").starts_with("csfxrg"));
