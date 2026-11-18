@@ -4,49 +4,21 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
-use migration::{Migrator, MigratorTrait};
 use scheduler::models::workload::CreateWorkloadRequest;
 use scheduler::server::{create_router, AppState};
 use scheduler::services::scheduler::SchedulerService;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database, DatabaseConnection};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 use tower::ServiceExt;
 use uuid::Uuid;
-
-static MIGRATED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
-
-pub async fn migrated_database() -> DatabaseConnection {
-    unsafe { std::env::set_var(shared::env_secrets::KEY_VARIABLE, "11".repeat(32)) };
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let db = Database::connect(&url)
-        .await
-        .expect("database must be reachable");
-    MIGRATED
-        .get_or_init(|| async {
-            Migrator::up(&db, None)
-                .await
-                .expect("migrations must apply");
-        })
-        .await;
-    db
-}
 
 pub async fn router() -> Router {
     rustls::crypto::ring::default_provider()
         .install_default()
         .ok();
     let db = migrated_database().await;
-    let etcd = etcd_client::Client::connect(["http://127.0.0.1:1"], None)
-        .await
-        .expect("etcd client must be constructed");
-    let etcd = Arc::new(Mutex::new(etcd));
-    let scheduler = Arc::new(SchedulerService::new(db.clone(), etcd.clone()));
-    create_router(AppState {
-        db,
-        etcd,
-        scheduler,
-    })
+    let scheduler = Arc::new(SchedulerService::new(db.clone()));
+    create_router(AppState { db, scheduler })
 }
 
 pub fn unplaceable_request(name: &str) -> Value {
@@ -61,28 +33,6 @@ pub fn unplaceable_request(name: &str) -> Value {
 
 pub fn unique_name(prefix: &str) -> String {
     format!("{}-{}", prefix, Uuid::new_v4().simple())
-}
-
-pub async fn call(
-    app: &Router,
-    method: Method,
-    uri: &str,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    let payload = body.map_or_else(Body::empty, |value| Body::from(value.to_string()));
-    let request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header("content-type", "application/json")
-        .body(payload)
-        .unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
 }
 
 pub async fn call_page(app: &Router, uri: &str) -> (StatusCode, Value, Option<String>) {
@@ -127,7 +77,6 @@ pub async fn find_workload(app: &Router, id: &str) -> Value {
 pub struct Placing {
     pub service: SchedulerService,
     pub db: DatabaseConnection,
-    pub etcd: Arc<Mutex<etcd_client::Client>>,
 }
 
 pub async fn placing() -> Placing {
@@ -135,15 +84,9 @@ pub async fn placing() -> Placing {
         .install_default()
         .ok();
     let db = migrated_database().await;
-    let endpoints =
-        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://127.0.0.1:2379".to_string());
-    let etcd = etcd_client::Client::connect(endpoints.split(',').collect::<Vec<_>>(), None)
-        .await
-        .expect("etcd must be reachable");
-    let etcd = Arc::new(Mutex::new(etcd));
-    let service = SchedulerService::new(db.clone(), etcd.clone());
+    let service = SchedulerService::new(db.clone());
     insert_agent(&db).await;
-    Placing { service, db, etcd }
+    Placing { service, db }
 }
 
 pub async fn insert_agent(db: &DatabaseConnection) -> Uuid {
@@ -333,4 +276,11 @@ pub async fn insert_bucket_in_group(db: &DatabaseConnection, group: Option<Uuid>
     .await
     .expect("bucket must be inserted");
     id
+}
+
+pub use test_support::call;
+
+pub async fn migrated_database() -> DatabaseConnection {
+    unsafe { std::env::set_var(shared::env_secrets::KEY_VARIABLE, "11".repeat(32)) };
+    test_support::migrated_database().await
 }

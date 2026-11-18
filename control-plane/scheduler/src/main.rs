@@ -1,7 +1,6 @@
 use shared::leader::LeaderLease;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use scheduler::{db as store, log_error, log_info, logger, server, services};
 
@@ -83,30 +82,9 @@ async fn main() -> anyhow::Result<()> {
     });
     shared::observability::spawn_pool_gauges("default", db.clone());
 
-    let etcd_endpoints =
-        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://localhost:2379".to_string());
-    let etcd_endpoints: Vec<&str> = etcd_endpoints.split(',').collect();
+    let scheduler = Arc::new(services::scheduler::SchedulerService::new(db.clone()));
 
-    log_info!(
-        "main",
-        &format!("Connecting to etcd endpoints={}", etcd_endpoints.join(","))
-    );
-    let etcd = etcd_client::Client::connect(etcd_endpoints, None)
-        .await
-        .expect("Failed to connect to etcd");
-    log_info!("main", "etcd connection established");
-
-    let etcd = Arc::new(Mutex::new(etcd));
-    let scheduler = Arc::new(services::scheduler::SchedulerService::new(
-        db.clone(),
-        etcd.clone(),
-    ));
-
-    let state = server::AppState {
-        db,
-        etcd,
-        scheduler,
-    };
+    let state = server::AppState { db, scheduler };
 
     let app = server::create_router(state.clone());
 
