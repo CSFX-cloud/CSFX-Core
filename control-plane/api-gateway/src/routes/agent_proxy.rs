@@ -30,7 +30,7 @@ const CSFX_AGENT_DIRECT_ENV: &str = "CSFX_AGENT_DIRECT_HOSTNAME";
 const METRICS_TICKET_SCOPE: &str = "__node_metrics__";
 const POWER_TICKET_SCOPE: &str = "__power__";
 
-async fn resolve_agent_tunnel_ip(
+pub(crate) async fn resolve_agent_tunnel_ip(
     state: &AppState,
     agent_id: Uuid,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
@@ -115,7 +115,7 @@ async fn resolve_agent_target(
     Ok((tunnel_ip, agent_id))
 }
 
-async fn fetch_proxy_ticket(
+pub(crate) async fn fetch_proxy_ticket(
     state: &AppState,
     agent_id: Uuid,
     workload_id: &str,

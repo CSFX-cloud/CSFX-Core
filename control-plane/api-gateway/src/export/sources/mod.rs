@@ -1,6 +1,8 @@
 pub mod bucket;
 pub mod config;
+pub mod resource_group;
 pub mod volume;
+pub mod workload;
 
 use futures_util::StreamExt;
 use std::fmt::Display;

@@ -121,6 +121,8 @@ async fn collect_scope(
     let id = scope.id.unwrap_or_default();
     match scope.kind {
         ScopeKind::Config => sources::config::export(&state.db_conn, exporter).await,
+        ScopeKind::ResourceGroup => sources::resource_group::export(state, exporter, id).await,
+        ScopeKind::Workload => sources::workload::export(state, exporter, id).await,
         ScopeKind::Volume => sources::volume::export(state, exporter, id).await,
         ScopeKind::Bucket => sources::bucket::export(state, exporter, id).await,
         other => Err(ExportError::UnsupportedScope(other.as_str())),
@@ -175,6 +177,12 @@ pub async fn restore(
         }
         ScopeKind::Bucket => sources::bucket::restore(state, &reader, id).await,
         ScopeKind::Volume => sources::volume::restore(state, &reader, id).await,
+        ScopeKind::Workload => {
+            sources::workload::restore(state, &reader, id, options.agent_id).await
+        }
+        ScopeKind::ResourceGroup => {
+            sources::resource_group::restore(state, &reader, options.agent_id).await
+        }
         other => Err(ExportError::UnsupportedScope(other.as_str())),
     }
 }
