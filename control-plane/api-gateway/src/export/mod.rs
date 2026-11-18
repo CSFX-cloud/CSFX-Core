@@ -118,8 +118,11 @@ async fn collect_scope(
     if scope.kind.needs_id() && scope.id.is_none() {
         return Err(ExportError::ScopeIdRequired);
     }
+    let id = scope.id.unwrap_or_default();
     match scope.kind {
         ScopeKind::Config => sources::config::export(&state.db_conn, exporter).await,
+        ScopeKind::Volume => sources::volume::export(state, exporter, id).await,
+        ScopeKind::Bucket => sources::bucket::export(state, exporter, id).await,
         other => Err(ExportError::UnsupportedScope(other.as_str())),
     }
 }
@@ -164,11 +167,14 @@ pub async fn restore(
     let reader = Reader::open(target, export_id, options.passphrase).await?;
     ensure_schema(&state.db_conn, &reader.manifest).await?;
     let scope = &reader.manifest.scope;
+    let id = scope.id.unwrap_or_default();
     match scope.kind {
         ScopeKind::Config => {
             sources::config::restore(&state.db_conn, &reader).await?;
             Ok(json!({}))
         }
+        ScopeKind::Bucket => sources::bucket::restore(state, &reader, id).await,
+        ScopeKind::Volume => sources::volume::restore(state, &reader, id).await,
         other => Err(ExportError::UnsupportedScope(other.as_str())),
     }
 }
