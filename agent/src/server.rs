@@ -11,12 +11,10 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use futures_util::{SinkExt, StreamExt};
 use ring::signature::{UnparsedPublicKey, ECDSA_P256_SHA256_ASN1};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::pki::AgentPki;
@@ -33,7 +31,7 @@ pub const EXPORT_TICKET_PREFIX: &str = "__export__";
 pub struct ServerState {
     pub firecracker: Arc<crate::firecracker::runtime::FirecrackerRuntime>,
     pub qemu: Arc<crate::qemu::runtime::QemuRuntime>,
-    pub running_containers: Arc<Mutex<HashMap<String, String>>>,
+    pub workloads: crate::state::WorkloadTable,
     pub agent_id: uuid::Uuid,
     pub api_client: Arc<crate::client::ApiClient>,
     pub api_key: String,
@@ -191,19 +189,13 @@ async fn logs_handler(
         (StatusCode::UNAUTHORIZED, e.to_string())
     })?;
 
-    let container_id = state
-        .running_containers
-        .lock()
-        .await
-        .get(&workload_id)
-        .cloned()
-        .ok_or_else(|| {
-            warn!(workload_id = %workload_id, "log stream requested for workload not running here");
-            (
-                StatusCode::NOT_FOUND,
-                "workload not running here".to_string(),
-            )
-        })?;
+    let container_id = state.workloads.handle(&workload_id).await.ok_or_else(|| {
+        warn!(workload_id = %workload_id, "log stream requested for workload not running here");
+        (
+            StatusCode::NOT_FOUND,
+            "workload not running here".to_string(),
+        )
+    })?;
 
     info!(workload_id = %workload_id, container_id = %container_id, "opening log stream to guest");
     let stream =
@@ -236,16 +228,10 @@ async fn exec_handler(
         (StatusCode::UNAUTHORIZED, e.to_string())
     })?;
 
-    let container_id = state
-        .running_containers
-        .lock()
-        .await
-        .get(&workload_id)
-        .cloned()
-        .ok_or((
-            StatusCode::NOT_FOUND,
-            "workload not running here".to_string(),
-        ))?;
+    let container_id = state.workloads.handle(&workload_id).await.ok_or((
+        StatusCode::NOT_FOUND,
+        "workload not running here".to_string(),
+    ))?;
 
     Ok(ws.on_upgrade(move |socket| handle_exec_socket(socket, state, container_id)))
 }
@@ -635,7 +621,7 @@ mod tests {
                 local_state,
                 registry,
             )),
-            running_containers: Arc::new(Mutex::new(HashMap::new())),
+            workloads: crate::state::WorkloadTable::default(),
             agent_id: uuid::Uuid::new_v4(),
             api_client: Arc::new(
                 crate::client::ApiClient::new(

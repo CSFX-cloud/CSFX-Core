@@ -9,11 +9,10 @@ const NOTIFY_TIMEOUT: Duration = Duration::from_secs(2);
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(NOTIFY_TIMEOUT)
+        shared::http::builder(NOTIFY_TIMEOUT)
             .danger_accept_invalid_certs(true)
             .build()
-            .unwrap_or_default()
+            .expect("failed to build gateway notify client")
     })
 }
 

@@ -58,8 +58,7 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .expect("Failed to build HTTP client");
 
-    let etcd_endpoints =
-        std::env::var("ETCD_ENDPOINTS").unwrap_or_else(|_| "http://localhost:2379".to_string());
+    let etcd_endpoints = shared::etcd::endpoints_from_env();
 
     let mgmt_ipam = Arc::new(services::mgmt_ipam::MgmtIpamService::new(
         etcd_endpoints.clone(),

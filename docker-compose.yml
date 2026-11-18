@@ -272,7 +272,7 @@ services:
     container_name: csfx-object-storage-dev
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
-      ETCD_URL: http://etcd:2379
+      ETCD_ENDPOINTS: http://etcd:2379
       OBJECT_STORAGE_PORT: "8006"
       LISTEN_ADDR: "0.0.0.0"
       GARAGE_ADMIN_URL: http://garage:3903
@@ -331,7 +331,7 @@ services:
     container_name: csfx-sdn-controller-dev
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
-      ETCD_URL: http://etcd:2379
+      ETCD_ENDPOINTS: http://etcd:2379
       SDN_CONTROLLER_PORT: "8005"
       LISTEN_ADDR: "0.0.0.0"
       RUST_LOG: ${RUST_LOG:-debug}

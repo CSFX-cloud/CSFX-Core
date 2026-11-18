@@ -19,8 +19,9 @@ use crate::{
 
 const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
 const GATEWAY_PORT: u16 = 8000;
-const WORKER_MANIFEST_PREFIX: &str = "/csfx/config/worker_release_manifest/";
-const WORKER_SIGNATURE_PREFIX: &str = "/csfx/config/worker_release_manifest_sig/";
+use shared::etcd::{
+    WORKER_MANIFEST_PREFIX, WORKER_MANIFEST_SIGNATURE_PREFIX as WORKER_SIGNATURE_PREFIX,
+};
 
 pub async fn register_agent(
     State(state): State<AppState>,
@@ -368,12 +369,12 @@ async fn read_ssh_enabled(state: &AppState) -> bool {
 }
 
 async fn read_worker_releases(
-    etcd_endpoints: &str,
+    etcd_endpoints: &[String],
     agent_id: Uuid,
     role: &str,
     release_version: &str,
 ) -> HashMap<String, SignedRelease> {
-    let mut client = match etcd_client::Client::connect([etcd_endpoints], None).await {
+    let mut client = match shared::etcd::connect(etcd_endpoints).await {
         Ok(client) => client,
         Err(error) => {
             tracing::warn!(error = %error, "etcd unreachable while reading worker releases");

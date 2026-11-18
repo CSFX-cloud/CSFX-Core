@@ -9,11 +9,10 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(RESOLVE_TIMEOUT)
+        shared::http::builder(RESOLVE_TIMEOUT)
             .danger_accept_invalid_certs(true)
             .build()
-            .unwrap_or_default()
+            .expect("failed to build image resolver client")
     })
 }
 

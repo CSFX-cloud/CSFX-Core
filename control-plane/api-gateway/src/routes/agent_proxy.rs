@@ -1,3 +1,6 @@
+use std::sync::OnceLock;
+use std::time::Duration;
+
 use axum::{
     body::Body,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -29,6 +32,12 @@ const CSFX_AGENT_PORT_ENV: &str = "CSFX_AGENT_PORT";
 const CSFX_AGENT_DIRECT_ENV: &str = "CSFX_AGENT_DIRECT_HOSTNAME";
 const METRICS_TICKET_SCOPE: &str = "__node_metrics__";
 const POWER_TICKET_SCOPE: &str = "__power__";
+const AGENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| shared::http::client(AGENT_REQUEST_TIMEOUT))
+}
 
 pub(crate) async fn resolve_agent_tunnel_ip(
     state: &AppState,
@@ -181,8 +190,7 @@ pub async fn stream_workload_logs(
 
     let url = format!("http://{}:{}/logs/{}", tunnel_ip, agent_port, workload_id);
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = client()
         .get(&url)
         .header("X-Csfx-Proxy-Ticket", ticket)
         .send()
@@ -540,8 +548,7 @@ pub async fn power_agent(
 
     let url = format!("http://{}:{}/power", tunnel_ip, agent_port);
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = client()
         .post(&url)
         .header("X-Csfx-Proxy-Ticket", proxy_ticket)
         .json(&json!({ "action": req.action.as_str() }))
@@ -584,8 +591,7 @@ pub async fn get_agent_disks(
 
     let url = format!("http://{}:{}/disks", tunnel_ip, agent_port);
 
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = client()
         .get(&url)
         .header("X-Csfx-Proxy-Ticket", proxy_ticket)
         .send()
