@@ -92,6 +92,14 @@ impl QemuRuntime {
         }
     }
 
+    pub async fn qmp_socket_path(&self, workload_id: &str) -> Option<PathBuf> {
+        self.handles
+            .lock()
+            .await
+            .get(workload_id)
+            .map(|h| h.qmp_socket_path.clone())
+    }
+
     pub async fn vnc_socket_path(&self, workload_id: &str) -> Option<PathBuf> {
         self.handles
             .lock()

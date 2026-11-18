@@ -27,6 +27,7 @@ const TICKET_HEADER: &str = "X-Csfx-Proxy-Ticket";
 pub const METRICS_TICKET_SCOPE: &str = "__node_metrics__";
 pub const POWER_TICKET_SCOPE: &str = "__power__";
 pub const DISKS_TICKET_SCOPE: &str = "__disks__";
+pub const EXPORT_TICKET_PREFIX: &str = "__export__";
 
 #[derive(Clone)]
 pub struct ServerState {
@@ -57,6 +58,10 @@ async fn serve(state: ServerState, listener: tokio::net::TcpListener) -> Result<
         .route("/metrics/stream", get(metrics_stream_handler))
         .route("/power", post(power_handler))
         .route("/disks", get(disks_handler))
+        .route(
+            "/export/{workload_id}/boot",
+            get(export_boot_handler).put(import_boot_handler),
+        )
         .route(
             "/ingress-config/{group_id}/{gateway_id}",
             get(ingress_config_handler),
@@ -471,6 +476,72 @@ async fn disks_handler(
         .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))?;
 
     Ok(Json(crate::disks::collect_disks().await))
+}
+
+fn authorize_export(
+    addr: &SocketAddr,
+    headers: &HeaderMap,
+    state: &ServerState,
+    workload_id: &str,
+) -> Result<(), (StatusCode, String)> {
+    if !is_internal_source(addr) {
+        warn!(source = %addr, "rejected agent inbound request from non-internal source");
+        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
+    }
+    if uuid::Uuid::parse_str(workload_id).is_err() {
+        return Err((StatusCode::BAD_REQUEST, "invalid workload id".to_string()));
+    }
+    let scope = format!("{EXPORT_TICKET_PREFIX}{workload_id}");
+    verify_ticket(headers, &scope, &state.agent_id.to_string())
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e.to_string()))
+}
+
+fn export_failure(workload_id: &str, error: anyhow::Error) -> (StatusCode, String) {
+    warn!(workload_id = %workload_id, error = %format!("{error:#}"), "boot disk transfer failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "boot disk transfer failed".to_string(),
+    )
+}
+
+async fn export_boot_handler(
+    State(state): State<ServerState>,
+    Path(workload_id): Path<String>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    authorize_export(&addr, &headers, &state, &workload_id)?;
+    let qmp_socket = state.qemu.qmp_socket_path(&workload_id).await;
+    let stream = crate::qemu::export::boot_disk_stream(&workload_id, qmp_socket)
+        .await
+        .map_err(|e| export_failure(&workload_id, e))?
+        .ok_or((StatusCode::NOT_FOUND, "boot disk not found".to_string()))?;
+    info!(workload_id = %workload_id, "streaming boot disk export");
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        axum::body::Body::from_stream(stream),
+    ))
+}
+
+async fn import_boot_handler(
+    State(state): State<ServerState>,
+    Path(workload_id): Path<String>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: axum::body::Body,
+) -> Result<StatusCode, (StatusCode, String)> {
+    authorize_export(&addr, &headers, &state, &workload_id)?;
+    if state.qemu.qmp_socket_path(&workload_id).await.is_some() {
+        return Err((StatusCode::CONFLICT, "vm is running".to_string()));
+    }
+    let imported = crate::qemu::export::import_boot_disk(&workload_id, body.into_data_stream())
+        .await
+        .map_err(|e| export_failure(&workload_id, e))?;
+    if !imported {
+        return Err((StatusCode::CONFLICT, "boot disk already exists".to_string()));
+    }
+    info!(workload_id = %workload_id, "boot disk imported");
+    Ok(StatusCode::CREATED)
 }
 
 async fn ingress_config_handler(
