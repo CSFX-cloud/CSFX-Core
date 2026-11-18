@@ -31,7 +31,9 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 chrono = { workspace = true, features = ["serde"] }
 sea-orm = { workspace = true }
 etcd-client = { workspace = true }
-reqwest = { workspace = true, features = ["json"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
+futures-util = { workspace = true }
+tar = "0.4"
 ring = { workspace = true }
 rustls = { workspace = true }
 opentelemetry = { workspace = true }

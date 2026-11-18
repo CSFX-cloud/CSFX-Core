@@ -62,6 +62,11 @@ pub fn create_router(state: AppState) -> Router {
             axum::routing::delete(keys::delete_key),
         )
         .route("/buckets/{id}/objects", get(objects::list_objects))
+        .route("/buckets/{id}/export", get(objects::export_bucket))
+        .route(
+            "/buckets/{id}/import",
+            axum::routing::post(objects::import_bucket),
+        )
         .route(
             "/buckets/{id}/objects/presign-upload",
             axum::routing::post(objects::presign_upload),
