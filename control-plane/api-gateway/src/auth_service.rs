@@ -17,6 +17,7 @@ use crate::auth::{
     },
     jwt::{create_jwt, TOKEN_LIFETIME_HOURS},
 };
+use crate::cache_sync;
 
 #[derive(Debug, Error)]
 pub enum AuthError {
@@ -126,6 +127,7 @@ impl AuthService {
         InvalidJwt::insert(invalid_jwt)
             .exec_without_returning(&self.db)
             .await?;
+        cache_sync::invalidate(&self.db).await;
         Ok(())
     }
 
@@ -143,6 +145,7 @@ impl AuthService {
             .exec(&txn)
             .await?;
         txn.commit().await?;
+        cache_sync::invalidate(&self.db).await;
         Ok(())
     }
 
@@ -327,6 +330,7 @@ impl AuthService {
         InvalidJwt::insert(marker)
             .exec_without_returning(&self.db)
             .await?;
+        cache_sync::invalidate(&self.db).await;
         Ok(())
     }
 

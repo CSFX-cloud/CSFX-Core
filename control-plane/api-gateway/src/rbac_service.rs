@@ -4,9 +4,25 @@ use entity::{
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QuerySelect, QueryTrait,
 };
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 use tracing::info;
 use uuid::Uuid;
+
+use crate::{cache_sync, ttl_cache::TtlCache};
+
+const PERMISSION_CACHE_TTL: Duration = Duration::from_secs(30);
+
+pub fn forget_granted_permissions() {
+    GRANTED.clear();
+}
+
+type GrantedPermissions = Arc<Vec<(String, String)>>;
+
+static GRANTED: LazyLock<TtlCache<GrantedPermissions>> =
+    LazyLock::new(|| TtlCache::new(PERMISSION_CACHE_TTL));
 
 #[derive(Debug, Clone)]
 pub struct RbacService {
@@ -18,7 +34,6 @@ impl RbacService {
         Self { db }
     }
 
-    /// Check if a user has a specific permission in an organization
     pub async fn has_permission(
         &self,
         user_id: Uuid,
@@ -26,25 +41,43 @@ impl RbacService {
         resource: &str,
         action: &str,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        // Get user's role in the organization
-        let user_org = UserOrganization::find()
+        let granted = self.granted_permissions(user_id, organization_id).await?;
+        Ok(granted
+            .iter()
+            .any(|(res, act)| res == resource && (act == action || act == "*")))
+    }
+
+    async fn granted_permissions(
+        &self,
+        user_id: Uuid,
+        organization_id: Uuid,
+    ) -> Result<GrantedPermissions, Box<dyn std::error::Error>> {
+        let key = format!("{user_id}:{organization_id}");
+        if let Some(cached) = GRANTED.get(&key) {
+            return Ok(cached);
+        }
+        let member_roles = UserOrganization::find()
+            .select_only()
+            .column(user_organization::Column::RoleId)
             .filter(user_organization::Column::UserId.eq(user_id))
             .filter(user_organization::Column::OrganizationId.eq(organization_id))
-            .one(&self.db)
-            .await?;
-
-        let role_id = match user_org {
-            Some(uo) => uo.role_id,
-            None => return Ok(false), // User not in organization
-        };
-
-        // Get role's permissions
-        let permissions = self.get_role_permissions(role_id).await?;
-
-        // Check if permission exists
-        Ok(permissions
-            .iter()
-            .any(|p| p.resource == resource && (p.action == action || p.action == "*")))
+            .into_query();
+        let role_grants = RolePermission::find()
+            .select_only()
+            .column(role_permission::Column::PermissionId)
+            .filter(role_permission::Column::RoleId.in_subquery(member_roles))
+            .into_query();
+        let granted: GrantedPermissions = Arc::new(
+            Permission::find()
+                .filter(permission::Column::Id.in_subquery(role_grants))
+                .all(&self.db)
+                .await?
+                .into_iter()
+                .map(|p| (p.resource, p.action))
+                .collect(),
+        );
+        GRANTED.insert(&key, granted.clone());
+        Ok(granted)
     }
 
     /// Get all permissions for a role
@@ -126,6 +159,7 @@ impl RbacService {
             let mut active: user_organization::ActiveModel = existing.clone().into();
             active.role_id = ActiveValue::Set(role_id);
             let updated = active.update(&self.db).await?;
+            cache_sync::invalidate(&self.db).await;
             info!(user_id = %user_id, organization_id = %organization_id, role_id = %role_id, "role updated");
             Ok(updated)
         } else {
@@ -138,6 +172,7 @@ impl RbacService {
             };
 
             let result = new_user_org.insert(&self.db).await?;
+            cache_sync::invalidate(&self.db).await;
             info!(user_id = %user_id, organization_id = %organization_id, role_id = %role_id, "role assigned");
             Ok(result)
         }
@@ -154,6 +189,7 @@ impl RbacService {
             .filter(user_organization::Column::OrganizationId.eq(organization_id))
             .exec(&self.db)
             .await?;
+        cache_sync::invalidate(&self.db).await;
 
         Ok(())
     }
@@ -190,6 +226,7 @@ impl RbacService {
             .filter(role_permission::Column::RoleId.eq(role_id))
             .exec(&self.db)
             .await?;
+        cache_sync::invalidate(&self.db).await;
 
         // Add new permissions
         for permission_id in permission_ids {
@@ -199,6 +236,7 @@ impl RbacService {
             };
             role_perm.insert(&self.db).await?;
         }
+        cache_sync::invalidate(&self.db).await;
 
         Ok(())
     }
