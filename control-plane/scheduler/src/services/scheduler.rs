@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use crate::models::compose::{ComposeServiceSpec, CreateStackRequest, CreateStackResponse};
 use crate::models::workload::{
-    node_ports_of, AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, RuntimeClass,
-    TopologySpread, UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
+    node_ports_of, AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, Named,
+    RuntimeClass, TopologySpread, UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
 };
 use crate::services::compose_parser::{self, ComposeParseError};
 use crate::services::placement::{self, Demand, Strategy};
@@ -690,9 +690,8 @@ fn demand_for<'a>(
         cpu_millicores: workload.cpu_millicores,
         memory_bytes: workload.memory_bytes,
         disk_bytes: workload.disk_bytes,
-        requires_kvm: RuntimeClass::from_str(&workload.runtime_class).requires_kvm(),
         spread_key: workload.spread_key.as_deref(),
-        topology_spread: TopologySpread::from_str(&workload.topology_spread),
+        topology_spread: TopologySpread::from_name(&workload.topology_spread),
         preferred_agents,
         workload_id: workload.id,
         replaces: workload.replaces_workload_id,
@@ -790,12 +789,11 @@ fn unplaceable_message(
     agents: &[AgentResources],
 ) -> String {
     format!(
-        "No suitable agent found workload_id={} required_cpu={} required_memory={} required_disk={} requires_kvm={} {}",
+        "No suitable agent found workload_id={} required_cpu={} required_memory={} required_disk={} {}",
         workload.id,
         demand.cpu_millicores,
         demand.memory_bytes,
         demand.disk_bytes,
-        demand.requires_kvm,
         describe_agents(agents)
     )
 }

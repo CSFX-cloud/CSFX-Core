@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use uuid::Uuid;
 
-use crate::models::workload::{VolumeUsage, WorkloadStatus};
+use crate::models::workload::{Named, VolumeUsage, WorkloadStatus};
 use crate::server::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -188,7 +188,7 @@ pub async fn update_container_statuses(
             &state.db,
             update.workload_id,
             &update.container_id,
-            status.as_str(),
+            &status.name(),
         )
         .await
         {
