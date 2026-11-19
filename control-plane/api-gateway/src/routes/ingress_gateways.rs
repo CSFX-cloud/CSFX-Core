@@ -14,11 +14,12 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use shared::validate::is_dns_label;
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::cluster::{error, internal, ApiError};
-use super::ingress::{ensure_group, is_valid_label};
+use super::ingress::ensure_group;
 use crate::{
     auth::{
         agent::AgentApiKey,
@@ -93,7 +94,7 @@ fn response_for(
 
 pub fn validate_request(request: &CreateGatewayRequest) -> Result<String, &'static str> {
     let name = request.name.trim().to_ascii_lowercase();
-    if name.len() > MAX_NAME_LENGTH || !is_valid_label(&name) {
+    if name.len() > MAX_NAME_LENGTH || !is_dns_label(&name, false) {
         return Err("gateway name must be a dns label of at most 40 characters");
     }
     if request.http_port == 0 || request.https_port == 0 {

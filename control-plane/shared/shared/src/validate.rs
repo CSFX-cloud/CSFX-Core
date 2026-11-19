@@ -113,14 +113,21 @@ pub fn root_dir(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-pub fn site_name(value: &str) -> Result<(), &'static str> {
-    let allowed = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
-    let valid = !value.is_empty()
+pub fn is_dns_label(value: &str, allow_uppercase: bool) -> bool {
+    !value.is_empty()
         && value.len() <= MAX_NAME_LENGTH
-        && value.chars().all(allowed)
         && !value.starts_with('-')
-        && !value.ends_with('-');
-    valid
+        && !value.ends_with('-')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || byte == b'-'
+                || (allow_uppercase && byte.is_ascii_uppercase())
+        })
+}
+
+pub fn site_name(value: &str) -> Result<(), &'static str> {
+    is_dns_label(value, false)
         .then_some(())
         .ok_or("name must be a lowercase dns label")
 }
@@ -150,6 +157,16 @@ pub fn command(value: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_labels_follow_case_policy() {
+        assert!(is_dns_label("web-1", false));
+        assert!(!is_dns_label("Web", false));
+        assert!(is_dns_label("Web", true));
+        for invalid in ["", "-a", "a-", "a.b", "a b", &"a".repeat(64)] {
+            assert!(!is_dns_label(invalid, true), "{invalid:?}");
+        }
+    }
 
     #[test]
     fn repo_urls_must_be_public_https_without_credentials() {
