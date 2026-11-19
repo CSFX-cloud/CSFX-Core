@@ -15,17 +15,15 @@ static REPORTED_PORTS: LazyLock<Mutex<HashMap<String, u16>>> = LazyLock::new(Mut
 
 pub async fn sync(
     client: &ApiClient,
-    api_key: &str,
     agent_id: uuid::Uuid,
     resource_group_ids: &[String],
     dns_registry: &RgDnsRegistry,
     local_state: &LocalState,
 ) {
     for resource_group_id in resource_group_ids {
-        report_wg_port(client, api_key, resource_group_id, local_state).await;
+        report_wg_port(client, resource_group_id, local_state).await;
         if let Err(e) = sync_group(
             client,
-            api_key,
             &agent_id.to_string(),
             resource_group_id,
             dns_registry,
@@ -39,7 +37,6 @@ pub async fn sync(
 
 async fn report_wg_port(
     client: &ApiClient,
-    api_key: &str,
     resource_group_id: &str,
     local_state: &LocalState,
 ) {
@@ -50,7 +47,7 @@ async fn report_wg_port(
         return;
     }
     match client
-        .report_resource_group_wg_port(api_key, resource_group_id, port)
+        .report_resource_group_wg_port(resource_group_id, port)
         .await
     {
         Ok(()) => {
@@ -67,19 +64,18 @@ async fn report_wg_port(
 
 async fn sync_group(
     client: &ApiClient,
-    api_key: &str,
     agent_id: &str,
     resource_group_id: &str,
     dns_registry: &RgDnsRegistry,
 ) -> Result<()> {
     let peers = client
-        .fetch_resource_group_peers(api_key, resource_group_id)
+        .fetch_resource_group_peers(resource_group_id)
         .await?;
     let members = client
-        .fetch_resource_group_members(api_key, resource_group_id)
+        .fetch_resource_group_members(resource_group_id)
         .await?;
 
-    let sites = fetch_site_services(client, api_key, resource_group_id).await;
+    let sites = fetch_site_services(client, resource_group_id).await;
 
     let iface = wireguard::rg_interface_name(resource_group_id);
     let wg_peers = build_peers(resource_group_id, agent_id, peers, &members);
@@ -94,11 +90,10 @@ async fn sync_group(
 
 async fn fetch_site_services(
     client: &ApiClient,
-    api_key: &str,
     resource_group_id: &str,
 ) -> Vec<SiteService> {
     match client
-        .fetch_resource_group_site_services(api_key, resource_group_id)
+        .fetch_resource_group_site_services(resource_group_id)
         .await
     {
         Ok(sites) => sites,

@@ -53,12 +53,7 @@ impl Heartbeat {
         let reconciler = &self.reconciler;
         let result = reconciler
             .client
-            .heartbeat(
-                reconciler.agent_id,
-                &reconciler.api_key,
-                Some(statuses),
-                Some(metrics),
-            )
+            .heartbeat(reconciler.agent_id, Some(statuses), Some(metrics))
             .await;
         match result {
             Ok(response) => self.on_success(response).await,

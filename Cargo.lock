@@ -1039,6 +1039,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "csfx-agent-api",
  "flate2",
  "futures-util",
  "libc",
@@ -1061,6 +1062,15 @@ dependencies = [
  "uuid",
  "x25519-dalek",
  "x509-parser",
+]
+
+[[package]]
+name = "csfx-agent-api"
+version = "0.2.2"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -3821,6 +3831,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "csfx-agent-api",
  "dotenvy",
  "entity",
  "etcd-client",

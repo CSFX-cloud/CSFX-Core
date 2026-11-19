@@ -2,7 +2,7 @@ use anyhow::Result;
 use entity::agents;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, Set,
+    QueryFilter, QuerySelect, Set,
 };
 use uuid::Uuid;
 
@@ -24,84 +24,106 @@ pub async fn name_taken(db: &DatabaseConnection, name: &str) -> Result<bool> {
         .is_some())
 }
 
+pub struct Registration {
+    pub agent_version: String,
+    pub os_type: String,
+    pub os_version: String,
+    pub architecture: String,
+    pub tags: Option<serde_json::Value>,
+}
+
+pub struct NewAgent {
+    pub id: Uuid,
+    pub name: String,
+    pub hostname: String,
+    pub registration: Registration,
+    pub wg_tunnel_ip: Option<String>,
+    pub role: String,
+    pub machine_id: Option<String>,
+}
+
+pub struct Heartbeat {
+    pub wg_public_key: Option<String>,
+    pub wg_endpoint: Option<String>,
+    pub agent_version: Option<String>,
+    pub kvm_capable: bool,
+    pub ssh_host_key: Option<String>,
+}
+
+async fn patch(
+    db: &DatabaseConnection,
+    agent_id: Uuid,
+    mut changes: agents::ActiveModel,
+) -> Result<agents::Model> {
+    changes.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
+    agents::Entity::update_many()
+        .set(changes)
+        .filter(agents::Column::Id.eq(agent_id))
+        .exec_with_returning(db)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Agent not found"))
+}
+
+fn set_if_some<T: Into<sea_orm::Value> + sea_orm::sea_query::Nullable>(
+    value: Option<T>,
+) -> sea_orm::ActiveValue<Option<T>> {
+    value.map_or(NotSet, |value| Set(Some(value)))
+}
+
 pub async fn update_registration(
     db: &DatabaseConnection,
     agent_id: Uuid,
-    agent_version: String,
-    os_type: String,
-    os_version: String,
-    architecture: String,
-    tags: Option<serde_json::Value>,
-    public_key_pem: Option<String>,
+    registration: Registration,
 ) -> Result<agents::Model> {
-    let mut agent: agents::ActiveModel = agents::Entity::find_by_id(agent_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found"))?
-        .into();
-
-    agent.agent_version = Set(agent_version);
-    agent.os_type = Set(os_type);
-    agent.os_version = Set(os_version);
-    agent.architecture = Set(architecture);
-    agent.status = Set("Online".to_string());
-    agent.registered_at = Set(chrono::Utc::now().naive_utc());
-    agent.last_heartbeat = Set(Some(chrono::Utc::now().naive_utc()));
-    agent.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
-    if tags.is_some() {
-        agent.tags = Set(tags);
-    }
-    if public_key_pem.is_some() {
-        agent.public_key_pem = Set(public_key_pem);
-    }
-
-    Ok(agent.update(db).await?)
+    let now = chrono::Utc::now().naive_utc();
+    patch(
+        db,
+        agent_id,
+        agents::ActiveModel {
+            agent_version: Set(registration.agent_version),
+            os_type: Set(registration.os_type),
+            os_version: Set(registration.os_version),
+            architecture: Set(registration.architecture),
+            status: Set("Online".to_string()),
+            registered_at: Set(now),
+            last_heartbeat: Set(Some(now)),
+            tags: registration.tags.map_or(NotSet, |tags| Set(Some(tags))),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
-pub async fn create(
-    db: &DatabaseConnection,
-    id: Uuid,
-    name: String,
-    hostname: String,
-    ip_address: Option<String>,
-    agent_version: String,
-    os_type: String,
-    os_version: String,
-    architecture: String,
-    status: String,
-    tags: Option<serde_json::Value>,
-    capabilities: Option<serde_json::Value>,
-    public_key_pem: Option<String>,
-    wg_tunnel_ip: Option<String>,
-    role: String,
-    machine_id: Option<String>,
-) -> Result<agents::Model> {
+pub async fn create(db: &DatabaseConnection, agent: NewAgent) -> Result<agents::Model> {
+    let now = chrono::Utc::now().naive_utc();
     let model = agents::ActiveModel {
-        id: Set(id),
-        name: Set(name),
-        hostname: Set(hostname),
-        ip_address: Set(ip_address),
-        agent_version: Set(agent_version),
-        os_type: Set(os_type),
-        os_version: Set(os_version),
-        architecture: Set(architecture),
-        status: Set(status),
-        last_heartbeat: Set(Some(chrono::Utc::now().naive_utc())),
-        registered_at: Set(chrono::Utc::now().naive_utc()),
+        id: Set(agent.id),
+        name: Set(agent.name),
+        hostname: Set(agent.hostname),
+        ip_address: Set(None),
+        agent_version: Set(agent.registration.agent_version),
+        os_type: Set(agent.registration.os_type),
+        os_version: Set(agent.registration.os_version),
+        architecture: Set(agent.registration.architecture),
+        status: Set("Online".to_string()),
+        last_heartbeat: Set(Some(now)),
+        registered_at: Set(now),
         updated_at: Set(None),
         organization_id: Set(None),
-        tags: Set(tags),
-        capabilities: Set(capabilities),
-        public_key_pem: Set(public_key_pem),
+        tags: Set(agent.registration.tags),
+        capabilities: Set(None),
+        public_key_pem: Set(None),
         wg_public_key: Set(None),
         wg_endpoint: Set(None),
-        wg_tunnel_ip: Set(wg_tunnel_ip),
+        wg_tunnel_ip: Set(agent.wg_tunnel_ip),
         kvm_capable: Set(false),
         ssh_host_key: Set(None),
         cordoned: Set(false),
         maintenance_until: Set(None),
-        role: Set(role),
-        machine_id: Set(machine_id),
+        role: Set(agent.role),
+        machine_id: Set(agent.machine_id),
         cpu_overcommit_ratio: NotSet,
         memory_overcommit_ratio: NotSet,
         disk_overcommit_ratio: NotSet,
@@ -136,49 +158,40 @@ pub async fn wg_endpoint_in_use(
 pub async fn update_heartbeat(
     db: &DatabaseConnection,
     agent_id: Uuid,
-    status: String,
-    wg_public_key: Option<String>,
-    wg_endpoint: Option<String>,
-    agent_version: Option<String>,
-    kvm_capable: bool,
-    ssh_host_key: Option<String>,
+    heartbeat: Heartbeat,
 ) -> Result<agents::Model> {
-    let mut agent: agents::ActiveModel = agents::Entity::find_by_id(agent_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found"))?
-        .into();
-
-    agent.last_heartbeat = Set(Some(chrono::Utc::now().naive_utc()));
-    agent.status = Set(status);
-    agent.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
-    if wg_public_key.is_some() {
-        agent.wg_public_key = Set(wg_public_key);
-    }
-    if let Some(wg_endpoint) = wg_endpoint {
-        if let Some((host, _port)) = wg_endpoint.rsplit_once(':') {
-            agent.ip_address = Set(Some(host.to_string()));
-        }
-        agent.wg_endpoint = Set(Some(wg_endpoint));
-    }
-    if let Some(agent_version) = agent_version {
-        agent.agent_version = Set(agent_version);
-    }
-    agent.kvm_capable = Set(kvm_capable);
-    if ssh_host_key.is_some() {
-        agent.ssh_host_key = Set(ssh_host_key);
-    }
-    Ok(agent.update(db).await?)
+    let reported_host = heartbeat
+        .wg_endpoint
+        .as_deref()
+        .and_then(|endpoint| endpoint.rsplit_once(':'))
+        .map(|(host, _port)| host.to_string());
+    patch(
+        db,
+        agent_id,
+        agents::ActiveModel {
+            last_heartbeat: Set(Some(chrono::Utc::now().naive_utc())),
+            status: Set("Online".to_string()),
+            wg_public_key: set_if_some(heartbeat.wg_public_key),
+            wg_endpoint: set_if_some(heartbeat.wg_endpoint),
+            ip_address: set_if_some(reported_host),
+            agent_version: heartbeat.agent_version.map_or(NotSet, Set),
+            kvm_capable: Set(heartbeat.kvm_capable),
+            ssh_host_key: set_if_some(heartbeat.ssh_host_key),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
-pub async fn get_statistics(db: &DatabaseConnection) -> Result<(usize, usize, usize, usize)> {
-    let all = get_all(db).await?;
-    let total = all.len();
-    let online = all.iter().filter(|a| a.status == "Online").count();
-    let offline = all.iter().filter(|a| a.status == "Offline").count();
-    let degraded = all.iter().filter(|a| a.status == "Degraded").count();
-
-    Ok((total, online, offline, degraded))
+pub async fn count_by_status(db: &DatabaseConnection) -> Result<Vec<(String, i64)>> {
+    Ok(agents::Entity::find()
+        .select_only()
+        .column(agents::Column::Status)
+        .column_as(agents::Column::Id.count(), "total")
+        .group_by(agents::Column::Status)
+        .into_tuple()
+        .all(db)
+        .await?)
 }
 
 pub async fn delete(db: &DatabaseConnection, agent_id: Uuid) -> Result<()> {
@@ -191,13 +204,14 @@ pub async fn set_wg_tunnel_ip(
     agent_id: Uuid,
     wg_tunnel_ip: &str,
 ) -> Result<()> {
-    let mut agent: agents::ActiveModel = agents::Entity::find_by_id(agent_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found"))?
-        .into();
-
-    agent.wg_tunnel_ip = Set(Some(wg_tunnel_ip.to_string()));
-    agent.update(db).await?;
+    patch(
+        db,
+        agent_id,
+        agents::ActiveModel {
+            wg_tunnel_ip: Set(Some(wg_tunnel_ip.to_string())),
+            ..Default::default()
+        },
+    )
+    .await?;
     Ok(())
 }

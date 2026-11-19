@@ -29,7 +29,7 @@ impl Reconciler {
     pub(super) async fn cleanup_stale_resource_groups(&self) {
         let active_ids = match self
             .client
-            .fetch_active_resource_group_ids(&self.api_key)
+            .fetch_active_resource_group_ids()
             .await
         {
             Ok(ids) => ids,
@@ -96,7 +96,7 @@ impl Reconciler {
     }
 
     async fn fetch_mesh_wg_peers(&self) -> Option<Vec<wireguard::Peer>> {
-        let peers = match self.client.fetch_mesh_peers(&self.api_key).await {
+        let peers = match self.client.fetch_mesh_peers().await {
             Ok(peers) => peers,
             Err(e) => {
                 warn!(error = %e, "Failed to fetch mesh peers");
@@ -124,7 +124,7 @@ impl Reconciler {
         for resource_group_id in resource_group_ids {
             match self
                 .client
-                .fetch_resource_group_vpn_peers(&self.api_key, resource_group_id)
+                .fetch_resource_group_vpn_peers(resource_group_id)
                 .await
             {
                 Ok(peers) => {

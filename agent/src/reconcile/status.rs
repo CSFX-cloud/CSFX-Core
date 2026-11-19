@@ -82,7 +82,7 @@ impl Reconciler {
             .collect()
             .await;
 
-        if let Err(e) = self.client.push_workload_stats(&self.api_key, stats).await {
+        if let Err(e) = self.client.push_workload_stats(stats).await {
             warn!(error = %e, "Failed to push workload stats");
         }
     }

@@ -12,7 +12,7 @@ impl Reconciler {
     pub(super) async fn process_volumes(&self) -> Option<Vec<client::AssignedVolume>> {
         let volumes = match self
             .client
-            .fetch_assigned_volumes(self.agent_id, &self.api_key)
+            .fetch_assigned_volumes()
             .await
         {
             Ok(volumes) => volumes,

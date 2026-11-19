@@ -1,4 +1,4 @@
-use serde::Serialize;
+pub use csfx_agent_api::SystemMetrics;
 use sysinfo::{Disks, Networks, System};
 
 pub struct SystemInfo {
@@ -7,19 +7,6 @@ pub struct SystemInfo {
     pub os_version: String,
     pub architecture: String,
     pub machine_id: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct SystemMetrics {
-    pub cpu_usage_percent: f32,
-    pub cpu_cores: u32,
-    pub memory_total_bytes: u64,
-    pub memory_used_bytes: u64,
-    pub disk_total_bytes: u64,
-    pub disk_used_bytes: u64,
-    pub network_rx_bytes: u64,
-    pub network_tx_bytes: u64,
-    pub uptime_seconds: u64,
 }
 
 fn fresh_system() -> System {
