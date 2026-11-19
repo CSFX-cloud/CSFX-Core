@@ -23,10 +23,21 @@ use shared::etcd::{
     WORKER_MANIFEST_PREFIX, WORKER_MANIFEST_SIGNATURE_PREFIX as WORKER_SIGNATURE_PREFIX,
 };
 
+type ApiError = (StatusCode, Json<ErrorResponse>);
+
+fn api_error(status: StatusCode, message: impl Into<String>) -> ApiError {
+    (
+        status,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
+}
+
 pub async fn register_agent(
     State(state): State<AppState>,
     Json(request): Json<RegisterRequest>,
-) -> Result<Json<RegisterResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<RegisterResponse>, ApiError> {
     let (agent_id, allow_reregister, role) =
         if crate::services::bootstrap_tokens::BootstrapTokenManager::is_bootstrap_token(
             &request.registration_token,
@@ -36,11 +47,9 @@ pub async fn register_agent(
                 .validate_and_use(&request.registration_token)
                 .await
                 .map_err(|e| {
-                    (
+                    api_error(
                         StatusCode::UNAUTHORIZED,
-                        Json(ErrorResponse {
-                            error: format!("Invalid bootstrap token: {}", e),
-                        }),
+                        format!("Invalid bootstrap token: {}", e),
                     )
                 })?;
             (uuid::Uuid::new_v4(), true, role)
@@ -52,36 +61,30 @@ pub async fn register_agent(
             {
                 Ok(token) => token,
                 Err(e) => {
-                    return Err((
+                    return Err(api_error(
                         StatusCode::UNAUTHORIZED,
-                        Json(ErrorResponse {
-                            error: format!("Invalid registration token: {}", e),
-                        }),
+                        format!("Invalid registration token: {}", e),
                     ))
                 }
             };
 
             if token_data.expected_name != request.name {
-                return Err((
+                return Err(api_error(
                     StatusCode::FORBIDDEN,
-                    Json(ErrorResponse {
-                        error: format!(
-                            "Agent name mismatch. Expected '{}', got '{}'",
-                            token_data.expected_name, request.name
-                        ),
-                    }),
+                    format!(
+                        "Agent name mismatch. Expected '{}', got '{}'",
+                        token_data.expected_name, request.name
+                    ),
                 ));
             }
 
             if token_data.expected_hostname != request.hostname {
-                return Err((
+                return Err(api_error(
                     StatusCode::FORBIDDEN,
-                    Json(ErrorResponse {
-                        error: format!(
-                            "Agent hostname mismatch. Expected '{}', got '{}'",
-                            token_data.expected_hostname, request.hostname
-                        ),
-                    }),
+                    format!(
+                        "Agent hostname mismatch. Expected '{}', got '{}'",
+                        token_data.expected_hostname, request.hostname
+                    ),
                 ));
             }
 
@@ -119,11 +122,9 @@ pub async fn register_agent(
     {
         Ok(result) => result,
         Err(e) => {
-            return Err((
+            return Err(api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to register agent: {}", e),
-                }),
+                format!("Failed to register agent: {}", e),
             ))
         }
     };
@@ -139,11 +140,9 @@ pub async fn register_agent(
                 "agent_handler",
                 &format!("Failed to issue API key for agent={}: {}", agent.id, e)
             );
-            return Err((
+            return Err(api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Failed to issue API key".to_string(),
-                }),
+                "Failed to issue API key".to_string(),
             ));
         }
     };
@@ -180,16 +179,14 @@ async fn proven_agent_id(
     state: &AppState,
     machine_id: Option<&str>,
     csr_pem: Option<&str>,
-) -> Result<Option<Uuid>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Option<Uuid>, ApiError> {
     let (Some(machine_id), Some(csr_pem)) = (machine_id, csr_pem) else {
         return Ok(None);
     };
     let internal = |e: &dyn std::fmt::Display| {
-        (
+        api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to verify agent identity: {}", e),
-            }),
+            format!("Failed to verify agent identity: {}", e),
         )
     };
     let Some(owner) = crate::db::agents::get_by_machine_id(&state.db, machine_id)
@@ -210,37 +207,26 @@ pub async fn heartbeat(
     headers: HeaderMap,
     Path(agent_id): Path<Uuid>,
     Json(request): Json<HeartbeatRequest>,
-) -> Result<Json<HeartbeatResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<HeartbeatResponse>, ApiError> {
     let api_key = headers
         .get("X-API-Key")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
-            (
+            api_error(
                 StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Missing X-API-Key header".to_string(),
-                }),
+                "Missing X-API-Key header".to_string(),
             )
         })?;
 
     let validated_agent_id = match state.api_key_manager.validate_key(api_key).await {
         Ok(id) => id,
-        Err(e) => {
-            return Err((
-                e.status(),
-                Json(ErrorResponse {
-                    error: format!("Invalid API key: {}", e),
-                }),
-            ))
-        }
+        Err(e) => return Err(api_error(e.status(), format!("Invalid API key: {}", e))),
     };
 
     if validated_agent_id != agent_id {
-        return Err((
+        return Err(api_error(
             StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "Agent ID mismatch".to_string(),
-            }),
+            "Agent ID mismatch".to_string(),
         ));
     }
 
@@ -248,20 +234,16 @@ pub async fn heartbeat(
         let valid = crate::db::certificates::verify_client_cert(&state.db, agent_id, cert_pem)
             .await
             .map_err(|e| {
-                (
+                api_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Certificate verification failed: {}", e),
-                    }),
+                    format!("Certificate verification failed: {}", e),
                 )
             })?;
 
         if !valid {
-            return Err((
+            return Err(api_error(
                 StatusCode::FORBIDDEN,
-                Json(ErrorResponse {
-                    error: "Invalid or revoked client certificate".to_string(),
-                }),
+                "Invalid or revoked client certificate".to_string(),
             ));
         }
     }
@@ -270,20 +252,16 @@ pub async fn heartbeat(
         let in_use = crate::db::agents::wg_endpoint_in_use(&state.db, agent_id, wg_endpoint)
             .await
             .map_err(|e| {
-                (
+                api_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Endpoint verification failed: {}", e),
-                    }),
+                    format!("Endpoint verification failed: {}", e),
                 )
             })?;
 
         if in_use {
-            return Err((
+            return Err(api_error(
                 StatusCode::CONFLICT,
-                Json(ErrorResponse {
-                    error: "WireGuard endpoint is already in use by another agent".to_string(),
-                }),
+                "WireGuard endpoint is already in use by another agent".to_string(),
             ));
         }
     }
@@ -332,11 +310,9 @@ pub async fn heartbeat(
                 gateway_url: advertised_gateway_url(std::env::var(VIP_ADDRESS_VAR).ok().as_deref()),
             }))
         }
-        Err(e) => Err((
+        Err(e) => Err(api_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ErrorResponse {
-                error: format!("Heartbeat could not be recorded: {}", e),
-            }),
+            format!("Heartbeat could not be recorded: {}", e),
         )),
     }
 }

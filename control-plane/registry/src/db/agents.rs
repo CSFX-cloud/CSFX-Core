@@ -1,10 +1,26 @@
 use anyhow::Result;
 use entity::agents;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, Set,
+    sea_query::Expr, ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, QuerySelect, Set,
 };
 use uuid::Uuid;
+
+use crate::models::agent::AgentStatistics;
+
+pub struct NewAgent {
+    pub id: Uuid,
+    pub name: String,
+    pub hostname: String,
+    pub agent_version: String,
+    pub os_type: String,
+    pub os_version: String,
+    pub architecture: String,
+    pub tags: Option<serde_json::Value>,
+    pub wg_tunnel_ip: Option<String>,
+    pub role: String,
+    pub machine_id: Option<String>,
+}
 
 pub async fn get_by_machine_id(
     db: &DatabaseConnection,
@@ -32,7 +48,6 @@ pub async fn update_registration(
     os_version: String,
     architecture: String,
     tags: Option<serde_json::Value>,
-    public_key_pem: Option<String>,
 ) -> Result<agents::Model> {
     let mut agent: agents::ActiveModel = agents::Entity::find_by_id(agent_id)
         .one(db)
@@ -51,57 +66,38 @@ pub async fn update_registration(
     if tags.is_some() {
         agent.tags = Set(tags);
     }
-    if public_key_pem.is_some() {
-        agent.public_key_pem = Set(public_key_pem);
-    }
 
     Ok(agent.update(db).await?)
 }
 
-pub async fn create(
-    db: &DatabaseConnection,
-    id: Uuid,
-    name: String,
-    hostname: String,
-    ip_address: Option<String>,
-    agent_version: String,
-    os_type: String,
-    os_version: String,
-    architecture: String,
-    status: String,
-    tags: Option<serde_json::Value>,
-    capabilities: Option<serde_json::Value>,
-    public_key_pem: Option<String>,
-    wg_tunnel_ip: Option<String>,
-    role: String,
-    machine_id: Option<String>,
-) -> Result<agents::Model> {
+pub async fn create(db: &DatabaseConnection, agent: NewAgent) -> Result<agents::Model> {
+    let now = chrono::Utc::now().naive_utc();
     let model = agents::ActiveModel {
-        id: Set(id),
-        name: Set(name),
-        hostname: Set(hostname),
-        ip_address: Set(ip_address),
-        agent_version: Set(agent_version),
-        os_type: Set(os_type),
-        os_version: Set(os_version),
-        architecture: Set(architecture),
-        status: Set(status),
-        last_heartbeat: Set(Some(chrono::Utc::now().naive_utc())),
-        registered_at: Set(chrono::Utc::now().naive_utc()),
+        id: Set(agent.id),
+        name: Set(agent.name),
+        hostname: Set(agent.hostname),
+        ip_address: Set(None),
+        agent_version: Set(agent.agent_version),
+        os_type: Set(agent.os_type),
+        os_version: Set(agent.os_version),
+        architecture: Set(agent.architecture),
+        status: Set("Online".to_string()),
+        last_heartbeat: Set(Some(now)),
+        registered_at: Set(now),
         updated_at: Set(None),
         organization_id: Set(None),
-        tags: Set(tags),
-        capabilities: Set(capabilities),
-        public_key_pem: Set(public_key_pem),
+        tags: Set(agent.tags),
+        capabilities: Set(None),
+        public_key_pem: Set(None),
         wg_public_key: Set(None),
         wg_endpoint: Set(None),
-        wg_tunnel_ip: Set(wg_tunnel_ip),
+        wg_tunnel_ip: Set(agent.wg_tunnel_ip),
         kvm_capable: Set(false),
         ssh_host_key: Set(None),
         cordoned: Set(false),
         maintenance_until: Set(None),
-        role: Set(role),
-        machine_id: Set(machine_id),
+        role: Set(agent.role),
+        machine_id: Set(agent.machine_id),
         cpu_overcommit_ratio: NotSet,
         memory_overcommit_ratio: NotSet,
         disk_overcommit_ratio: NotSet,
@@ -171,14 +167,28 @@ pub async fn update_heartbeat(
     Ok(agent.update(db).await?)
 }
 
-pub async fn get_statistics(db: &DatabaseConnection) -> Result<(usize, usize, usize, usize)> {
-    let all = get_all(db).await?;
-    let total = all.len();
-    let online = all.iter().filter(|a| a.status == "Online").count();
-    let offline = all.iter().filter(|a| a.status == "Offline").count();
-    let degraded = all.iter().filter(|a| a.status == "Degraded").count();
+pub async fn get_statistics(db: &DatabaseConnection) -> Result<AgentStatistics> {
+    let counts: Vec<(String, i64)> = agents::Entity::find()
+        .select_only()
+        .column(agents::Column::Status)
+        .column_as(agents::Column::Id.count(), "agents")
+        .group_by(agents::Column::Status)
+        .into_tuple()
+        .all(db)
+        .await?;
+    let count_of = |status: &str| {
+        counts
+            .iter()
+            .find(|(name, _)| name == status)
+            .map_or(0, |(_, count)| *count as usize)
+    };
 
-    Ok((total, online, offline, degraded))
+    Ok(AgentStatistics {
+        total: counts.iter().map(|(_, count)| *count as usize).sum(),
+        online: count_of("Online"),
+        offline: count_of("Offline"),
+        degraded: count_of("Degraded"),
+    })
 }
 
 pub async fn delete(db: &DatabaseConnection, agent_id: Uuid) -> Result<()> {
@@ -191,13 +201,11 @@ pub async fn set_wg_tunnel_ip(
     agent_id: Uuid,
     wg_tunnel_ip: &str,
 ) -> Result<()> {
-    let mut agent: agents::ActiveModel = agents::Entity::find_by_id(agent_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Agent not found"))?
-        .into();
-
-    agent.wg_tunnel_ip = Set(Some(wg_tunnel_ip.to_string()));
-    agent.update(db).await?;
+    let updated = agents::Entity::update_many()
+        .col_expr(agents::Column::WgTunnelIp, Expr::value(wg_tunnel_ip))
+        .filter(agents::Column::Id.eq(agent_id))
+        .exec(db)
+        .await?;
+    anyhow::ensure!(updated.rows_affected == 1, "Agent not found");
     Ok(())
 }

@@ -61,6 +61,26 @@ pub struct RegisteredAgent {
     pub wg_tunnel_ip: Option<String>,
 }
 
+impl From<entity::agents::Model> for RegisteredAgent {
+    fn from(agent: entity::agents::Model) -> Self {
+        Self {
+            id: agent.id,
+            name: agent.name,
+            hostname: agent.hostname,
+            ip_address: agent.ip_address,
+            os_type: agent.os_type,
+            os_version: agent.os_version,
+            architecture: agent.architecture,
+            agent_version: agent.agent_version,
+            status: AgentStatus::from_str(&agent.status),
+            registered_at: agent.registered_at.and_utc(),
+            last_heartbeat: agent.last_heartbeat.map(|time| time.and_utc()),
+            tags: None,
+            wg_tunnel_ip: agent.wg_tunnel_ip,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStatistics {
     pub total: usize,

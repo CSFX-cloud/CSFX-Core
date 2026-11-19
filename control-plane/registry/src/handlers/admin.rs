@@ -9,10 +9,7 @@ use uuid::Uuid;
 use crate::{
     models::agent::{ErrorResponse, PreRegisterRequest, PreRegisterResponse},
     server::AppState,
-    services::{
-        bootstrap_tokens::{is_valid_role, ROLE_WORKER},
-        registry::PreRegisterParams,
-    },
+    services::bootstrap_tokens::{is_valid_role, ROLE_WORKER},
 };
 
 #[derive(Debug, Deserialize)]
@@ -32,7 +29,6 @@ pub async fn pre_register_agent(
     State(state): State<AppState>,
     Json(request): Json<PreRegisterRequest>,
 ) -> Result<Json<PreRegisterResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let created_by = "admin".to_string();
     let ttl_hours = request.ttl_hours.unwrap_or(24);
     let agent_id = Uuid::new_v4();
 
@@ -46,33 +42,18 @@ pub async fn pre_register_agent(
                 "Pre-registration for {}@{}",
                 request.name, request.hostname
             )),
-            created_by.clone(),
+            "admin".to_string(),
             ttl_hours,
         )
         .await;
 
-    let pre_agent = state
-        .agent_registry
-        .pre_register_agent(PreRegisterParams {
-            agent_id,
-            name: request.name,
-            hostname: request.hostname,
-            expected_os_type: request.expected_os_type,
-            expected_architecture: request.expected_architecture,
-            tags: request.tags,
-            created_by,
-            registration_token: token.token.clone(),
-            token_expires_at: token.expires_at,
-        })
-        .await;
-
     Ok(Json(PreRegisterResponse {
-        agent_id: pre_agent.id,
+        agent_id,
         registration_token: token.token,
         token_expires_at: token.expires_at.to_rfc3339(),
         message: format!(
             "Agent '{}@{}' pre-registered. Use the registration token for initial connection.",
-            pre_agent.name, pre_agent.hostname
+            request.name, request.hostname
         ),
     }))
 }
