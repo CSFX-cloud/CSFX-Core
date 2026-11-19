@@ -14,6 +14,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::validate::is_dns_label;
 use uuid::Uuid;
 
 use crate::{
@@ -153,12 +154,7 @@ fn default_scope() -> String {
 }
 
 fn validate_vault_name(name: &str) -> Result<(), VaultError> {
-    let valid = !name.is_empty()
-        && name.len() <= 63
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    if valid {
+    if is_dns_label(name, false) {
         Ok(())
     } else {
         Err(VaultError::Invalid(
@@ -550,13 +546,10 @@ async fn require_reveal_for_read_grant(
     if !needs_role(capability) {
         return Ok(());
     }
-    let allowed = match state.default_org_id {
-        Some(org_id) => RbacService::new(state.db_conn.clone())
-            .has_permission(claims.user_id, org_id, "secrets", "reveal")
-            .await
-            .unwrap_or(false),
-        None => false,
-    };
+    let allowed = RbacService::new(state.db_conn.clone())
+        .has_permission(claims.user_id, state.default_org_id, "secrets", "reveal")
+        .await
+        .unwrap_or(false);
     if allowed {
         return Ok(());
     }

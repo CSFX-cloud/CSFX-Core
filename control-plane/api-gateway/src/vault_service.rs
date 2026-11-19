@@ -61,9 +61,8 @@ pub async fn load_group(
     state: &AppState,
     resource_group_id: Uuid,
 ) -> Result<resource_groups::Model, VaultError> {
-    let org_id = state.default_org_id.ok_or(VaultError::NotFound)?;
     ResourceGroups::find_by_id(resource_group_id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
+        .filter(resource_groups::Column::OrganizationId.eq(state.default_org_id))
         .one(&state.db_conn)
         .await?
         .ok_or(VaultError::NotFound)

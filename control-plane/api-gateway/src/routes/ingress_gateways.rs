@@ -1,3 +1,4 @@
+use crate::routes::agent_proxy::agent_port;
 use crate::service_client::Service;
 use axum::{
     extract::{Path, Query, State},
@@ -13,11 +14,12 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use shared::validate::is_dns_label;
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use super::cluster::{error, internal, ApiError};
-use super::ingress::{ensure_group, is_valid_label};
+use super::ingress::ensure_group;
 use crate::{
     auth::{
         agent::AgentApiKey,
@@ -32,7 +34,6 @@ const GATEWAY_MEMORY_BYTES: i64 = 256 * 1024 * 1024;
 const GATEWAY_DISK_BYTES: i64 = 1024 * 1024 * 1024;
 const DEFAULT_HTTP_PORT: u16 = 80;
 const DEFAULT_HTTPS_PORT: u16 = 443;
-const DEFAULT_AGENT_PORT: u16 = 7443;
 const POLL_INTERVAL: &str = "10s";
 const MAX_NAME_LENGTH: usize = 40;
 pub const STATUS_PENDING: &str = "pending";
@@ -93,7 +94,7 @@ fn response_for(
 
 pub fn validate_request(request: &CreateGatewayRequest) -> Result<String, &'static str> {
     let name = request.name.trim().to_ascii_lowercase();
-    if name.len() > MAX_NAME_LENGTH || !is_valid_label(&name) {
+    if name.len() > MAX_NAME_LENGTH || !is_dns_label(&name, false) {
         return Err("gateway name must be a dns label of at most 40 characters");
     }
     if request.http_port == 0 || request.https_port == 0 {
@@ -169,13 +170,6 @@ fn workload_request(
         "resource_group_id": group_id,
         "restart_policy": "always"
     })
-}
-
-fn agent_port() -> u16 {
-    std::env::var("CSFX_AGENT_PORT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_AGENT_PORT)
 }
 
 fn acme_settings() -> Option<(String, String)> {

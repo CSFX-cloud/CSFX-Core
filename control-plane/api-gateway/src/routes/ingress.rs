@@ -10,6 +10,7 @@ use entity::entities::{ingress_gateways, ingress_routes, resource_groups, worklo
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use shared::validate::is_dns_label;
 use uuid::Uuid;
 
 use super::cluster::{error, internal, ApiError};
@@ -20,7 +21,6 @@ use crate::{
 };
 
 const MAX_HOSTNAME_LENGTH: usize = 253;
-const MAX_LABEL_LENGTH: usize = 63;
 
 #[derive(Debug, Deserialize)]
 pub struct CreateIngressRequest {
@@ -72,7 +72,7 @@ pub fn validate_hostname(raw: &str) -> Result<String, &'static str> {
     if labels.len() < 2 {
         return Err("hostname needs at least two labels");
     }
-    if !labels.iter().all(|label| is_valid_label(label)) {
+    if !labels.iter().all(|label| is_dns_label(label, false)) {
         return Err("hostname contains an invalid label");
     }
     if labels
@@ -82,16 +82,6 @@ pub fn validate_hostname(raw: &str) -> Result<String, &'static str> {
         return Err("hostname must not be an ip address");
     }
     Ok(hostname)
-}
-
-pub(super) fn is_valid_label(label: &str) -> bool {
-    !label.is_empty()
-        && label.len() <= MAX_LABEL_LENGTH
-        && !label.starts_with('-')
-        && !label.ends_with('-')
-        && label
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 pub fn port_is_declared(ports: Option<&Value>, container_port: u16) -> bool {
@@ -106,11 +96,8 @@ pub(super) async fn ensure_group(
     state: &AppState,
     group_id: Uuid,
 ) -> Result<resource_groups::Model, ApiError> {
-    let org_id = state
-        .default_org_id
-        .ok_or_else(|| internal("default organization not initialized"))?;
     resource_groups::Entity::find_by_id(group_id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
+        .filter(resource_groups::Column::OrganizationId.eq(state.default_org_id))
         .one(&state.db_conn)
         .await
         .map_err(internal)?

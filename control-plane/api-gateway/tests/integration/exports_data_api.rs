@@ -104,7 +104,7 @@ async fn state_with_upstreams(harness: &Harness, volume_url: &str, bucket_url: &
         db_conn: harness.db.clone(),
         agent_db: harness.db.clone(),
         service_client,
-        default_org_id: Some(harness.org_id),
+        default_org_id: harness.org_id,
         agent_stream_registry: routes::agent_stream::AgentStreamRegistry::new(),
         openbao: None,
         site_builder: None,

@@ -89,13 +89,8 @@ async fn permitted(
     resource: &str,
     action: &str,
 ) -> Result<bool, ApiError> {
-    let org_id = state.default_org_id.ok_or_else(|| {
-        api_error(ExportError::Db(sea_orm::DbErr::Custom(
-            "default organization missing".to_string(),
-        )))
-    })?;
     RbacService::new(state.db_conn.clone())
-        .has_permission(claims.user_id, org_id, resource, action)
+        .has_permission(claims.user_id, state.default_org_id, resource, action)
         .await
         .map_err(|error| api_error(ExportError::Db(sea_orm::DbErr::Custom(error.to_string()))))
 }

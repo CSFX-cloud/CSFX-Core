@@ -17,7 +17,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use shared::env_secrets;
-use site_builder::{detect::Mode, validate};
+use shared::{detect::Mode, validate};
 use uuid::Uuid;
 
 use super::ingress::validate_hostname;
@@ -233,11 +233,8 @@ pub struct DetectRequest {
 }
 
 pub async fn permitted(state: &AppState, claims: &Claims, resource: &str, action: &str) -> bool {
-    let Some(org_id) = state.default_org_id else {
-        return false;
-    };
     RbacService::new(state.db_conn.clone())
-        .has_permission(claims.user_id, org_id, resource, action)
+        .has_permission(claims.user_id, state.default_org_id, resource, action)
         .await
         .unwrap_or(false)
 }

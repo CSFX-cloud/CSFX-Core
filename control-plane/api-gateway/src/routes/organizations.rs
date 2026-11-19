@@ -12,7 +12,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    auth::middleware::AuthenticatedUser,
+    auth::{
+        middleware::AuthenticatedUser,
+        rbac::{
+            CanCreateUsers, CanDeleteUsers, CanUpdateOrganization, CanUpdateUsers, CanViewUsers,
+        },
+    },
     rbac_service::RbacService,
     role_grants::{
         ensure_not_last_admin, ensure_role_change_allowed, ensure_role_grantable,
@@ -105,215 +110,22 @@ pub struct UserResponse {
     pub joined_at: String,
 }
 
-// Get the single organization (always "Default Organization")
-async fn get_organization(
-    AuthenticatedUser(_claims): AuthenticatedUser,
-    State(state): State<AppState>,
-) -> Result<Json<OrganizationResponse>, StatusCode> {
-    let db = &state.db_conn;
+fn internal<E>(_: E) -> StatusCode {
+    StatusCode::INTERNAL_SERVER_ERROR
+}
 
-    // Get the first (and only) organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    Ok(Json(OrganizationResponse {
+fn organization_response(org: organization::Model) -> OrganizationResponse {
+    OrganizationResponse {
         id: org.id,
         name: org.name,
         description: org.description,
         created_at: org.created_at.to_string(),
         updated_at: org.updated_at.to_string(),
-    }))
+    }
 }
 
-// Update the organization
-async fn update_organization(
-    AuthenticatedUser(claims): AuthenticatedUser,
-    State(state): State<AppState>,
-    Json(req): Json<UpdateOrganizationRequest>,
-) -> Result<Json<OrganizationResponse>, StatusCode> {
-    let db = &state.db_conn;
-
-    // Get the organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Check if user has permission to update organization
-    let rbac = RbacService::new(state.db_conn.clone());
-    let has_perm = rbac
-        .has_permission(claims.user_id, org.id, "organization", "update")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !has_perm {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    // Update organization
-    let mut active: organization::ActiveModel = org.into();
-    active.name = ActiveValue::Set(req.name);
-    active.description = ActiveValue::Set(req.description);
-    active.updated_at = ActiveValue::Set(chrono::Utc::now().naive_utc());
-
-    let updated = active
-        .update(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(Json(OrganizationResponse {
-        id: updated.id,
-        name: updated.name,
-        description: updated.description,
-        created_at: updated.created_at.to_string(),
-        updated_at: updated.updated_at.to_string(),
-    }))
-}
-
-// Get all available roles
-async fn get_roles(
-    AuthenticatedUser(_claims): AuthenticatedUser,
-    State(state): State<AppState>,
-) -> Result<Json<Vec<RoleResponse>>, StatusCode> {
-    let db = &state.db_conn;
-
-    // Get the organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Get all roles for this organization
-    let roles = Role::find()
-        .filter(role::Column::OrganizationId.eq(org.id))
-        .all(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let response: Vec<RoleResponse> = roles
-        .into_iter()
-        .map(|r| RoleResponse {
-            id: r.id,
-            name: r.name,
-            description: r.description,
-            is_system_role: r.is_system_role,
-        })
-        .collect();
-
-    Ok(Json(response))
-}
-
-// List all users in the organization
-async fn list_users(
-    AuthenticatedUser(claims): AuthenticatedUser,
-    State(state): State<AppState>,
-) -> Result<Json<Vec<UserResponse>>, StatusCode> {
-    let db = &state.db_conn;
-
-    // Get the organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Check if user has permission to view users
-    let rbac = RbacService::new(state.db_conn.clone());
-    let has_perm = rbac
-        .has_permission(claims.user_id, org.id, "users", "view")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !has_perm {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    // Get all members with their roles
-    let members = rbac
-        .get_organization_members(org.id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let mut response = Vec::new();
-    for (user_org, role) in members {
-        let user = User::find_by_id(user_org.user_id)
-            .one(db)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::NOT_FOUND)?;
-
-        response.push(UserResponse {
-            id: user.id,
-            username: user.name,
-            email: user.email,
-            role_id: role.id,
-            role_name: role.name,
-            force_password_change: user.force_password_change,
-            two_factor_enabled: user.two_factor_enabled,
-            gravatar_email: user.gravatar_email,
-            auth_source: user.auth_source,
-            joined_at: user_org.joined_at.to_string(),
-        });
-    }
-
-    Ok(Json(response))
-}
-
-// Get specific user
-async fn get_user(
-    AuthenticatedUser(claims): AuthenticatedUser,
-    State(state): State<AppState>,
-    Path(user_id): Path<Uuid>,
-) -> Result<Json<UserResponse>, StatusCode> {
-    let db = &state.db_conn;
-
-    // Get the organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Check if user has permission to view users
-    let rbac = RbacService::new(state.db_conn.clone());
-    let has_perm = rbac
-        .has_permission(claims.user_id, org.id, "users", "view")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !has_perm {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    // Get user
-    let user = User::find_by_id(user_id)
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Get user's role in this organization
-    let role = rbac
-        .get_user_role(user_id, org.id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Get user_organization for joined_at
-    let user_org = entity::UserOrganization::find()
-        .filter(entity::user_organization::Column::UserId.eq(user_id))
-        .filter(entity::user_organization::Column::OrganizationId.eq(org.id))
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    Ok(Json(UserResponse {
+fn user_response(user: user::Model, role: role::Model, joined_at: String) -> UserResponse {
+    UserResponse {
         id: user.id,
         username: user.name,
         email: user.email,
@@ -323,128 +135,181 @@ async fn get_user(
         two_factor_enabled: user.two_factor_enabled,
         gravatar_email: user.gravatar_email,
         auth_source: user.auth_source,
-        joined_at: user_org.joined_at.to_string(),
-    }))
+        joined_at,
+    }
 }
 
-// Create new user
+async fn load_user(state: &AppState, user_id: Uuid) -> Result<user::Model, StatusCode> {
+    User::find_by_id(user_id)
+        .one(&state.db_conn)
+        .await
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn load_user_response(
+    state: &AppState,
+    user: user::Model,
+) -> Result<UserResponse, StatusCode> {
+    let org_id = state.default_org_id;
+    let role = RbacService::new(state.db_conn.clone())
+        .get_user_role(user.id, org_id)
+        .await
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let user_org = entity::UserOrganization::find()
+        .filter(entity::user_organization::Column::UserId.eq(user.id))
+        .filter(entity::user_organization::Column::OrganizationId.eq(org_id))
+        .one(&state.db_conn)
+        .await
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(user_response(user, role, user_org.joined_at.to_string()))
+}
+
+async fn get_organization(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+) -> Result<Json<OrganizationResponse>, StatusCode> {
+    let org = Organization::find_by_id(state.default_org_id)
+        .one(&state.db_conn)
+        .await
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(organization_response(org)))
+}
+
+async fn update_organization(
+    CanUpdateOrganization(_claims): CanUpdateOrganization,
+    State(state): State<AppState>,
+    Json(req): Json<UpdateOrganizationRequest>,
+) -> Result<Json<OrganizationResponse>, StatusCode> {
+    let org = Organization::find_by_id(state.default_org_id)
+        .one(&state.db_conn)
+        .await
+        .map_err(internal)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let mut active: organization::ActiveModel = org.into();
+    active.name = ActiveValue::Set(req.name);
+    active.description = ActiveValue::Set(req.description);
+    active.updated_at = ActiveValue::Set(chrono::Utc::now().naive_utc());
+
+    let updated = active.update(&state.db_conn).await.map_err(internal)?;
+
+    Ok(Json(organization_response(updated)))
+}
+
+async fn get_roles(
+    AuthenticatedUser(_claims): AuthenticatedUser,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<RoleResponse>>, StatusCode> {
+    let roles = Role::find()
+        .filter(role::Column::OrganizationId.eq(state.default_org_id))
+        .all(&state.db_conn)
+        .await
+        .map_err(internal)?;
+
+    Ok(Json(
+        roles
+            .into_iter()
+            .map(|r| RoleResponse {
+                id: r.id,
+                name: r.name,
+                description: r.description,
+                is_system_role: r.is_system_role,
+            })
+            .collect(),
+    ))
+}
+
+async fn list_users(
+    CanViewUsers(_claims): CanViewUsers,
+    State(state): State<AppState>,
+) -> Result<Json<Vec<UserResponse>>, StatusCode> {
+    let members = RbacService::new(state.db_conn.clone())
+        .get_organization_members(state.default_org_id)
+        .await
+        .map_err(internal)?;
+
+    let mut response = Vec::with_capacity(members.len());
+    for (user_org, role) in members {
+        let user = load_user(&state, user_org.user_id).await?;
+        response.push(user_response(user, role, user_org.joined_at.to_string()));
+    }
+
+    Ok(Json(response))
+}
+
+async fn get_user(
+    CanViewUsers(_claims): CanViewUsers,
+    State(state): State<AppState>,
+    Path(user_id): Path<Uuid>,
+) -> Result<Json<UserResponse>, StatusCode> {
+    let user = load_user(&state, user_id).await?;
+    Ok(Json(load_user_response(&state, user).await?))
+}
+
 async fn create_user(
-    AuthenticatedUser(claims): AuthenticatedUser,
+    CanCreateUsers(claims): CanCreateUsers,
     State(state): State<AppState>,
     Json(req): Json<CreateUserRequest>,
 ) -> Result<Json<UserResponse>, StatusCode> {
     let db = &state.db_conn;
+    let org_id = state.default_org_id;
 
-    // Get the organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Check if user has permission to create users
-    let rbac = RbacService::new(state.db_conn.clone());
-    let has_perm = rbac
-        .has_permission(claims.user_id, org.id, "users", "create")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !has_perm {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    ensure_role_grantable(db, claims.user_id, org.id, req.role_id)
+    ensure_role_grantable(db, claims.user_id, org_id, req.role_id)
         .await
         .map_err(|error| error.status())?;
 
-    // Create user directly (not via AuthService as we need more control)
-    let user_id = Uuid::new_v4();
-
-    // Hash password
     let salt = crate::auth::crypto::generate_salt();
     let hashed_password = crate::auth::crypto::hash_password(&req.password, &salt)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal)?;
 
     let new_user = user::ActiveModel {
-        id: ActiveValue::Set(user_id),
-        name: ActiveValue::Set(req.username.clone()),
+        id: ActiveValue::Set(Uuid::new_v4()),
+        name: ActiveValue::Set(req.username),
         password: ActiveValue::Set(hashed_password),
         salt: ActiveValue::Set(salt),
-        email: ActiveValue::Set(req.email.clone()),
+        email: ActiveValue::Set(req.email),
         gravatar_email: ActiveValue::NotSet,
         two_factor_secret: ActiveValue::NotSet,
         two_factor_enabled: ActiveValue::Set(false),
         force_password_change: ActiveValue::Set(req.force_password_change),
         auth_source: ActiveValue::Set("local".to_string()),
-    };
+    }
+    .insert(db)
+    .await
+    .map_err(internal)?;
 
-    let new_user = new_user
-        .insert(db)
+    RbacService::new(db.clone())
+        .assign_role_to_user(new_user.id, org_id, req.role_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal)?;
 
-    // Assign role to user in organization
-    rbac.assign_role_to_user(new_user.id, org.id, req.role_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // Get role name
     let role = Role::find_by_id(req.role_id)
         .one(db)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .map_err(internal)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(Json(UserResponse {
-        id: new_user.id,
-        username: new_user.name,
-        email: new_user.email,
-        role_id: req.role_id,
-        role_name: role.name,
-        force_password_change: req.force_password_change,
-        two_factor_enabled: false,
-        gravatar_email: new_user.gravatar_email,
-        auth_source: new_user.auth_source,
-        joined_at: chrono::Utc::now().naive_utc().to_string(),
-    }))
+    let joined_at = chrono::Utc::now().naive_utc().to_string();
+    Ok(Json(user_response(new_user, role, joined_at)))
 }
 
-// Update user
 async fn update_user(
-    AuthenticatedUser(claims): AuthenticatedUser,
+    CanUpdateUsers(claims): CanUpdateUsers,
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
     Json(req): Json<UpdateUserRequest>,
 ) -> Result<Json<UserResponse>, StatusCode> {
     let db = &state.db_conn;
 
-    // Get the organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let user = load_user(&state, user_id).await?;
 
-    // Check if user has permission to update users
-    let rbac = RbacService::new(state.db_conn.clone());
-    let has_perm = rbac
-        .has_permission(claims.user_id, org.id, "users", "update")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !has_perm {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    // Get user
-    let user = User::find_by_id(user_id)
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    ensure_user_manageable(db, claims.user_id, org.id, user_id)
+    ensure_user_manageable(db, claims.user_id, state.default_org_id, user_id)
         .await
         .map_err(|error| error.status())?;
 
@@ -454,14 +319,13 @@ async fn update_user(
             .filter(user::Column::Id.ne(user_id))
             .one(db)
             .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .map_err(internal)?
             .is_some();
         if taken {
             return Err(StatusCode::CONFLICT);
         }
     }
 
-    // Update user
     let mut active: user::ActiveModel = user.into();
     if let Some(email) = req.email {
         active.email = ActiveValue::Set(Some(email));
@@ -470,132 +334,65 @@ async fn update_user(
         active.force_password_change = ActiveValue::Set(force_pwd);
     }
 
-    let updated = active
-        .update(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let updated = active.update(db).await.map_err(internal)?;
 
-    // Get user's role
-    let role = rbac
-        .get_user_role(user_id, org.id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Get user_organization for joined_at
-    let user_org = entity::UserOrganization::find()
-        .filter(entity::user_organization::Column::UserId.eq(user_id))
-        .filter(entity::user_organization::Column::OrganizationId.eq(org.id))
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    Ok(Json(UserResponse {
-        id: updated.id,
-        username: updated.name,
-        email: updated.email,
-        role_id: role.id,
-        role_name: role.name,
-        force_password_change: updated.force_password_change,
-        two_factor_enabled: updated.two_factor_enabled,
-        gravatar_email: updated.gravatar_email,
-        auth_source: updated.auth_source,
-        joined_at: user_org.joined_at.to_string(),
-    }))
+    Ok(Json(load_user_response(&state, updated).await?))
 }
 
-// Delete user
 async fn delete_user(
-    AuthenticatedUser(claims): AuthenticatedUser,
+    CanDeleteUsers(claims): CanDeleteUsers,
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
 ) -> Result<StatusCode, StatusCode> {
     let db = &state.db_conn;
+    let org_id = state.default_org_id;
 
-    // Get the organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Check if user has permission to delete users
-    let rbac = RbacService::new(state.db_conn.clone());
-    let has_perm = rbac
-        .has_permission(claims.user_id, org.id, "users", "delete")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !has_perm {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    // Don't allow deleting yourself
     if user_id == claims.user_id {
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    ensure_user_manageable(db, claims.user_id, org.id, user_id)
+    ensure_user_manageable(db, claims.user_id, org_id, user_id)
         .await
         .map_err(|error| error.status())?;
 
-    ensure_not_last_admin(db, org.id, user_id)
+    ensure_not_last_admin(db, org_id, user_id)
         .await
         .map_err(|error| error.status())?;
 
-    // Remove user from organization
-    rbac.remove_user_from_organization(user_id, org.id)
+    RbacService::new(db.clone())
+        .remove_user_from_organization(user_id, org_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal)?;
 
-    crate::auth_service::AuthService::new(state.db_conn.clone())
+    crate::auth_service::AuthService::new(db.clone())
         .delete_users(&[user_id])
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
-// Update user's role
 async fn update_user_role(
-    AuthenticatedUser(claims): AuthenticatedUser,
+    CanUpdateUsers(claims): CanUpdateUsers,
     State(state): State<AppState>,
     Path(user_id): Path<Uuid>,
     Json(req): Json<UpdateUserRoleRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let db = &state.db_conn;
+    let org_id = state.default_org_id;
+    let rbac = RbacService::new(db.clone());
 
-    // Get the organization
-    let org = Organization::find()
-        .one(db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    // Check if user has permission to update users
-    let rbac = RbacService::new(state.db_conn.clone());
-    let has_perm = rbac
-        .has_permission(claims.user_id, org.id, "users", "update")
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    if !has_perm {
-        return Err(StatusCode::FORBIDDEN);
-    }
-
-    ensure_role_change_allowed(db, claims.user_id, org.id, user_id, req.role_id)
+    ensure_role_change_allowed(db, claims.user_id, org_id, user_id, req.role_id)
         .await
         .map_err(|error| error.status())?;
 
-    // Update user's role
-    rbac.assign_role_to_user(user_id, org.id, req.role_id)
+    rbac.assign_role_to_user(user_id, org_id, req.role_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal)?;
 
-    revoke_vpn_peers_without_access(&rbac, db, user_id, org.id)
+    revoke_vpn_peers_without_access(&rbac, db, user_id, org_id)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(internal)?;
 
     Ok(StatusCode::OK)
 }

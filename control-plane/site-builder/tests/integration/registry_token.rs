@@ -196,7 +196,7 @@ async fn registry_token(db: &DatabaseConnection, scope: &str) -> (Uuid, String, 
     .await
     .unwrap();
     transaction.commit().await.unwrap();
-    let prefix = site_builder::images::registry_prefix(group, &registry.name);
+    let prefix = shared::images::registry_prefix(group, &registry.name);
     (token.id, password, prefix)
 }
 

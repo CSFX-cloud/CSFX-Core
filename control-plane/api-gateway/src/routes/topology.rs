@@ -49,12 +49,10 @@ fn db_error(error: impl std::fmt::Display) -> ApiError {
     )
 }
 
-fn org_scope<C: ColumnTrait>(column: C, org_id: Option<Uuid>) -> Condition {
-    let scope = Condition::any().add(column.is_null());
-    match org_id {
-        Some(id) => scope.add(column.eq(id)),
-        None => scope,
-    }
+fn org_scope<C: ColumnTrait>(column: C, org_id: Uuid) -> Condition {
+    Condition::any()
+        .add(column.is_null())
+        .add(column.eq(org_id))
 }
 
 fn edge(kind: &'static str, source: String, target: String) -> TopologyEdge {

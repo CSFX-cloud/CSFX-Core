@@ -8,7 +8,7 @@ use entity::{image_registries, ImageRegistries};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use site_builder::images::registry_prefix;
+use shared::images::registry_prefix;
 use std::net::SocketAddr;
 use tracing::warn;
 use uuid::Uuid;

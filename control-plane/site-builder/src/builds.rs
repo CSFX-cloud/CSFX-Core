@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::detect::Mode;
 use crate::error::ServiceError;
 use crate::job::{builder_name, builder_request, stored_reference, BuildJob};
 use crate::prune::{self, Candidate};
@@ -11,6 +10,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     Set, Statement,
 };
+use shared::detect::Mode;
 use shared::env_secrets;
 use std::collections::BTreeMap;
 use std::sync::Arc;
