@@ -50,10 +50,8 @@ fn bad_gateway(message: impl Into<String>) -> ProxyError {
 }
 
 fn database_error(e: sea_orm::DbErr) -> ProxyError {
-    error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("database error: {}", e),
-    )
+    tracing::error!(error = %e, "agent proxy database query failed");
+    error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
 
 pub(crate) fn agent_port() -> u16 {
@@ -120,7 +118,10 @@ pub(crate) async fn fetch_proxy_ticket(
             Some(json!({ "agent_id": agent_id, "workload_id": workload_id })),
         )
         .await
-        .map_err(|e| bad_gateway(format!("failed to reach registry: {}", e)))?;
+        .map_err(|e| {
+            tracing::warn!(error = %e, "failed to reach registry");
+            bad_gateway("registry unreachable")
+        })?;
 
     if !status.is_success() {
         return Err(bad_gateway("registry refused to issue proxy ticket"));
@@ -151,10 +152,10 @@ async fn agent_call(
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| bad_gateway(format!("failed to reach agent: {}", e)))?;
+    let resp = request.send().await.map_err(|e| {
+        tracing::warn!(error = %e, "failed to reach agent");
+        bad_gateway("agent unreachable")
+    })?;
 
     if resp.status().is_success() {
         return Ok(resp);
@@ -179,10 +180,8 @@ async fn connect_agent_socket(
     ProxyError,
 > {
     let mut request = url.into_client_request().map_err(|e| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("invalid agent {label} url: {}", e),
-        )
+        tracing::error!(subject = %subject, error = %e, "invalid agent {label} url");
+        error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
     })?;
     request.headers_mut().insert(
         PROXY_TICKET_HEADER,
@@ -198,7 +197,7 @@ async fn connect_agent_socket(
         .await
         .map_err(|e| {
             tracing::warn!(subject = %subject, error = %e, "failed to connect to agent {label} socket");
-            bad_gateway(format!("failed to connect to agent {label} socket: {}", e))
+            bad_gateway(format!("failed to connect to agent {label} socket"))
         })?;
     Ok(socket)
 }
@@ -210,10 +209,8 @@ fn issue_ticket(
     user_id: Uuid,
 ) -> Result<impl IntoResponse, ProxyError> {
     let ticket = create_ticket(purpose, subject, user_id).map_err(|e| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("failed to issue {label} ticket: {}", e),
-        )
+        tracing::error!(error = %e, "failed to issue {label} ticket");
+        error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
     })?;
     Ok(Json(json!({ "ticket": ticket })))
 }
@@ -482,10 +479,10 @@ pub async fn get_agent_disks(
     )
     .await?;
 
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| bad_gateway(format!("invalid agent response: {}", e)))?;
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        tracing::warn!(error = %e, "invalid agent response");
+        bad_gateway("invalid agent response")
+    })?;
 
     Ok(Json(body))
 }

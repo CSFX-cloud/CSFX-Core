@@ -178,6 +178,10 @@ fn secret_ref_error(error: SiteError) -> (StatusCode, Json<Value>) {
         SiteError::Forbidden => StatusCode::FORBIDDEN,
         _ => StatusCode::SERVICE_UNAVAILABLE,
     };
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        tracing::error!(error = %error, "secret reference check failed");
+        return (status, Json(json!({ "error": "service unavailable" })));
+    }
     (status, Json(json!({ "error": error.to_string() })))
 }
 

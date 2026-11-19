@@ -249,7 +249,7 @@ fn ntfy_error(error: NtfyError) -> (StatusCode, Json<serde_json::Value>) {
             tracing::warn!(error = %e, "ntfy request failed");
             (
                 StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": format!("ntfy request failed: {e}") })),
+                Json(json!({ "error": "ntfy request failed" })),
             )
         }
         NtfyError::Database(e) => {

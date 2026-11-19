@@ -339,10 +339,8 @@ async fn schedule_workload(
         )
         .await
         .map_err(|e| {
-            error(
-                StatusCode::BAD_GATEWAY,
-                &format!("scheduler unavailable: {e}"),
-            )
+            tracing::warn!(error = %e, "scheduler unavailable");
+            error(StatusCode::BAD_GATEWAY, "scheduler unavailable")
         })?;
     if !status.is_success() {
         let message = response
@@ -402,10 +400,8 @@ pub async fn remove_workload(state: &AppState, workload_id: Uuid) -> Result<(), 
         .call_json(Service::Scheduler, reqwest::Method::DELETE, &path, None)
         .await
         .map_err(|e| {
-            error(
-                StatusCode::BAD_GATEWAY,
-                &format!("scheduler unavailable: {e}"),
-            )
+            tracing::warn!(error = %e, "scheduler unavailable");
+            error(StatusCode::BAD_GATEWAY, "scheduler unavailable")
         })?;
     if status.is_success() || status.as_u16() == StatusCode::NOT_FOUND.as_u16() {
         return Ok(());

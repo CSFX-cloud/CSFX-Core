@@ -49,17 +49,13 @@ fn error(status: StatusCode, message: &str) -> ProxyError {
 }
 
 fn database_error(e: sea_orm::DbErr) -> ProxyError {
-    error(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        &format!("database error: {}", e),
-    )
+    tracing::error!(error = %e, "s3 proxy database query failed");
+    error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
 
 fn bad_gateway(e: &reqwest::Error) -> ProxyError {
-    error(
-        StatusCode::BAD_GATEWAY,
-        &format!("failed to reach garage node: {}", e),
-    )
+    tracing::warn!(error = %e, "failed to reach garage node");
+    error(StatusCode::BAD_GATEWAY, "storage node unreachable")
 }
 
 fn rotation(len: usize, start: usize) -> impl Iterator<Item = usize> {
