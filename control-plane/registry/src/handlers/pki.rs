@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::{
-    models::agent::ErrorResponse,
+    handlers::{api_error, ApiError},
     models::certificate::{
         AgentEndpointResponse, CrlResponse, IssueCertificateRequest, IssueCertificateResponse,
         RevokeCertificateRequest, RotateCertificateRequest,
@@ -22,39 +22,20 @@ pub async fn issue_certificate(
     headers: HeaderMap,
     Path(agent_id): Path<Uuid>,
     Json(request): Json<IssueCertificateRequest>,
-) -> Result<Json<IssueCertificateResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<IssueCertificateResponse>, ApiError> {
     let api_key = headers
         .get("X-API-Key")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Missing X-API-Key header".to_string(),
-                }),
-            )
-        })?;
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "Missing X-API-Key header"))?;
 
     let validated_id = state
         .api_key_manager
         .validate_key(api_key)
         .await
-        .map_err(|e| {
-            (
-                e.status(),
-                Json(ErrorResponse {
-                    error: format!("Invalid API key: {}", e),
-                }),
-            )
-        })?;
+        .map_err(|e| api_error(e.status(), format!("Invalid API key: {}", e)))?;
 
     if validated_id != agent_id {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "Agent ID mismatch".to_string(),
-            }),
-        ));
+        return Err(api_error(StatusCode::FORBIDDEN, "Agent ID mismatch"));
     }
 
     let issued = state
@@ -62,11 +43,9 @@ pub async fn issue_certificate(
         .issue_certificate(agent_id, &request.csr_pem)
         .await
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to issue certificate: {}", e),
-                }),
+                format!("Failed to issue certificate: {}", e),
             )
         })?;
 
@@ -83,39 +62,20 @@ pub async fn rotate_certificate(
     headers: HeaderMap,
     Path(agent_id): Path<Uuid>,
     Json(request): Json<RotateCertificateRequest>,
-) -> Result<Json<IssueCertificateResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<IssueCertificateResponse>, ApiError> {
     let api_key = headers
         .get("X-API-Key")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(ErrorResponse {
-                    error: "Missing X-API-Key header".to_string(),
-                }),
-            )
-        })?;
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "Missing X-API-Key header"))?;
 
     let validated_id = state
         .api_key_manager
         .validate_key(api_key)
         .await
-        .map_err(|e| {
-            (
-                e.status(),
-                Json(ErrorResponse {
-                    error: format!("Invalid API key: {}", e),
-                }),
-            )
-        })?;
+        .map_err(|e| api_error(e.status(), format!("Invalid API key: {}", e)))?;
 
     if validated_id != agent_id {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "Agent ID mismatch".to_string(),
-            }),
-        ));
+        return Err(api_error(StatusCode::FORBIDDEN, "Agent ID mismatch"));
     }
 
     let issued = state
@@ -123,11 +83,9 @@ pub async fn rotate_certificate(
         .rotate_certificate(agent_id, &request.new_csr_pem)
         .await
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to rotate certificate: {}", e),
-                }),
+                format!("Failed to rotate certificate: {}", e),
             )
         })?;
 
@@ -143,32 +101,26 @@ pub async fn revoke_certificate(
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
     Json(request): Json<RevokeCertificateRequest>,
-) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<StatusCode, ApiError> {
     state
         .pki_service
         .revoke_agent_certificate(agent_id, request.reason)
         .await
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to revoke certificate: {}", e),
-                }),
+                format!("Failed to revoke certificate: {}", e),
             )
         })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn get_crl(
-    State(state): State<AppState>,
-) -> Result<Json<CrlResponse>, (StatusCode, Json<ErrorResponse>)> {
+pub async fn get_crl(State(state): State<AppState>) -> Result<Json<CrlResponse>, ApiError> {
     let revoked_serials = state.pki_service.build_crl().await.map_err(|e| {
-        (
+        api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: format!("Failed to build CRL: {}", e),
-            }),
+            format!("Failed to build CRL: {}", e),
         )
     })?;
 
@@ -194,7 +146,7 @@ pub async fn issue_proxy_ticket(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<ProxyTicketRequest>,
-) -> Result<Json<ProxyTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<ProxyTicketResponse>, ApiError> {
     let ip = addr.ip();
     let allowed = ip.is_loopback()
         || match ip {
@@ -208,11 +160,9 @@ pub async fn issue_proxy_ticket(
         };
 
     if !allowed {
-        return Err((
+        return Err(api_error(
             StatusCode::FORBIDDEN,
-            Json(ErrorResponse {
-                error: "internal endpoint not accessible from this network".to_string(),
-            }),
+            "internal endpoint not accessible from this network",
         ));
     }
 
@@ -220,11 +170,9 @@ pub async fn issue_proxy_ticket(
         .pki_service
         .sign_proxy_ticket(request.agent_id, &request.workload_id)
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to sign proxy ticket: {}", e),
-                }),
+                format!("Failed to sign proxy ticket: {}", e),
             )
         })?;
 
@@ -237,17 +185,15 @@ pub async fn issue_proxy_ticket(
 pub async fn get_agent_endpoint(
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
-) -> Result<Json<AgentEndpointResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<AgentEndpointResponse>, ApiError> {
     let agent = state
         .agent_registry
         .get_agent(agent_id)
         .await
         .ok_or_else(|| {
-            (
+            api_error(
                 StatusCode::NOT_FOUND,
-                Json(ErrorResponse {
-                    error: format!("Agent not found: {}", agent_id),
-                }),
+                format!("Agent not found: {}", agent_id),
             )
         })?;
 

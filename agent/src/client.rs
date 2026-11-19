@@ -1,12 +1,18 @@
 use anyhow::{Context, Result};
-use reqwest::Client;
+use reqwest::{Client, Method, RequestBuilder, Response};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::sync::RwLock;
 use tracing::warn;
 use uuid::Uuid;
 
+pub use csfx_agent_api::{
+    ContainerStatus, HeartbeatRequest, HeartbeatResponse, RegisterRequest, RegisterResponse,
+    SignedRelease,
+};
+
 use crate::runtime::VolumeUsage;
+use crate::system::SystemMetrics;
 
 fn is_throttled(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::TOO_MANY_REQUESTS
@@ -34,57 +40,6 @@ pub struct AssignedVolume {
     pub size_gb: i64,
 }
 
-#[derive(Debug, Serialize)]
-pub struct RegisterRequest<'a> {
-    pub registration_token: &'a str,
-    pub name: &'a str,
-    pub hostname: &'a str,
-    pub os_type: &'a str,
-    pub os_version: &'a str,
-    pub architecture: &'a str,
-    pub agent_version: &'a str,
-    pub machine_id: Option<&'a str>,
-    pub csr_pem: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RegisterResponse {
-    pub agent_id: Uuid,
-    pub api_key: String,
-    pub certificate_pem: Option<String>,
-    pub ca_cert_pem: Option<String>,
-    pub wg_tunnel_ip: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct HeartbeatRequest {
-    status: Option<String>,
-    container_statuses: Option<Vec<ContainerStatus>>,
-    cpu_usage_percent: Option<f32>,
-    cpu_cores: Option<u32>,
-    memory_total_bytes: Option<u64>,
-    memory_used_bytes: Option<u64>,
-    disk_total_bytes: Option<u64>,
-    disk_used_bytes: Option<u64>,
-    network_rx_bytes: Option<u64>,
-    network_tx_bytes: Option<u64>,
-    uptime_seconds: Option<u64>,
-    wg_public_key: Option<String>,
-    wg_endpoint: Option<String>,
-    wg_tunnel_ip: Option<String>,
-    agent_version: Option<String>,
-    release_version: Option<String>,
-    kvm_capable: bool,
-    ssh_host_key: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ContainerStatus {
-    pub workload_id: String,
-    pub container_id: String,
-    pub status: String,
-}
-
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkloadStatsUpdate {
     pub workload_id: String,
@@ -98,22 +53,6 @@ pub struct WorkloadStatsUpdate {
 #[derive(Debug, Serialize)]
 struct WorkloadStatsRequest {
     stats: Vec<WorkloadStatsUpdate>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct SignedRelease {
-    pub manifest: String,
-    pub signature: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct HeartbeatResponse {
-    #[serde(default)]
-    pub worker_releases: HashMap<String, SignedRelease>,
-    #[serde(default)]
-    pub ssh_enabled: bool,
-    #[serde(default)]
-    pub gateway_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -284,19 +223,17 @@ pub struct ClusterVip {
 }
 
 pub async fn fetch_cluster_ca(gateway_url: &str) -> Result<String> {
-    let url = format!("{}/api/setup/ca.crt", gateway_url);
-
-    let resp = build_http_client(None)?
-        .get(&url)
+    let response = build_http_client(None)?
+        .get(format!("{gateway_url}/api/setup/ca.crt"))
         .send()
         .await
         .context("Failed to fetch cluster CA")?;
 
-    if !resp.status().is_success() {
-        anyhow::bail!("Cluster CA fetch failed status={}", resp.status());
-    }
-
-    resp.text().await.context("Failed to read cluster CA")
+    check_status(response, "fetch cluster CA")
+        .await?
+        .text()
+        .await
+        .context("Failed to read cluster CA")
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -315,10 +252,10 @@ struct JournalBatch {
 pub struct ApiClient {
     client: Client,
     gateway_url: String,
+    api_key: Option<String>,
     cert_pem: Option<String>,
     wg_public_key: String,
     wg_endpoint: Option<String>,
-    wg_tunnel_ip: RwLock<Option<String>>,
 }
 
 impl ApiClient {
@@ -326,19 +263,21 @@ impl ApiClient {
         gateway_url: String,
         wg_public_key: String,
         wg_endpoint: Option<String>,
-        wg_tunnel_ip: Option<String>,
         ca_pem: Option<&str>,
     ) -> Result<Self> {
-        let client = build_http_client(ca_pem)?;
-
         Ok(Self {
-            client,
+            client: build_http_client(ca_pem)?,
             gateway_url,
+            api_key: None,
             cert_pem: None,
             wg_public_key,
             wg_endpoint,
-            wg_tunnel_ip: RwLock::new(wg_tunnel_ip),
         })
+    }
+
+    pub fn with_api_key(mut self, api_key: String) -> Self {
+        self.api_key = Some(api_key);
+        self
     }
 
     pub fn with_certificate(mut self, cert_pem: String) -> Self {
@@ -350,580 +289,254 @@ impl ApiClient {
         &self.gateway_url
     }
 
-    pub async fn request_master_bundle(&self, api_key: &str) -> Result<MasterBundle> {
-        let url = format!("{}/api/cluster/masters/join", self.gateway_url);
-
-        let resp = self
+    fn request(&self, method: Method, path: &str) -> RequestBuilder {
+        let builder = self
             .client
-            .post(&url)
-            .header("X-API-Key", api_key)
-            .send()
-            .await
-            .context("Failed to request master join bundle")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Master join bundle request failed status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
+            .request(method, format!("{}{}", self.gateway_url, path));
+        match &self.api_key {
+            Some(api_key) => builder.header("X-API-Key", api_key),
+            None => builder,
         }
-
-        resp.json()
-            .await
-            .context("Failed to parse master join bundle")
     }
 
-    pub async fn fetch_cluster_vip(&self, api_key: &str) -> Result<Option<ClusterVip>> {
-        let url = format!("{}/api/cluster/masters/vip", self.gateway_url);
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
+    async fn send_checked(&self, builder: RequestBuilder, action: &str) -> Result<Response> {
+        let response = builder
             .send()
             .await
-            .context("Failed to request cluster vip")?;
-
-        if !resp.status().is_success() {
-            anyhow::bail!("Cluster vip request failed status={}", resp.status());
-        }
-
-        resp.json().await.context("Failed to parse cluster vip")
+            .with_context(|| format!("Failed to {action}"))?;
+        check_status(response, action).await
     }
 
-    pub async fn promote_master(&self, api_key: &str) -> Result<bool> {
-        let url = format!("{}/api/cluster/masters/promote", self.gateway_url);
+    async fn send_json<T: DeserializeOwned>(
+        &self,
+        builder: RequestBuilder,
+        action: &str,
+    ) -> Result<T> {
+        self.send_checked(builder, action)
+            .await?
+            .json()
+            .await
+            .with_context(|| format!("Failed to parse {action} response"))
+    }
 
-        let resp = self
-            .client
-            .post(&url)
-            .header("X-API-Key", api_key)
+    async fn get_json<T: DeserializeOwned>(&self, path: &str, action: &str) -> Result<T> {
+        self.send_json(self.request(Method::GET, path), action).await
+    }
+
+    pub async fn request_master_bundle(&self) -> Result<MasterBundle> {
+        let builder = self.request(Method::POST, "/api/cluster/masters/join");
+        self.send_json(builder, "request master join bundle").await
+    }
+
+    pub async fn fetch_cluster_vip(&self) -> Result<Option<ClusterVip>> {
+        self.get_json("/api/cluster/masters/vip", "fetch cluster vip")
+            .await
+    }
+
+    pub async fn promote_master(&self) -> Result<bool> {
+        let response = self
+            .request(Method::POST, "/api/cluster/masters/promote")
             .send()
             .await
             .context("Failed to request master promotion")?;
-
-        if resp.status() == reqwest::StatusCode::CONFLICT {
+        if response.status() == reqwest::StatusCode::CONFLICT {
             return Ok(false);
         }
-        if !resp.status().is_success() {
-            anyhow::bail!("Master promotion failed status={}", resp.status());
-        }
+        check_status(response, "promote master").await?;
         Ok(true)
     }
 
-    pub async fn set_wg_tunnel_ip(&self, ip: String) {
-        *self.wg_tunnel_ip.write().await = Some(ip);
-    }
-
-    pub async fn register(&self, body: &RegisterRequest<'_>) -> Result<RegisterResponse> {
-        let url = format!("{}/api/registry/agents/register", self.gateway_url);
-
+    pub async fn register(&self, body: &RegisterRequest) -> Result<RegisterResponse> {
         loop {
-            let resp = self
-                .client
-                .post(&url)
+            let response = self
+                .request(Method::POST, "/api/registry/agents/register")
                 .json(body)
                 .send()
                 .await
                 .context("Failed to send registration request")?;
 
-            if is_throttled(resp.status()) {
-                let retry_after = resp
-                    .headers()
-                    .get("Retry-After")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<u64>().ok())
-                    .unwrap_or(60);
-                let delay = crate::backoff::retry_after_delay(retry_after);
-                tracing::warn!(
-                    retry_after,
-                    delay_ms = delay.as_millis() as u64,
-                    "Registration rate-limited, retrying"
-                );
-                tokio::time::sleep(delay).await;
-                continue;
+            if !is_throttled(response.status()) {
+                return check_status(response, "register")
+                    .await?
+                    .json()
+                    .await
+                    .context("Failed to parse registration response");
             }
-
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                anyhow::bail!("Registration failed status={} body={}", status, body);
-            }
-
-            return resp
-                .json::<RegisterResponse>()
-                .await
-                .context("Failed to parse registration response");
+            wait_out_throttle(&response).await;
         }
     }
 
     pub async fn heartbeat(
         &self,
         agent_id: Uuid,
-        api_key: &str,
         container_statuses: Option<Vec<ContainerStatus>>,
-        metrics: Option<crate::system::SystemMetrics>,
+        metrics: Option<SystemMetrics>,
     ) -> Result<HeartbeatResponse> {
-        let url = format!(
-            "{}/api/registry/agents/{}/heartbeat",
-            self.gateway_url, agent_id
-        );
-
-        let (
-            cpu_usage_percent,
-            cpu_cores,
-            memory_total_bytes,
-            memory_used_bytes,
-            disk_total_bytes,
-            disk_used_bytes,
-            network_rx_bytes,
-            network_tx_bytes,
-            uptime_seconds,
-        ) = metrics
-            .map(|m| {
-                (
-                    Some(m.cpu_usage_percent),
-                    Some(m.cpu_cores),
-                    Some(m.memory_total_bytes),
-                    Some(m.memory_used_bytes),
-                    Some(m.disk_total_bytes),
-                    Some(m.disk_used_bytes),
-                    Some(m.network_rx_bytes),
-                    Some(m.network_tx_bytes),
-                    Some(m.uptime_seconds),
-                )
-            })
-            .unwrap_or_default();
-
-        let wg_tunnel_ip = self.wg_tunnel_ip.read().await.clone();
-
-        let mut req = self
-            .client
-            .post(&url)
-            .header("X-API-Key", api_key)
-            .json(&HeartbeatRequest {
-                status: None,
-                container_statuses,
-                cpu_usage_percent,
-                cpu_cores,
-                memory_total_bytes,
-                memory_used_bytes,
-                disk_total_bytes,
-                disk_used_bytes,
-                network_rx_bytes,
-                network_tx_bytes,
-                uptime_seconds,
-                wg_public_key: Some(self.wg_public_key.clone()),
-                wg_endpoint: self.wg_endpoint.clone(),
-                wg_tunnel_ip,
-                agent_version: Some(env!("CARGO_PKG_VERSION").to_string()),
-                release_version: crate::update_watch::applied_version().await,
-                kvm_capable: crate::system::is_kvm_capable(),
-                ssh_host_key: crate::system::read_ssh_host_key(),
-            });
-
-        if let Some(ref cert_pem) = self.cert_pem {
-            let encoded = cert_pem.replace('\n', "\\n");
-            req = req.header("X-Client-Cert", encoded);
+        let body = HeartbeatRequest {
+            container_statuses,
+            metrics,
+            wg_public_key: Some(self.wg_public_key.clone()),
+            wg_endpoint: self.wg_endpoint.clone(),
+            agent_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            release_version: crate::update_watch::applied_version().await,
+            kvm_capable: crate::system::is_kvm_capable(),
+            ssh_host_key: crate::system::read_ssh_host_key(),
+        };
+        let path = format!("/api/registry/agents/{agent_id}/heartbeat");
+        let mut builder = self.request(Method::POST, &path).json(&body);
+        if let Some(cert_pem) = &self.cert_pem {
+            builder = builder.header("X-Client-Cert", cert_pem.replace('\n', "\\n"));
         }
-
-        let resp = req.send().await.context("Failed to send heartbeat")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!("Heartbeat failed status={}", status);
-        }
-
-        resp.json::<HeartbeatResponse>()
-            .await
-            .context("Failed to parse heartbeat response")
+        self.send_json(builder, "send heartbeat").await
     }
 
     pub async fn fetch_resource_group_members(
         &self,
-        api_key: &str,
         resource_group_id: &str,
     ) -> Result<Vec<ResourceGroupMember>> {
-        let url = format!(
-            "{}/api/resource-groups/{}/members",
-            self.gateway_url, resource_group_id
-        );
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
-            .send()
-            .await
-            .context("Failed to fetch resource group members")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch resource group members status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        resp.json::<Vec<ResourceGroupMember>>()
-            .await
-            .context("Failed to parse resource group members response")
+        let path = format!("/api/resource-groups/{resource_group_id}/members");
+        self.get_json(&path, "fetch resource group members").await
     }
 
     pub async fn fetch_resource_group_site_services(
         &self,
-        api_key: &str,
         resource_group_id: &str,
     ) -> Result<Vec<SiteService>> {
-        let url = format!(
-            "{}/api/resource-groups/{}/site-services",
-            self.gateway_url, resource_group_id
-        );
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
-            .send()
+        let path = format!("/api/resource-groups/{resource_group_id}/site-services");
+        self.get_json(&path, "fetch resource group site services")
             .await
-            .context("Failed to fetch resource group site services")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch resource group site services status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        resp.json::<Vec<SiteService>>()
-            .await
-            .context("Failed to parse resource group site services response")
     }
 
     pub async fn fetch_resource_group_peers(
         &self,
-        api_key: &str,
         resource_group_id: &str,
     ) -> Result<Vec<ResourceGroupPeer>> {
-        let url = format!(
-            "{}/api/resource-groups/{}/peers",
-            self.gateway_url, resource_group_id
-        );
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
-            .send()
-            .await
-            .context("Failed to fetch resource group peers")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch resource group peers status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        resp.json::<Vec<ResourceGroupPeer>>()
-            .await
-            .context("Failed to parse resource group peers response")
+        let path = format!("/api/resource-groups/{resource_group_id}/peers");
+        self.get_json(&path, "fetch resource group peers").await
     }
 
     pub async fn report_resource_group_wg_port(
         &self,
-        api_key: &str,
         resource_group_id: &str,
         port: u16,
     ) -> Result<()> {
-        let url = format!(
-            "{}/api/resource-groups/{}/wg-port",
-            self.gateway_url, resource_group_id
-        );
-
-        let resp = self
-            .client
-            .put(&url)
-            .header("X-API-Key", api_key)
-            .json(&serde_json::json!({ "port": port }))
-            .send()
+        let path = format!("/api/resource-groups/{resource_group_id}/wg-port");
+        let builder = self
+            .request(Method::PUT, &path)
+            .json(&serde_json::json!({ "port": port }));
+        self.send_checked(builder, "report resource group wireguard port")
             .await
-            .context("Failed to report resource group wireguard port")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to report resource group wireguard port status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        Ok(())
+            .map(drop)
     }
 
     pub async fn fetch_gateway_config(
         &self,
-        api_key: &str,
         resource_group_id: &str,
         gateway_id: &str,
         source_workload_id: &str,
     ) -> Result<serde_json::Value> {
-        let url = format!(
-            "{}/api/resource-groups/{}/gateways/{}/config",
-            self.gateway_url, resource_group_id, gateway_id
-        );
-
-        let resp = self
-            .client
-            .get(&url)
+        let path = format!("/api/resource-groups/{resource_group_id}/gateways/{gateway_id}/config");
+        let response = self
+            .request(Method::GET, &path)
             .query(&[("source_workload_id", source_workload_id)])
-            .header("X-API-Key", api_key)
             .send()
             .await
             .context("Failed to fetch ingress gateway config")?;
-
-        if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        if response.status() == reqwest::StatusCode::FORBIDDEN {
             return Err(GatewayConfigRejected.into());
         }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch ingress gateway config status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        resp.json::<serde_json::Value>()
+        check_status(response, "fetch ingress gateway config")
+            .await?
+            .json()
             .await
             .context("Failed to parse ingress gateway config response")
     }
 
-    pub async fn fetch_mesh_peers(&self, api_key: &str) -> Result<Vec<ResourceGroupPeer>> {
-        let url = format!("{}/api/agents/mesh-peers", self.gateway_url);
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
-            .send()
+    pub async fn fetch_mesh_peers(&self) -> Result<Vec<ResourceGroupPeer>> {
+        self.get_json("/api/agents/mesh-peers", "fetch mesh peers")
             .await
-            .context("Failed to fetch mesh peers")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch mesh peers status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        resp.json::<Vec<ResourceGroupPeer>>()
-            .await
-            .context("Failed to parse mesh peers response")
     }
 
     pub async fn fetch_resource_group_vpn_peers(
         &self,
-        api_key: &str,
         resource_group_id: &str,
     ) -> Result<Vec<VpnPeer>> {
-        let url = format!(
-            "{}/api/resource-groups/{}/vpn-peers",
-            self.gateway_url, resource_group_id
-        );
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
-            .send()
-            .await
-            .context("Failed to fetch resource group vpn peers")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch resource group vpn peers status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        resp.json::<Vec<VpnPeer>>()
-            .await
-            .context("Failed to parse resource group vpn peers response")
+        let path = format!("/api/resource-groups/{resource_group_id}/vpn-peers");
+        self.get_json(&path, "fetch resource group vpn peers").await
     }
 
-    pub async fn fetch_active_resource_group_ids(&self, api_key: &str) -> Result<Vec<String>> {
-        let url = format!("{}/api/resource-groups/agent/active-ids", self.gateway_url);
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
-            .send()
-            .await
-            .context("Failed to fetch active resource group ids")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch active resource group ids status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        resp.json::<Vec<String>>()
-            .await
-            .context("Failed to parse active resource group ids response")
+    pub async fn fetch_active_resource_group_ids(&self) -> Result<Vec<String>> {
+        self.get_json(
+            "/api/resource-groups/agent/active-ids",
+            "fetch active resource group ids",
+        )
+        .await
     }
 
-    pub async fn fetch_assigned_workloads(&self, api_key: &str) -> Result<Vec<AssignedWorkload>> {
-        let url = format!("{}/api/agents/self/workloads", self.gateway_url);
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
-            .send()
-            .await
-            .context("Failed to fetch workloads")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch workloads status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        let items = resp
-            .json::<Vec<serde_json::Value>>()
-            .await
-            .context("Failed to parse workloads response")?;
+    pub async fn fetch_assigned_workloads(&self) -> Result<Vec<AssignedWorkload>> {
+        let items: Vec<serde_json::Value> = self
+            .get_json("/api/agents/self/workloads", "fetch workloads")
+            .await?;
         parse_workloads(items)
     }
 
-    pub async fn push_workload_stats(
-        &self,
-        api_key: &str,
-        stats: Vec<WorkloadStatsUpdate>,
-    ) -> Result<()> {
+    pub async fn push_workload_stats(&self, stats: Vec<WorkloadStatsUpdate>) -> Result<()> {
         if stats.is_empty() {
             return Ok(());
         }
-
-        let url = format!("{}/api/agents/self/workloads/stats", self.gateway_url);
-
-        let resp = self
-            .client
-            .post(&url)
-            .header("X-API-Key", api_key)
-            .json(&WorkloadStatsRequest { stats })
-            .send()
+        let builder = self
+            .request(Method::POST, "/api/agents/self/workloads/stats")
+            .json(&WorkloadStatsRequest { stats });
+        self.send_checked(builder, "push workload stats")
             .await
-            .context("Failed to push workload stats")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to push workload stats status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        Ok(())
+            .map(drop)
     }
 
-    pub async fn push_logs(&self, api_key: &str, entries: Vec<JournalEntry>) -> Result<()> {
-        let url = format!("{}/api/agents/self/logs", self.gateway_url);
-
-        let resp = self
-            .client
-            .post(&url)
-            .header("X-API-Key", api_key)
-            .json(&JournalBatch { entries })
-            .send()
-            .await
-            .context("Failed to push logs")?;
-
-        if !resp.status().is_success() {
-            anyhow::bail!("Failed to push logs status={}", resp.status());
-        }
-
-        Ok(())
+    pub async fn push_logs(&self, entries: Vec<JournalEntry>) -> Result<()> {
+        let builder = self
+            .request(Method::POST, "/api/agents/self/logs")
+            .json(&JournalBatch { entries });
+        self.send_checked(builder, "push logs").await.map(drop)
     }
 
-    pub async fn ack_workload_restart(&self, api_key: &str, workload_id: &str) -> Result<()> {
-        let url = format!(
-            "{}/api/agents/self/workloads/{}/restart-ack",
-            self.gateway_url, workload_id
-        );
-
-        let resp = self
-            .client
-            .post(&url)
-            .header("X-API-Key", api_key)
-            .send()
+    pub async fn ack_workload_restart(&self, workload_id: &str) -> Result<()> {
+        let path = format!("/api/agents/self/workloads/{workload_id}/restart-ack");
+        self.send_checked(self.request(Method::POST, &path), "ack workload restart")
             .await
-            .context("Failed to ack workload restart")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to ack workload restart status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        Ok(())
+            .map(drop)
     }
 
-    pub async fn fetch_assigned_volumes(
-        &self,
-        _agent_id: Uuid,
-        api_key: &str,
-    ) -> Result<Vec<AssignedVolume>> {
-        let url = format!("{}/api/agents/self/volumes", self.gateway_url);
-
-        let resp = self
-            .client
-            .get(&url)
-            .header("X-API-Key", api_key)
-            .send()
-            .await
-            .context("Failed to fetch volumes")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!(
-                "Failed to fetch volumes status={} {}",
-                status,
-                resp.text().await.unwrap_or_default()
-            );
-        }
-
-        let all: Vec<AssignedVolume> = resp
-            .json()
-            .await
-            .context("Failed to parse volumes response")?;
-
+    pub async fn fetch_assigned_volumes(&self) -> Result<Vec<AssignedVolume>> {
+        let all: Vec<AssignedVolume> = self
+            .get_json("/api/agents/self/volumes", "fetch volumes")
+            .await?;
         Ok(all.into_iter().filter(|v| v.status == "in_use").collect())
     }
+}
+
+async fn check_status(response: Response, action: &str) -> Result<Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let body = response.text().await.unwrap_or_default();
+    anyhow::bail!("Failed to {action} status={status} {body}")
+}
+
+async fn wait_out_throttle(response: &Response) {
+    let retry_after = response
+        .headers()
+        .get("Retry-After")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(60);
+    let delay = crate::backoff::retry_after_delay(retry_after);
+    warn!(
+        retry_after,
+        delay_ms = delay.as_millis() as u64,
+        "Registration rate-limited, retrying"
+    );
+    tokio::time::sleep(delay).await;
 }
 
 #[cfg(test)]
@@ -943,14 +556,9 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        ApiClient::new(
-            url,
-            "pub".to_string(),
-            None,
-            Some("10.9.0.1".to_string()),
-            None,
-        )
-        .unwrap()
+        ApiClient::new(url, "pub".to_string(), None, None)
+            .unwrap()
+            .with_api_key("k".to_string())
     }
 
     async fn failing_client() -> ApiClient {
@@ -1063,12 +671,12 @@ mod tests {
     async fn cluster_ca_and_master_endpoints() {
         let client = serve(gateway()).await;
         assert_eq!(fetch_cluster_ca(client.gateway_url()).await.unwrap(), "PEM");
-        let bundle = client.request_master_bundle("key").await.unwrap();
+        let bundle = client.request_master_bundle().await.unwrap();
         assert_eq!(bundle.etcd_name, "etcd1");
         assert_eq!(bundle.vip.unwrap().router_id, 7);
-        let vip = client.fetch_cluster_vip("key").await.unwrap().unwrap();
+        let vip = client.fetch_cluster_vip().await.unwrap().unwrap();
         assert_eq!(vip.address, "10.0.0.9");
-        assert!(client.promote_master("key").await.unwrap());
+        assert!(client.promote_master().await.unwrap());
     }
 
     #[tokio::test]
@@ -1077,54 +685,54 @@ mod tests {
             "/api/cluster/masters/promote",
             post(|| async { StatusCode::CONFLICT }),
         );
-        assert!(!serve(app).await.promote_master("key").await.unwrap());
+        assert!(!serve(app).await.promote_master().await.unwrap());
     }
 
     #[tokio::test]
     async fn resource_group_endpoints_parse_responses() {
         let client = serve(gateway()).await;
         let members = client
-            .fetch_resource_group_members("k", "rg")
+            .fetch_resource_group_members("rg")
             .await
             .unwrap();
         assert_eq!(members[0].agent_id, "rg");
         let services = client
-            .fetch_resource_group_site_services("k", "rg")
+            .fetch_resource_group_site_services("rg")
             .await
             .unwrap();
         assert_eq!(services[0].address, "10.0.0.4");
-        let peers = client.fetch_resource_group_peers("k", "rg").await.unwrap();
+        let peers = client.fetch_resource_group_peers("rg").await.unwrap();
         assert_eq!(peers[0].wg_endpoint, "1.2.3.4:5");
-        assert_eq!(client.fetch_mesh_peers("k").await.unwrap().len(), 1);
+        assert_eq!(client.fetch_mesh_peers().await.unwrap().len(), 1);
         let config = client
-            .fetch_gateway_config("k", "rg", "gw", "wl")
+            .fetch_gateway_config("rg", "gw", "wl")
             .await
             .unwrap();
         assert!(config["routes"].is_array());
         let vpn = client
-            .fetch_resource_group_vpn_peers("k", "rg")
+            .fetch_resource_group_vpn_peers("rg")
             .await
             .unwrap();
         assert_eq!(vpn[0].client_tunnel_ip, "10.8.0.2");
-        let ids = client.fetch_active_resource_group_ids("k").await.unwrap();
+        let ids = client.fetch_active_resource_group_ids().await.unwrap();
         assert_eq!(ids, vec!["rg1".to_string(), "rg2".to_string()]);
     }
 
     #[tokio::test]
     async fn workload_and_volume_endpoints() {
         let client = serve(gateway()).await;
-        let workloads = client.fetch_assigned_workloads("k").await.unwrap();
+        let workloads = client.fetch_assigned_workloads().await.unwrap();
         assert_eq!(workloads[0].image, "nginx");
         assert!(!workloads[0].restart_requested);
         assert_eq!(workloads[0].env_vars.as_ref().unwrap()["A"], "b");
         let volumes = client
-            .fetch_assigned_volumes(Uuid::new_v4(), "k")
+            .fetch_assigned_volumes()
             .await
             .unwrap();
         assert_eq!(volumes.len(), 2);
         assert_eq!(volumes[0].id, "1");
         assert_eq!(volumes[1].id, "2");
-        client.ack_workload_restart("k", "w1").await.unwrap();
+        client.ack_workload_restart("w1").await.unwrap();
     }
 
     #[tokio::test]
@@ -1140,7 +748,7 @@ mod tests {
             {"container_port": 9, "protocol": "sctp"}
         ]);
         let client = serve_workloads(json!([extended, unknown_protocol])).await;
-        let workloads = client.fetch_assigned_workloads("k").await.unwrap();
+        let workloads = client.fetch_assigned_workloads().await.unwrap();
         let ids: Vec<&str> = workloads.iter().map(|w| w.id.as_str()).collect();
         assert_eq!(ids, vec!["w-extended", "w-unknown-protocol"]);
         assert_eq!(workloads[1].ports.as_ref().map(Vec::len), Some(1));
@@ -1152,7 +760,7 @@ mod tests {
         broken["id"] = json!("w-broken");
         broken["cpu_millicores"] = json!("many");
         let client = serve_workloads(json!([workload(), broken, 7])).await;
-        let error = client.fetch_assigned_workloads("k").await.unwrap_err();
+        let error = client.fetch_assigned_workloads().await.unwrap_err();
         assert!(
             error.to_string().contains("ids=w-broken,unknown"),
             "{error}"
@@ -1182,13 +790,13 @@ mod tests {
             }),
         ))
         .await;
-        assert_eq!(client.fetch_assigned_workloads("k").await.unwrap().len(), 1);
+        assert_eq!(client.fetch_assigned_workloads().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
     async fn push_endpoints_skip_empty_payloads() {
         let client = serve(gateway()).await;
-        client.push_workload_stats("k", Vec::new()).await.unwrap();
+        client.push_workload_stats(Vec::new()).await.unwrap();
         let stat = WorkloadStatsUpdate {
             workload_id: "w".to_string(),
             cpu_usage_percent: Some(1.0),
@@ -1197,46 +805,46 @@ mod tests {
             network_tx_bytes: None,
             volume_usage: Vec::new(),
         };
-        client.push_workload_stats("k", vec![stat]).await.unwrap();
+        client.push_workload_stats(vec![stat]).await.unwrap();
         let entry = JournalEntry {
             level: "ERROR".to_string(),
             unit: "u".to_string(),
             message: "m".to_string(),
             timestamp_micros: Some(1),
         };
-        client.push_logs("k", vec![entry]).await.unwrap();
+        client.push_logs(vec![entry]).await.unwrap();
     }
 
     #[tokio::test]
     async fn every_endpoint_reports_server_errors() {
         let client = failing_client().await;
         assert!(fetch_cluster_ca(client.gateway_url()).await.is_err());
-        assert!(client.request_master_bundle("k").await.is_err());
-        assert!(client.fetch_cluster_vip("k").await.is_err());
-        assert!(client.promote_master("k").await.is_err());
-        assert!(client.fetch_resource_group_members("k", "r").await.is_err());
+        assert!(client.request_master_bundle().await.is_err());
+        assert!(client.fetch_cluster_vip().await.is_err());
+        assert!(client.promote_master().await.is_err());
+        assert!(client.fetch_resource_group_members("r").await.is_err());
         assert!(client
-            .fetch_resource_group_site_services("k", "r")
+            .fetch_resource_group_site_services("r")
             .await
             .is_err());
-        assert!(client.fetch_resource_group_peers("k", "r").await.is_err());
+        assert!(client.fetch_resource_group_peers("r").await.is_err());
         assert!(client
-            .fetch_gateway_config("k", "r", "g", "w")
+            .fetch_gateway_config("r", "g", "w")
             .await
             .is_err());
-        assert!(client.fetch_mesh_peers("k").await.is_err());
+        assert!(client.fetch_mesh_peers().await.is_err());
         assert!(client
-            .fetch_resource_group_vpn_peers("k", "r")
+            .fetch_resource_group_vpn_peers("r")
             .await
             .is_err());
-        assert!(client.fetch_active_resource_group_ids("k").await.is_err());
-        assert!(client.fetch_assigned_workloads("k").await.is_err());
+        assert!(client.fetch_active_resource_group_ids().await.is_err());
+        assert!(client.fetch_assigned_workloads().await.is_err());
         assert!(client
-            .fetch_assigned_volumes(Uuid::nil(), "k")
+            .fetch_assigned_volumes()
             .await
             .is_err());
-        assert!(client.ack_workload_restart("k", "w").await.is_err());
-        assert!(client.push_logs("k", Vec::new()).await.is_err());
+        assert!(client.ack_workload_restart("w").await.is_err());
+        assert!(client.push_logs(Vec::new()).await.is_err());
         let stat = WorkloadStatsUpdate {
             workload_id: "w".to_string(),
             cpu_usage_percent: None,
@@ -1245,15 +853,15 @@ mod tests {
             network_tx_bytes: None,
             volume_usage: Vec::new(),
         };
-        assert!(client.push_workload_stats("k", vec![stat]).await.is_err());
+        assert!(client.push_workload_stats(vec![stat]).await.is_err());
     }
 
     #[tokio::test]
     async fn malformed_bodies_are_parse_errors() {
         let app = Router::new().fallback(|| async { "not json" });
         let client = serve(app).await;
-        assert!(client.request_master_bundle("k").await.is_err());
-        assert!(client.fetch_mesh_peers("k").await.is_err());
+        assert!(client.request_master_bundle().await.is_err());
+        assert!(client.fetch_mesh_peers().await.is_err());
     }
 
     #[tokio::test]
@@ -1288,17 +896,18 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
-    fn registration(machine_id: Option<&str>) -> RegisterRequest<'_> {
+    fn registration(machine_id: Option<&str>) -> RegisterRequest {
         RegisterRequest {
-            registration_token: "t",
-            name: "n",
-            hostname: "h",
-            os_type: "linux",
-            os_version: "1",
-            architecture: "x86_64",
-            agent_version: "0.0.0",
-            machine_id,
-            csr_pem: "csr",
+            registration_token: "t".to_string(),
+            name: "n".to_string(),
+            hostname: "h".to_string(),
+            os_type: "linux".to_string(),
+            os_version: "1".to_string(),
+            architecture: "x86_64".to_string(),
+            agent_version: "0.0.0".to_string(),
+            tags: None,
+            csr_pem: Some("csr".to_string()),
+            machine_id: machine_id.map(str::to_string),
         }
     }
 
@@ -1337,7 +946,6 @@ mod tests {
         let client = serve(app)
             .await
             .with_certificate("line1\nline2".to_string());
-        client.set_wg_tunnel_ip("10.9.0.7".to_string()).await;
         let statuses = vec![ContainerStatus {
             workload_id: "w".to_string(),
             container_id: "c".to_string(),
@@ -1346,7 +954,6 @@ mod tests {
         let response = client
             .heartbeat(
                 Uuid::new_v4(),
-                "key",
                 Some(statuses),
                 Some(crate::system::LiveMetricsCollector::new().sample()),
             )
@@ -1357,10 +964,10 @@ mod tests {
         assert_eq!(response.gateway_url.as_deref(), Some("https://gw"));
 
         let (headers, body) = seen.lock().unwrap().take().unwrap();
-        assert_eq!(headers["x-api-key"], "key");
+        assert_eq!(headers["x-api-key"], "k");
         assert_eq!(headers["x-client-cert"], "line1\\nline2");
         assert_eq!(body["wg_public_key"], "pub");
-        assert_eq!(body["wg_tunnel_ip"], "10.9.0.7");
+        assert!(body.get("wg_tunnel_ip").is_none());
         assert_eq!(body["container_statuses"][0]["workload_id"], "w");
         assert!(body["cpu_cores"].is_number());
     }
@@ -1373,14 +980,14 @@ mod tests {
         );
         let ok = serve(app)
             .await
-            .heartbeat(Uuid::nil(), "k", None, None)
+            .heartbeat(Uuid::nil(), None, None)
             .await
             .unwrap();
         assert!(ok.worker_releases.is_empty());
         assert!(!ok.ssh_enabled);
         let failed = failing_client()
             .await
-            .heartbeat(Uuid::nil(), "k", None, None)
+            .heartbeat(Uuid::nil(), None, None)
             .await;
         assert!(failed.is_err());
     }

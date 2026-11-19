@@ -7,12 +7,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    models::agent::{ErrorResponse, PreRegisterRequest, PreRegisterResponse},
+    handlers::{api_error, ApiError},
+    models::agent::{PreRegisterRequest, PreRegisterResponse},
     server::AppState,
-    services::{
-        bootstrap_tokens::{is_valid_role, ROLE_WORKER},
-        registry::PreRegisterParams,
-    },
+    services::bootstrap_tokens::{is_valid_role, ROLE_WORKER},
 };
 
 #[derive(Debug, Deserialize)]
@@ -31,8 +29,7 @@ pub struct RevokeBootstrapTokenResponse {
 pub async fn pre_register_agent(
     State(state): State<AppState>,
     Json(request): Json<PreRegisterRequest>,
-) -> Result<Json<PreRegisterResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let created_by = "admin".to_string();
+) -> Result<Json<PreRegisterResponse>, ApiError> {
     let ttl_hours = request.ttl_hours.unwrap_or(24);
     let agent_id = Uuid::new_v4();
 
@@ -46,33 +43,18 @@ pub async fn pre_register_agent(
                 "Pre-registration for {}@{}",
                 request.name, request.hostname
             )),
-            created_by.clone(),
+            "admin".to_string(),
             ttl_hours,
         )
         .await;
 
-    let pre_agent = state
-        .agent_registry
-        .pre_register_agent(PreRegisterParams {
-            agent_id,
-            name: request.name,
-            hostname: request.hostname,
-            expected_os_type: request.expected_os_type,
-            expected_architecture: request.expected_architecture,
-            tags: request.tags,
-            created_by,
-            registration_token: token.token.clone(),
-            token_expires_at: token.expires_at,
-        })
-        .await;
-
     Ok(Json(PreRegisterResponse {
-        agent_id: pre_agent.id,
+        agent_id,
         registration_token: token.token,
         token_expires_at: token.expires_at.to_rfc3339(),
         message: format!(
             "Agent '{}@{}' pre-registered. Use the registration token for initial connection.",
-            pre_agent.name, pre_agent.hostname
+            request.name, request.hostname
         ),
     }))
 }
@@ -86,14 +68,14 @@ pub async fn list_pending_agents(
 pub async fn delete_pending_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
-) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<StatusCode, ApiError> {
     match state
         .agent_registry
         .delete_pre_registered_agent(agent_id)
         .await
     {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: e }))),
+        Err(e) => Err(api_error(StatusCode::NOT_FOUND, e)),
     }
 }
 
@@ -119,17 +101,14 @@ pub async fn get_agent(
     }
 }
 
-fn internal_error(message: String) -> (StatusCode, Json<ErrorResponse>) {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ErrorResponse { error: message }),
-    )
+fn internal_error(message: String) -> ApiError {
+    api_error(StatusCode::INTERNAL_SERVER_ERROR, message)
 }
 
 pub async fn deregister_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<Uuid>,
-) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<StatusCode, ApiError> {
     state
         .api_key_manager
         .revoke_key(agent_id)
@@ -147,11 +126,9 @@ pub async fn deregister_agent(
         .await
     {
         Ok(_) => Ok(StatusCode::NO_CONTENT),
-        Err(e) => Err((
+        Err(e) => Err(api_error(
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: format!("Failed to deregister agent: {}", e),
-            }),
+            format!("Failed to deregister agent: {}", e),
         )),
     }
 }
@@ -165,19 +142,14 @@ pub async fn get_statistics(
 pub async fn create_bootstrap_token(
     State(state): State<AppState>,
     Json(request): Json<CreateBootstrapTokenRequest>,
-) -> Result<
-    Json<crate::services::bootstrap_tokens::BootstrapToken>,
-    (StatusCode, Json<ErrorResponse>),
-> {
+) -> Result<Json<crate::services::bootstrap_tokens::BootstrapToken>, ApiError> {
     let ttl_hours = request.ttl_hours.unwrap_or(24 * 30);
     let max_uses = request.max_uses.unwrap_or(100);
     let role = request.role.unwrap_or_else(|| ROLE_WORKER.to_string());
     if !is_valid_role(&role) {
-        return Err((
+        return Err(api_error(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!("Invalid role '{}', expected master or worker", role),
-            }),
+            format!("Invalid role '{}', expected master or worker", role),
         ));
     }
 
@@ -192,12 +164,7 @@ pub async fn create_bootstrap_token(
         )
         .await
         .map(Json)
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e }),
-            )
-        })
+        .map_err(|e| api_error(StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
 pub async fn list_bootstrap_tokens(
@@ -209,7 +176,7 @@ pub async fn list_bootstrap_tokens(
 pub async fn revoke_bootstrap_token(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Json<RevokeBootstrapTokenResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<RevokeBootstrapTokenResponse>, ApiError> {
     state
         .bootstrap_token_manager
         .revoke(id)
@@ -219,5 +186,5 @@ pub async fn revoke_bootstrap_token(
                 message: format!("Bootstrap token {} revoked", id),
             })
         })
-        .map_err(|e| (StatusCode::NOT_FOUND, Json(ErrorResponse { error: e })))
+        .map_err(|e| api_error(StatusCode::NOT_FOUND, e))
 }
