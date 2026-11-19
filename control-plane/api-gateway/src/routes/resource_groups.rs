@@ -3,31 +3,27 @@ use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Router,
 };
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use chrono::Utc;
 use entity::{
-    entities::{
-        agent_rg_wg_ports, agents, buckets, networks, resource_group_vpn_peers, resource_groups,
-        sites, volumes, workloads,
-    },
-    Agents, Buckets, Networks, ResourceGroupVpnPeers, ResourceGroups, Sites, Volumes, Workloads,
+    entities::{buckets, networks, resource_groups, volumes, workloads},
+    Buckets, Networks, ResourceGroups, Volumes, Workloads,
 };
-use ring::rand::{SecureRandom, SystemRandom};
 use sea_orm::{
-    sea_query::OnConflict, ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbConn, DbErr,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, PaginatorTrait,
+    QueryFilter, QueryOrder,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use shared::env_secrets;
-use shared::workload_status::ACTIVE_STATUSES;
-use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use shared::{env_secrets, validate::is_dns_label};
 use uuid::Uuid;
 
+use super::resource_group_network::{
+    create_vpn_config, ensure_no_node_address_inside, ensure_tenant_range, parse_cidr,
+    revoke_vpn_peer, suggest_cidr, MGMT_TUNNEL_CIDR,
+};
 use crate::{
     auth::rbac::{CanManageResourceGroups, CanViewResourceGroups},
     AppState,
@@ -37,6 +33,31 @@ const DEFAULT_ICON: &str = "mdi:cube-outline";
 const DEFAULT_COLOR: &str = "#6366f1";
 const MAX_ICON_IMAGE_BYTES: usize = 512 * 1024;
 const ALLOWED_ICON_IMAGE_TYPES: [&str; 3] = ["image/png", "image/jpeg", "image/svg+xml"];
+
+pub(super) type ApiError = (StatusCode, Json<serde_json::Value>);
+
+pub(super) fn error(status: StatusCode, message: impl Into<String>) -> ApiError {
+    (status, Json(json!({ "error": message.into() })))
+}
+
+pub(super) fn db_error(context: &'static str) -> impl FnOnce(DbErr) -> ApiError {
+    move |cause| {
+        tracing::error!(error = %cause, "{context}");
+        error(StatusCode::INTERNAL_SERVER_ERROR, "database error")
+    }
+}
+
+pub(super) async fn load_group(
+    state: &AppState,
+    id: Uuid,
+) -> Result<resource_groups::Model, ApiError> {
+    ResourceGroups::find_by_id(id)
+        .filter(resource_groups::Column::OrganizationId.eq(state.default_org_id))
+        .one(&state.db_conn)
+        .await
+        .map_err(db_error("failed to find resource group"))?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "resource group not found"))
+}
 
 #[derive(Debug, Deserialize)]
 pub struct CreateResourceGroupRequest {
@@ -94,9 +115,7 @@ impl From<resource_groups::Model> for ResourceGroupResponse {
     }
 }
 
-fn normalize_preview_url(
-    raw: String,
-) -> Result<Option<String>, (StatusCode, Json<serde_json::Value>)> {
+fn normalize_preview_url(raw: String) -> Result<Option<String>, ApiError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -104,41 +123,28 @@ fn normalize_preview_url(
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
         return Ok(Some(trimmed.to_string()));
     }
-    Err((
+    Err(error(
         StatusCode::BAD_REQUEST,
-        Json(json!({ "error": "preview_url must start with http:// or https://" })),
+        "preview_url must start with http:// or https://",
     ))
 }
 
-const MAX_NAME_LENGTH: usize = 63;
-
-fn validate_name(name: String) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
+fn validate_name(name: String) -> Result<String, ApiError> {
     let name = name.trim().to_string();
-    let valid = !name.is_empty()
-        && name.len() <= MAX_NAME_LENGTH
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
-    if valid {
+    if is_dns_label(&name, true) {
         return Ok(name);
     }
-    Err((
+    Err(error(
         StatusCode::BAD_REQUEST,
-        Json(json!({ "error": "name must be a dns label of letters, digits and hyphens" })),
+        "name must be a dns label of letters, digits and hyphens",
     ))
-}
-
-fn get_org_id(state: &AppState) -> Uuid {
-    state.default_org_id
 }
 
 pub async fn list_resource_groups(
     CanViewResourceGroups(_claims): CanViewResourceGroups,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
+) -> Result<impl IntoResponse, ApiError> {
+    let org_id = state.default_org_id;
 
     let groups = ResourceGroups::find()
         .filter(resource_groups::Column::OrganizationId.eq(org_id))
@@ -146,13 +152,7 @@ pub async fn list_resource_groups(
         .order_by_asc(resource_groups::Column::Name)
         .all(&state.db_conn)
         .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list resource groups");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
+        .map_err(db_error("failed to list resource groups"))?;
 
     let resp: Vec<ResourceGroupResponse> = groups.into_iter().map(Into::into).collect();
     Ok((StatusCode::OK, Json(json!(resp))))
@@ -162,24 +162,25 @@ pub async fn create_resource_group(
     CanManageResourceGroups(_claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Json(req): Json<CreateResourceGroupRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
+) -> Result<impl IntoResponse, ApiError> {
+    let org_id = state.default_org_id;
     let name = validate_name(req.name)?;
 
     let requested = parse_cidr(&req.internal_cidr).ok_or_else(|| {
-        (
+        error(
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": format!("invalid CIDR: {}", req.internal_cidr) })),
+            format!("invalid CIDR: {}", req.internal_cidr),
         )
     })?;
 
     ensure_tenant_range(&requested, &req.internal_cidr)?;
 
     if requested.overlaps(&MGMT_TUNNEL_CIDR) {
-        return Err((
+        return Err(error(
             StatusCode::CONFLICT,
-            Json(
-                json!({ "error": format!("CIDR {} overlaps with the management tunnel range (10.100.0.0/16)", req.internal_cidr) }),
+            format!(
+                "CIDR {} overlaps with the management tunnel range (10.100.0.0/16)",
+                req.internal_cidr
             ),
         ));
     }
@@ -188,13 +189,7 @@ pub async fn create_resource_group(
         .filter(resource_groups::Column::OrganizationId.eq(org_id))
         .all(&state.db_conn)
         .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to check cidr overlap");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
+        .map_err(db_error("failed to check cidr overlap"))?;
 
     for group in &existing_groups {
         let Some(other) = parse_cidr(&group.internal_cidr) else {
@@ -202,10 +197,11 @@ pub async fn create_resource_group(
         };
 
         if requested.overlaps(&other) {
-            return Err((
+            return Err(error(
                 StatusCode::CONFLICT,
-                Json(
-                    json!({ "error": format!("CIDR {} overlaps with existing resource group {} ({})", req.internal_cidr, group.name, group.internal_cidr) }),
+                format!(
+                    "CIDR {} overlaps with existing resource group {} ({})",
+                    req.internal_cidr, group.name, group.internal_cidr
                 ),
             ));
         }
@@ -232,13 +228,10 @@ pub async fn create_resource_group(
         ..Default::default()
     };
 
-    let inserted = model.insert(&state.db_conn).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to create resource group");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
+    let inserted = model
+        .insert(&state.db_conn)
+        .await
+        .map_err(db_error("failed to create resource group"))?;
 
     Ok((
         StatusCode::CREATED,
@@ -246,154 +239,12 @@ pub async fn create_resource_group(
     ))
 }
 
-const DNS_HOST_OFFSET: u32 = 2;
-const VPN_PEER_LOWEST_OFFSET: u32 = 3;
-const SUGGESTED_CIDR_BASE: u32 = 0x0A650000;
-const SUGGESTED_CIDR_PREFIX: u8 = 24;
-const SUGGESTED_CIDR_MAX_SUBNETS: u32 = 256;
-
-const MIN_TENANT_PREFIX: u8 = 16;
-const MAX_TENANT_PREFIX: u8 = 29;
-
-const PRIVATE_RANGES: [Cidr; 3] = [
-    Cidr {
-        network: 0x0A000000,
-        prefix_len: 8,
-    },
-    Cidr {
-        network: 0xAC100000,
-        prefix_len: 12,
-    },
-    Cidr {
-        network: 0xC0A80000,
-        prefix_len: 16,
-    },
-];
-
-const MGMT_TUNNEL_CIDR: Cidr = Cidr {
-    network: 0x0A640000,
-    prefix_len: 16,
-};
-
-fn bad_cidr(error: String) -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))
-}
-
-fn ensure_tenant_range(
-    requested: &Cidr,
-    raw: &str,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if !PRIVATE_RANGES.iter().any(|range| range.contains(requested)) {
-        return Err(bad_cidr(format!(
-            "CIDR {raw} must be inside 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16"
-        )));
-    }
-    if !(MIN_TENANT_PREFIX..=MAX_TENANT_PREFIX).contains(&requested.prefix_len) {
-        return Err(bad_cidr(format!(
-            "CIDR {raw} prefix must be between /{MIN_TENANT_PREFIX} and /{MAX_TENANT_PREFIX}"
-        )));
-    }
-    Ok(())
-}
-
-async fn ensure_no_node_address_inside(
-    state: &AppState,
-    requested: &Cidr,
-    raw: &str,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    let agents = Agents::find().all(&state.db_conn).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to list agents for cidr check");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
-    let collides = agents
-        .iter()
-        .flat_map(|agent| [&agent.ip_address, &agent.wg_tunnel_ip])
-        .flatten()
-        .filter_map(|address| address.parse::<Ipv4Addr>().ok())
-        .any(|address| requested.contains_address(u32::from(address)));
-    if collides {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(json!({ "error": format!("CIDR {raw} contains the address of a node") })),
-        ));
-    }
-    Ok(())
-}
-
-pub async fn suggest_cidr(
-    CanViewResourceGroups(_claims): CanViewResourceGroups,
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    let existing_groups = ResourceGroups::find()
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list resource groups for cidr suggestion");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    let existing_cidrs: Vec<Cidr> = existing_groups
-        .iter()
-        .filter_map(|g| parse_cidr(&g.internal_cidr))
-        .collect();
-
-    for subnet_index in 0..SUGGESTED_CIDR_MAX_SUBNETS {
-        let network = SUGGESTED_CIDR_BASE + (subnet_index << (32 - SUGGESTED_CIDR_PREFIX));
-        let candidate = Cidr {
-            network,
-            prefix_len: SUGGESTED_CIDR_PREFIX,
-        };
-
-        if !existing_cidrs.iter().any(|c| c.overlaps(&candidate)) {
-            let [a, b, c, d] = network.to_be_bytes();
-            return Ok((
-                StatusCode::OK,
-                Json(
-                    json!({ "internal_cidr": format!("{}.{}.{}.{}/{}", a, b, c, d, SUGGESTED_CIDR_PREFIX) }),
-                ),
-            ));
-        }
-    }
-
-    Err((
-        StatusCode::CONFLICT,
-        Json(json!({ "error": "no free cidr subnet available" })),
-    ))
-}
-
 pub async fn get_resource_group(
     CanViewResourceGroups(_claims): CanViewResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    let group = ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to get resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
+) -> Result<impl IntoResponse, ApiError> {
+    let group = load_group(&state, id).await?;
 
     Ok((
         StatusCode::OK,
@@ -406,26 +257,8 @@ pub async fn update_resource_group(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateResourceGroupRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    let group = ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
+) -> Result<impl IntoResponse, ApiError> {
+    let group = load_group(&state, id).await?;
 
     let mut active: resource_groups::ActiveModel = group.into();
     if let Some(name) = req.name {
@@ -450,13 +283,10 @@ pub async fn update_resource_group(
     }
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
-    let updated = active.update(&state.db_conn).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to update resource group");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
+    let updated = active
+        .update(&state.db_conn)
+        .await
+        .map_err(db_error("failed to update resource group"))?;
 
     Ok((
         StatusCode::OK,
@@ -470,60 +300,37 @@ pub async fn upload_resource_group_icon_image(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
+) -> Result<impl IntoResponse, ApiError> {
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
     if !ALLOWED_ICON_IMAGE_TYPES.contains(&content_type) {
-        return Err((
+        return Err(error(
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Json(json!({ "error": "icon image must be png, jpeg or svg" })),
+            "icon image must be png, jpeg or svg",
         ));
     }
 
     if body.len() > MAX_ICON_IMAGE_BYTES {
-        return Err((
+        return Err(error(
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(
-                json!({ "error": format!("icon image must be under {} bytes", MAX_ICON_IMAGE_BYTES) }),
-            ),
+            format!("icon image must be under {} bytes", MAX_ICON_IMAGE_BYTES),
         ));
     }
 
-    let group = ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
+    let group = load_group(&state, id).await?;
 
     let mut active: resource_groups::ActiveModel = group.into();
     active.icon_image = Set(Some(body.to_vec()));
     active.icon_image_mime = Set(Some(content_type.to_string()));
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
-    let updated = active.update(&state.db_conn).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to store resource group icon image");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
+    let updated = active
+        .update(&state.db_conn)
+        .await
+        .map_err(db_error("failed to store resource group icon image"))?;
 
     Ok((
         StatusCode::OK,
@@ -535,31 +342,13 @@ pub async fn get_resource_group_icon_image(
     CanViewResourceGroups(_claims): CanViewResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    let group = ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
+) -> Result<Response, ApiError> {
+    let group = load_group(&state, id).await?;
 
     let (Some(image), Some(mime)) = (group.icon_image, group.icon_image_mime) else {
-        return Err((
+        return Err(error(
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": "resource group has no icon image" })),
+            "resource group has no icon image",
         ));
     };
 
@@ -570,39 +359,18 @@ pub async fn delete_resource_group_icon_image(
     CanManageResourceGroups(_claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    let group = ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
+) -> Result<impl IntoResponse, ApiError> {
+    let group = load_group(&state, id).await?;
 
     let mut active: resource_groups::ActiveModel = group.into();
     active.icon_image = Set(None);
     active.icon_image_mime = Set(None);
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
-    let updated = active.update(&state.db_conn).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to clear resource group icon image");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
+    let updated = active
+        .update(&state.db_conn)
+        .await
+        .map_err(db_error("failed to clear resource group icon image"))?;
 
     Ok((
         StatusCode::OK,
@@ -654,125 +422,78 @@ pub async fn delete_resource_group(
     CanManageResourceGroups(claims): CanManageResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    let group = ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
+) -> Result<impl IntoResponse, ApiError> {
+    let group = load_group(&state, id).await?;
 
     let active_workloads = Workloads::find()
         .filter(workloads::Column::ResourceGroupId.eq(id))
         .filter(workloads::Column::Status.is_in(["pending", "scheduled", "running"]))
         .count(&state.db_conn)
         .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to count workloads");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
+        .map_err(db_error("failed to count workloads"))?;
 
     if active_workloads > 0 {
-        return Err((
+        return Err(error(
             StatusCode::CONFLICT,
-            Json(json!({ "error": "resource group has active workloads" })),
+            "resource group has active workloads",
         ));
     }
 
-    let contained = contained_resources(&state.db_conn, id).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to list contained resources");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
+    let contained = contained_resources(&state.db_conn, id)
+        .await
+        .map_err(db_error("failed to list contained resources"))?;
 
     let mut active: resource_groups::ActiveModel = group.into();
     active.status = Set("deleting".to_string());
     active.updated_at = Set(Some(Utc::now().naive_utc()));
-    active.update(&state.db_conn).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to update resource group status");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
+    active
+        .update(&state.db_conn)
+        .await
+        .map_err(db_error("failed to update resource group status"))?;
 
-    if let Err(error) = crate::vault_service::teardown_resource_group(&state, id).await {
-        tracing::error!(resource_group_id = %id, error = %error, "vault cleanup failed, deletion will be retried");
-        return Err((
+    if let Err(cause) = crate::vault_service::teardown_resource_group(&state, id).await {
+        tracing::error!(resource_group_id = %id, error = %cause, "vault cleanup failed, deletion will be retried");
+        return Err(error(
             StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": "vault cleanup failed, deletion will be retried" })),
+            "vault cleanup failed, deletion will be retried",
         ));
     }
 
     ResourceGroups::delete_by_id(id)
         .exec(&state.db_conn)
         .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to delete resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
+        .map_err(db_error("failed to delete resource group"))?;
 
     audit_cascade(claims.user_id, id, &contained);
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn list_group_resources<E: EntityTrait>(
+    state: &AppState,
+    id: Uuid,
+    column: E::Column,
+    context: &'static str,
+) -> Result<Vec<E::Model>, ApiError> {
+    load_group(state, id).await?;
+    E::find()
+        .filter(column.eq(id))
+        .all(&state.db_conn)
+        .await
+        .map_err(db_error(context))
 }
 
 pub async fn list_resource_group_workloads(
     CanViewResourceGroups(_claims): CanViewResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
-
-    let mut workloads = Workloads::find()
-        .filter(workloads::Column::ResourceGroupId.eq(id))
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list workloads");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
+) -> Result<impl IntoResponse, ApiError> {
+    let mut workloads = list_group_resources::<Workloads>(
+        &state,
+        id,
+        workloads::Column::ResourceGroupId,
+        "failed to list workloads",
+    )
+    .await?;
 
     for workload in &mut workloads {
         let context = env_secrets::workload_env(workload.id);
@@ -782,745 +503,55 @@ pub async fn list_resource_group_workloads(
             .and_then(|stored| env_secrets::redact(stored, &context));
     }
 
-    Ok((StatusCode::OK, Json(json!(workloads))))
+    Ok(Json(workloads))
 }
 
 pub async fn list_resource_group_volumes(
     CanViewResourceGroups(_claims): CanViewResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
-
-    let vols = Volumes::find()
-        .filter(volumes::Column::ResourceGroupId.eq(id))
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list volumes");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    Ok((StatusCode::OK, Json(json!(vols))))
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        list_group_resources::<Volumes>(
+            &state,
+            id,
+            volumes::Column::ResourceGroupId,
+            "failed to list volumes",
+        )
+        .await?,
+    ))
 }
 
 pub async fn list_resource_group_buckets(
     CanViewResourceGroups(_claims): CanViewResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
-
-    let buckets = Buckets::find()
-        .filter(buckets::Column::ResourceGroupId.eq(id))
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list buckets");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    Ok((StatusCode::OK, Json(json!(buckets))))
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        list_group_resources::<Buckets>(
+            &state,
+            id,
+            buckets::Column::ResourceGroupId,
+            "failed to list buckets",
+        )
+        .await?,
+    ))
 }
 
 pub async fn list_resource_group_networks(
     CanViewResourceGroups(_claims): CanViewResourceGroups,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
-
-    let nets = Networks::find()
-        .filter(networks::Column::ResourceGroupId.eq(id))
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list networks");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    Ok((StatusCode::OK, Json(json!(nets))))
-}
-
-#[derive(Debug, Serialize)]
-pub struct ResourceGroupPeer {
-    pub agent_id: Uuid,
-    pub wg_public_key: String,
-    pub wg_endpoint: String,
-    pub wg_tunnel_ip: String,
-    pub wg_listen_port: Option<u16>,
-}
-
-async fn reported_wg_ports(
-    db: &DbConn,
-    resource_group_id: Uuid,
-) -> Result<HashMap<Uuid, u16>, DbErr> {
-    Ok(agent_rg_wg_ports::Entity::find()
-        .filter(agent_rg_wg_ports::Column::ResourceGroupId.eq(resource_group_id))
-        .all(db)
-        .await?
-        .into_iter()
-        .filter_map(|row| Some((row.agent_id, u16::try_from(row.port).ok()?)))
-        .collect())
-}
-
-fn with_port(endpoint: &str, port: u16) -> String {
-    match endpoint.rsplit_once(':') {
-        Some((host, _)) => format!("{host}:{port}"),
-        None => endpoint.to_string(),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ReportWgPortRequest {
-    pub port: u16,
-}
-
-pub async fn report_resource_group_wg_port(
-    agent: crate::auth::agent::AgentApiKey,
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-    Json(request): Json<ReportWgPortRequest>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-    if request.port < 1024 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "port out of range" })),
-        ));
-    }
-    let row = agent_rg_wg_ports::ActiveModel {
-        agent_id: Set(agent.agent_id),
-        resource_group_id: Set(id),
-        port: Set(i32::from(request.port)),
-        updated_at: Set(Utc::now().naive_utc()),
-    };
-    agent_rg_wg_ports::Entity::insert(row)
-        .on_conflict(
-            OnConflict::columns([
-                agent_rg_wg_ports::Column::AgentId,
-                agent_rg_wg_ports::Column::ResourceGroupId,
-            ])
-            .update_columns([
-                agent_rg_wg_ports::Column::Port,
-                agent_rg_wg_ports::Column::UpdatedAt,
-            ])
-            .to_owned(),
+) -> Result<impl IntoResponse, ApiError> {
+    Ok(Json(
+        list_group_resources::<Networks>(
+            &state,
+            id,
+            networks::Column::ResourceGroupId,
+            "failed to list networks",
         )
-        .exec(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to store reported wireguard port");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn list_active_resource_group_ids(
-    _agent: crate::auth::agent::AgentApiKey,
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let ids: Vec<Uuid> = ResourceGroups::find()
-        .filter(resource_groups::Column::Status.eq("active"))
-        .all(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list active resource groups");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .into_iter()
-        .map(|rg| rg.id)
-        .collect();
-
-    Ok((StatusCode::OK, Json(json!(ids))))
-}
-
-pub async fn list_resource_group_peers(
-    _agent: crate::auth::agent::AgentApiKey,
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    ResourceGroups::find_by_id(id)
-        .one(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
-
-    let hosting_agents = Workloads::find()
-        .filter(workloads::Column::ResourceGroupId.eq(id))
-        .filter(workloads::Column::AssignedAgentId.is_not_null())
-        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
-        .all(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list resource group workloads");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    let mut agent_ids: Vec<Uuid> = hosting_agents
-        .into_iter()
-        .filter_map(|w| w.assigned_agent_id)
-        .collect();
-    agent_ids.sort_unstable();
-    agent_ids.dedup();
-
-    if agent_ids.is_empty() {
-        return Ok((StatusCode::OK, Json(json!(Vec::<ResourceGroupPeer>::new()))));
-    }
-
-    let agent_rows = Agents::find()
-        .filter(agents::Column::Id.is_in(agent_ids))
-        .filter(agents::Column::WgPublicKey.is_not_null())
-        .filter(agents::Column::WgEndpoint.is_not_null())
-        .filter(agents::Column::WgTunnelIp.is_not_null())
-        .all(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to fetch peer agents");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    let ports = reported_wg_ports(&state.agent_db, id).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to load reported wireguard ports");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
-
-    let peers: Vec<ResourceGroupPeer> = agent_rows
-        .into_iter()
-        .filter_map(|a| {
-            Some(ResourceGroupPeer {
-                agent_id: a.id,
-                wg_public_key: a.wg_public_key?,
-                wg_endpoint: a.wg_endpoint?,
-                wg_tunnel_ip: a.wg_tunnel_ip?,
-                wg_listen_port: ports.get(&a.id).copied(),
-            })
-        })
-        .collect();
-
-    Ok((StatusCode::OK, Json(json!(peers))))
-}
-
-#[derive(Debug, Serialize)]
-pub struct ResourceGroupMember {
-    pub workload_id: Uuid,
-    pub agent_id: Uuid,
-    pub service_name: Option<String>,
-    pub guest_ip: String,
-}
-
-pub async fn list_resource_group_members(
-    _agent: crate::auth::agent::AgentApiKey,
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let rows = Workloads::find()
-        .filter(workloads::Column::ResourceGroupId.eq(id))
-        .filter(workloads::Column::AssignedAgentId.is_not_null())
-        .filter(workloads::Column::GuestIp.is_not_null())
-        .filter(workloads::Column::DesiredState.ne("stopped"))
-        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
-        .all(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list resource group members");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    let members: Vec<ResourceGroupMember> = rows
-        .into_iter()
-        .filter_map(|w| {
-            Some(ResourceGroupMember {
-                workload_id: w.id,
-                agent_id: w.assigned_agent_id?,
-                service_name: w.service_name,
-                guest_ip: w.guest_ip?,
-            })
-        })
-        .collect();
-
-    Ok((StatusCode::OK, Json(json!(members))))
-}
-
-#[derive(Debug, Serialize)]
-pub struct SiteService {
-    pub service_name: String,
-    pub address: String,
-}
-
-pub async fn list_resource_group_site_services(
-    _agent: crate::auth::agent::AgentApiKey,
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let Some(address) = crate::ingress_sync::site_edge_address() else {
-        return Ok((StatusCode::OK, Json(json!(Vec::<SiteService>::new()))));
-    };
-    let services: Vec<SiteService> = Sites::find()
-        .filter(sites::Column::ResourceGroupId.eq(id))
-        .filter(sites::Column::Mode.eq("static"))
-        .all(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list resource group sites");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .into_iter()
-        .map(|site| SiteService {
-            service_name: site.name,
-            address: address.clone(),
-        })
-        .collect();
-
-    Ok((StatusCode::OK, Json(json!(services))))
-}
-
-pub async fn list_mesh_peers(
-    _agent: crate::auth::agent::AgentApiKey,
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let agent_rows = Agents::find()
-        .filter(agents::Column::WgPublicKey.is_not_null())
-        .filter(agents::Column::WgEndpoint.is_not_null())
-        .filter(agents::Column::WgTunnelIp.is_not_null())
-        .all(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to fetch mesh peers");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    let peers: Vec<ResourceGroupPeer> = agent_rows
-        .into_iter()
-        .filter_map(|a| {
-            Some(ResourceGroupPeer {
-                agent_id: a.id,
-                wg_public_key: a.wg_public_key?,
-                wg_endpoint: a.wg_endpoint?,
-                wg_tunnel_ip: a.wg_tunnel_ip?,
-                wg_listen_port: None,
-            })
-        })
-        .collect();
-
-    Ok((StatusCode::OK, Json(json!(peers))))
-}
-
-#[derive(Debug, Serialize)]
-pub struct VpnPeerInfo {
-    pub client_public_key: String,
-    pub client_tunnel_ip: String,
-}
-
-pub async fn list_resource_group_vpn_peers(
-    _agent: crate::auth::agent::AgentApiKey,
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    let peers: Vec<VpnPeerInfo> = ResourceGroupVpnPeers::find()
-        .filter(resource_group_vpn_peers::Column::ResourceGroupId.eq(id))
-        .all(&state.agent_db)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list resource group vpn peers");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .into_iter()
-        .map(|p| VpnPeerInfo {
-            client_public_key: p.client_public_key,
-            client_tunnel_ip: p.client_tunnel_ip,
-        })
-        .collect();
-
-    Ok((StatusCode::OK, Json(json!(peers))))
-}
-
-pub async fn create_vpn_config(
-    CanManageResourceGroups(claims): CanManageResourceGroups,
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
-    let org_id = get_org_id(&state);
-
-    let group = ResourceGroups::find_by_id(id)
-        .filter(resource_groups::Column::OrganizationId.eq(org_id))
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to get resource group");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": "resource group not found" })),
-            )
-        })?;
-
-    let hosting_agents = Workloads::find()
-        .filter(workloads::Column::ResourceGroupId.eq(id))
-        .filter(workloads::Column::AssignedAgentId.is_not_null())
-        .filter(workloads::Column::Status.is_in(ACTIVE_STATUSES))
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list resource group workloads");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-
-    let mut agent_ids: Vec<Uuid> = hosting_agents
-        .into_iter()
-        .filter_map(|w| w.assigned_agent_id)
-        .collect();
-    agent_ids.sort_unstable();
-    agent_ids.dedup();
-
-    if agent_ids.is_empty() {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "no WireGuard-enabled agent online" })),
-        ));
-    }
-
-    let gateway_agent = Agents::find()
-        .filter(agents::Column::Id.is_in(agent_ids))
-        .filter(agents::Column::Status.eq("Online"))
-        .filter(agents::Column::WgPublicKey.is_not_null())
-        .filter(agents::Column::WgEndpoint.is_not_null())
-        .order_by_asc(agents::Column::RegisteredAt)
-        .one(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to find gateway agent");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .ok_or_else(|| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": "no WireGuard-enabled agent online" })),
-            )
-        })?;
-
-    let server_pubkey = gateway_agent.wg_public_key.as_deref().unwrap_or("");
-    let reported_port = reported_wg_ports(&state.db_conn, id)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to load reported wireguard ports");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .get(&gateway_agent.id)
-        .copied();
-    let advertised = gateway_agent.wg_endpoint.as_deref().unwrap_or("");
-    let endpoint = match reported_port {
-        Some(port) => with_port(advertised, port),
-        None => advertised.to_string(),
-    };
-
-    let client_private_key = generate_wg_key().map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "failed to generate keypair" })),
-        )
-    })?;
-
-    let client_public_key = derive_wg_public_key(&client_private_key).ok_or_else(|| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "failed to derive public key" })),
-        )
-    })?;
-
-    let existing_ips: Vec<String> = ResourceGroupVpnPeers::find()
-        .filter(resource_group_vpn_peers::Column::ResourceGroupId.eq(id))
-        .all(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to list existing vpn peers");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?
-        .into_iter()
-        .map(|p| p.client_tunnel_ip)
-        .collect();
-
-    let client_tunnel_ip =
-        allocate_vpn_peer_ip(&group.internal_cidr, &existing_ips).ok_or_else(|| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({ "error": "no free address in resource group cidr" })),
-            )
-        })?;
-
-    let peer = resource_group_vpn_peers::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        resource_group_id: Set(id),
-        user_id: Set(claims.user_id),
-        client_public_key: Set(client_public_key),
-        client_tunnel_ip: Set(client_tunnel_ip.clone()),
-        created_at: Set(Utc::now().naive_utc()),
-    };
-    peer.insert(&state.db_conn).await.map_err(|e| {
-        tracing::error!(error = %e, "failed to store vpn peer");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "database error" })),
-        )
-    })?;
-
-    let dns = dns_host_ip(&group.internal_cidr).unwrap_or_else(|| "1.1.1.1".to_string());
-    let search_domain = format!("svc.{}.internal", id);
-
-    let config = format!(
-        "[Interface]\nPrivateKey = {client_private_key}\nAddress = {client_tunnel_ip}/32\nDNS = {dns}, {search_domain}\n\n[Peer]\nPublicKey = {server_pubkey}\nEndpoint = {endpoint}\nAllowedIPs = {cidr}\nPersistentKeepalive = 25\n",
-        client_private_key = client_private_key,
-        client_tunnel_ip = client_tunnel_ip,
-        dns = dns,
-        server_pubkey = server_pubkey,
-        endpoint = endpoint,
-        cidr = group.internal_cidr,
-    );
-
-    let filename = format!("csfx-{}.conf", group.name.to_lowercase().replace(' ', "-"));
-
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
-            (
-                header::CONTENT_DISPOSITION,
-                &format!("attachment; filename=\"{}\"", filename),
-            ),
-        ],
-        config,
-    )
-        .into_response())
-}
-
-pub async fn revoke_vpn_peer(
-    CanManageResourceGroups(_claims): CanManageResourceGroups,
-    State(state): State<AppState>,
-    Path((id, peer_id)): Path<(Uuid, Uuid)>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
-    let result = ResourceGroupVpnPeers::delete_many()
-        .filter(resource_group_vpn_peers::Column::Id.eq(peer_id))
-        .filter(resource_group_vpn_peers::Column::ResourceGroupId.eq(id))
-        .exec(&state.db_conn)
-        .await
-        .map_err(|e| {
-            tracing::error!(error = %e, "failed to revoke vpn peer");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "database error" })),
-            )
-        })?;
-    if result.rows_affected == 0 {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "vpn peer not found" })),
-        ));
-    }
-    Ok(StatusCode::NO_CONTENT)
-}
-
-fn generate_wg_key() -> Result<String, ring::error::Unspecified> {
-    let rng = SystemRandom::new();
-    let mut key_bytes = [0u8; 32];
-    rng.fill(&mut key_bytes)?;
-    key_bytes[0] &= 248;
-    key_bytes[31] &= 127;
-    key_bytes[31] |= 64;
-    Ok(B64.encode(key_bytes))
-}
-
-fn derive_wg_public_key(private_key_b64: &str) -> Option<String> {
-    let bytes = B64.decode(private_key_b64).ok()?;
-    let bytes: [u8; 32] = bytes.try_into().ok()?;
-    let secret = x25519_dalek::StaticSecret::from(bytes);
-    let public = x25519_dalek::PublicKey::from(&secret);
-    Some(B64.encode(public.as_bytes()))
-}
-
-fn allocate_vpn_peer_ip(cidr: &str, taken: &[String]) -> Option<String> {
-    let parsed = parse_cidr(cidr)?;
-    let host_count = 1u32 << (32 - parsed.prefix_len);
-    (VPN_PEER_LOWEST_OFFSET..host_count.saturating_sub(1))
-        .rev()
-        .map(|offset| Ipv4Addr::from(parsed.network + offset).to_string())
-        .find(|candidate| !taken.contains(candidate))
-}
-
-struct Cidr {
-    network: u32,
-    prefix_len: u8,
-}
-
-impl Cidr {
-    fn mask(&self) -> u32 {
-        if self.prefix_len == 0 {
-            0
-        } else {
-            u32::MAX << (32 - self.prefix_len)
-        }
-    }
-
-    fn contains(&self, other: &Cidr) -> bool {
-        other.prefix_len >= self.prefix_len && self.contains_address(other.network)
-    }
-
-    fn contains_address(&self, address: u32) -> bool {
-        (address & self.mask()) == self.network
-    }
-
-    fn overlaps(&self, other: &Cidr) -> bool {
-        let shared_prefix = self.prefix_len.min(other.prefix_len);
-        let shared_mask = if shared_prefix == 0 {
-            0
-        } else {
-            u32::MAX << (32 - shared_prefix)
-        };
-        (self.network & shared_mask) == (other.network & shared_mask)
-    }
-}
-
-fn parse_cidr(cidr: &str) -> Option<Cidr> {
-    let (addr, prefix) = cidr.split_once('/')?;
-    let octets: Vec<u8> = addr.split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() != 4 {
-        return None;
-    }
-    let prefix_len: u8 = prefix.parse().ok()?;
-    if prefix_len > 32 {
-        return None;
-    }
-    let network = u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]);
-    let cidr = Cidr {
-        network,
-        prefix_len,
-    };
-    let masked = network & cidr.mask();
-    if masked != network {
-        return None;
-    }
-    Some(cidr)
-}
-
-fn dns_host_ip(cidr: &str) -> Option<String> {
-    let parsed = parse_cidr(cidr)?;
-    Some(Ipv4Addr::from(parsed.network + DNS_HOST_OFFSET).to_string())
+        .await?,
+    ))
 }
 
 pub fn resource_groups_routes() -> Router<AppState> {
@@ -1565,35 +596,6 @@ pub fn resource_groups_routes() -> Router<AppState> {
         )
 }
 
-pub fn resource_groups_agent_routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/resource-groups/agent/active-ids",
-            get(list_active_resource_group_ids),
-        )
-        .route("/agents/mesh-peers", get(list_mesh_peers))
-        .route(
-            "/resource-groups/{id}/peers",
-            get(list_resource_group_peers),
-        )
-        .route(
-            "/resource-groups/{id}/wg-port",
-            put(report_resource_group_wg_port),
-        )
-        .route(
-            "/resource-groups/{id}/members",
-            get(list_resource_group_members),
-        )
-        .route(
-            "/resource-groups/{id}/site-services",
-            get(list_resource_group_site_services),
-        )
-        .route(
-            "/resource-groups/{id}/vpn-peers",
-            get(list_resource_group_vpn_peers),
-        )
-}
-
 #[cfg(test)]
 mod name_tests {
     use super::validate_name;
@@ -1617,34 +619,5 @@ mod name_tests {
         ] {
             assert!(validate_name(invalid.to_string()).is_err(), "{invalid:?}");
         }
-    }
-}
-
-#[cfg(test)]
-mod vpn_tests {
-    use super::{allocate_vpn_peer_ip, dns_host_ip};
-
-    #[test]
-    fn dns_is_the_second_host_of_the_group() {
-        assert_eq!(dns_host_ip("10.20.0.0/24").as_deref(), Some("10.20.0.2"));
-    }
-
-    #[test]
-    fn peers_are_allocated_from_the_top_and_skip_taken_addresses() {
-        let taken = vec!["10.20.0.254".to_string()];
-        assert_eq!(
-            allocate_vpn_peer_ip("10.20.0.0/24", &[]).as_deref(),
-            Some("10.20.0.254")
-        );
-        assert_eq!(
-            allocate_vpn_peer_ip("10.20.0.0/24", &taken).as_deref(),
-            Some("10.20.0.253")
-        );
-    }
-
-    #[test]
-    fn peers_never_take_the_infrastructure_addresses() {
-        let taken: Vec<String> = (3..=254).map(|host| format!("10.20.0.{host}")).collect();
-        assert_eq!(allocate_vpn_peer_ip("10.20.0.0/24", &taken), None);
     }
 }

@@ -39,6 +39,8 @@ pub mod proxy;
 pub mod registries;
 pub mod registry;
 pub mod releases;
+pub mod resource_group_agent;
+pub mod resource_group_network;
 pub mod resource_groups;
 pub mod roles;
 pub mod s3_proxy;
@@ -175,7 +177,7 @@ pub fn create_router(state: AppState) -> Router<AppState> {
     let agent_unmetered_router = Router::new()
         .merge(agents::agents_unmetered_routes())
         .merge(agent_logs::agent_logs_routes())
-        .merge(resource_groups::resource_groups_agent_routes())
+        .merge(resource_group_agent::resource_groups_agent_routes())
         .merge(agent_stream::agent_stream_routes());
 
     let rate_limited_router = Router::new()
