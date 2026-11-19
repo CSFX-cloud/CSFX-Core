@@ -1,8 +1,8 @@
-use shared::detect::RepoSnapshot;
 use crate::error::ServiceError;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use serde_json::Value;
+use shared::detect::RepoSnapshot;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -90,7 +90,8 @@ fn git_settings(request: &SnapshotRequest, pinned: &[String]) -> Vec<(String, St
 }
 
 async fn resolve_public(url: &str) -> Result<Vec<String>, ServiceError> {
-    let not_allowed = || ServiceError::Invalid(shared::validate::REPOSITORY_NOT_ALLOWED.to_string());
+    let not_allowed =
+        || ServiceError::Invalid(shared::validate::REPOSITORY_NOT_ALLOWED.to_string());
     let url = reqwest::Url::parse(url).map_err(|_| not_allowed())?;
     let host = url.host_str().ok_or_else(not_allowed)?;
     let port = url.port().unwrap_or(DEFAULT_HTTPS_PORT);
