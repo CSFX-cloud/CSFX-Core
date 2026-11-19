@@ -15,6 +15,7 @@ pub mod pagination;
 pub mod qos;
 pub mod rollout;
 pub mod ssh_access;
+pub mod ttl_cache;
 pub mod validate;
 pub mod volumes;
 pub mod workload_status;

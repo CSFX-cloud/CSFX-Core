@@ -8,6 +8,7 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use uuid::Uuid;
 
+use crate::db::workloads::ReportedStatus;
 use crate::models::workload::{Named, VolumeUsage, WorkloadStatus};
 use crate::server::AppState;
 
@@ -169,48 +170,61 @@ pub async fn update_container_statuses(
         Ok(owned) => owned,
         Err(e) => return database_failure("status", &e),
     };
-    for update in &req.statuses {
-        if !owned.contains(&update.workload_id) {
-            log_foreign_workload(req.agent_id, update.workload_id, "status");
-            continue;
-        }
-        let Some(status) = WorkloadStatus::parse(&update.status) else {
-            crate::log_warn!(
-                "internal",
-                &format!(
-                    "Rejected unknown workload status agent_id={} workload_id={}",
-                    req.agent_id, update.workload_id
-                )
-            );
-            continue;
-        };
-        if let Err(e) = crate::db::workloads::update_container_status(
-            &state.db,
-            update.workload_id,
-            &update.container_id,
-            &status.name(),
-        )
-        .await
-        {
-            crate::log_warn!(
-                "internal",
-                &format!(
-                    "Failed to update container status workload_id={} err={}",
-                    update.workload_id, e
-                )
-            );
-        } else {
+    let statuses: Vec<(&ContainerStatusUpdate, String)> = req
+        .statuses
+        .iter()
+        .filter_map(|update| accepted_status(req.agent_id, update, &owned))
+        .collect();
+    let reported: Vec<ReportedStatus> = statuses
+        .iter()
+        .map(|(update, status)| ReportedStatus {
+            workload_id: update.workload_id,
+            container_id: &update.container_id,
+            status,
+        })
+        .collect();
+    match crate::db::workloads::apply_reported_statuses(&state.db, req.agent_id, &reported).await {
+        Ok(changed) => changed.iter().for_each(|(workload_id, status)| {
             crate::log_info!(
                 "internal",
                 &format!(
                     "Container status updated workload_id={} status={}",
-                    update.workload_id, update.status
+                    workload_id, status
                 )
             );
-        }
+        }),
+        Err(e) => crate::log_warn!(
+            "internal",
+            &format!(
+                "Failed to update container statuses agent_id={} err={}",
+                req.agent_id, e
+            )
+        ),
     }
 
     StatusCode::NO_CONTENT
+}
+
+fn accepted_status<'a>(
+    agent_id: Uuid,
+    update: &'a ContainerStatusUpdate,
+    owned: &HashSet<Uuid>,
+) -> Option<(&'a ContainerStatusUpdate, String)> {
+    if !owned.contains(&update.workload_id) {
+        log_foreign_workload(agent_id, update.workload_id, "status");
+        return None;
+    }
+    let Some(status) = WorkloadStatus::parse(&update.status) else {
+        crate::log_warn!(
+            "internal",
+            &format!(
+                "Rejected unknown workload status agent_id={} workload_id={}",
+                agent_id, update.workload_id
+            )
+        );
+        return None;
+    };
+    Some((update, status.name().to_string()))
 }
 
 fn database_failure(operation: &str, error: &sea_orm::DbErr) -> StatusCode {

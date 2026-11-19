@@ -32,7 +32,13 @@ async fn running_workload(service: &SchedulerService, db: &DatabaseConnection) -
 }
 
 async fn set_status(db: &DatabaseConnection, id: Uuid, status: &str) {
-    workloads::update_container_status(db, id, "container", status)
+    let agent_id = fetch(db, id).await.unwrap().assigned_agent_id.unwrap();
+    let reported = [workloads::ReportedStatus {
+        workload_id: id,
+        container_id: "container",
+        status,
+    }];
+    workloads::apply_reported_statuses(db, agent_id, &reported)
         .await
         .unwrap();
 }

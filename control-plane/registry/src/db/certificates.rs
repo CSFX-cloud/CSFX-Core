@@ -1,6 +1,9 @@
 use anyhow::Result;
 use entity::{agent_certificates, certificate_revocations};
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    sea_query::Query, ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    Set,
+};
 use uuid::Uuid;
 
 pub async fn create_certificate(
@@ -87,18 +90,16 @@ pub async fn verify_client_cert(
     cert_pem: &str,
 ) -> Result<bool> {
     let normalized = cert_pem.replace("\\n", "\n");
-    let cert = agent_certificates::Entity::find()
+    let revoked = Query::select()
+        .column(certificate_revocations::Column::SerialNumber)
+        .from(certificate_revocations::Entity)
+        .to_owned();
+    Ok(agent_certificates::Entity::find()
         .filter(agent_certificates::Column::AgentId.eq(agent_id))
         .filter(agent_certificates::Column::IsActive.eq(true))
         .filter(agent_certificates::Column::CertificatePem.eq(normalized))
+        .filter(agent_certificates::Column::SerialNumber.not_in_subquery(revoked))
         .one(db)
-        .await?;
-
-    match cert {
-        None => Ok(false),
-        Some(c) => {
-            let revoked = is_revoked(db, c.serial_number).await?;
-            Ok(!revoked)
-        }
-    }
+        .await?
+        .is_some())
 }

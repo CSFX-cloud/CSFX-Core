@@ -9,7 +9,10 @@ use csfx_agent_api::{
 };
 use entity::agent_metrics;
 use sea_orm::{ActiveModelTrait, Set};
+use shared::ttl_cache::TtlCache;
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::{
@@ -21,6 +24,17 @@ use crate::{
 
 const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
 const GATEWAY_PORT: u16 = 8000;
+const SSH_SETTING_TTL: Duration = Duration::from_secs(5);
+const ENDPOINT_CHECK_TTL: Duration = Duration::from_secs(300);
+const RELEASE_CACHE_TTL: Duration = Duration::from_secs(60);
+
+type ReleaseCache = Mutex<Option<(Instant, HashMap<String, SignedRelease>)>>;
+
+static SSH_SETTING: LazyLock<TtlCache<bool>> = LazyLock::new(|| TtlCache::new(SSH_SETTING_TTL));
+static VERIFIED_ENDPOINTS: LazyLock<TtlCache<String>> =
+    LazyLock::new(|| TtlCache::new(ENDPOINT_CHECK_TTL));
+
+static RELEASE_CACHE: LazyLock<ReleaseCache> = LazyLock::new(|| Mutex::new(None));
 use shared::etcd::{
     WORKER_MANIFEST_PREFIX, WORKER_MANIFEST_SIGNATURE_PREFIX as WORKER_SIGNATURE_PREFIX,
 };
@@ -232,21 +246,7 @@ pub async fn heartbeat(
     }
 
     if let Some(wg_endpoint) = request.wg_endpoint.as_deref() {
-        let in_use = crate::db::agents::wg_endpoint_in_use(&state.db, agent_id, wg_endpoint)
-            .await
-            .map_err(|e| {
-                api_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Endpoint verification failed: {}", e),
-                )
-            })?;
-
-        if in_use {
-            return Err(api_error(
-                StatusCode::CONFLICT,
-                "WireGuard endpoint is already in use by another agent",
-            ));
-        }
+        verify_wg_endpoint(&state, agent_id, wg_endpoint).await?;
     }
 
     match state
@@ -274,7 +274,7 @@ pub async fn heartbeat(
             }
 
             let worker_releases = read_worker_releases(
-                &state.etcd_endpoints,
+                &state,
                 agent_id,
                 &role,
                 request.release_version.as_deref().unwrap_or_default(),
@@ -319,9 +319,42 @@ fn advertised_gateway_url(vip_address: Option<&str>) -> Option<String> {
         .map(|address| format!("https://{address}:{GATEWAY_PORT}"))
 }
 
+async fn verify_wg_endpoint(
+    state: &AppState,
+    agent_id: Uuid,
+    wg_endpoint: &str,
+) -> Result<(), ApiError> {
+    let key = agent_id.to_string();
+    if VERIFIED_ENDPOINTS.get(&key).as_deref() == Some(wg_endpoint) {
+        return Ok(());
+    }
+    let in_use = crate::db::agents::wg_endpoint_in_use(&state.db, agent_id, wg_endpoint)
+        .await
+        .map_err(|e| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Endpoint verification failed: {}", e),
+            )
+        })?;
+    if in_use {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "WireGuard endpoint is already in use by another agent",
+        ));
+    }
+    VERIFIED_ENDPOINTS.insert(&key, wg_endpoint.to_string());
+    Ok(())
+}
+
 async fn read_ssh_enabled(state: &AppState) -> bool {
+    if let Some(open) = SSH_SETTING.get("open") {
+        return open;
+    }
     match shared::ssh_access::load(&state.db).await {
-        Ok(access) => access.is_open(),
+        Ok(access) => {
+            SSH_SETTING.insert("open", access.is_open());
+            access.is_open()
+        }
         Err(err) => {
             tracing::warn!(error = %err, "failed to read ssh access setting, keeping ssh closed");
             false
@@ -330,12 +363,12 @@ async fn read_ssh_enabled(state: &AppState) -> bool {
 }
 
 async fn read_worker_releases(
-    etcd_endpoints: &[String],
+    state: &AppState,
     agent_id: Uuid,
     role: &str,
     release_version: &str,
 ) -> HashMap<String, SignedRelease> {
-    let mut client = match shared::etcd::connect(etcd_endpoints).await {
+    let mut client = match state.etcd_client().await {
         Ok(client) => client,
         Err(error) => {
             tracing::warn!(error = %error, "etcd unreachable while reading worker releases");
@@ -348,8 +381,32 @@ async fn read_worker_releases(
             return HashMap::new();
         }
     }
-    let manifests = read_prefix(&mut client, WORKER_MANIFEST_PREFIX).await;
-    let mut signatures = read_prefix(&mut client, WORKER_SIGNATURE_PREFIX).await;
+    cached_signed_releases(&mut client).await
+}
+
+async fn cached_signed_releases(
+    client: &mut etcd_client::Client,
+) -> HashMap<String, SignedRelease> {
+    if let Some(releases) = fresh_cached_releases() {
+        return releases;
+    }
+    let releases = read_signed_releases(client).await;
+    if !releases.is_empty() {
+        *RELEASE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((Instant::now(), releases.clone()));
+    }
+    releases
+}
+
+fn fresh_cached_releases() -> Option<HashMap<String, SignedRelease>> {
+    let cache = RELEASE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let (stored_at, releases) = cache.as_ref()?;
+    (stored_at.elapsed() < RELEASE_CACHE_TTL).then(|| releases.clone())
+}
+
+async fn read_signed_releases(client: &mut etcd_client::Client) -> HashMap<String, SignedRelease> {
+    let manifests = read_prefix(client, WORKER_MANIFEST_PREFIX).await;
+    let mut signatures = read_prefix(client, WORKER_SIGNATURE_PREFIX).await;
     manifests
         .into_iter()
         .filter_map(|(arch, manifest)| {

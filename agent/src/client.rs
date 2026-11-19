@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
-use reqwest::{Client, Method, RequestBuilder, Response};
+use reqwest::header::{ETAG, IF_NONE_MATCH};
+use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Mutex;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -256,6 +258,7 @@ pub struct ApiClient {
     cert_pem: Option<String>,
     wg_public_key: String,
     wg_endpoint: Option<String>,
+    mesh_peers: Mutex<Option<(String, Vec<ResourceGroupPeer>)>>,
 }
 
 impl ApiClient {
@@ -272,6 +275,7 @@ impl ApiClient {
             cert_pem: None,
             wg_public_key,
             wg_endpoint,
+            mesh_peers: Mutex::new(None),
         })
     }
 
@@ -454,8 +458,35 @@ impl ApiClient {
     }
 
     pub async fn fetch_mesh_peers(&self) -> Result<Vec<ResourceGroupPeer>> {
-        self.get_json("/api/agents/mesh-peers", "fetch mesh peers")
+        let known = self
+            .mesh_peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let mut builder = self.request(Method::GET, "/api/agents/mesh-peers");
+        if let Some((etag, _)) = &known {
+            builder = builder.header(IF_NONE_MATCH, etag);
+        }
+        let response = builder.send().await.context("Failed to fetch mesh peers")?;
+        if let (StatusCode::NOT_MODIFIED, Some((_, peers))) = (response.status(), known) {
+            return Ok(peers);
+        }
+        let etag = response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let peers: Vec<ResourceGroupPeer> = check_status(response, "fetch mesh peers")
+            .await?
+            .json()
             .await
+            .context("Failed to parse fetch mesh peers response")?;
+        *self
+            .mesh_peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            etag.map(|etag| (etag, peers.clone()));
+        Ok(peers)
     }
 
     pub async fn fetch_resource_group_vpn_peers(

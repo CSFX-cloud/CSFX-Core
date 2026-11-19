@@ -2,8 +2,8 @@ use chrono::Utc;
 use entity::entities::workloads;
 use sea_orm::sea_query::{Expr, Func, SimpleExpr};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr,
-    EntityTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    DbBackend, DbErr, EntityTrait, QueryFilter, Statement,
 };
 use shared::env_secrets::{self, EnvSecretError};
 use std::collections::{HashMap, HashSet};
@@ -309,22 +309,56 @@ pub async fn assigned_to_agent(
         .collect())
 }
 
-pub async fn update_container_status(
+pub struct ReportedStatus<'a> {
+    pub workload_id: Uuid,
+    pub container_id: &'a str,
+    pub status: &'a str,
+}
+
+pub async fn apply_reported_statuses(
     db: &DatabaseConnection,
-    workload_id: Uuid,
-    container_id: &str,
-    status: &str,
-) -> Result<(), DbErr> {
-    let mut changes = vec![
-        (workloads::Column::Status, Expr::value(status)),
-        (workloads::Column::ObservedStatus, Expr::value(status)),
-        (workloads::Column::UpdatedAt, now()),
-    ];
-    if !container_id.is_empty() {
-        changes.push((workloads::Column::ContainerId, Expr::value(container_id)));
+    agent_id: Uuid,
+    reported: &[ReportedStatus<'_>],
+) -> Result<Vec<(Uuid, String)>, DbErr> {
+    if reported.is_empty() {
+        return Ok(Vec::new());
     }
-    patch(db, workload_id, changes).await?;
-    Ok(())
+    let mut values: Vec<sea_orm::Value> = vec![agent_id.into(), Utc::now().naive_utc().into()];
+    let rows = reported
+        .iter()
+        .map(|entry| {
+            values.push(entry.workload_id.into());
+            values.push(entry.status.into());
+            values.push(entry.container_id.into());
+            let last = values.len();
+            format!(
+                "(${}::uuid, ${}::text, ${}::text)",
+                last - 2,
+                last - 1,
+                last
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "UPDATE workloads AS w SET status = v.status, observed_status = v.status, \
+         container_id = COALESCE(NULLIF(v.container_id, ''), w.container_id), updated_at = $2::timestamp \
+         FROM (VALUES {rows}) AS v(id, status, container_id) \
+         WHERE w.id = v.id AND w.assigned_agent_id = $1 AND (w.status IS DISTINCT FROM v.status \
+         OR w.replaces_workload_id IS NOT NULL \
+         OR w.observed_status IS DISTINCT FROM v.status \
+         OR (v.container_id <> '' AND w.container_id IS DISTINCT FROM v.container_id)) \
+         RETURNING w.id, w.status"
+    );
+    db.query_all(Statement::from_sql_and_values(
+        DbBackend::Postgres,
+        sql,
+        values,
+    ))
+    .await?
+    .iter()
+    .map(|row| Ok((row.try_get("", "id")?, row.try_get("", "status")?)))
+    .collect()
 }
 
 pub async fn set_desired_state(

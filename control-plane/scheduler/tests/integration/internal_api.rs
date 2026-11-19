@@ -40,6 +40,48 @@ async fn container_status_updates_are_stored() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
+async fn repeated_container_statuses_leave_the_row_untouched() {
+    let app = router().await;
+    let (id, agent) = assigned_workload(&app).await;
+    let report = |status: &str| {
+        json!({"agent_id": agent, "statuses": [
+            {"workload_id": id, "container_id": "abc123", "status": status}
+        ]})
+    };
+
+    let (code, _) = call(
+        &app,
+        Method::POST,
+        "/internal/workloads/status",
+        Some(report("running")),
+    )
+    .await;
+    assert_eq!(code, StatusCode::NO_CONTENT);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let first = find_workload(&app, &id).await["updated_at"].clone();
+    let (code, _) = call(
+        &app,
+        Method::POST,
+        "/internal/workloads/status",
+        Some(report("running")),
+    )
+    .await;
+    assert_eq!(code, StatusCode::NO_CONTENT);
+    assert_eq!(find_workload(&app, &id).await["updated_at"], first);
+
+    let (code, _) = call(
+        &app,
+        Method::POST,
+        "/internal/workloads/status",
+        Some(report("stopped")),
+    )
+    .await;
+    assert_eq!(code, StatusCode::NO_CONTENT);
+    assert_ne!(find_workload(&app, &id).await["updated_at"], first);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL"]
 async fn stats_updates_are_stored() {
     let app = router().await;
     let (id, agent) = assigned_workload(&app).await;

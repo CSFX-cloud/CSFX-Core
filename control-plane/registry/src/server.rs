@@ -29,6 +29,16 @@ pub struct AppState {
     pub gateway_url: String,
     pub http_client: Client,
     pub etcd_endpoints: Vec<String>,
+    pub etcd: Arc<tokio::sync::OnceCell<etcd_client::Client>>,
+}
+
+impl AppState {
+    pub async fn etcd_client(&self) -> Result<etcd_client::Client, etcd_client::Error> {
+        self.etcd
+            .get_or_try_init(|| shared::etcd::connect(&self.etcd_endpoints))
+            .await
+            .cloned()
+    }
 }
 
 pub async fn health_check() -> impl IntoResponse {

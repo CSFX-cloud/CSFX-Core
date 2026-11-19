@@ -72,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
         gateway_url,
         http_client,
         etcd_endpoints,
+        etcd: Default::default(),
     };
 
     let token_cleanup_handle = {

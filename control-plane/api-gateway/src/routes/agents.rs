@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use shared::env_secrets;
 use shared::pagination::{cursor_headers, keyset_by_id, split_page, PageParams};
 use shared::workload_status::ACTIVE_STATUSES;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -204,6 +205,31 @@ async fn prepare_env(state: &AppState, workload: &mut workloads::Model, deadline
     }
 }
 
+async fn group_cidrs(
+    state: &AppState,
+    rows: &[workloads::Model],
+) -> Result<HashMap<Uuid, String>, StatusCode> {
+    let group_ids: HashSet<Uuid> = rows
+        .iter()
+        .filter_map(|row| row.resource_group_id)
+        .collect();
+    if group_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let groups = resource_groups::Entity::find()
+        .filter(resource_groups::Column::Id.is_in(group_ids))
+        .all(&state.agent_db)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to fetch resource groups for workloads");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(groups
+        .into_iter()
+        .map(|group| (group.id, group.internal_cidr))
+        .collect())
+}
+
 pub async fn get_self_workloads(
     agent: AgentApiKey,
     State(state): State<AppState>,
@@ -218,21 +244,14 @@ pub async fn get_self_workloads(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
+    let cidrs = group_cidrs(&state, &rows).await?;
     let deadline = Instant::now() + RESOLVE_BUDGET;
     let mut response = Vec::with_capacity(rows.len());
     for mut workload in rows {
         let env_unresolved = prepare_env(&state, &mut workload, deadline).await;
-        let resource_group_cidr = match workload.resource_group_id {
-            Some(rg_id) => resource_groups::Entity::find_by_id(rg_id)
-                .one(&state.agent_db)
-                .await
-                .map_err(|e| {
-                    tracing::error!(error = %e, "failed to fetch resource group for workload");
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })?
-                .map(|rg| rg.internal_cidr),
-            None => None,
-        };
+        let resource_group_cidr = workload
+            .resource_group_id
+            .and_then(|group_id| cidrs.get(&group_id).cloned());
 
         response.push(AssignedWorkloadResponse {
             workload,

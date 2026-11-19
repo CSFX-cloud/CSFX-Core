@@ -4,7 +4,14 @@ use axum::{
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use shared::ttl_cache::TtlCache;
+use std::sync::LazyLock;
+use std::time::Duration;
 use uuid::Uuid;
+
+const KEY_CACHE_TTL: Duration = Duration::from_secs(5);
+
+static VERIFIED_KEYS: LazyLock<TtlCache<Uuid>> = LazyLock::new(|| TtlCache::new(KEY_CACHE_TTL));
 
 const PROTOCOL_HEADER: &str = "X-Csfx-Agent-Protocol";
 pub const MIN_AGENT_PROTOCOL: u32 = 1;
@@ -68,10 +75,15 @@ impl FromRequestParts<AppState> for AgentApiKey {
             .and_then(|v| v.to_str().ok())
             .ok_or(StatusCode::UNAUTHORIZED)?;
 
+        let key_hash = shared::agent_auth::hash_key(raw_key);
+        if let Some(agent_id) = VERIFIED_KEYS.get(&key_hash) {
+            return Ok(AgentApiKey { agent_id });
+        }
         let agent_id = shared::agent_auth::agent_for_key(&state.agent_db, raw_key)
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             .ok_or(StatusCode::UNAUTHORIZED)?;
+        VERIFIED_KEYS.insert(&key_hash, agent_id);
 
         Ok(AgentApiKey { agent_id })
     }
