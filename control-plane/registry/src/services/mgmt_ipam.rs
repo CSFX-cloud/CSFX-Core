@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use etcd_client::{Client, Compare, CompareOp, Txn, TxnOp};
+use etcd_client::{Client, Compare, CompareOp, GetOptions, Txn, TxnOp};
+use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use uuid::Uuid;
 
@@ -26,11 +27,14 @@ impl MgmtIpamService {
             .context("failed to connect to etcd")?;
         let base = site_base(&mut client, site_id).await?;
 
+        let taken = taken_addresses(&mut client, base).await?;
         let total = 1u32 << (32 - MGMT_CIDR_PREFIX_LEN);
 
         for offset in 2..total - 1 {
-            let candidate = ip_add(base, offset);
-            let ip_str = candidate.to_string();
+            let ip_str = ip_add(base, offset).to_string();
+            if taken.contains(&ip_str) {
+                continue;
+            }
             let key = format!("{}{}", MGMT_IPAM_PREFIX, ip_str);
 
             let claim = Txn::new()
@@ -57,6 +61,25 @@ impl MgmtIpamService {
             .context("etcd delete failed")?;
         Ok(())
     }
+}
+
+async fn taken_addresses(client: &mut Client, base: Ipv4Addr) -> Result<HashSet<String>> {
+    let octets = base.octets();
+    let block_prefix = format!("{}{}.{}.", MGMT_IPAM_PREFIX, octets[0], octets[1]);
+    let response = client
+        .get(
+            block_prefix.as_str(),
+            Some(GetOptions::new().with_prefix().with_keys_only()),
+        )
+        .await
+        .context("etcd get failed")?;
+    Ok(response
+        .kvs()
+        .iter()
+        .filter_map(|entry| entry.key_str().ok())
+        .filter_map(|key| key.strip_prefix(MGMT_IPAM_PREFIX))
+        .map(str::to_string)
+        .collect())
 }
 
 async fn site_base(client: &mut Client, site_id: &str) -> Result<Ipv4Addr> {
