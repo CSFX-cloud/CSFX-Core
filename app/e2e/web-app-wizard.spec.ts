@@ -48,7 +48,8 @@ test('walks through the steps and launches with the chosen build size', async ({
 	await expect(page.getByRole('heading', { name: 'Launch' })).toBeVisible();
 	await expect(page.getByText('github.com/org/shop-web')).toBeVisible();
 	await page.locator('#wa-name').fill('shop-web');
-	await page.locator('#wa-size').selectOption('large');
+	await page.locator('#wa-size').click();
+	await page.getByRole('option', { name: /^Large/ }).click();
 	await page.getByRole('button', { name: 'Deploy' }).click();
 	await expect.poll(() => created?.['build_size']).toBe('large');
 	expect(created?.['name']).toBe('shop-web');

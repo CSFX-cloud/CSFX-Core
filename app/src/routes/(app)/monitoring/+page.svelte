@@ -13,8 +13,7 @@
     } from "$lib/utils/topology-layout";
     import AgentNode from "$lib/components/monitoring/agent-node.svelte";
     import CompactNode from "$lib/components/monitoring/compact-node.svelte";
-    import * as Sheet from "$lib/components/ui/sheet/index.js";
-    import { Button } from "$lib/components/ui/button/index.js";
+    import TopologyDrawer from "$lib/components/monitoring/topology-drawer.svelte";
     import RefreshCwIcon from "@lucide/svelte/icons/refresh-cw";
     import RotateCcwIcon from "@lucide/svelte/icons/rotate-ccw";
 
@@ -41,7 +40,6 @@
     let structureKey = "";
 
     let selectedNode = $state<Node | null>(null);
-    let detailOpen = $state(false);
 
     const manualPositions = new Map<string, Point>();
 
@@ -61,6 +59,7 @@
             : [],
     );
     const groupColors = $derived(topology ? resourceGroupColors(topology) : new Map());
+    const groupNames = $derived(new Map(groups.map((group) => [group.id, group.name])));
 
     async function load() {
         try {
@@ -115,7 +114,6 @@
     function onNodeClick({ node }: { node: Node }) {
         if (node.type === "cluster") return;
         selectedNode = node;
-        detailOpen = true;
     }
 
     function resetLayout() {
@@ -217,29 +215,7 @@
     </section>
 </div>
 
-<Sheet.Root bind:open={detailOpen}>
-    <Sheet.Content side="right" class="w-full sm:max-w-md overflow-y-auto">
-        {#if selectedNode}
-            <Sheet.Header>
-                <Sheet.Title>{selectedNode.data.label}</Sheet.Title>
-            </Sheet.Header>
-            <div class="flex flex-col gap-3 px-4 pb-4 text-sm">
-                {#each Object.entries(selectedNode.data).filter(([key]) => key !== "label" && key !== "groupColor") as [key, value] (key)}
-                    <div class="flex justify-between gap-4 border-b pb-2">
-                        <span class="text-muted-foreground">{key}</span>
-                        <span class="break-all text-right font-mono text-xs">{value ?? "-"}</span>
-                    </div>
-                {/each}
-                {#if selectedNode.type === "agent"}
-                    <div class="flex gap-2 pt-2">
-                        <Button href="/nodes/{selectedNode.data.id}" variant="outline" size="sm">Node details</Button>
-                        <Button href="/logs?node={selectedNode.data.id}" variant="outline" size="sm">Node logs</Button>
-                    </div>
-                {/if}
-            </div>
-        {/if}
-    </Sheet.Content>
-</Sheet.Root>
+<TopologyDrawer node={selectedNode} {groupNames} onclose={() => (selectedNode = null)} />
 
 <style>
     :global(.svelte-flow__handle) {

@@ -8,8 +8,6 @@ export interface TrafficPaths {
 }
 
 const PERCENT = 100;
-const BASE_BAY_COUNT = 8;
-const BAYS_PER_ROW = 4;
 const MIN_TRAFFIC_CEILING = 1024;
 const TRAFFIC_WIDTH = 600;
 const TRAFFIC_HEIGHT = 140;
@@ -39,18 +37,6 @@ export function smartTone(health: string | undefined): Tone | "" {
 
 export function diskUsage(disk: DiskInfo): number {
     return disk.total_bytes > 0 ? clampPercent((disk.used_bytes / disk.total_bytes) * PERCENT) : 0;
-}
-
-export function isOptical(disk: DiskInfo): boolean {
-    return /^sr\d|cdrom|dvd/i.test(`${disk.device} ${disk.media_type}`);
-}
-
-export function bayCount(diskCount: number): number {
-    return Math.max(BASE_BAY_COUNT, Math.ceil(diskCount / BAYS_PER_ROW) * BAYS_PER_ROW);
-}
-
-export function bayLabel(index: number): string {
-    return String(index).padStart(2, "0");
 }
 
 export function trafficCeiling(points: HistoryPoint[]): number {
