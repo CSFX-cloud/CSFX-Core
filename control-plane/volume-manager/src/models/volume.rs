@@ -7,9 +7,8 @@ use uuid::Uuid;
 pub enum VolumeStatus {
     Creating,
     Available,
-    Attaching,
+    #[serde(rename = "in_use")]
     InUse,
-    Detaching,
     Deleting,
     Error,
 }
@@ -19,9 +18,7 @@ impl VolumeStatus {
         match self {
             VolumeStatus::Creating => "creating",
             VolumeStatus::Available => "available",
-            VolumeStatus::Attaching => "attaching",
             VolumeStatus::InUse => "in_use",
-            VolumeStatus::Detaching => "detaching",
             VolumeStatus::Deleting => "deleting",
             VolumeStatus::Error => "error",
         }
@@ -30,9 +27,7 @@ impl VolumeStatus {
     pub fn from_str(s: &str) -> Self {
         match s {
             "creating" => VolumeStatus::Creating,
-            "attaching" => VolumeStatus::Attaching,
             "in_use" => VolumeStatus::InUse,
-            "detaching" => VolumeStatus::Detaching,
             "deleting" => VolumeStatus::Deleting,
             "error" => VolumeStatus::Error,
             _ => VolumeStatus::Available,
