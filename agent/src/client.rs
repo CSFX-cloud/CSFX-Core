@@ -320,7 +320,8 @@ impl ApiClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, path: &str, action: &str) -> Result<T> {
-        self.send_json(self.request(Method::GET, path), action).await
+        self.send_json(self.request(Method::GET, path), action)
+            .await
     }
 
     pub async fn request_master_bundle(&self) -> Result<MasterBundle> {
@@ -691,10 +692,7 @@ mod tests {
     #[tokio::test]
     async fn resource_group_endpoints_parse_responses() {
         let client = serve(gateway()).await;
-        let members = client
-            .fetch_resource_group_members("rg")
-            .await
-            .unwrap();
+        let members = client.fetch_resource_group_members("rg").await.unwrap();
         assert_eq!(members[0].agent_id, "rg");
         let services = client
             .fetch_resource_group_site_services("rg")
@@ -704,15 +702,9 @@ mod tests {
         let peers = client.fetch_resource_group_peers("rg").await.unwrap();
         assert_eq!(peers[0].wg_endpoint, "1.2.3.4:5");
         assert_eq!(client.fetch_mesh_peers().await.unwrap().len(), 1);
-        let config = client
-            .fetch_gateway_config("rg", "gw", "wl")
-            .await
-            .unwrap();
+        let config = client.fetch_gateway_config("rg", "gw", "wl").await.unwrap();
         assert!(config["routes"].is_array());
-        let vpn = client
-            .fetch_resource_group_vpn_peers("rg")
-            .await
-            .unwrap();
+        let vpn = client.fetch_resource_group_vpn_peers("rg").await.unwrap();
         assert_eq!(vpn[0].client_tunnel_ip, "10.8.0.2");
         let ids = client.fetch_active_resource_group_ids().await.unwrap();
         assert_eq!(ids, vec!["rg1".to_string(), "rg2".to_string()]);
@@ -725,10 +717,7 @@ mod tests {
         assert_eq!(workloads[0].image, "nginx");
         assert!(!workloads[0].restart_requested);
         assert_eq!(workloads[0].env_vars.as_ref().unwrap()["A"], "b");
-        let volumes = client
-            .fetch_assigned_volumes()
-            .await
-            .unwrap();
+        let volumes = client.fetch_assigned_volumes().await.unwrap();
         assert_eq!(volumes.len(), 2);
         assert_eq!(volumes[0].id, "1");
         assert_eq!(volumes[1].id, "2");
@@ -828,21 +817,12 @@ mod tests {
             .await
             .is_err());
         assert!(client.fetch_resource_group_peers("r").await.is_err());
-        assert!(client
-            .fetch_gateway_config("r", "g", "w")
-            .await
-            .is_err());
+        assert!(client.fetch_gateway_config("r", "g", "w").await.is_err());
         assert!(client.fetch_mesh_peers().await.is_err());
-        assert!(client
-            .fetch_resource_group_vpn_peers("r")
-            .await
-            .is_err());
+        assert!(client.fetch_resource_group_vpn_peers("r").await.is_err());
         assert!(client.fetch_active_resource_group_ids().await.is_err());
         assert!(client.fetch_assigned_workloads().await.is_err());
-        assert!(client
-            .fetch_assigned_volumes()
-            .await
-            .is_err());
+        assert!(client.fetch_assigned_volumes().await.is_err());
         assert!(client.ack_workload_restart("w").await.is_err());
         assert!(client.push_logs(Vec::new()).await.is_err());
         let stat = WorkloadStatsUpdate {

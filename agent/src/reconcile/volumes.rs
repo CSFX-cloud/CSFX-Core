@@ -10,11 +10,7 @@ pub type MountedVolumes = Arc<Mutex<HashMap<String, String>>>;
 
 impl Reconciler {
     pub(super) async fn process_volumes(&self) -> Option<Vec<client::AssignedVolume>> {
-        let volumes = match self
-            .client
-            .fetch_assigned_volumes()
-            .await
-        {
+        let volumes = match self.client.fetch_assigned_volumes().await {
             Ok(volumes) => volumes,
             Err(e) => {
                 warn!(error = %e, "Failed to fetch assigned volumes");

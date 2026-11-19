@@ -27,11 +27,7 @@ impl Reconciler {
     }
 
     pub(super) async fn cleanup_stale_resource_groups(&self) {
-        let active_ids = match self
-            .client
-            .fetch_active_resource_group_ids()
-            .await
-        {
+        let active_ids = match self.client.fetch_active_resource_group_ids().await {
             Ok(ids) => ids,
             Err(e) => {
                 warn!(error = %e, "Failed to fetch active resource group ids");

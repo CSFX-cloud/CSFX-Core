@@ -105,11 +105,7 @@ impl Reconciler {
 
         let restart_fulfilled = self.start_or_restart(runtime, workload).await;
         if restart_fulfilled {
-            if let Err(e) = self
-                .client
-                .ack_workload_restart(&workload_id)
-                .await
-            {
+            if let Err(e) = self.client.ack_workload_restart(&workload_id).await {
                 warn!(workload_id = %workload_id, error = %e, "Failed to ack workload restart");
             }
         }

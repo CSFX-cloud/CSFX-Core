@@ -90,11 +90,7 @@ fn spawn_journalctl() -> Result<(tokio::process::Child, ChildStdout)> {
     Ok((child, stdout))
 }
 
-async fn ship(
-    client: &ApiClient,
-    batch: &mut Vec<JournalEntry>,
-    failing: &mut bool,
-) {
+async fn ship(client: &ApiClient, batch: &mut Vec<JournalEntry>, failing: &mut bool) {
     if batch.is_empty() {
         return;
     }

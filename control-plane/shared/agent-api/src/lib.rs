@@ -109,6 +109,9 @@ mod tests {
         assert!(request.kvm_capable);
         let bare: HeartbeatRequest = serde_json::from_value(json!({})).unwrap();
         assert!(bare.metrics.is_none());
-        assert!(serde_json::to_value(bare).unwrap().get("cpu_cores").is_none());
+        assert!(serde_json::to_value(bare)
+            .unwrap()
+            .get("cpu_cores")
+            .is_none());
     }
 }

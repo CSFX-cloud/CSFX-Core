@@ -35,11 +35,7 @@ pub async fn sync(
     }
 }
 
-async fn report_wg_port(
-    client: &ApiClient,
-    resource_group_id: &str,
-    local_state: &LocalState,
-) {
+async fn report_wg_port(client: &ApiClient, resource_group_id: &str, local_state: &LocalState) {
     let Some(port) = local_state.assigned_wg_port(resource_group_id).await else {
         return;
     };
@@ -68,9 +64,7 @@ async fn sync_group(
     resource_group_id: &str,
     dns_registry: &RgDnsRegistry,
 ) -> Result<()> {
-    let peers = client
-        .fetch_resource_group_peers(resource_group_id)
-        .await?;
+    let peers = client.fetch_resource_group_peers(resource_group_id).await?;
     let members = client
         .fetch_resource_group_members(resource_group_id)
         .await?;
@@ -88,10 +82,7 @@ async fn sync_group(
         .await
 }
 
-async fn fetch_site_services(
-    client: &ApiClient,
-    resource_group_id: &str,
-) -> Vec<SiteService> {
+async fn fetch_site_services(client: &ApiClient, resource_group_id: &str) -> Vec<SiteService> {
     match client
         .fetch_resource_group_site_services(resource_group_id)
         .await

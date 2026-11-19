@@ -466,7 +466,10 @@ async fn store_metrics(
         )),
         disk_total_bytes: Set(Some(metrics.disk_total_bytes as i64)),
         disk_used_bytes: Set(Some(metrics.disk_used_bytes as i64)),
-        disk_usage_percent: Set(percent_of(metrics.disk_used_bytes, metrics.disk_total_bytes)),
+        disk_usage_percent: Set(percent_of(
+            metrics.disk_used_bytes,
+            metrics.disk_total_bytes,
+        )),
         network_rx_bytes: Set(Some(metrics.network_rx_bytes as i64)),
         network_tx_bytes: Set(Some(metrics.network_tx_bytes as i64)),
         uptime_seconds: Set(Some(metrics.uptime_seconds as i64)),

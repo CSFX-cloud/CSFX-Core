@@ -58,12 +58,7 @@ pub(crate) async fn authenticated_client(gateway_url: &str) -> Result<ApiClient>
     wait_for_registration().await?;
     let credentials = config::load_credentials().context("Failed to load credentials")?;
     let ca_pem = pki::AgentPki::load_ca_pem().context("Failed to load cluster CA")?;
-    let client = ApiClient::new(
-        gateway_url.to_string(),
-        String::new(),
-        None,
-        Some(&ca_pem),
-    )?;
+    let client = ApiClient::new(gateway_url.to_string(), String::new(), None, Some(&ca_pem))?;
     Ok(client.with_api_key(credentials.api_key))
 }
 
