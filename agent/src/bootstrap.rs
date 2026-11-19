@@ -73,7 +73,7 @@ pub async fn run(gateway_url: String, join_ticket: Option<join::JoinTicket>) -> 
         .await?
     };
 
-    let api_client = Arc::new(with_certificate(api_client));
+    let api_client = Arc::new(with_certificate(api_client).with_api_key(api_key.clone()));
     info!(agent_id = %agent_id, "Agent registered, starting heartbeat loop");
     bring_up_mgmt_interface(&wg_identity).await;
 
@@ -82,13 +82,12 @@ pub async fn run(gateway_url: String, join_ticket: Option<join::JoinTicket>) -> 
     let runtimes = build_runtimes(&wg_identity, &local_state, &rg_dns, &gateway_url, &api_key);
     let workloads = WorkloadTable::default();
 
-    spawn_inbound_server(&runtimes, &workloads, &api_client, agent_id, &api_key);
-    journal::spawn(api_client.clone(), api_key.clone());
+    spawn_inbound_server(&runtimes, &workloads, &api_client, agent_id);
+    journal::spawn(api_client.clone());
     let assignment_signal = agent_stream::spawn(gateway_url, api_key.clone(), agent_id);
 
     let reconciler = Reconciler {
         client: api_client,
-        api_key: Arc::from(api_key),
         agent_id,
         runtimes,
         workloads,
@@ -107,17 +106,11 @@ async fn build_client(
     wg_identity: &wg_identity::WgIdentity,
 ) -> Result<client::ApiClient> {
     let wg_endpoint = endpoint::resolve(MGMT_WG_PORT).await;
-    let wg_tunnel_ip = if config::is_registered() {
-        config::load_config().ok().and_then(|cfg| cfg.wg_tunnel_ip)
-    } else {
-        std::env::var("CSFX_WG_TUNNEL_IP").ok()
-    };
     let ca_pem = resolve_trust_anchor(gateway_url, join_ticket).await?;
     client::ApiClient::new(
         gateway_url.to_string(),
         wg_identity.public_key_b64.clone(),
         wg_endpoint,
-        wg_tunnel_ip,
         ca_pem.as_deref(),
     )
     .context("Failed to initialize API client")
@@ -185,7 +178,6 @@ fn spawn_inbound_server(
     workloads: &WorkloadTable,
     api_client: &Arc<client::ApiClient>,
     agent_id: uuid::Uuid,
-    api_key: &str,
 ) {
     let Some(port) = std::env::var("CSFX_AGENT_PORT")
         .ok()
@@ -207,7 +199,6 @@ fn spawn_inbound_server(
         workloads: workloads.clone(),
         agent_id,
         api_client: api_client.clone(),
-        api_key: api_key.to_string(),
         ca_key,
     };
     tokio::spawn(async move {
@@ -278,15 +269,16 @@ async fn register(
     );
 
     let request = client::RegisterRequest {
-        registration_token: &token,
-        name: &info.hostname,
-        hostname: &info.hostname,
-        os_type: &info.os_type,
-        os_version: &info.os_version,
-        architecture: &info.architecture,
-        agent_version: env!("CARGO_PKG_VERSION"),
-        machine_id: info.machine_id.as_deref(),
-        csr_pem: agent_pki.csr_pem(),
+        registration_token: token,
+        name: info.hostname.clone(),
+        hostname: info.hostname,
+        os_type: info.os_type,
+        os_version: info.os_version,
+        architecture: info.architecture,
+        agent_version: env!("CARGO_PKG_VERSION").to_string(),
+        tags: None,
+        csr_pem: Some(agent_pki.csr_pem().to_string()),
+        machine_id: info.machine_id,
     };
     let resp = client
         .register(&request)
@@ -294,7 +286,6 @@ async fn register(
         .context("Registration request failed")?;
 
     store_certificate(&resp)?;
-    adopt_tunnel_ip(client, &resp).await;
 
     let cfg = config::DaemonConfig {
         gateway_url: gateway_url.to_string(),
@@ -317,15 +308,6 @@ fn store_certificate(resp: &client::RegisterResponse) -> Result<()> {
     pki::AgentPki::save_certificate(cert_pem, ca_pem).context("Failed to save certificate")?;
     info!("PKI: certificate received and stored");
     Ok(())
-}
-
-async fn adopt_tunnel_ip(client: &client::ApiClient, resp: &client::RegisterResponse) {
-    let Some(ip) = &resp.wg_tunnel_ip else {
-        warn!("Registry did not assign a management tunnel IP");
-        return;
-    };
-    client.set_wg_tunnel_ip(ip.clone()).await;
-    info!(wg_tunnel_ip = %ip, "Management tunnel IP assigned by registry");
 }
 
 #[cfg(test)]

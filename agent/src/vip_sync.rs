@@ -14,8 +14,8 @@ const RESTARTED_UNITS: [&str; 5] = [
 ];
 
 pub async fn run(gateway_url: &str) -> Result<()> {
-    let (client, api_key) = authenticated_client(gateway_url).await?;
-    let Some(vip) = client.fetch_cluster_vip(&api_key).await? else {
+    let client = authenticated_client(gateway_url).await?;
+    let Some(vip) = client.fetch_cluster_vip().await? else {
         return Ok(());
     };
     let rendered = render_cluster_env(&vip);

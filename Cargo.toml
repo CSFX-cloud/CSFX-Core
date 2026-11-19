@@ -17,6 +17,7 @@ members = [
     "control-plane/shared/entity",
     "control-plane/shared/migration",
     "control-plane/shared/shared",
+    "control-plane/shared/agent-api",
     "control-plane/shared/test-support",
 ]
 

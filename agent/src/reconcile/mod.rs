@@ -38,7 +38,6 @@ impl Runtimes {
 #[derive(Clone)]
 pub struct Reconciler {
     pub client: Arc<ApiClient>,
-    pub api_key: Arc<str>,
     pub agent_id: uuid::Uuid,
     pub runtimes: Runtimes,
     pub workloads: WorkloadTable,
@@ -60,7 +59,6 @@ impl Reconciler {
         }
         rg_mesh::sync(
             &self.client,
-            &self.api_key,
             self.agent_id,
             &resource_group_ids,
             &self.rg_dns,
@@ -110,7 +108,6 @@ pub(crate) mod fixtures {
     pub fn reconciler(client: ApiClient, local_state: LocalState) -> Reconciler {
         Reconciler {
             client: Arc::new(client),
-            api_key: Arc::from("k"),
             agent_id: uuid::Uuid::nil(),
             runtimes: runtimes(),
             workloads: WorkloadTable::default(),
@@ -126,7 +123,7 @@ pub(crate) mod fixtures {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        ApiClient::new(url, "pub".to_string(), None, None, None).unwrap()
+        ApiClient::new(url, "pub".to_string(), None, None).unwrap()
     }
 
     pub async fn json_client(routes: &[(&'static str, serde_json::Value)]) -> ApiClient {
@@ -149,7 +146,6 @@ pub(crate) mod fixtures {
         ApiClient::new(
             "http://127.0.0.1:1".to_string(),
             "pub".to_string(),
-            None,
             None,
             None,
         )

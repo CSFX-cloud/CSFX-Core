@@ -458,3 +458,46 @@ async fn bootstrap_registration_proving_the_certificate_key_reregisters_without_
         .await
         .is_err());
 }
+
+#[tokio::test]
+#[ignore = "requires postgres via DATABASE_URL and etcd via ETCD_ENDPOINTS"]
+async fn failed_registration_releases_the_management_ip() {
+    let db = common::migrated_database().await;
+    let existing = common::insert_agent(&db).await;
+    let endpoints = shared::etcd::endpoints_from_env();
+    let ipam = registry::services::mgmt_ipam::MgmtIpamService::new(endpoints.clone());
+
+    let result = registry::services::registry::AgentRegistry::new(db)
+        .register_agent(
+            registry::services::registry::RegisterAgentParams {
+                agent_id: existing,
+                name: format!("duplicate-{}", Uuid::new_v4().simple()),
+                hostname: "duplicate-host".to_string(),
+                os_type: "linux".to_string(),
+                os_version: "6.1".to_string(),
+                architecture: "x86_64".to_string(),
+                agent_version: "0.2.2".to_string(),
+                tags: None,
+                allow_reregister: false,
+                proven_agent_id: None,
+                role: "worker".to_string(),
+                machine_id: None,
+            },
+            &ipam,
+        )
+        .await;
+
+    assert!(result.is_err());
+    let mut client = shared::etcd::connect(&endpoints).await.unwrap();
+    let holders = client
+        .get(
+            "/csfx/ipam/mgmt/",
+            Some(etcd_client::GetOptions::new().with_prefix()),
+        )
+        .await
+        .unwrap();
+    assert!(!holders
+        .kvs()
+        .iter()
+        .any(|entry| entry.value_str().ok() == Some(existing.to_string().as_str())));
+}

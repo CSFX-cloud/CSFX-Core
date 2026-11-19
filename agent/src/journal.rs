@@ -90,17 +90,12 @@ fn spawn_journalctl() -> Result<(tokio::process::Child, ChildStdout)> {
     Ok((child, stdout))
 }
 
-async fn ship(
-    client: &ApiClient,
-    api_key: &str,
-    batch: &mut Vec<JournalEntry>,
-    failing: &mut bool,
-) {
+async fn ship(client: &ApiClient, batch: &mut Vec<JournalEntry>, failing: &mut bool) {
     if batch.is_empty() {
         return;
     }
     let entries = std::mem::take(batch);
-    match client.push_logs(api_key, entries).await {
+    match client.push_logs(entries).await {
         Ok(()) => *failing = false,
         Err(e) if !*failing => {
             *failing = true;
@@ -110,7 +105,7 @@ async fn ship(
     }
 }
 
-async fn stream_once(client: &ApiClient, api_key: &str) -> Result<()> {
+async fn stream_once(client: &ApiClient) -> Result<()> {
     let (_child, stdout) = spawn_journalctl()?;
     let mut lines = BufReader::new(stdout).lines();
     let mut ticker = interval(FLUSH_INTERVAL);
@@ -122,23 +117,23 @@ async fn stream_once(client: &ApiClient, api_key: &str) -> Result<()> {
         tokio::select! {
             line = lines.next_line() => {
                 let Some(line) = line.context("Failed to read journal output")? else {
-                    ship(client, api_key, &mut batch, &mut failing).await;
+                    ship(client, &mut batch, &mut failing).await;
                     return Ok(());
                 };
                 batch.extend(parse_line(&line));
                 if batch.len() >= BATCH_SIZE {
-                    ship(client, api_key, &mut batch, &mut failing).await;
+                    ship(client, &mut batch, &mut failing).await;
                 }
             }
-            _ = ticker.tick() => ship(client, api_key, &mut batch, &mut failing).await,
+            _ = ticker.tick() => ship(client, &mut batch, &mut failing).await,
         }
     }
 }
 
-pub fn spawn(client: Arc<ApiClient>, api_key: String) {
+pub fn spawn(client: Arc<ApiClient>) {
     tokio::spawn(async move {
         loop {
-            if let Err(e) = stream_once(&client, &api_key).await {
+            if let Err(e) = stream_once(&client).await {
                 error!(error = %e, "journal streaming stopped");
             }
             sleep(RESTART_DELAY).await;
@@ -226,18 +221,18 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = ApiClient::new(url, "pub".to_string(), None, None, None).unwrap();
+        let client = ApiClient::new(url, "pub".to_string(), None, None).unwrap();
 
         let mut batch = Vec::new();
         let mut failing = false;
-        ship(&client, "key", &mut batch, &mut failing).await;
+        ship(&client, &mut batch, &mut failing).await;
         assert_eq!(hits.load(Ordering::SeqCst), 0);
 
         for _ in 0..2 {
             batch.extend(parse_line(
                 &json!({"MESSAGE": "m", "PRIORITY": "3"}).to_string(),
             ));
-            ship(&client, "key", &mut batch, &mut failing).await;
+            ship(&client, &mut batch, &mut failing).await;
             assert!(batch.is_empty());
             assert!(failing);
         }
