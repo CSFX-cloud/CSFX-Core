@@ -2,11 +2,19 @@ use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
+use std::time::Duration as StdDuration;
 use uuid::Uuid;
+
+use crate::ttl_cache::TtlCache;
 
 pub const TOKEN_LIFETIME_HOURS: i64 = 24;
 const MIN_JWT_SECRET_BYTES: usize = 32;
+const TICKET_LIFETIME_SECONDS: i64 = 30;
+const TICKET_REPLAY_WINDOW: StdDuration = StdDuration::from_secs(120);
+
+static REDEEMED_TICKETS: LazyLock<TtlCache<()>> =
+    LazyLock::new(|| TtlCache::new(TICKET_REPLAY_WINDOW));
 
 static JWT_SECRET: OnceLock<String> = OnceLock::new();
 
@@ -89,6 +97,7 @@ pub const NODE_METRICS_PURPOSE: &str = "node-metrics";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TicketClaims {
+    pub jti: Uuid,
     pub subject: Uuid,
     pub user_id: Uuid,
     pub exp: i64,
@@ -103,9 +112,10 @@ pub fn create_ticket(
 ) -> Result<String, jsonwebtoken::errors::Error> {
     let now = Utc::now();
     let claims = TicketClaims {
+        jti: Uuid::new_v4(),
         subject,
         user_id,
-        exp: (now + Duration::seconds(30)).timestamp(),
+        exp: (now + Duration::seconds(TICKET_LIFETIME_SECONDS)).timestamp(),
         iat: now.timestamp(),
         purpose: purpose.to_string(),
     };
@@ -131,12 +141,25 @@ pub fn verify_ticket(
         return Err(jsonwebtoken::errors::ErrorKind::InvalidToken.into());
     }
 
+    if !REDEEMED_TICKETS.insert_if_absent(&data.claims.jti.to_string(), ()) {
+        return Err(jsonwebtoken::errors::ErrorKind::InvalidToken.into());
+    }
+
     Ok(data.claims)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ticket_can_be_redeemed_once() {
+        std::env::set_var("JWT_SECRET", "t".repeat(MIN_JWT_SECRET_BYTES));
+        let subject = Uuid::new_v4();
+        let ticket = create_ticket(EXEC_PURPOSE, subject, Uuid::new_v4()).unwrap();
+        assert!(verify_ticket(&ticket, EXEC_PURPOSE, subject).is_ok());
+        assert!(verify_ticket(&ticket, EXEC_PURPOSE, subject).is_err());
+    }
 
     #[test]
     fn missing_secret_is_rejected() {
