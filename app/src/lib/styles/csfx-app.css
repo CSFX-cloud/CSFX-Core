@@ -269,6 +269,7 @@
 .am-item--danger{color:var(--danger)}
 .am-item--danger:hover:not(:disabled){color:var(--danger)}
 .gd-head{position:relative;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--space-5);padding:var(--space-5)}
+.gd-head .db-actions .cx-icon-btn{width:36px;height:36px}
 .gd-id{display:flex;align-items:center;gap:var(--space-4);min-width:0}
 .gd-title{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
 .gd-title h1,.gd-name{margin:0;font-size:24px;line-height:1.2;font-weight:500;letter-spacing:-0.015em;color:var(--ink)}
