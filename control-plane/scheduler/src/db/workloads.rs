@@ -345,6 +345,7 @@ pub async fn apply_reported_statuses(
          container_id = COALESCE(NULLIF(v.container_id, ''), w.container_id), updated_at = $2::timestamp \
          FROM (VALUES {rows}) AS v(id, status, container_id) \
          WHERE w.id = v.id AND w.assigned_agent_id = $1 AND (w.status IS DISTINCT FROM v.status \
+         OR w.replaces_workload_id IS NOT NULL \
          OR w.observed_status IS DISTINCT FROM v.status \
          OR (v.container_id <> '' AND w.container_id IS DISTINCT FROM v.container_id)) \
          RETURNING w.id, w.status"

@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
-    response::{IntoResponse, Json},
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Json, Response},
     routing::{get, put},
     Router,
 };
@@ -17,8 +17,12 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shared::ttl_cache::TtlCache;
 use shared::workload_status::ACTIVE_STATUSES;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::resource_groups::{db_error, error, ApiError};
@@ -234,10 +238,54 @@ pub async fn list_resource_group_site_services(
     Ok((StatusCode::OK, Json(json!(services))))
 }
 
+const MESH_SNAPSHOT_TTL: Duration = Duration::from_secs(5);
+const MESH_SNAPSHOT_KEY: &str = "peers";
+
+struct MeshSnapshot {
+    etag: String,
+    body: String,
+}
+
+static MESH_SNAPSHOT: LazyLock<TtlCache<Arc<MeshSnapshot>>> =
+    LazyLock::new(|| TtlCache::new(MESH_SNAPSHOT_TTL));
+
+fn etag_of(body: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    body.hash(&mut hasher);
+    format!("\"{:x}\"", hasher.finish())
+}
+
+async fn load_mesh_snapshot(state: &AppState) -> Result<Arc<MeshSnapshot>, ApiError> {
+    if let Some(snapshot) = MESH_SNAPSHOT.get(MESH_SNAPSHOT_KEY) {
+        return Ok(snapshot);
+    }
+    let body = json!(mesh_peers(state).await?).to_string();
+    let snapshot = Arc::new(MeshSnapshot {
+        etag: etag_of(&body),
+        body,
+    });
+    MESH_SNAPSHOT.insert(MESH_SNAPSHOT_KEY, snapshot.clone());
+    Ok(snapshot)
+}
+
 pub async fn list_mesh_peers(
     _agent: crate::auth::agent::AgentApiKey,
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, ApiError> {
+    request_headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let snapshot = load_mesh_snapshot(&state).await?;
+    let etag = [(header::ETAG, snapshot.etag.clone())];
+    let known = request_headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok());
+    if known == Some(snapshot.etag.as_str()) {
+        return Ok((StatusCode::NOT_MODIFIED, etag).into_response());
+    }
+    let content_type = [(header::CONTENT_TYPE, "application/json".to_string())];
+    Ok((StatusCode::OK, etag, content_type, snapshot.body.clone()).into_response())
+}
+
+async fn mesh_peers(state: &AppState) -> Result<Vec<ResourceGroupPeer>, ApiError> {
     let agent_rows = Agents::find()
         .filter(agents::Column::WgPublicKey.is_not_null())
         .filter(agents::Column::WgEndpoint.is_not_null())
@@ -246,7 +294,7 @@ pub async fn list_mesh_peers(
         .await
         .map_err(db_error("failed to fetch mesh peers"))?;
 
-    let peers: Vec<ResourceGroupPeer> = agent_rows
+    Ok(agent_rows
         .into_iter()
         .filter_map(|a| {
             Some(ResourceGroupPeer {
@@ -257,9 +305,7 @@ pub async fn list_mesh_peers(
                 wg_listen_port: None,
             })
         })
-        .collect();
-
-    Ok((StatusCode::OK, Json(json!(peers))))
+        .collect())
 }
 
 #[derive(Debug, Serialize)]

@@ -209,7 +209,10 @@ async fn group_cidrs(
     state: &AppState,
     rows: &[workloads::Model],
 ) -> Result<HashMap<Uuid, String>, StatusCode> {
-    let group_ids: HashSet<Uuid> = rows.iter().filter_map(|row| row.resource_group_id).collect();
+    let group_ids: HashSet<Uuid> = rows
+        .iter()
+        .filter_map(|row| row.resource_group_id)
+        .collect();
     if group_ids.is_empty() {
         return Ok(HashMap::new());
     }
