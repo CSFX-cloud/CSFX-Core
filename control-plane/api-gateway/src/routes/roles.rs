@@ -61,15 +61,6 @@ fn internal(context: &'static str) -> impl Fn(sea_orm::DbErr) -> ApiError {
     }
 }
 
-fn organization_id(state: &AppState) -> Result<Uuid, ApiError> {
-    state.default_org_id.ok_or_else(|| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "organization not initialized",
-        )
-    })
-}
-
 async fn load_role(
     db: &DatabaseConnection,
     id: Uuid,
@@ -148,7 +139,7 @@ async fn list_roles(
     CanManageRoles(_claims): CanManageRoles,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RoleDetail>>, ApiError> {
-    let organization_id = organization_id(&state)?;
+    let organization_id = state.default_org_id;
     let roles = Role::find()
         .filter(role::Column::OrganizationId.eq(organization_id))
         .order_by_asc(role::Column::Name)
@@ -185,7 +176,7 @@ async fn create_role(
     State(state): State<AppState>,
     Json(payload): Json<RolePayload>,
 ) -> Result<(StatusCode, Json<RoleDetail>), ApiError> {
-    let organization_id = organization_id(&state)?;
+    let organization_id = state.default_org_id;
     let payload = validated_payload(&state.db_conn, payload).await?;
     ensure_grantable_permissions(&state, claims.user_id, organization_id, &payload).await?;
     ensure_unique_name(&state.db_conn, organization_id, &payload.name, None).await?;
@@ -241,7 +232,7 @@ async fn update_role(
     Path(id): Path<Uuid>,
     Json(payload): Json<RolePayload>,
 ) -> Result<Json<RoleDetail>, ApiError> {
-    let organization_id = organization_id(&state)?;
+    let organization_id = state.default_org_id;
     let existing = load_role(&state.db_conn, id, organization_id).await?;
     if existing.is_system_role {
         return Err(error(
@@ -286,7 +277,7 @@ async fn delete_role(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let existing = load_role(&state.db_conn, id, organization_id(&state)?).await?;
+    let existing = load_role(&state.db_conn, id, state.default_org_id).await?;
     if existing.is_system_role {
         return Err(error(
             StatusCode::CONFLICT,

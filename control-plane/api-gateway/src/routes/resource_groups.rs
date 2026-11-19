@@ -131,9 +131,7 @@ fn validate_name(name: String) -> Result<String, (StatusCode, Json<serde_json::V
 }
 
 fn get_org_id(state: &AppState) -> Uuid {
-    state
-        .default_org_id
-        .expect("default organization not initialized")
+    state.default_org_id
 }
 
 pub async fn list_resource_groups(

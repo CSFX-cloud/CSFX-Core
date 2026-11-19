@@ -78,7 +78,7 @@ async fn main() {
         db_conn: db_conn.clone(),
         agent_db,
         service_client: service_client::ServiceClient::new(),
-        default_org_id: Some(default_org_id),
+        default_org_id,
         agent_stream_registry: routes::agent_stream::AgentStreamRegistry::new(),
         openbao: connect_openbao(),
         site_builder: site_client::SiteBuilder::from_environment(),

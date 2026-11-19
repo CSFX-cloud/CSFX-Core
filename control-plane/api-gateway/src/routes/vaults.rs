@@ -550,13 +550,10 @@ async fn require_reveal_for_read_grant(
     if !needs_role(capability) {
         return Ok(());
     }
-    let allowed = match state.default_org_id {
-        Some(org_id) => RbacService::new(state.db_conn.clone())
-            .has_permission(claims.user_id, org_id, "secrets", "reveal")
-            .await
-            .unwrap_or(false),
-        None => false,
-    };
+    let allowed = RbacService::new(state.db_conn.clone())
+        .has_permission(claims.user_id, state.default_org_id, "secrets", "reveal")
+        .await
+        .unwrap_or(false);
     if allowed {
         return Ok(());
     }

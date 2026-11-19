@@ -275,7 +275,7 @@ fn state_for(harness: &Harness) -> AppState {
         db_conn: harness.db.clone(),
         agent_db: harness.db.clone(),
         service_client: service_client::ServiceClient::new(),
-        default_org_id: Some(harness.org_id),
+        default_org_id: harness.org_id,
         agent_stream_registry: AgentStreamRegistry::new(),
         openbao: None,
         site_builder: None,

@@ -160,15 +160,6 @@ fn internal(context: &'static str) -> impl Fn(sea_orm::DbErr) -> ApiError {
     }
 }
 
-fn organization_id(state: &AppState) -> Result<Uuid, ApiError> {
-    state.default_org_id.ok_or_else(|| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "organization not initialized",
-        )
-    })
-}
-
 fn valid_slug(slug: &str) -> bool {
     !slug.is_empty()
         && slug.len() <= MAX_SLUG_LENGTH
@@ -299,7 +290,7 @@ async fn create(
     headers: HeaderMap,
     Json(request): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderResponse>), ApiError> {
-    let organization_id = organization_id(&state)?;
+    let organization_id = state.default_org_id;
     let payload = request.payload;
     validate_payload(
         &state.db_conn,

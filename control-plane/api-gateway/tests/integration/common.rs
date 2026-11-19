@@ -202,7 +202,7 @@ pub async fn harness() -> Harness {
         db_conn: db.clone(),
         agent_db: db.clone(),
         service_client: service_client::ServiceClient::new(),
-        default_org_id: Some(org_id),
+        default_org_id: org_id,
         agent_stream_registry: routes::agent_stream::AgentStreamRegistry::new(),
         openbao: None,
         site_builder: None,

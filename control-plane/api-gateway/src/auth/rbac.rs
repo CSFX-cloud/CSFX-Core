@@ -7,7 +7,6 @@ use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
 };
-use uuid::Uuid;
 
 pub struct CanViewAgents(pub Claims);
 pub struct CanViewWorkloads(pub Claims);
@@ -28,6 +27,11 @@ pub struct CanManageSecrets(pub Claims);
 pub struct CanRevealSecrets(pub Claims);
 pub struct CanManageRoles(pub Claims);
 pub struct CanManageIdentityProviders(pub Claims);
+pub struct CanUpdateOrganization(pub Claims);
+pub struct CanViewUsers(pub Claims);
+pub struct CanCreateUsers(pub Claims);
+pub struct CanUpdateUsers(pub Claims);
+pub struct CanDeleteUsers(pub Claims);
 pub struct AuthenticatedUser(pub Claims);
 
 impl FromRequestParts<AppState> for AuthenticatedUser {
@@ -41,12 +45,6 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
     }
 }
 
-fn get_default_org(state: &AppState) -> Result<Uuid, StatusCode> {
-    state
-        .default_org_id
-        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)
-}
-
 async fn check(
     parts: &mut Parts,
     state: &AppState,
@@ -54,7 +52,7 @@ async fn check(
     action: &str,
 ) -> Result<Claims, StatusCode> {
     let claims = authenticate(parts, state).await?;
-    let org_id = get_default_org(state)?;
+    let org_id = state.default_org_id;
     let rbac = RbacService::new(state.db_conn.clone());
     let allowed = rbac
         .has_permission(claims.user_id, org_id, resource, action)
@@ -101,3 +99,8 @@ impl_extractor!(CanManageSecrets, "secrets", "manage");
 impl_extractor!(CanRevealSecrets, "secrets", "reveal");
 impl_extractor!(CanManageRoles, "roles", "manage");
 impl_extractor!(CanManageIdentityProviders, "idp", "manage");
+impl_extractor!(CanUpdateOrganization, "organization", "update");
+impl_extractor!(CanViewUsers, "users", "view");
+impl_extractor!(CanCreateUsers, "users", "create");
+impl_extractor!(CanUpdateUsers, "users", "update");
+impl_extractor!(CanDeleteUsers, "users", "delete");
