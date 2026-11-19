@@ -16,6 +16,7 @@
         type SiteMode,
     } from "$lib/api/sites";
     import { listSecrets } from "$lib/api/vaults";
+    import { Select } from "$lib/components/ui/select";
     import CreateGatewayDialog from "$lib/components/resource-group/create-gateway-dialog.svelte";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
@@ -252,17 +253,21 @@
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
                     <div class="cx-field">
                         <label class="cx-label" for="wa-vault">Key vault</label>
-                        <select class="cx-input" id="wa-vault" bind:value={vaultId} onchange={loadTokenNames}>
-                            <option value="">None, public repository</option>
-                            {#each usableVaults as vault (vault.id)}<option value={vault.id}>{vault.name}</option>{/each}
-                        </select>
+                        <Select
+                            id="wa-vault"
+                            bind:value={vaultId}
+                            onchange={loadTokenNames}
+                            options={[{ value: "", label: "None, public repository" }, ...usableVaults.map((vault) => ({ value: vault.id, label: vault.name }))]}
+                        />
                     </div>
                     <div class="cx-field">
                         <label class="cx-label" for="wa-token">Access token secret</label>
-                        <select class="cx-input" id="wa-token" bind:value={tokenSecret} disabled={tokenNames.length === 0}>
-                            <option value="">Select</option>
-                            {#each tokenNames as secretName (secretName)}<option value={secretName}>{secretName}</option>{/each}
-                        </select>
+                        <Select
+                            id="wa-token"
+                            bind:value={tokenSecret}
+                            disabled={tokenNames.length === 0}
+                            options={[{ value: "", label: "Select" }, ...tokenNames.map((secretName) => ({ value: secretName, label: secretName }))]}
+                        />
                     </div>
                 </div>
                 <div>
@@ -374,19 +379,22 @@
                         </div>
                         <div class="cx-field">
                             <label class="cx-label" for="wa-gateway">API gateway (optional)</label>
-                            <select class="cx-input" id="wa-gateway" bind:value={gatewayId}>
-                                <option value="">None, served inside the resource group</option>
-                                {#each rg.gateways as gateway (gateway.id)}<option value={gateway.id}>{gateway.name}</option>{/each}
-                            </select>
+                            <Select
+                                id="wa-gateway"
+                                bind:value={gatewayId}
+                                options={[{ value: "", label: "None, served inside the resource group" }, ...rg.gateways.map((gateway) => ({ value: gateway.id, label: gateway.name }))]}
+                            />
                             <p class="cx-hint">The site always gets an internal domain in this group. A gateway adds public hostnames and TLS.</p>
                             <button class="cx-btn cx-btn--secondary cx-btn--sm" type="button" onclick={() => gatewayDialog?.open()}>Create API gateway</button>
                         </div>
                     </div>
                     <div class="cx-field">
                         <label class="cx-label" for="wa-size">Build size</label>
-                        <select class="cx-input" id="wa-size" bind:value={buildSize}>
-                            {#each BUILD_SIZES as size (size.id)}<option value={size.id}>{size.label}, {size.spec}</option>{/each}
-                        </select>
+                        <Select
+                            id="wa-size"
+                            bind:value={buildSize}
+                            options={BUILD_SIZES.map((size) => ({ value: size.id, label: `${size.label}, ${size.spec}` }))}
+                        />
                         <p class="cx-hint">Larger builds finish big frameworks faster. You can change this later in the site settings.</p>
                     </div>
                     {#if mode === "static"}
