@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::models::workload::{
-    CreateWorkloadRequest, DesiredState, PortMapping, RestartPolicy, RuntimeClass, TopologySpread,
-    UpdateWorkloadRequest, WorkloadStatus,
+    CreateWorkloadRequest, DesiredState, Named, PortMapping, RestartPolicy, RuntimeClass,
+    TopologySpread, UpdateWorkloadRequest, WorkloadStatus,
 };
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
 use crate::services::scheduler::{
@@ -235,8 +235,8 @@ impl SchedulerService {
         update: &UpdateWorkloadRequest,
     ) -> Result<bool, DbErr> {
         let runnable = old.assigned_agent_id.is_some()
-            && old.status == WorkloadStatus::Running.as_str()
-            && old.desired_state == DesiredState::Running.as_str()
+            && old.status == WorkloadStatus::Running.name()
+            && old.desired_state == DesiredState::Running.name()
             && !old.restart_requested
             && old.runtime_class != VM_CLASS;
         let stateless = !has_volumes(old)
@@ -334,7 +334,7 @@ impl SchedulerService {
         let replaced = crate::db::workloads::get_by_id(&self.db, replaced_id)
             .await
             .map_err(|e| e.to_string())?;
-        let status = WorkloadStatus::from_str(&replacement.status);
+        let status = WorkloadStatus::from_name(&replacement.status);
         let running = status == WorkloadStatus::Running;
         let failed = status == WorkloadStatus::Failed;
         let age = (Utc::now().naive_utc() - replacement.created_at).num_seconds();
@@ -342,7 +342,7 @@ impl SchedulerService {
             replaced.is_some(),
             replaced
                 .as_ref()
-                .is_some_and(|workload| workload.desired_state == DesiredState::Running.as_str()),
+                .is_some_and(|workload| workload.desired_state == DesiredState::Running.name()),
             status,
             age,
             self.ready_for(replacement.id, running, replacement.updated_at),
@@ -465,10 +465,10 @@ async fn swap_identities(
     let (Some(old), Some(new)) = (old, new) else {
         return Ok(None);
     };
-    let valid = old.desired_state == DesiredState::Running.as_str()
-        && new.desired_state == DesiredState::Running.as_str()
+    let valid = old.desired_state == DesiredState::Running.name()
+        && new.desired_state == DesiredState::Running.name()
         && new.replaces_workload_id == Some(old.id)
-        && new.status == WorkloadStatus::Running.as_str();
+        && new.status == WorkloadStatus::Running.name();
     if !valid || !agent_online(transaction, new.assigned_agent_id).await? {
         return Ok(None);
     }
@@ -592,15 +592,15 @@ fn replacement_request(
         service_name: None,
         restart_policy: update
             .restart_policy
-            .unwrap_or_else(|| RestartPolicy::from_str(&old.restart_policy)),
+            .unwrap_or_else(|| RestartPolicy::from_name(&old.restart_policy)),
         max_restarts: update.max_restarts.or(old.max_restarts),
-        runtime_class: RuntimeClass::from_str(&old.runtime_class),
+        runtime_class: RuntimeClass::from_name(&old.runtime_class),
         cpu_limit_millicores: sizes.cpu_limit_millicores,
         memory_limit_bytes: sizes.memory_limit_bytes,
         auto_resources: old.auto_resources,
         replicas: None,
         spread_key: old.spread_key.clone(),
-        topology_spread: TopologySpread::from_str(&old.topology_spread),
+        topology_spread: TopologySpread::from_name(&old.topology_spread),
         replaces: None,
     })
 }

@@ -4,36 +4,37 @@ use shared::qos::QosClass;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-macro_rules! string_enum {
-    ($name:ident, default $default:ident, { $($variant:ident => $text:literal),+ $(,)? }) => {
-        impl $name {
-            pub fn as_str(&self) -> &'static str {
-                match self {
-                    $($name::$variant => $text),+
-                }
-            }
-
-            pub fn parse(value: &str) -> Option<Self> {
-                match value {
-                    $($text => Some($name::$variant),)+
-                    _ => None,
-                }
-            }
-
-            pub fn from_str(value: &str) -> Self {
-                Self::parse(value).unwrap_or($name::$default)
-            }
-        }
-    };
-}
-
 pub const MAX_REPLICAS: u32 = 32;
 const MAX_SERVICE_NAME_LENGTH: usize = 63;
 const BUCKET_PERMISSIONS: [&str; 2] = ["read", "readwrite"];
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub trait Named: Serialize + serde::de::DeserializeOwned + Default {
+    fn name(&self) -> String {
+        serde_json::to_value(self)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    }
+
+    fn parse(name: &str) -> Option<Self> {
+        serde_json::from_value(serde_json::Value::String(name.to_string())).ok()
+    }
+
+    fn from_name(name: &str) -> Self {
+        Self::parse(name).unwrap_or_default()
+    }
+}
+
+impl Named for WorkloadStatus {}
+impl Named for RestartPolicy {}
+impl Named for RuntimeClass {}
+impl Named for TopologySpread {}
+impl Named for DesiredState {}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkloadStatus {
+    #[default]
     Pending,
     Scheduled,
     Pulling,
@@ -43,17 +44,6 @@ pub enum WorkloadStatus {
     Failed,
     Stopped,
 }
-
-string_enum!(WorkloadStatus, default Pending, {
-    Pending => "pending",
-    Scheduled => "scheduled",
-    Pulling => "pulling",
-    Creating => "creating",
-    Starting => "starting",
-    Running => "running",
-    Failed => "failed",
-    Stopped => "stopped",
-});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageEntry {
@@ -83,38 +73,21 @@ pub struct BucketBinding {
     pub permissions: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum RestartPolicy {
+    #[default]
     Always,
     OnFailure,
     Never,
 }
 
-string_enum!(RestartPolicy, default Always, {
-    Always => "always",
-    OnFailure => "on-failure",
-    Never => "never",
-});
-
-fn default_restart_policy() -> RestartPolicy {
-    RestartPolicy::Always
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeClass {
+    #[default]
     Firecracker,
     Vm,
-}
-
-string_enum!(RuntimeClass, default Firecracker, {
-    Firecracker => "firecracker",
-    Vm => "vm",
-});
-
-fn default_runtime_class() -> RuntimeClass {
-    RuntimeClass::Firecracker
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -126,23 +99,13 @@ pub enum TopologySpread {
     Hard,
 }
 
-string_enum!(TopologySpread, default None, {
-    None => "none",
-    Soft => "soft",
-    Hard => "hard",
-});
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DesiredState {
+    #[default]
     Running,
     Stopped,
 }
-
-string_enum!(DesiredState, default Running, {
-    Running => "running",
-    Stopped => "stopped",
-});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateWorkloadRequest {
@@ -182,11 +145,11 @@ pub struct CreateWorkloadRequest {
     pub stack_id: Option<Uuid>,
     #[serde(default)]
     pub service_name: Option<String>,
-    #[serde(default = "default_restart_policy")]
+    #[serde(default)]
     pub restart_policy: RestartPolicy,
     #[serde(default)]
     pub max_restarts: Option<i32>,
-    #[serde(default = "default_runtime_class")]
+    #[serde(default)]
     pub runtime_class: RuntimeClass,
     #[serde(default)]
     pub cpu_limit_millicores: Option<i32>,
@@ -387,10 +350,34 @@ mod tests {
     }
 
     #[test]
-    fn workload_status_parsing_rejects_unknown_names() {
+    fn enum_names_round_trip_and_reject_unknown_values() {
+        assert_eq!(
+            WorkloadStatus::parse("running"),
+            Some(WorkloadStatus::Running)
+        );
         for hostile in ["", "RUNNING", "running; drop", "ok"] {
             assert!(WorkloadStatus::parse(hostile).is_none(), "{hostile}");
         }
+        assert_eq!(RestartPolicy::OnFailure.name(), "on-failure");
+        assert_eq!(
+            RestartPolicy::from_name("on-failure"),
+            RestartPolicy::OnFailure
+        );
+        assert_eq!(DesiredState::Stopped.name(), "stopped");
+        assert_eq!(RuntimeClass::Vm.name(), "vm");
+        assert_eq!(TopologySpread::Hard.name(), "hard");
+    }
+
+    #[test]
+    fn unknown_stored_names_fall_back_to_the_default() {
+        assert_eq!(
+            WorkloadStatus::from_name("unknown"),
+            WorkloadStatus::Pending
+        );
+        assert_eq!(RestartPolicy::from_name("sometimes"), RestartPolicy::Always);
+        assert_eq!(RuntimeClass::from_name("docker"), RuntimeClass::Firecracker);
+        assert_eq!(DesiredState::from_name("paused"), DesiredState::Running);
+        assert_eq!(TopologySpread::from_name("loose"), TopologySpread::None);
     }
 
     #[test]
@@ -411,23 +398,6 @@ mod tests {
             req.bucket_bindings = serde_json::from_value(binding(Some(denied))).unwrap();
             assert!(req.validate().is_err());
         }
-    }
-
-    #[test]
-    fn enums_round_trip_through_their_names_and_fall_back_to_defaults() {
-        for status in [WorkloadStatus::Pending, WorkloadStatus::Stopped] {
-            assert_eq!(WorkloadStatus::from_str(status.as_str()), status);
-        }
-        assert_eq!(WorkloadStatus::from_str("unknown"), WorkloadStatus::Pending);
-        assert_eq!(
-            RestartPolicy::from_str("on-failure"),
-            RestartPolicy::OnFailure
-        );
-        assert_eq!(RestartPolicy::from_str("sometimes"), RestartPolicy::Always);
-        assert_eq!(RuntimeClass::from_str("vm"), RuntimeClass::Vm);
-        assert_eq!(RuntimeClass::from_str("docker"), RuntimeClass::Firecracker);
-        assert_eq!(TopologySpread::from_str("hard"), TopologySpread::Hard);
-        assert_eq!(DesiredState::from_str("paused"), DesiredState::Running);
     }
 
     #[test]

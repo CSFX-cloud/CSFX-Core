@@ -137,3 +137,26 @@ async fn a_second_update_during_a_rollout_conflicts() {
     assert!(matches!(update, Err(DbErr::RecordNotUpdated)));
     assert!(matches!(restart, Err(DbErr::RecordNotUpdated)));
 }
+
+#[tokio::test]
+#[ignore = "requires postgres"]
+async fn usage_peaks_only_grow_between_samples() {
+    let fixture = placing().await;
+    let id = running_workload(&fixture.service, &fixture.db).await;
+
+    for (cpu, memory) in [
+        (Some(40.0), Some(500)),
+        (Some(10.0), None),
+        (None, Some(100)),
+    ] {
+        workloads::update_stats(&fixture.db, id, cpu, memory, None, None, None)
+            .await
+            .unwrap();
+    }
+
+    let stored = fetch(&fixture.db, id).await.unwrap();
+    assert_eq!(stored.cpu_usage_peak_percent, Some(40.0));
+    assert_eq!(stored.memory_usage_peak_bytes, Some(500));
+    assert_eq!(stored.cpu_usage_percent, None);
+    assert_eq!(stored.memory_usage_bytes, Some(100));
+}

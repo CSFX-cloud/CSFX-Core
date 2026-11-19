@@ -1,17 +1,16 @@
 use chrono::Utc;
 use entity::entities::workloads;
-use sea_orm::sea_query::{Expr, Func};
+use sea_orm::sea_query::{Expr, Func, SimpleExpr};
 use sea_orm::{
-    ActiveModelTrait,
-    ActiveValue::{NotSet, Set},
-    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr,
+    EntityTrait, QueryFilter,
 };
 use shared::env_secrets::{self, EnvSecretError};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::models::workload::{
-    CreateWorkloadRequest, DesiredState, RestartPolicy, RuntimeClass, VolumeUsage,
+    CreateWorkloadRequest, DesiredState, Named, RestartPolicy, RuntimeClass, VolumeUsage,
     WorkloadResponse, WorkloadStatus,
 };
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
@@ -48,7 +47,7 @@ pub async fn create(
         cpu_limit_millicores: Set(req.cpu_limit_millicores),
         memory_limit_bytes: Set(req.memory_limit_bytes),
         spread_key: Set(req.spread_key.clone()),
-        topology_spread: Set(req.topology_spread.as_str().to_string()),
+        topology_spread: Set(req.topology_spread.name().to_string()),
         guest_ip: Set(guest_ip),
         auto_resources: Set(req.auto_resources),
         cpu_usage_peak_percent: Set(None),
@@ -56,7 +55,7 @@ pub async fn create(
         env_vars: Set(env_vars),
         ports: Set(ports),
         volume_mounts: Set(volume_mounts),
-        status: Set(WorkloadStatus::Pending.as_str().to_string()),
+        status: Set(WorkloadStatus::Pending.name().to_string()),
         assigned_agent_id: Set(None),
         container_id: Set(None),
         created_by: Set(None),
@@ -65,11 +64,11 @@ pub async fn create(
         stack_id: Set(req.stack_id),
         replaces_workload_id: Set(req.replaces),
         service_name: Set(req.service_name.clone()),
-        restart_policy: Set(req.restart_policy.as_str().to_string()),
+        restart_policy: Set(req.restart_policy.name().to_string()),
         max_restarts: Set(req.max_restarts),
         restart_count: Set(0),
-        runtime_class: Set(req.runtime_class.as_str().to_string()),
-        desired_state: Set(DesiredState::Running.as_str().to_string()),
+        runtime_class: Set(req.runtime_class.name().to_string()),
+        desired_state: Set(DesiredState::Running.name().to_string()),
         restart_requested: Set(false),
         cpu_usage_percent: Set(None),
         memory_usage_bytes: Set(None),
@@ -113,14 +112,11 @@ pub async fn set_guest_ip(
     db: &DatabaseConnection,
     workload_id: Uuid,
     guest_ip: String,
-) -> Result<(), sea_orm::DbErr> {
+) -> Result<(), DbErr> {
     patch(
         db,
         workload_id,
-        workloads::ActiveModel {
-            guest_ip: Set(Some(guest_ip)),
-            ..Default::default()
-        },
+        [(workloads::Column::GuestIp, Expr::value(guest_ip))],
     )
     .await?;
     Ok(())
@@ -157,29 +153,6 @@ pub async fn unassign(
     .await
 }
 
-async fn patch(
-    db: &impl ConnectionTrait,
-    workload_id: Uuid,
-    mut changes: workloads::ActiveModel,
-) -> Result<workloads::Model, sea_orm::DbErr> {
-    changes.updated_at = Set(Some(Utc::now().naive_utc()));
-    workloads::Entity::update_many()
-        .set(changes)
-        .filter(workloads::Column::Id.eq(workload_id))
-        .exec_with_returning(db)
-        .await?
-        .into_iter()
-        .next()
-        .ok_or_else(|| sea_orm::DbErr::RecordNotFound(workload_id.to_string()))
-}
-
-fn require_row(rows_affected: u64, workload_id: Uuid) -> Result<(), sea_orm::DbErr> {
-    if rows_affected == 0 {
-        return Err(sea_orm::DbErr::RecordNotFound(workload_id.to_string()));
-    }
-    Ok(())
-}
-
 async fn move_workload(
     db: &impl ConnectionTrait,
     workload_id: Uuid,
@@ -196,7 +169,7 @@ async fn move_workload(
             workloads::Column::AssignedAgentId,
             Expr::value(target_agent),
         )
-        .col_expr(workloads::Column::Status, Expr::value(status.as_str()))
+        .col_expr(workloads::Column::Status, Expr::value(status.name()))
         .col_expr(
             workloads::Column::UpdatedAt,
             Expr::value(Utc::now().naive_utc()),
@@ -212,12 +185,8 @@ pub async fn update_spec(
     db: &DatabaseConnection,
     workload_id: Uuid,
     req: &crate::models::workload::UpdateWorkloadRequest,
-) -> Result<workloads::Model, sea_orm::DbErr> {
-    let workload = workloads::Entity::find_by_id(workload_id)
-        .one(db)
-        .await?
-        .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
-
+) -> Result<workloads::Model, DbErr> {
+    let workload = require(get_by_id(db, workload_id).await?, workload_id)?;
     let mut active: workloads::ActiveModel = workload.clone().into();
 
     if let Some(ref image) = req.image {
@@ -232,7 +201,7 @@ pub async fn update_spec(
         active.ports = Set(serde_json::to_value(ports).ok());
     }
     if let Some(ref restart_policy) = req.restart_policy {
-        active.restart_policy = Set(restart_policy.as_str().to_string());
+        active.restart_policy = Set(restart_policy.name().to_string());
     }
     if req.max_restarts.is_some() {
         active.max_restarts = Set(req.max_restarts);
@@ -240,32 +209,9 @@ pub async fn update_spec(
     if let Some(ref volume_mounts) = req.volume_mounts {
         active.volume_mounts = Set(serde_json::to_value(volume_mounts).ok());
     }
-
     active.generation = Set(workload.generation + 1);
 
-    apply_auto_resources(&workload, &mut active);
-    active.restart_requested = Set(true);
-    active.status = Set(WorkloadStatus::Starting.as_str().to_string());
-    active.updated_at = Set(Some(Utc::now().naive_utc()));
-
-    commit_if_unchanged(db, &workload, active).await
-}
-
-async fn commit_if_unchanged(
-    db: &DatabaseConnection,
-    workload: &workloads::Model,
-    active: workloads::ActiveModel,
-) -> Result<workloads::Model, sea_orm::DbErr> {
-    let applied = workloads::Entity::update_many()
-        .set(active)
-        .filter(workloads::Column::Id.eq(workload.id))
-        .filter(workloads::Column::Generation.eq(workload.generation))
-        .exec_with_returning(db)
-        .await?;
-    applied
-        .into_iter()
-        .next()
-        .ok_or(sea_orm::DbErr::RecordNotUpdated)
+    request_rollout(db, &workload, active).await
 }
 
 pub async fn get_page(
@@ -303,7 +249,7 @@ pub async fn delete_by_stack_id(
 
 pub async fn get_pending(db: &DatabaseConnection) -> Result<Vec<workloads::Model>, sea_orm::DbErr> {
     workloads::Entity::find()
-        .filter(workloads::Column::Status.eq(WorkloadStatus::Pending.as_str()))
+        .filter(workloads::Column::Status.eq(WorkloadStatus::Pending.name()))
         .filter(workloads::Column::AssignedAgentId.is_null())
         .all(db)
         .await
@@ -368,19 +314,16 @@ pub async fn update_container_status(
     workload_id: Uuid,
     container_id: &str,
     status: &str,
-) -> Result<(), sea_orm::DbErr> {
-    let container = (!container_id.is_empty()).then(|| container_id.to_string());
-    patch(
-        db,
-        workload_id,
-        workloads::ActiveModel {
-            container_id: container.map_or(NotSet, |id| Set(Some(id))),
-            status: Set(status.to_string()),
-            observed_status: Set(Some(status.to_string())),
-            ..Default::default()
-        },
-    )
-    .await?;
+) -> Result<(), DbErr> {
+    let mut changes = vec![
+        (workloads::Column::Status, Expr::value(status)),
+        (workloads::Column::ObservedStatus, Expr::value(status)),
+        (workloads::Column::UpdatedAt, now()),
+    ];
+    if !container_id.is_empty() {
+        changes.push((workloads::Column::ContainerId, Expr::value(container_id)));
+    }
+    patch(db, workload_id, changes).await?;
     Ok(())
 }
 
@@ -388,53 +331,45 @@ pub async fn set_desired_state(
     db: &DatabaseConnection,
     workload_id: Uuid,
     desired_state: DesiredState,
-) -> Result<workloads::Model, sea_orm::DbErr> {
-    let stopped = desired_state == DesiredState::Stopped;
-    patch(
-        db,
-        workload_id,
-        workloads::ActiveModel {
-            desired_state: Set(desired_state.as_str().to_string()),
-            status: if stopped {
-                Set(WorkloadStatus::Stopped.as_str().to_string())
-            } else {
-                NotSet
-            },
-            ..Default::default()
-        },
-    )
-    .await
+) -> Result<workloads::Model, DbErr> {
+    let mut changes = vec![
+        (
+            workloads::Column::DesiredState,
+            Expr::value(desired_state.name()),
+        ),
+        (workloads::Column::UpdatedAt, now()),
+    ];
+    if desired_state == DesiredState::Stopped {
+        changes.push((
+            workloads::Column::Status,
+            Expr::value(WorkloadStatus::Stopped.name()),
+        ));
+    }
+    patch(db, workload_id, changes).await
 }
 
 pub async fn request_restart(
     db: &DatabaseConnection,
     workload_id: Uuid,
-) -> Result<workloads::Model, sea_orm::DbErr> {
-    let workload = get_by_id(db, workload_id)
-        .await?
-        .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
-
+) -> Result<workloads::Model, DbErr> {
+    let workload = require(get_by_id(db, workload_id).await?, workload_id)?;
     let mut active: workloads::ActiveModel = workload.clone().into();
-    apply_auto_resources(&workload, &mut active);
-    active.desired_state = Set(DesiredState::Running.as_str().to_string());
-    active.restart_requested = Set(true);
-    active.status = Set(WorkloadStatus::Starting.as_str().to_string());
-    active.updated_at = Set(Some(Utc::now().naive_utc()));
+    active.desired_state = Set(DesiredState::Running.name().to_string());
 
-    commit_if_unchanged(db, &workload, active).await
+    request_rollout(db, &workload, active).await
 }
 
 pub async fn clear_restart_request(
     db: &DatabaseConnection,
     workload_id: Uuid,
-) -> Result<(), sea_orm::DbErr> {
+) -> Result<(), DbErr> {
     patch(
         db,
         workload_id,
-        workloads::ActiveModel {
-            restart_requested: Set(false),
-            ..Default::default()
-        },
+        [
+            (workloads::Column::RestartRequested, Expr::value(false)),
+            (workloads::Column::UpdatedAt, now()),
+        ],
     )
     .await?;
     Ok(())
@@ -448,59 +383,112 @@ pub async fn update_stats(
     network_rx_bytes: Option<i64>,
     network_tx_bytes: Option<i64>,
     volume_usage: Option<Vec<VolumeUsage>>,
-) -> Result<(), sea_orm::DbErr> {
-    let updated = workloads::Entity::update_many()
-        .col_expr(
-            workloads::Column::CpuUsagePeakPercent,
-            Func::greatest([
-                Expr::col(workloads::Column::CpuUsagePeakPercent).into(),
+) -> Result<(), DbErr> {
+    let volume_usage = volume_usage.and_then(|usage| serde_json::to_value(usage).ok());
+    patch(
+        db,
+        workload_id,
+        [
+            (
+                workloads::Column::CpuUsagePeakPercent,
+                peak_of(workloads::Column::CpuUsagePeakPercent, cpu_usage_percent),
+            ),
+            (
+                workloads::Column::MemoryUsagePeakBytes,
+                peak_of(workloads::Column::MemoryUsagePeakBytes, memory_usage_bytes),
+            ),
+            (
+                workloads::Column::CpuUsagePercent,
                 Expr::value(cpu_usage_percent),
-            ])
-            .into(),
-        )
-        .col_expr(
-            workloads::Column::MemoryUsagePeakBytes,
-            Func::greatest([
-                Expr::col(workloads::Column::MemoryUsagePeakBytes).into(),
+            ),
+            (
+                workloads::Column::MemoryUsageBytes,
                 Expr::value(memory_usage_bytes),
-            ])
-            .into(),
-        )
-        .col_expr(
-            workloads::Column::CpuUsagePercent,
-            Expr::value(cpu_usage_percent),
-        )
-        .col_expr(
-            workloads::Column::MemoryUsageBytes,
-            Expr::value(memory_usage_bytes),
-        )
-        .col_expr(
-            workloads::Column::NetworkRxBytes,
-            Expr::value(network_rx_bytes),
-        )
-        .col_expr(
-            workloads::Column::NetworkTxBytes,
-            Expr::value(network_tx_bytes),
-        )
-        .col_expr(
-            workloads::Column::VolumeUsage,
-            Expr::value(volume_usage.and_then(|usage| serde_json::to_value(usage).ok())),
-        )
-        .col_expr(
-            workloads::Column::StatsUpdatedAt,
-            Expr::value(Utc::now().naive_utc()),
-        )
+            ),
+            (
+                workloads::Column::NetworkRxBytes,
+                Expr::value(network_rx_bytes),
+            ),
+            (
+                workloads::Column::NetworkTxBytes,
+                Expr::value(network_tx_bytes),
+            ),
+            (workloads::Column::VolumeUsage, Expr::value(volume_usage)),
+            (workloads::Column::StatsUpdatedAt, now()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn delete(db: &DatabaseConnection, workload_id: Uuid) -> Result<(), DbErr> {
+    let deleted = workloads::Entity::delete_many()
         .filter(workloads::Column::Id.eq(workload_id))
         .exec(db)
         .await?;
-    require_row(updated.rows_affected, workload_id)
+    if deleted.rows_affected == 0 {
+        return Err(not_found(workload_id));
+    }
+    Ok(())
 }
 
-pub async fn delete(db: &DatabaseConnection, workload_id: Uuid) -> Result<(), sea_orm::DbErr> {
-    let deleted = workloads::Entity::delete_by_id(workload_id)
+fn not_found(workload_id: Uuid) -> DbErr {
+    DbErr::RecordNotFound(workload_id.to_string())
+}
+
+fn require(
+    workload: Option<workloads::Model>,
+    workload_id: Uuid,
+) -> Result<workloads::Model, DbErr> {
+    workload.ok_or_else(|| not_found(workload_id))
+}
+
+fn now() -> SimpleExpr {
+    Expr::value(Utc::now().naive_utc())
+}
+
+fn peak_of(column: workloads::Column, sample: impl Into<sea_orm::Value>) -> SimpleExpr {
+    Func::greatest([Expr::col(column).into(), Expr::value(sample)]).into()
+}
+
+async fn patch(
+    db: &DatabaseConnection,
+    workload_id: Uuid,
+    changes: impl IntoIterator<Item = (workloads::Column, SimpleExpr)>,
+) -> Result<workloads::Model, DbErr> {
+    let update = changes.into_iter().fold(
+        workloads::Entity::update_many(),
+        |update, (column, value)| update.col_expr(column, value),
+    );
+    update
+        .filter(workloads::Column::Id.eq(workload_id))
+        .exec_with_returning(db)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| not_found(workload_id))
+}
+
+async fn request_rollout(
+    db: &DatabaseConnection,
+    workload: &workloads::Model,
+    mut active: workloads::ActiveModel,
+) -> Result<workloads::Model, DbErr> {
+    apply_auto_resources(workload, &mut active);
+    active.restart_requested = Set(true);
+    active.status = Set(WorkloadStatus::Starting.name().to_string());
+    active.updated_at = Set(Some(Utc::now().naive_utc()));
+
+    let applied = workloads::Entity::update_many()
+        .set(active)
+        .filter(workloads::Column::Id.eq(workload.id))
+        .filter(workloads::Column::Generation.eq(workload.generation))
         .exec(db)
         .await?;
-    require_row(deleted.rows_affected, workload_id)
+    if applied.rows_affected == 0 {
+        return Err(DbErr::RecordNotUpdated);
+    }
+    require(get_by_id(db, workload.id).await?, workload.id)
 }
 
 fn apply_auto_resources(workload: &workloads::Model, active: &mut workloads::ActiveModel) {
@@ -616,7 +604,7 @@ fn into_response(m: workloads::Model) -> WorkloadResponse {
         guest_ip: m.guest_ip,
         recommended_cpu_millicores: m.cpu_usage_peak_percent.map(recommend_cpu_millicores),
         recommended_memory_bytes: m.memory_usage_peak_bytes.map(recommend_memory_bytes),
-        status: WorkloadStatus::from_str(&m.status),
+        status: WorkloadStatus::from_name(&m.status),
         assigned_agent_id: m.assigned_agent_id,
         container_id: m.container_id,
         env_vars,
@@ -628,11 +616,11 @@ fn into_response(m: workloads::Model) -> WorkloadResponse {
         retire_after: m.retire_after.map(|time| time.and_utc()),
         rollout_error: m.rollout_error,
         service_name: m.service_name,
-        restart_policy: RestartPolicy::from_str(&m.restart_policy),
+        restart_policy: RestartPolicy::from_name(&m.restart_policy),
         max_restarts: m.max_restarts,
         restart_count: m.restart_count,
-        runtime_class: RuntimeClass::from_str(&m.runtime_class),
-        desired_state: DesiredState::from_str(&m.desired_state),
+        runtime_class: RuntimeClass::from_name(&m.runtime_class),
+        desired_state: DesiredState::from_name(&m.desired_state),
         cpu_usage_percent: m.cpu_usage_percent,
         memory_usage_bytes: m.memory_usage_bytes,
         network_rx_bytes: m.network_rx_bytes,

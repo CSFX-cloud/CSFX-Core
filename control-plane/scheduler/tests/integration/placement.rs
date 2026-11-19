@@ -1,5 +1,5 @@
 use scheduler::db::workloads;
-use scheduler::models::workload::{CreateWorkloadRequest, WorkloadStatus};
+use scheduler::models::workload::{CreateWorkloadRequest, Named, WorkloadStatus};
 use sea_orm::EntityTrait;
 use serde_json::json;
 use uuid::Uuid;
@@ -449,7 +449,7 @@ async fn failover_without_capacity_releases_workloads_to_pending() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.assigned_agent_id, None);
-    assert_eq!(stored.status, WorkloadStatus::Pending.as_str());
+    assert_eq!(stored.status, WorkloadStatus::Pending.name());
     assert!(workloads::get_pending(&fixture.db)
         .await
         .unwrap()

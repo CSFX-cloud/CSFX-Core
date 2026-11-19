@@ -5,16 +5,21 @@ use uuid::Uuid;
 
 use crate::models::compose::{ComposeServiceSpec, CreateStackRequest, CreateStackResponse};
 use crate::models::workload::{
-    node_ports_of, AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, RuntimeClass,
-    TopologySpread, UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
+    node_ports_of, AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, Named,
+    RuntimeClass, TopologySpread, UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
 };
 use crate::services::compose_parser::{self, ComposeParseError};
-use crate::services::failed;
 use crate::services::placement::{self, Demand, Strategy};
 use crate::services::{image_resolver, stack_volumes};
 
 pub(crate) fn notify_assigned(agent_id: Uuid) {
     tokio::spawn(crate::services::gateway_notify::notify_assignment(agent_id));
+}
+
+fn notify_assignee(workload: &workloads::Model) {
+    if let Some(agent_id) = workload.assigned_agent_id {
+        notify_assigned(agent_id);
+    }
 }
 
 const GUEST_IP_ATTEMPTS: usize = 5;
@@ -100,9 +105,7 @@ impl SchedulerService {
         req: CreateWorkloadRequest,
         replaced: Option<Uuid>,
     ) -> Result<CreateWorkloadResponse, String> {
-        let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
-            .await
-            .map_err(failed("fetch agent resources"))?;
+        let mut agents = self.schedulable_agents().await?;
 
         if let Some(required_agent) = self.resolve_volume_affinity(&req).await? {
             agents.retain(|a| a.agent_id == required_agent);
@@ -115,7 +118,10 @@ impl SchedulerService {
             if replaced.is_some() {
                 return Err(NO_SURGE_TARGET.to_string());
             }
-            log_unplaceable(&workload, &demand, &agents, true);
+            crate::log_warn!(
+                "scheduler",
+                &unplaceable_message(&workload, &demand, &agents)
+            );
             return Ok(pending_response(workload.id));
         };
 
@@ -131,10 +137,10 @@ impl SchedulerService {
             )
         );
 
-        Ok(placement_response(
+        Ok(scheduled_response(
             workload.id,
-            Some(agent_id),
-            "assigned to",
+            agent_id,
+            "Workload assigned to agent",
         ))
     }
 
@@ -155,7 +161,7 @@ impl SchedulerService {
             &req.compose_yaml,
         )
         .await
-        .map_err(failed("persist stack"))?;
+        .map_err(|e| format!("Failed to persist stack: {}", e))?;
 
         let workloads = self
             .place_stack_workloads(stack.id, req.resource_group_id, &services, &volume_ids)
@@ -171,7 +177,7 @@ impl SchedulerService {
             },
         )
         .await
-        .map_err(failed("update stack status"))?;
+        .map_err(|e| format!("Failed to update stack status: {}", e))?;
 
         Ok(CreateStackResponse {
             stack_id: stack.id,
@@ -179,24 +185,28 @@ impl SchedulerService {
         })
     }
 
-    pub async fn delete_stack(&self, stack_id: Uuid) -> Result<(), String> {
-        let workloads = crate::db::workloads::get_by_stack_id(&self.db, stack_id)
+    async fn stack_workloads(&self, stack_id: Uuid) -> Result<Vec<workloads::Model>, String> {
+        crate::db::workloads::get_by_stack_id(&self.db, stack_id)
             .await
-            .map_err(failed("fetch stack workloads"))?;
+            .map_err(|e| format!("Failed to fetch stack workloads: {}", e))
+    }
+
+    pub async fn delete_stack(&self, stack_id: Uuid) -> Result<(), String> {
+        let workloads = self.stack_workloads(stack_id).await?;
 
         for workload in &workloads {
             shared::volumes::release_for_workload(&self.db, workload.id)
                 .await
-                .map_err(failed("release workload volumes"))?;
+                .map_err(|e| format!("Failed to release workload volumes: {}", e))?;
         }
 
         crate::db::workloads::delete_by_stack_id(&self.db, stack_id)
             .await
-            .map_err(failed("delete stack workloads"))?;
+            .map_err(|e| format!("Failed to delete stack workloads: {}", e))?;
 
         crate::db::workload_stacks::delete(&self.db, stack_id)
             .await
-            .map_err(failed("delete stack"))?;
+            .map_err(|e| format!("Failed to delete stack: {}", e))?;
 
         Ok(())
     }
@@ -209,9 +219,10 @@ impl SchedulerService {
                 crate::models::workload::DesiredState::Stopped,
             )
             .await
-            .map_err(failed("stop workload"))?;
-            notify_if_assigned(&model);
+            .map_err(|e| format!("Failed to stop workload: {}", e))?;
+            notify_assignee(&model);
         }
+
         Ok(())
     }
 
@@ -223,16 +234,11 @@ impl SchedulerService {
             let model = self
                 .apply_restart(workload.id)
                 .await
-                .map_err(failed("restart workload"))?;
-            notify_if_assigned(&model);
+                .map_err(|e| format!("Failed to restart workload: {}", e))?;
+            notify_assignee(&model);
         }
-        Ok(())
-    }
 
-    async fn stack_workloads(&self, stack_id: Uuid) -> Result<Vec<workloads::Model>, String> {
-        crate::db::workloads::get_by_stack_id(&self.db, stack_id)
-            .await
-            .map_err(failed("fetch stack workloads"))
+        Ok(())
     }
 
     pub async fn redeploy_stack(&self, stack_id: Uuid, compose_yaml: &str) -> Result<(), String> {
@@ -240,13 +246,11 @@ impl SchedulerService {
             compose_parser::parse_compose(compose_yaml).map_err(|e| format_compose_error(&e))?;
         let stack = crate::db::workload_stacks::get_by_id(&self.db, stack_id)
             .await
-            .map_err(failed("fetch stack"))?
+            .map_err(|e| format!("Failed to fetch stack: {}", e))?
             .ok_or_else(|| format!("Stack {} not found", stack_id))?;
         resolve_service_images(stack.resource_group_id, &mut services).await;
 
-        let existing = crate::db::workloads::get_by_stack_id(&self.db, stack_id)
-            .await
-            .map_err(failed("fetch stack workloads"))?;
+        let existing = self.stack_workloads(stack_id).await?;
         ensure_stack_idle(&existing)?;
 
         for service in &services {
@@ -269,13 +273,13 @@ impl SchedulerService {
             let model = self
                 .apply_update(workload.id, &update)
                 .await
-                .map_err(failed("update workload"))?;
-            notify_if_assigned(&model);
+                .map_err(|e| format!("Failed to update workload: {}", e))?;
+            notify_assignee(&model);
         }
 
         crate::db::workload_stacks::update_compose_source(&self.db, stack_id, compose_yaml)
             .await
-            .map_err(failed("update stack source"))?;
+            .map_err(|e| format!("Failed to update stack source: {}", e))?;
 
         Ok(())
     }
@@ -293,7 +297,8 @@ impl SchedulerService {
             created.push(self.create_with_guest_ip(&req).await?);
         }
 
-        let placements = self.place_batch(&created, None).await?;
+        let mut agents = self.schedulable_agents().await?;
+        let placements = self.place_batch(&created, &mut agents, None).await?;
 
         crate::log_info!(
             "scheduler",
@@ -307,56 +312,71 @@ impl SchedulerService {
         Ok(created
             .iter()
             .zip(placements)
-            .map(|(workload, agent_id)| placement_response(workload.id, agent_id, "assigned to"))
+            .map(|(workload, placed)| {
+                response_for(workload.id, placed, "Workload assigned to agent")
+            })
             .collect())
+    }
+
+    async fn schedulable_agents(&self) -> Result<Vec<AgentResources>, String> {
+        crate::db::agents::get_schedulable_agents(&self.db)
+            .await
+            .map_err(|e| format!("Failed to fetch agent resources: {}", e))
     }
 
     async fn place_batch(
         &self,
-        batch: &[workloads::Model],
-        from_agent: Option<Uuid>,
+        workloads: &[workloads::Model],
+        agents: &mut [AgentResources],
+        expected_agent: Option<Uuid>,
     ) -> Result<Vec<Option<Uuid>>, String> {
-        let mut agents = crate::db::agents::get_schedulable_agents(&self.db)
-            .await
-            .map_err(failed("fetch agent resources"))?;
-        agents.retain(|agent| Some(agent.agent_id) != from_agent);
-
-        let mut placements = Vec::with_capacity(batch.len());
-        for workload in batch {
-            let preferred = self.hosting_agents(workload.resource_group_id).await?;
-            let demand = demand_for(workload, preferred.as_ref());
-            let mut placed = None;
-            if let Some(agent_id) = placement::pick(&demand, &agents, self.strategy) {
-                if self.assign_workload(workload, agent_id, from_agent).await? {
-                    placement::commit(&mut agents, agent_id, &demand);
-                    placed = Some(agent_id);
-                }
-            }
+        let mut placements = Vec::with_capacity(workloads.len());
+        for workload in workloads {
+            let placed = self.place_next(workload, agents, expected_agent).await?;
             if placed.is_none() {
-                self.release_unplaced(workload, &demand, &agents, from_agent)
-                    .await?;
+                if let Some(agent_id) = expected_agent {
+                    self.release_to_pending(workload.id, agent_id).await?;
+                    crate::log_warn!(
+                        "scheduler",
+                        &format!(
+                            "Workload released to pending workload_id={} from_agent_id={}",
+                            workload.id, agent_id
+                        )
+                    );
+                }
             }
             placements.push(placed);
         }
         Ok(placements)
     }
 
-    async fn release_unplaced(
+    async fn place_next(
         &self,
         workload: &workloads::Model,
-        demand: &Demand<'_>,
-        agents: &[AgentResources],
-        from_agent: Option<Uuid>,
-    ) -> Result<(), String> {
-        let Some(agent_id) = from_agent else {
-            log_unplaceable(workload, demand, agents, false);
-            return Ok(());
+        agents: &mut [AgentResources],
+        expected_agent: Option<Uuid>,
+    ) -> Result<Option<Uuid>, String> {
+        let preferred = self.hosting_agents(workload.resource_group_id).await?;
+        let demand = demand_for(workload, preferred.as_ref());
+        let Some(agent_id) = placement::pick(&demand, agents, self.strategy) else {
+            crate::log_debug!("scheduler", &unplaceable_message(workload, &demand, agents));
+            return Ok(None);
         };
-        log_unplaceable(workload, demand, agents, true);
-        crate::db::workloads::unassign(&self.db, workload.id, agent_id)
-            .await
-            .map_err(failed("release workload to pending"))?;
-        Ok(())
+        if !self
+            .assign_workload(workload, agent_id, expected_agent)
+            .await?
+        {
+            return Ok(None);
+        }
+        placement::commit(agents, agent_id, &demand);
+        crate::log_info!(
+            "scheduler",
+            &format!(
+                "Workload placed workload_id={} agent_id={}",
+                workload.id, agent_id
+            )
+        );
+        Ok(Some(agent_id))
     }
 
     async fn create_with_guest_ip(
@@ -366,7 +386,7 @@ impl SchedulerService {
         let Some(group) = req.resource_group_id else {
             return crate::db::workloads::create(&self.db, req, None)
                 .await
-                .map_err(failed("persist workload"));
+                .map_err(|e| format!("Failed to persist workload: {}", e));
         };
 
         for _ in 0..GUEST_IP_ATTEMPTS {
@@ -387,11 +407,11 @@ impl SchedulerService {
     async fn next_guest_ip(&self, resource_group_id: Uuid) -> Result<String, String> {
         let cidr = crate::db::resource_groups::internal_cidr(&self.db, resource_group_id)
             .await
-            .map_err(failed("fetch resource group cidr"))?
+            .map_err(|e| format!("Failed to fetch resource group cidr: {}", e))?
             .ok_or_else(|| format!("Resource group {} not found", resource_group_id))?;
         let used = crate::db::workloads::used_guest_ips(&self.db, resource_group_id)
             .await
-            .map_err(failed("fetch used guest ips"))?;
+            .map_err(|e| format!("Failed to fetch used guest ips: {}", e))?;
 
         crate::services::guest_ip::next_free(&cidr, &used).ok_or_else(|| {
             format!(
@@ -404,7 +424,7 @@ impl SchedulerService {
     pub async fn backfill_guest_ips(&self) -> Result<usize, String> {
         let missing = crate::db::workloads::get_without_guest_ip(&self.db)
             .await
-            .map_err(failed("fetch workloads without guest ip"))?;
+            .map_err(|e| format!("Failed to fetch workloads without guest ip: {}", e))?;
 
         let mut assigned = 0;
         for workload in missing {
@@ -414,7 +434,7 @@ impl SchedulerService {
             let guest_ip = self.next_guest_ip(group).await?;
             crate::db::workloads::set_guest_ip(&self.db, workload.id, guest_ip)
                 .await
-                .map_err(failed("store guest ip"))?;
+                .map_err(|e| format!("Failed to store guest ip: {}", e))?;
             assigned += 1;
         }
         Ok(assigned)
@@ -430,7 +450,7 @@ impl SchedulerService {
         crate::db::agents::get_agents_hosting_resource_group(&self.db, resource_group_id)
             .await
             .map(Some)
-            .map_err(failed("resolve resource group affinity"))
+            .map_err(|e| format!("Failed to resolve resource group affinity: {}", e))
     }
 
     async fn resolve_volume_affinity(
@@ -447,7 +467,7 @@ impl SchedulerService {
         for mount in mounts {
             let agent_id = crate::db::agents::get_volume_agent(&self.db, mount.volume_id)
                 .await
-                .map_err(failed("check volume affinity"))?;
+                .map_err(|e| format!("Failed to check volume affinity: {}", e))?;
 
             if let Some(aid) = agent_id {
                 match pinned {
@@ -476,11 +496,11 @@ impl SchedulerService {
             .db
             .begin()
             .await
-            .map_err(failed("open assignment transaction"))?;
+            .map_err(|e| format!("Failed to open assignment transaction: {}", e))?;
         let assigned =
             crate::db::workloads::assign(&transaction, workload.id, agent_id, expected_agent)
                 .await
-                .map_err(failed("assign workload"))?;
+                .map_err(|e| format!("Failed to assign workload: {}", e))?;
         if !assigned {
             crate::log_warn!(
                 "scheduler",
@@ -497,7 +517,7 @@ impl SchedulerService {
         transaction
             .commit()
             .await
-            .map_err(failed("commit assignment"))?;
+            .map_err(|e| format!("Failed to commit assignment: {}", e))?;
         notify_assigned(agent_id);
         Ok(true)
     }
@@ -509,7 +529,7 @@ impl SchedulerService {
     ) -> Result<Vec<crate::models::workload::WorkloadResponse>, String> {
         crate::db::workloads::get_page(&self.db, after, params)
             .await
-            .map_err(failed("list workloads"))
+            .map_err(|e| format!("Failed to list workloads: {}", e))
     }
 
     pub async fn reschedule_from_agent(
@@ -517,58 +537,61 @@ impl SchedulerService {
         dead_agent_id: Uuid,
         workload_ids: &[Uuid],
     ) -> Result<Vec<CreateWorkloadResponse>, String> {
-        let mut batch = Vec::with_capacity(workload_ids.len());
+        let mut agents = self.schedulable_agents().await?;
+        agents.retain(|a| a.agent_id != dead_agent_id);
+
+        let mut stranded = Vec::with_capacity(workload_ids.len());
         for &workload_id in workload_ids {
-            batch.push(
-                crate::db::workloads::get_by_id(&self.db, workload_id)
-                    .await
-                    .map_err(failed("fetch workload"))?
-                    .ok_or_else(|| format!("Workload {} not found", workload_id))?,
-            );
+            let workload = crate::db::workloads::get_by_id(&self.db, workload_id)
+                .await
+                .map_err(|e| format!("Failed to fetch workload: {}", e))?
+                .ok_or_else(|| format!("Workload {} not found", workload_id))?;
+            stranded.push(workload);
         }
 
-        let placements = self.place_batch(&batch, Some(dead_agent_id)).await?;
+        let placements = self
+            .place_batch(&stranded, &mut agents, Some(dead_agent_id))
+            .await?;
 
-        for (workload, agent_id) in batch.iter().zip(&placements) {
-            if let Some(agent_id) = agent_id {
-                crate::log_info!(
-                    "scheduler",
-                    &format!(
-                        "Workload rescheduled workload_id={} from_agent_id={} to_agent_id={}",
-                        workload.id, dead_agent_id, agent_id
-                    )
-                );
-            }
-        }
-
-        Ok(batch
+        Ok(stranded
             .iter()
             .zip(placements)
-            .map(|(workload, agent_id)| placement_response(workload.id, agent_id, "rescheduled to"))
+            .map(|(workload, placed)| {
+                response_for(workload.id, placed, "Workload rescheduled to agent")
+            })
             .collect())
+    }
+
+    async fn release_to_pending(&self, workload_id: Uuid, agent_id: Uuid) -> Result<(), String> {
+        crate::db::workloads::unassign(&self.db, workload_id, agent_id)
+            .await
+            .map_err(|e| format!("Failed to release workload to pending: {}", e))?;
+        Ok(())
     }
 
     pub async fn retry_pending(&self) -> Result<usize, String> {
         let pending = crate::db::workloads::get_pending(&self.db)
             .await
-            .map_err(failed("fetch pending workloads"))?;
+            .map_err(|e| format!("Failed to fetch pending workloads: {}", e))?;
 
         if pending.is_empty() {
             return Ok(0);
         }
 
-        let placements = self.place_batch(&pending, None).await?;
+        let mut agents = self.schedulable_agents().await?;
+        let placements = self.place_batch(&pending, &mut agents, None).await?;
+
         Ok(placements.iter().flatten().count())
     }
 
     pub async fn delete_workload(&self, workload_id: Uuid) -> Result<(), String> {
         crate::db::workloads::delete(&self.db, workload_id)
             .await
-            .map_err(failed("delete workload"))?;
+            .map_err(|e| format!("Failed to delete workload: {}", e))?;
 
         shared::volumes::release_for_workload(&self.db, workload_id)
             .await
-            .map_err(failed("release workload volumes"))?;
+            .map_err(|e| format!("Failed to release workload volumes: {}", e))?;
 
         crate::log_info!(
             "scheduler",
@@ -583,7 +606,7 @@ async fn rolled_back(transaction: DatabaseTransaction) -> Result<bool, String> {
     transaction
         .rollback()
         .await
-        .map_err(failed("roll back assignment"))?;
+        .map_err(|e| format!("Failed to roll back assignment: {}", e))?;
     Ok(false)
 }
 
@@ -595,7 +618,7 @@ async fn claim_volumes(
     let volume_ids = volume_ids_of(workload);
     let claimed = shared::volumes::claim_all(db, &volume_ids, agent_id, Some(workload.id))
         .await
-        .map_err(failed("claim volumes"))?;
+        .map_err(|e| format!("Failed to claim volumes: {}", e))?;
 
     if !claimed {
         crate::log_warn!(
@@ -608,12 +631,6 @@ async fn claim_volumes(
     }
 
     Ok(claimed)
-}
-
-fn notify_if_assigned(workload: &workloads::Model) {
-    if let Some(agent_id) = workload.assigned_agent_id {
-        notify_assigned(agent_id);
-    }
 }
 
 fn volume_ids_of(workload: &workloads::Model) -> Vec<Uuid> {
@@ -674,7 +691,7 @@ fn demand_for<'a>(
         memory_bytes: workload.memory_bytes,
         disk_bytes: workload.disk_bytes,
         spread_key: workload.spread_key.as_deref(),
-        topology_spread: TopologySpread::from_str(&workload.topology_spread),
+        topology_spread: TopologySpread::from_name(&workload.topology_spread),
         preferred_agents,
         workload_id: workload.id,
         replaces: workload.replaces_workload_id,
@@ -741,19 +758,12 @@ fn stack_service_request(
     }
 }
 
-fn placement_response(
-    workload_id: Uuid,
-    agent_id: Option<Uuid>,
-    verb: &str,
-) -> CreateWorkloadResponse {
-    let Some(agent_id) = agent_id else {
-        return pending_response(workload_id);
-    };
+fn scheduled_response(workload_id: Uuid, agent_id: Uuid, message: &str) -> CreateWorkloadResponse {
     CreateWorkloadResponse {
         workload_id,
         status: WorkloadStatus::Scheduled,
         assigned_agent_id: Some(agent_id),
-        message: format!("Workload {} agent {}", verb, agent_id),
+        message: format!("{} {}", message, agent_id),
     }
 }
 
@@ -766,25 +776,26 @@ fn pending_response(workload_id: Uuid) -> CreateWorkloadResponse {
     }
 }
 
-fn log_unplaceable(
+fn response_for(workload_id: Uuid, placed: Option<Uuid>, message: &str) -> CreateWorkloadResponse {
+    match placed {
+        Some(agent_id) => scheduled_response(workload_id, agent_id, message),
+        None => pending_response(workload_id),
+    }
+}
+
+fn unplaceable_message(
     workload: &workloads::Model,
     demand: &Demand,
     agents: &[AgentResources],
-    notable: bool,
-) {
-    let message = format!(
+) -> String {
+    format!(
         "No suitable agent found workload_id={} required_cpu={} required_memory={} required_disk={} {}",
         workload.id,
         demand.cpu_millicores,
         demand.memory_bytes,
         demand.disk_bytes,
         describe_agents(agents)
-    );
-    if notable {
-        crate::log_warn!("scheduler", &message);
-    } else {
-        crate::log_debug!("scheduler", &message);
-    }
+    )
 }
 
 fn describe_agents(agents: &[AgentResources]) -> String {
