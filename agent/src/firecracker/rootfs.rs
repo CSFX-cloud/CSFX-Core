@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
+use futures_util::StreamExt;
 use oci_client::client::{ClientConfig, ClientProtocol};
 use oci_client::config::ConfigFile;
+use oci_client::manifest::{OciDescriptor, OciImageManifest};
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
 use oci_spec::runtime::{
@@ -10,9 +12,11 @@ use oci_spec::runtime::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::io::{BufReader, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::{debug, info, warn};
 
@@ -24,7 +28,10 @@ const CONTAINER_ROOTFS_DIR: &str = "rootfs";
 
 const ROOTFS_CACHE_DIR: &str = "/var/lib/csfx-agent/rootfs";
 const ROOTFS_SIZE_MB: u64 = 2048;
-const MAX_CONCURRENT_LAYER_DOWNLOADS: usize = 8;
+const MAX_LAYER_COUNT: usize = 128;
+const MAX_COMPRESSED_IMAGE_BYTES: u64 = ROOTFS_SIZE_MB * 1024 * 1024;
+const MAX_UNPACKED_IMAGE_BYTES: u64 = ROOTFS_SIZE_MB * 1024 * 1024;
+const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const SOURCE_KEY_BYTES: usize = 8;
 const DIGEST_CACHE_TTL: Duration = Duration::from_secs(120);
 const GUEST_INIT_BINARY_PATH: &str = "/var/lib/csfx-agent/csfx-guest-init";
@@ -206,7 +213,6 @@ impl RootfsBuilder {
         Self {
             client: Client::new(ClientConfig {
                 protocol,
-                max_concurrent_download: MAX_CONCURRENT_LAYER_DOWNLOADS,
                 ..Default::default()
             }),
             registry_mirror,
@@ -272,18 +278,12 @@ impl RootfsBuilder {
 
         info!(image = %image, digest = %digest, "Building rootfs image");
 
-        debug!(image = %image, digest = %digest, stage = "pull_layers", "Pulling image layers");
-        let image_data = self
+        let (manifest, _, config) = self
             .client
-            .pull(&reference, &auth, GZIP_LAYER_MEDIA_TYPES.to_vec())
+            .pull_manifest_and_config(&reference, &auth)
             .await
-            .context("Failed to pull image layers")?;
-        debug!(
-            image = %image,
-            stage = "pull_layers",
-            layer_count = image_data.layers.len(),
-            "Pulled image layers"
-        );
+            .context("Failed to pull image manifest")?;
+        check_image_limits(&manifest, config.len())?;
 
         let extract_dir = Path::new(ROOTFS_CACHE_DIR).join(format!("{}.extract", cache_key));
         if extract_dir.exists() {
@@ -296,7 +296,9 @@ impl RootfsBuilder {
             .await
             .context("Failed to create rootfs extraction directory")?;
 
-        let build_result = self.build_extracted_rootfs(&image_data, &extract_dir).await;
+        let build_result = self
+            .build_extracted_rootfs(&reference, &manifest, &config, &extract_dir)
+            .await;
 
         if build_result.is_err() {
             debug!(path = ?extract_dir, stage = "extract_cleanup", "Removing extraction directory after failure");
@@ -323,9 +325,43 @@ impl RootfsBuilder {
         Ok(image_path)
     }
 
+    async fn download_layer(
+        &self,
+        reference: &Reference,
+        layer: &OciDescriptor,
+        path: &Path,
+    ) -> Result<()> {
+        let mut stream = self
+            .client
+            .pull_blob_stream(reference, layer)
+            .await
+            .context("Failed to start layer download")?;
+        let mut file = tokio::fs::File::create(path)
+            .await
+            .context("Failed to create layer download file")?;
+        let mut received = 0u64;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("Failed to download image layer")?;
+            received += chunk.len() as u64;
+            anyhow::ensure!(
+                received <= layer.size.max(0) as u64,
+                "Layer exceeds its declared size digest={}",
+                layer.digest
+            );
+            file.write_all(&chunk)
+                .await
+                .context("Failed to write layer download file")?;
+        }
+        file.flush()
+            .await
+            .context("Failed to flush layer download file")
+    }
+
     async fn build_extracted_rootfs(
         &self,
-        image_data: &oci_client::client::ImageData,
+        reference: &Reference,
+        manifest: &OciImageManifest,
+        config: &str,
         extract_dir: &Path,
     ) -> Result<()> {
         let bundle_dir = extract_dir.join(CONTAINER_BUNDLE_DIR);
@@ -334,24 +370,29 @@ impl RootfsBuilder {
             .await
             .context("Failed to create container rootfs directory")?;
 
-        for (index, layer) in image_data.layers.iter().enumerate() {
+        let layer_path = extract_dir.with_extension("layer");
+        let mut unpack_budget = MAX_UNPACKED_IMAGE_BYTES;
+        for (index, layer) in manifest.layers.iter().enumerate() {
             debug!(
                 stage = "extract_layer",
                 layer_index = index,
-                layer_size = layer.data.len(),
+                layer_size = layer.size,
                 media_type = %layer.media_type,
                 "Extracting image layer"
             );
-            extract_layer(&layer.data, &rootfs_dir)
-                .await
-                .context("Failed to extract image layer")?;
+            let result = match self.download_layer(reference, layer, &layer_path).await {
+                Ok(()) => extract_layer(&layer_path, &rootfs_dir, unpack_budget).await,
+                Err(error) => Err(error),
+            };
+            tokio::fs::remove_file(&layer_path).await.ok();
+            unpack_budget -= result.context("Failed to extract image layer")?;
         }
 
         debug!(
             stage = "write_runtime_config",
             "Writing OCI runtime config.json"
         );
-        write_runtime_config(&image_data.config.data, &bundle_dir).await?;
+        write_runtime_config(config.as_bytes(), &bundle_dir).await?;
 
         debug!(stage = "install_guest_init", "Installing guest-init binary");
         install_guest_init(extract_dir).await?;
@@ -366,21 +407,69 @@ impl RootfsBuilder {
     }
 }
 
-async fn extract_layer(gzip_data: &[u8], dest: &Path) -> Result<()> {
-    let dest = dest.to_path_buf();
-    let gzip_data = gzip_data.to_vec();
-
-    tokio::task::spawn_blocking(move || extract_layer_blocking(&gzip_data, &dest))
-        .await
-        .context("Layer extraction task panicked")?
+fn check_image_limits(manifest: &OciImageManifest, config_bytes: usize) -> Result<()> {
+    anyhow::ensure!(
+        manifest.layers.len() <= MAX_LAYER_COUNT,
+        "Image has too many layers count={}",
+        manifest.layers.len()
+    );
+    anyhow::ensure!(
+        config_bytes <= MAX_CONFIG_BYTES,
+        "Image config is too large bytes={config_bytes}"
+    );
+    let mut total = 0u64;
+    for layer in &manifest.layers {
+        anyhow::ensure!(
+            GZIP_LAYER_MEDIA_TYPES.contains(&layer.media_type.as_str()),
+            "Unsupported layer media type {}",
+            layer.media_type
+        );
+        anyhow::ensure!(layer.size >= 0, "Layer declares a negative size");
+        total = total.saturating_add(layer.size as u64);
+    }
+    anyhow::ensure!(
+        total <= MAX_COMPRESSED_IMAGE_BYTES,
+        "Image exceeds the download limit bytes={total} limit={MAX_COMPRESSED_IMAGE_BYTES}"
+    );
+    Ok(())
 }
 
-fn extract_layer_blocking(gzip_data: &[u8], dest: &Path) -> Result<()> {
-    let decoder = GzDecoder::new(gzip_data);
+struct LimitedReader<R> {
+    inner: R,
+    remaining: u64,
+}
+
+impl<R: Read> Read for LimitedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        self.remaining = self
+            .remaining
+            .checked_sub(read as u64)
+            .ok_or_else(|| std::io::Error::other("Unpacked image size limit exceeded"))?;
+        Ok(read)
+    }
+}
+
+async fn extract_layer(archive_path: &Path, dest: &Path, budget: u64) -> Result<u64> {
+    let archive_path = archive_path.to_path_buf();
+    let dest = dest.to_path_buf();
+
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(&archive_path).context("Failed to open downloaded layer")?;
+        extract_layer_blocking(BufReader::new(file), &dest, budget)
+    })
+    .await
+    .context("Layer extraction task panicked")?
+}
+
+fn extract_layer_blocking(gzip: impl Read, dest: &Path, budget: u64) -> Result<u64> {
+    let decoder = LimitedReader {
+        inner: GzDecoder::new(gzip),
+        remaining: budget,
+    };
     let mut archive = tar::Archive::new(decoder);
     archive.set_preserve_ownerships(true);
     archive.set_preserve_permissions(true);
-
     let entries = archive.entries().context("Failed to read layer entries")?;
     for entry in entries {
         let mut entry = entry.context("Failed to read layer entry")?;
@@ -406,7 +495,7 @@ fn extract_layer_blocking(gzip_data: &[u8], dest: &Path) -> Result<()> {
         }
     }
 
-    Ok(())
+    Ok(budget - archive.into_inner().remaining)
 }
 
 fn resolve_directory_within(dest: &Path, relative: &Path) -> Result<PathBuf> {
@@ -812,10 +901,10 @@ mod tests {
         let layer1 = build_gzip_layer(&[("a/b.txt", b"hello", false)]);
         let layer2 = build_gzip_layer(&[("a/.wh.b.txt", b"", false)]);
 
-        extract_layer_blocking(&layer1, &tmp).unwrap();
+        extract_layer_blocking(&layer1[..], &tmp, u64::MAX).unwrap();
         assert!(tmp.join("a/b.txt").exists());
 
-        extract_layer_blocking(&layer2, &tmp).unwrap();
+        extract_layer_blocking(&layer2[..], &tmp, u64::MAX).unwrap();
         assert!(!tmp.join("a/b.txt").exists());
 
         std::fs::remove_dir_all(&tmp).unwrap();
@@ -888,7 +977,7 @@ mod tests {
         std::fs::write(tmp.join("a/old.txt"), b"x").unwrap();
 
         let layer = build_gzip_layer(&[("a/.wh..wh..opq", b"", false), ("a/new.txt", b"y", false)]);
-        extract_layer_blocking(&layer, &tmp).unwrap();
+        extract_layer_blocking(&layer[..], &tmp, u64::MAX).unwrap();
 
         assert!(!tmp.join("a/old.txt").exists());
         assert!(!tmp.join("a/sub").exists());
@@ -959,7 +1048,10 @@ mod tests {
             "a/../../outside/.wh.sub",
         ] {
             let layer = raw_whiteout_layer(path);
-            assert!(extract_layer_blocking(&layer, &dest).is_err(), "{path}");
+            assert!(
+                extract_layer_blocking(&layer[..], &dest, u64::MAX).is_err(),
+                "{path}"
+            );
         }
         assert_outside_untouched(&outside);
         std::fs::remove_dir_all(&root).unwrap();
@@ -971,10 +1063,10 @@ mod tests {
         let dest = root.join("dest");
         let absolute = outside.join(".wh.keep.txt");
         let layer = raw_whiteout_layer(absolute.to_str().unwrap());
-        assert!(extract_layer_blocking(&layer, &dest).is_err());
+        assert!(extract_layer_blocking(&layer[..], &dest, u64::MAX).is_err());
         let opaque = outside.join(".wh..wh..opq");
         let layer = raw_whiteout_layer(opaque.to_str().unwrap());
-        assert!(extract_layer_blocking(&layer, &dest).is_err());
+        assert!(extract_layer_blocking(&layer[..], &dest, u64::MAX).is_err());
         assert_outside_untouched(&outside);
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -984,11 +1076,14 @@ mod tests {
         let (root, outside) = sandbox();
         let dest = root.join("dest");
         let link = symlink_layer("a", outside.to_str().unwrap());
-        extract_layer_blocking(&link, &dest).unwrap();
+        extract_layer_blocking(&link[..], &dest, u64::MAX).unwrap();
 
         for path in ["a/.wh.keep.txt", "a/sub/.wh.keep.txt", "a/sub/.wh..wh..opq"] {
             let layer = build_gzip_layer(&[(path, b"", false)]);
-            assert!(extract_layer_blocking(&layer, &dest).is_err(), "{path}");
+            assert!(
+                extract_layer_blocking(&layer[..], &dest, u64::MAX).is_err(),
+                "{path}"
+            );
         }
         assert_outside_untouched(&outside);
         std::fs::remove_dir_all(&root).unwrap();
@@ -999,10 +1094,10 @@ mod tests {
         let (root, outside) = sandbox();
         let dest = root.join("dest");
         let link = symlink_layer("link", outside.to_str().unwrap());
-        extract_layer_blocking(&link, &dest).unwrap();
+        extract_layer_blocking(&link[..], &dest, u64::MAX).unwrap();
 
         let layer = build_gzip_layer(&[(".wh.link", b"", false)]);
-        extract_layer_blocking(&layer, &dest).unwrap();
+        extract_layer_blocking(&layer[..], &dest, u64::MAX).unwrap();
 
         assert!(std::fs::symlink_metadata(dest.join("link")).is_err());
         assert_outside_untouched(&outside);
@@ -1025,7 +1120,7 @@ mod tests {
     fn unsafe_layer_entries_are_refused() {
         let tmp = std::env::temp_dir().join(format!("csfx-rootfs-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
-        assert!(extract_layer_blocking(b"not gzip", &tmp).is_err());
+        assert!(extract_layer_blocking(&b"not gzip"[..], &tmp, u64::MAX).is_err());
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 
@@ -1034,7 +1129,10 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("csfx-rootfs-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&tmp).unwrap();
         let layer = build_gzip_layer(&[("d", b"", true), ("d/f", b"z", false)]);
-        extract_layer(&layer, &tmp).await.unwrap();
+        let layer_path = tmp.join("layer.tar.gz");
+        std::fs::write(&layer_path, &layer).unwrap();
+        let unpacked = extract_layer(&layer_path, &tmp, u64::MAX).await.unwrap();
+        assert!(unpacked > 0);
         assert_eq!(std::fs::read(tmp.join("d/f")).unwrap(), b"z");
 
         let config = br#"{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]},"config":{"Cmd":["run"]}}"#;
@@ -1042,6 +1140,42 @@ mod tests {
         assert!(tmp.join("config.json").exists());
         assert!(write_runtime_config(b"{", &tmp).await.is_err());
         std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn layers_exceeding_the_unpack_budget_are_refused() {
+        let layer = build_gzip_layer(&[("big", &[0u8; 64 * 1024], false)]);
+        let (_, dest) = sandbox();
+        assert!(extract_layer_blocking(&layer[..], &dest, 1024).is_err());
+        assert!(extract_layer_blocking(&layer[..], &dest, u64::MAX).is_ok());
+    }
+
+    fn manifest_with_layers(sizes: &[i64], media_type: &str) -> OciImageManifest {
+        let mut manifest = OciImageManifest::default();
+        manifest.layers = sizes
+            .iter()
+            .map(|size| OciDescriptor {
+                media_type: media_type.to_string(),
+                size: *size,
+                ..Default::default()
+            })
+            .collect();
+        manifest
+    }
+
+    #[test]
+    fn image_limits_bound_layers_downloads_and_config() {
+        let gzip = GZIP_LAYER_MEDIA_TYPES[0];
+        let ok = manifest_with_layers(&[1024, 2048], gzip);
+        assert!(check_image_limits(&ok, 100).is_ok());
+        assert!(check_image_limits(&ok, MAX_CONFIG_BYTES + 1).is_err());
+        let huge = manifest_with_layers(&[MAX_COMPRESSED_IMAGE_BYTES as i64, 1], gzip);
+        assert!(check_image_limits(&huge, 100).is_err());
+        let many = manifest_with_layers(&vec![1; MAX_LAYER_COUNT + 1], gzip);
+        assert!(check_image_limits(&many, 100).is_err());
+        assert!(check_image_limits(&manifest_with_layers(&[-1], gzip), 100).is_err());
+        let foreign = manifest_with_layers(&[1], "application/zip");
+        assert!(check_image_limits(&foreign, 100).is_err());
     }
 
     #[test]
