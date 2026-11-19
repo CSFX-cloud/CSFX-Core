@@ -31,6 +31,9 @@ pub struct Demand<'a> {
     pub spread_key: Option<&'a str>,
     pub topology_spread: TopologySpread,
     pub preferred_agents: Option<&'a HashSet<Uuid>>,
+    pub workload_id: Uuid,
+    pub replaces: Option<Uuid>,
+    pub node_ports: Vec<u16>,
 }
 
 pub fn pick(demand: &Demand, agents: &[AgentResources], strategy: Strategy) -> Option<Uuid> {
@@ -70,6 +73,12 @@ pub fn commit(agents: &mut [AgentResources], agent_id: Uuid, demand: &Demand) {
     agent.free_cpu_millicores -= demand.cpu_millicores;
     agent.free_memory_bytes -= demand.memory_bytes;
     agent.free_disk_bytes -= demand.disk_bytes;
+    agent.used_node_ports.extend(
+        demand
+            .node_ports
+            .iter()
+            .map(|port| (*port, demand.workload_id)),
+    );
     if let Some(key) = demand.spread_key {
         *agent.spread_counts.entry(key.to_string()).or_default() += 1;
     }
@@ -80,6 +89,16 @@ fn fits(demand: &Demand, agent: &AgentResources) -> bool {
         && agent.free_memory_bytes >= demand.memory_bytes
         && agent.free_disk_bytes >= demand.disk_bytes
         && (!demand.requires_kvm || agent.kvm_capable)
+        && node_ports_free(demand, agent)
+}
+
+fn node_ports_free(demand: &Demand, agent: &AgentResources) -> bool {
+    demand.node_ports.iter().all(|port| {
+        agent
+            .used_node_ports
+            .get(port)
+            .is_none_or(|holder| Some(*holder) == demand.replaces || *holder == demand.workload_id)
+    })
 }
 
 fn utilization(allocatable: f64, free_after: f64) -> f64 {
@@ -148,6 +167,7 @@ mod tests {
             kvm_capable,
             zone: "default".to_string(),
             spread_counts: HashMap::new(),
+            used_node_ports: HashMap::new(),
         }
     }
 
@@ -160,6 +180,9 @@ mod tests {
             spread_key,
             topology_spread: TopologySpread::None,
             preferred_agents: None,
+            workload_id: Uuid::new_v4(),
+            replaces: None,
+            node_ports: Vec::new(),
         }
     }
 
@@ -180,6 +203,59 @@ mod tests {
     fn skips_agents_without_capacity_or_kvm() {
         let agents = vec![agent(500, 14, true), agent(7000, 14, false)];
         assert_eq!(pick(&demand(None), &agents, Strategy::Spread), None);
+    }
+
+    fn with_port(agent: &mut AgentResources, port: u16) -> Uuid {
+        let holder = Uuid::new_v4();
+        agent.used_node_ports.insert(port, holder);
+        holder
+    }
+
+    #[test]
+    fn agents_holding_a_requested_node_port_are_excluded() {
+        let mut agents = vec![agent(7000, 14, true), agent(2000, 4, true)];
+        with_port(&mut agents[0], 30080);
+        let demand = Demand {
+            node_ports: vec![30080],
+            ..demand(None)
+        };
+        assert_eq!(
+            pick(&demand, &agents, Strategy::Spread),
+            Some(agents[1].agent_id)
+        );
+        with_port(&mut agents[1], 30080);
+        assert_eq!(pick(&demand, &agents, Strategy::Spread), None);
+    }
+
+    #[test]
+    fn a_replacement_may_reuse_the_port_of_the_workload_it_replaces() {
+        let mut agents = vec![agent(7000, 14, true)];
+        let replaced = with_port(&mut agents[0], 30080);
+        let demand = Demand {
+            node_ports: vec![30080],
+            replaces: Some(replaced),
+            ..demand(None)
+        };
+        assert_eq!(
+            pick(&demand, &agents, Strategy::Spread),
+            Some(agents[0].agent_id)
+        );
+    }
+
+    #[test]
+    fn committed_placements_reserve_their_node_ports() {
+        let mut agents = vec![agent(7000, 14, true), agent(7000, 14, true)];
+        let demand = Demand {
+            node_ports: vec![30080],
+            ..demand(None)
+        };
+        let first = pick(&demand, &agents, Strategy::Spread).unwrap();
+        commit(&mut agents, first, &demand);
+        let second = Demand {
+            node_ports: vec![30080],
+            ..self::demand(None)
+        };
+        assert_ne!(pick(&second, &agents, Strategy::Spread), Some(first));
     }
 
     #[test]

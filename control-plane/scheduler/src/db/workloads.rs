@@ -2,8 +2,8 @@ use chrono::Utc;
 use entity::entities::workloads;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, ModelTrait,
-    QueryFilter,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, ModelTrait, QueryFilter,
 };
 use shared::env_secrets::{self, EnvSecretError};
 use std::collections::{HashMap, HashSet};
@@ -125,39 +125,62 @@ pub async fn set_guest_ip(
 }
 
 pub async fn assign(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     workload_id: Uuid,
     agent_id: Uuid,
-) -> Result<workloads::Model, sea_orm::DbErr> {
-    let workload = workloads::Entity::find_by_id(workload_id)
-        .one(db)
-        .await?
-        .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
-
-    let mut active: workloads::ActiveModel = workload.into();
-    active.assigned_agent_id = Set(Some(agent_id));
-    active.status = Set(WorkloadStatus::Scheduled.as_str().to_string());
-    active.updated_at = Set(Some(Utc::now().naive_utc()));
-
-    active.update(db).await
+    expected_agent: Option<Uuid>,
+) -> Result<bool, sea_orm::DbErr> {
+    move_workload(
+        db,
+        workload_id,
+        expected_agent,
+        Some(agent_id),
+        WorkloadStatus::Scheduled,
+    )
+    .await
 }
 
-pub async fn update_ports(
-    db: &DatabaseConnection,
+pub async fn unassign(
+    db: &impl ConnectionTrait,
     workload_id: Uuid,
-    ports: serde_json::Value,
-) -> Result<(), sea_orm::DbErr> {
-    let workload = workloads::Entity::find_by_id(workload_id)
-        .one(db)
-        .await?
-        .ok_or(sea_orm::DbErr::RecordNotFound(workload_id.to_string()))?;
+    expected_agent: Uuid,
+) -> Result<bool, sea_orm::DbErr> {
+    move_workload(
+        db,
+        workload_id,
+        Some(expected_agent),
+        None,
+        WorkloadStatus::Pending,
+    )
+    .await
+}
 
-    let mut active: workloads::ActiveModel = workload.into();
-    active.ports = Set(Some(ports));
-    active.updated_at = Set(Some(Utc::now().naive_utc()));
-
-    active.update(db).await?;
-    Ok(())
+async fn move_workload(
+    db: &impl ConnectionTrait,
+    workload_id: Uuid,
+    expected_agent: Option<Uuid>,
+    target_agent: Option<Uuid>,
+    status: WorkloadStatus,
+) -> Result<bool, sea_orm::DbErr> {
+    let holder = match expected_agent {
+        Some(agent_id) => workloads::Column::AssignedAgentId.eq(agent_id),
+        None => workloads::Column::AssignedAgentId.is_null(),
+    };
+    let moved = workloads::Entity::update_many()
+        .col_expr(
+            workloads::Column::AssignedAgentId,
+            Expr::value(target_agent),
+        )
+        .col_expr(workloads::Column::Status, Expr::value(status.as_str()))
+        .col_expr(
+            workloads::Column::UpdatedAt,
+            Expr::value(Utc::now().naive_utc()),
+        )
+        .filter(workloads::Column::Id.eq(workload_id))
+        .filter(holder)
+        .exec(db)
+        .await?;
+    Ok(moved.rows_affected == 1)
 }
 
 pub async fn update_spec(

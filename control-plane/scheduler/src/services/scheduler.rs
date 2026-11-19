@@ -1,12 +1,12 @@
 use entity::entities::workloads;
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection, DatabaseTransaction, TransactionTrait};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::models::compose::{ComposeServiceSpec, CreateStackRequest, CreateStackResponse};
 use crate::models::workload::{
-    AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, RuntimeClass, TopologySpread,
-    UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
+    node_ports_of, AgentResources, CreateWorkloadRequest, CreateWorkloadResponse, RuntimeClass,
+    TopologySpread, UpdateWorkloadRequest, VolumeMount, WorkloadStatus,
 };
 use crate::services::compose_parser::{self, ComposeParseError};
 use crate::services::placement::{self, Demand, Strategy};
@@ -118,16 +118,9 @@ impl SchedulerService {
             return Ok(pending_response(workload.id));
         };
 
-        if !self.claim_volumes(&workload, agent_id).await? {
+        if !self.assign_workload(&workload, agent_id, None).await? {
             return Ok(pending_response(workload.id));
         }
-
-        crate::db::workloads::assign(&self.db, workload.id, agent_id)
-            .await
-            .map_err(|e| format!("Failed to assign workload: {}", e))?;
-        self.persist_node_ports(&workload, agent_id, replaced, req.ports)
-            .await?;
-        notify_assigned(agent_id);
 
         crate::log_info!(
             "scheduler",
@@ -320,7 +313,7 @@ impl SchedulerService {
                 continue;
             };
 
-            if !self.assign_workload(&workload, agent_id).await? {
+            if !self.assign_workload(&workload, agent_id, None).await? {
                 responses.push(pending_response(workload.id));
                 continue;
             }
@@ -452,70 +445,40 @@ impl SchedulerService {
         Ok(pinned)
     }
 
-    async fn persist_node_ports(
-        &self,
-        workload: &workloads::Model,
-        agent_id: Uuid,
-        replaced: Option<Uuid>,
-        ports: Option<Vec<crate::models::workload::PortMapping>>,
-    ) -> Result<(), String> {
-        let Some(ports) = ports else {
-            return Ok(());
-        };
-        crate::services::port_allocator::validate_node_ports(
-            &self.db,
-            agent_id,
-            workload.id,
-            replaced,
-            &ports,
-        )
-        .await?;
-        let ports_json = crate::services::port_allocator::ports_to_json(&ports)?;
-        crate::db::workloads::update_ports(&self.db, workload.id, ports_json)
-            .await
-            .map_err(|e| format!("Failed to persist allocated node ports: {}", e))
-    }
-
     async fn assign_workload(
         &self,
         workload: &workloads::Model,
         agent_id: Uuid,
+        expected_agent: Option<Uuid>,
     ) -> Result<bool, String> {
-        if !self.claim_volumes(workload, agent_id).await? {
-            return Ok(false);
-        }
-        crate::db::workloads::assign(&self.db, workload.id, agent_id)
+        let transaction = self
+            .db
+            .begin()
             .await
-            .map_err(|e| format!("Failed to assign workload: {}", e))?;
-        notify_assigned(agent_id);
-        Ok(true)
-    }
-
-    async fn claim_volumes(
-        &self,
-        workload: &workloads::Model,
-        agent_id: Uuid,
-    ) -> Result<bool, String> {
-        let volume_ids = volume_ids_of(workload);
-        if volume_ids.is_empty() {
-            return Ok(true);
-        }
-
-        let claimed = shared::volumes::claim(&self.db, &volume_ids, agent_id, Some(workload.id))
-            .await
-            .map_err(|e| format!("Failed to claim volumes: {}", e))?;
-
-        if !claimed {
+            .map_err(|e| format!("Failed to open assignment transaction: {}", e))?;
+        let assigned =
+            crate::db::workloads::assign(&transaction, workload.id, agent_id, expected_agent)
+                .await
+                .map_err(|e| format!("Failed to assign workload: {}", e))?;
+        if !assigned {
             crate::log_warn!(
                 "scheduler",
                 &format!(
-                    "Volumes held by another workload or agent workload_id={} agent_id={}",
+                    "Workload already placed by another scheduler workload_id={} agent_id={}",
                     workload.id, agent_id
                 )
             );
+            return rolled_back(transaction).await;
         }
-
-        Ok(claimed)
+        if !claim_volumes(&transaction, workload, agent_id).await? {
+            return rolled_back(transaction).await;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|e| format!("Failed to commit assignment: {}", e))?;
+        notify_assigned(agent_id);
+        Ok(true)
     }
 
     pub async fn list_workloads(
@@ -557,11 +520,16 @@ impl SchedulerService {
                         workload_id
                     )
                 );
+                self.release_to_pending(workload_id, dead_agent_id).await?;
                 responses.push(pending_response(workload_id));
                 continue;
             };
 
-            if !self.assign_workload(&workload, agent_id).await? {
+            if !self
+                .assign_workload(&workload, agent_id, Some(dead_agent_id))
+                .await?
+            {
+                self.release_to_pending(workload_id, dead_agent_id).await?;
                 responses.push(pending_response(workload_id));
                 continue;
             }
@@ -583,6 +551,13 @@ impl SchedulerService {
         }
 
         Ok(responses)
+    }
+
+    async fn release_to_pending(&self, workload_id: Uuid, agent_id: Uuid) -> Result<(), String> {
+        crate::db::workloads::unassign(&self.db, workload_id, agent_id)
+            .await
+            .map_err(|e| format!("Failed to release workload to pending: {}", e))?;
+        Ok(())
     }
 
     pub async fn retry_pending(&self) -> Result<usize, String> {
@@ -619,7 +594,7 @@ impl SchedulerService {
                 continue;
             };
 
-            if !self.assign_workload(&workload, agent_id).await? {
+            if !self.assign_workload(&workload, agent_id, None).await? {
                 continue;
             }
             placement::commit(&mut agents, agent_id, &demand);
@@ -654,6 +629,37 @@ impl SchedulerService {
 
         Ok(())
     }
+}
+
+async fn rolled_back(transaction: DatabaseTransaction) -> Result<bool, String> {
+    transaction
+        .rollback()
+        .await
+        .map_err(|e| format!("Failed to roll back assignment: {}", e))?;
+    Ok(false)
+}
+
+async fn claim_volumes(
+    db: &impl ConnectionTrait,
+    workload: &workloads::Model,
+    agent_id: Uuid,
+) -> Result<bool, String> {
+    let volume_ids = volume_ids_of(workload);
+    let claimed = shared::volumes::claim_all(db, &volume_ids, agent_id, Some(workload.id))
+        .await
+        .map_err(|e| format!("Failed to claim volumes: {}", e))?;
+
+    if !claimed {
+        crate::log_warn!(
+            "scheduler",
+            &format!(
+                "Volumes held by another workload or agent workload_id={} agent_id={}",
+                workload.id, agent_id
+            )
+        );
+    }
+
+    Ok(claimed)
 }
 
 fn volume_ids_of(workload: &workloads::Model) -> Vec<Uuid> {
@@ -717,6 +723,13 @@ fn demand_for<'a>(
         spread_key: workload.spread_key.as_deref(),
         topology_spread: TopologySpread::from_str(&workload.topology_spread),
         preferred_agents,
+        workload_id: workload.id,
+        replaces: workload.replaces_workload_id,
+        node_ports: workload
+            .ports
+            .as_ref()
+            .map(node_ports_of)
+            .unwrap_or_default(),
     }
 }
 
