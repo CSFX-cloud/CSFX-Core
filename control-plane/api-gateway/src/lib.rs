@@ -5,6 +5,7 @@ pub mod admins;
 pub mod audit;
 pub mod auth;
 pub mod auth_service;
+pub mod cache_sync;
 pub mod cef;
 pub mod cluster_bundle;
 pub mod console_pin;

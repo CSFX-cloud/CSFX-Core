@@ -10,9 +10,20 @@ use axum::{
 use chrono::Utc;
 use entity::{InvalidJwt, User};
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
+use std::sync::LazyLock;
+use std::time::Duration;
+
+use crate::ttl_cache::TtlCache;
 
 const COOKIE_NAME: &str = "auth_token";
 const CSRF_HEADER: &str = "x-csfx-csrf";
+const SESSION_CACHE_TTL: Duration = Duration::from_secs(5);
+
+static LIVE_SESSIONS: LazyLock<TtlCache<()>> = LazyLock::new(|| TtlCache::new(SESSION_CACHE_TTL));
+
+pub fn forget_live_sessions() {
+    LIVE_SESSIONS.clear();
+}
 
 pub fn request_token(headers: &HeaderMap) -> Option<&str> {
     bearer_token(headers).or_else(|| cookie_token(headers))
@@ -75,6 +86,10 @@ pub async fn authenticate(parts: &Parts, state: &AppState) -> Result<Claims, Sta
     if claims.exp < Utc::now().timestamp() {
         return Err(StatusCode::UNAUTHORIZED);
     }
+    let key = format!("{}:{}", claims.user_id, claims.jti);
+    if LIVE_SESSIONS.get(&key).is_some() {
+        return Ok(claims);
+    }
     let internal = |_| StatusCode::INTERNAL_SERVER_ERROR;
     if is_token_revoked(&state.db_conn, &claims)
         .await
@@ -82,11 +97,16 @@ pub async fn authenticate(parts: &Parts, state: &AppState) -> Result<Claims, Sta
     {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let user = User::find_by_id(claims.user_id)
+    let user_exists = User::find_by_id(claims.user_id)
         .one(&state.db_conn)
         .await
-        .map_err(internal)?;
-    user.map(|_| claims).ok_or(StatusCode::UNAUTHORIZED)
+        .map_err(internal)?
+        .is_some();
+    if !user_exists {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    LIVE_SESSIONS.insert(&key, ());
+    Ok(claims)
 }
 
 pub struct AuthenticatedUser(pub Claims);
