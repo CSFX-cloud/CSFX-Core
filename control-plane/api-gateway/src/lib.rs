@@ -25,6 +25,7 @@ pub mod recovery;
 pub mod role_grants;
 pub mod routes;
 pub mod secret_rotation;
+pub mod security_headers;
 pub mod service_client;
 pub mod setup;
 pub mod site_client;

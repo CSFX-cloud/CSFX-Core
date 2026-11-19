@@ -1,9 +1,11 @@
 use api_gateway::{
     db, gateway_reconciler, idempotency, ingress_sync, init, openbao, prune, recovery, routes,
-    service_client, site_client, telemetry, tls, vault_service, ApiDoc, AppState,
+    service_client, site_client, telemetry, tls, vault_service, AppState,
 };
 use std::net::SocketAddr;
+#[cfg(debug_assertions)]
 use utoipa::OpenApi;
+#[cfg(debug_assertions)]
 use utoipa_swagger_ui::SwaggerUi;
 
 async fn connect_or_exit(name: &str, default_max_connections: u32) -> sea_orm::DbConn {
@@ -100,9 +102,12 @@ async fn main() {
     gateway_reconciler::spawn(state.clone());
     api_gateway::secret_rotation::spawn(state.clone());
 
-    let app = routes::create_router(state.clone())
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .with_state(state);
+    let router = routes::create_router(state.clone());
+    #[cfg(debug_assertions)]
+    let router = router.merge(
+        SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_gateway::ApiDoc::openapi()),
+    );
+    let app = router.with_state(state);
 
     let port = std::env::var("GATEWAY_PORT")
         .ok()

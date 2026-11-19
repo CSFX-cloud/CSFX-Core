@@ -55,9 +55,14 @@ fn api_error(error: ExportError) -> ApiError {
         ExportError::Sink(SinkError::Remote(_) | SinkError::Http(_)) => StatusCode::BAD_GATEWAY,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    if status == StatusCode::INTERNAL_SERVER_ERROR {
+    if status.is_server_error() {
         tracing::error!(error = %error, "export request failed");
-        return (status, Json(json!({ "error": "internal error" })));
+        let message = if status == StatusCode::BAD_GATEWAY {
+            "export target unavailable"
+        } else {
+            "internal error"
+        };
+        return (status, Json(json!({ "error": message })));
     }
     (status, Json(json!({ "error": error.to_string() })))
 }

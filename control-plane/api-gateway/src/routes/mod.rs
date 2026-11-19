@@ -69,6 +69,22 @@ fn static_service() -> ServeDir<tower_http::set_status::SetStatus<ServeFile>> {
     ServeDir::new(&static_dir).not_found_service(ServeFile::new(&index_path))
 }
 
+fn cors_origins() -> Vec<HeaderValue> {
+    ["FRONTEND_URL", "CORS_ALLOWED_ORIGINS"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .map(String::from)
+                .collect::<Vec<_>>()
+        })
+        .filter(|origin| !origin.is_empty())
+        .filter_map(|origin| origin.parse::<HeaderValue>().ok())
+        .collect()
+}
+
 /// Creates the main application router and logs all registered routes.
 pub fn create_router(state: AppState) -> Router<AppState> {
     let rate_limit_per_second: u64 = std::env::var("RATE_LIMIT_PER_SECOND")
@@ -128,28 +144,11 @@ pub fn create_router(state: AppState) -> Router<AppState> {
             .expect("invalid login rate limit configuration"),
     );
 
-    let frontend_url =
-        std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-
-    tracing::info!("CORS configured for frontend URL: {}", frontend_url);
-
-    let allowed_origins = vec![
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:8000",
-        &frontend_url,
-    ];
+    let allowed_origins = cors_origins();
+    tracing::info!(origins = ?allowed_origins, "cors configured");
 
     let cors = CorsLayer::new()
-        .allow_origin(
-            allowed_origins
-                .into_iter()
-                .filter_map(|origin| origin.parse::<HeaderValue>().ok())
-                .collect::<Vec<_>>(),
-        )
+        .allow_origin(allowed_origins)
         .allow_methods(vec![
             Method::GET,
             Method::POST,
@@ -248,7 +247,7 @@ pub fn create_router(state: AppState) -> Router<AppState> {
                     info_span!(
                         "http_request",
                         method = %request.method(),
-                        uri = %request.uri(),
+                        path = %request.uri().path(),
                         version = ?request.version(),
                     )
                 })
@@ -283,6 +282,9 @@ pub fn create_router(state: AppState) -> Router<AppState> {
                     },
                 ),
         )
-        .layer(cors);
+        .layer(cors)
+        .layer(axum::middleware::from_fn(
+            crate::security_headers::apply,
+        ));
     shared::observability::instrument(router)
 }
