@@ -3,16 +3,18 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use csfx_agent_api::{
+    ContainerStatus, HeartbeatRequest, HeartbeatResponse, RegisterRequest, RegisterResponse,
+    SignedRelease,
+};
 use entity::agent_metrics;
 use sea_orm::{ActiveModelTrait, Set};
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
-    models::agent::{
-        ErrorResponse, HeartbeatRequest, HeartbeatResponse, RegisterRequest, RegisterResponse,
-        SignedRelease,
-    },
+    db::agents::Heartbeat,
+    handlers::{api_error, ApiError},
     server::AppState,
     services::{bootstrap_tokens::ROLE_WORKER, registry::RegisterAgentParams, worker_rollout},
 };
@@ -22,17 +24,6 @@ const GATEWAY_PORT: u16 = 8000;
 use shared::etcd::{
     WORKER_MANIFEST_PREFIX, WORKER_MANIFEST_SIGNATURE_PREFIX as WORKER_SIGNATURE_PREFIX,
 };
-
-type ApiError = (StatusCode, Json<ErrorResponse>);
-
-fn api_error(status: StatusCode, message: impl Into<String>) -> ApiError {
-    (
-        status,
-        Json(ErrorResponse {
-            error: message.into(),
-        }),
-    )
-}
 
 pub async fn register_agent(
     State(state): State<AppState>,
@@ -142,7 +133,7 @@ pub async fn register_agent(
             );
             return Err(api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to issue API key".to_string(),
+                "Failed to issue API key",
             ));
         }
     };
@@ -211,12 +202,7 @@ pub async fn heartbeat(
     let api_key = headers
         .get("X-API-Key")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            api_error(
-                StatusCode::UNAUTHORIZED,
-                "Missing X-API-Key header".to_string(),
-            )
-        })?;
+        .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "Missing X-API-Key header"))?;
 
     let validated_agent_id = match state.api_key_manager.validate_key(api_key).await {
         Ok(id) => id,
@@ -224,10 +210,7 @@ pub async fn heartbeat(
     };
 
     if validated_agent_id != agent_id {
-        return Err(api_error(
-            StatusCode::FORBIDDEN,
-            "Agent ID mismatch".to_string(),
-        ));
+        return Err(api_error(StatusCode::FORBIDDEN, "Agent ID mismatch"));
     }
 
     if let Some(cert_pem) = headers.get("X-Client-Cert").and_then(|v| v.to_str().ok()) {
@@ -243,7 +226,7 @@ pub async fn heartbeat(
         if !valid {
             return Err(api_error(
                 StatusCode::FORBIDDEN,
-                "Invalid or revoked client certificate".to_string(),
+                "Invalid or revoked client certificate",
             ));
         }
     }
@@ -261,7 +244,7 @@ pub async fn heartbeat(
         if in_use {
             return Err(api_error(
                 StatusCode::CONFLICT,
-                "WireGuard endpoint is already in use by another agent".to_string(),
+                "WireGuard endpoint is already in use by another agent",
             ));
         }
     }
@@ -270,11 +253,13 @@ pub async fn heartbeat(
         .agent_registry
         .update_heartbeat(
             agent_id,
-            request.wg_public_key.clone(),
-            request.wg_endpoint.clone(),
-            request.agent_version.clone(),
-            request.kvm_capable,
-            accepted_host_key(request.ssh_host_key.as_deref()),
+            Heartbeat {
+                wg_public_key: request.wg_public_key.clone(),
+                wg_endpoint: request.wg_endpoint.clone(),
+                agent_version: request.agent_version.clone(),
+                kvm_capable: request.kvm_capable,
+                ssh_host_key: accepted_host_key(request.ssh_host_key.as_deref()),
+            },
             &state.mgmt_ipam,
         )
         .await
@@ -428,7 +413,7 @@ async fn read_prefix(client: &mut etcd_client::Client, prefix: &str) -> HashMap<
 async fn forward_container_statuses(
     state: &crate::server::AppState,
     agent_id: Uuid,
-    statuses: Vec<crate::models::agent::ContainerStatus>,
+    statuses: Vec<ContainerStatus>,
 ) {
     use serde_json::json;
 
@@ -454,9 +439,8 @@ async fn forward_container_statuses(
     }
 }
 
-fn percent_of(used: Option<u64>, total: Option<u64>) -> Option<f32> {
-    let total = total.filter(|total| *total > 0)?;
-    Some(used? as f32 / total as f32 * 100.0)
+fn percent_of(used: u64, total: u64) -> Option<f32> {
+    (total > 0).then(|| used as f32 / total as f32 * 100.0)
 }
 
 async fn store_metrics(
@@ -464,31 +448,31 @@ async fn store_metrics(
     agent_id: Uuid,
     request: &HeartbeatRequest,
 ) {
-    if request.cpu_usage_percent.is_none() && request.memory_total_bytes.is_none() {
+    let Some(metrics) = request.metrics.as_ref() else {
         return;
-    }
+    };
 
     let row = agent_metrics::ActiveModel {
         id: Set(Uuid::new_v4()),
         agent_id: Set(agent_id),
         timestamp: Set(chrono::Utc::now().naive_utc()),
-        cpu_usage_percent: Set(request.cpu_usage_percent),
-        cpu_cores: Set(request.cpu_cores.map(|value| value as i32)),
-        memory_total_bytes: Set(request.memory_total_bytes.map(|value| value as i64)),
-        memory_used_bytes: Set(request.memory_used_bytes.map(|value| value as i64)),
+        cpu_usage_percent: Set(Some(metrics.cpu_usage_percent)),
+        cpu_cores: Set(Some(metrics.cpu_cores as i32)),
+        memory_total_bytes: Set(Some(metrics.memory_total_bytes as i64)),
+        memory_used_bytes: Set(Some(metrics.memory_used_bytes as i64)),
         memory_usage_percent: Set(percent_of(
-            request.memory_used_bytes,
-            request.memory_total_bytes,
+            metrics.memory_used_bytes,
+            metrics.memory_total_bytes,
         )),
-        disk_total_bytes: Set(request.disk_total_bytes.map(|value| value as i64)),
-        disk_used_bytes: Set(request.disk_used_bytes.map(|value| value as i64)),
+        disk_total_bytes: Set(Some(metrics.disk_total_bytes as i64)),
+        disk_used_bytes: Set(Some(metrics.disk_used_bytes as i64)),
         disk_usage_percent: Set(percent_of(
-            request.disk_used_bytes,
-            request.disk_total_bytes,
+            metrics.disk_used_bytes,
+            metrics.disk_total_bytes,
         )),
-        network_rx_bytes: Set(request.network_rx_bytes.map(|value| value as i64)),
-        network_tx_bytes: Set(request.network_tx_bytes.map(|value| value as i64)),
-        uptime_seconds: Set(request.uptime_seconds.map(|value| value as i64)),
+        network_rx_bytes: Set(Some(metrics.network_rx_bytes as i64)),
+        network_tx_bytes: Set(Some(metrics.network_tx_bytes as i64)),
+        uptime_seconds: Set(Some(metrics.uptime_seconds as i64)),
         ..Default::default()
     };
 

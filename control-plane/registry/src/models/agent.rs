@@ -61,27 +61,7 @@ pub struct RegisteredAgent {
     pub wg_tunnel_ip: Option<String>,
 }
 
-impl From<entity::agents::Model> for RegisteredAgent {
-    fn from(agent: entity::agents::Model) -> Self {
-        Self {
-            id: agent.id,
-            name: agent.name,
-            hostname: agent.hostname,
-            ip_address: agent.ip_address,
-            os_type: agent.os_type,
-            os_version: agent.os_version,
-            architecture: agent.architecture,
-            agent_version: agent.agent_version,
-            status: AgentStatus::from_str(&agent.status),
-            registered_at: agent.registered_at.and_utc(),
-            last_heartbeat: agent.last_heartbeat.map(|time| time.and_utc()),
-            tags: None,
-            wg_tunnel_ip: agent.wg_tunnel_ip,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentStatistics {
     pub total: usize,
     pub online: usize,
@@ -108,77 +88,28 @@ pub struct PreRegisterResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterRequest {
-    pub registration_token: String,
-    pub name: String,
-    pub hostname: String,
-    pub os_type: String,
-    pub os_version: String,
-    pub architecture: String,
-    pub agent_version: String,
-    pub tags: Option<HashMap<String, String>>,
-    pub csr_pem: Option<String>,
-    #[serde(default)]
-    pub machine_id: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RegisterResponse {
-    pub agent_id: Uuid,
-    pub api_key: String,
-    pub certificate_pem: Option<String>,
-    pub ca_cert_pem: Option<String>,
-    pub wg_tunnel_ip: Option<String>,
-    pub message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ContainerStatus {
-    pub workload_id: String,
-    pub container_id: String,
-    pub status: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HeartbeatRequest {
-    pub status: Option<String>,
-    pub container_statuses: Option<Vec<ContainerStatus>>,
-    pub cpu_usage_percent: Option<f32>,
-    pub cpu_cores: Option<u32>,
-    pub memory_total_bytes: Option<u64>,
-    pub memory_used_bytes: Option<u64>,
-    pub disk_total_bytes: Option<u64>,
-    pub disk_used_bytes: Option<u64>,
-    pub network_rx_bytes: Option<u64>,
-    pub network_tx_bytes: Option<u64>,
-    pub uptime_seconds: Option<u64>,
-    pub wg_public_key: Option<String>,
-    pub wg_endpoint: Option<String>,
-    pub agent_version: Option<String>,
-    #[serde(default)]
-    pub release_version: Option<String>,
-    #[serde(default)]
-    pub kvm_capable: bool,
-    #[serde(default)]
-    pub ssh_host_key: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SignedRelease {
-    pub manifest: String,
-    pub signature: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HeartbeatResponse {
-    pub success: bool,
-    pub message: String,
-    pub worker_releases: HashMap<String, SignedRelease>,
-    pub ssh_enabled: bool,
-    pub gateway_url: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: String,
+}
+
+impl From<entity::agents::Model> for RegisteredAgent {
+    fn from(agent: entity::agents::Model) -> Self {
+        Self {
+            id: agent.id,
+            name: agent.name,
+            hostname: agent.hostname,
+            ip_address: agent.ip_address,
+            os_type: agent.os_type,
+            os_version: agent.os_version,
+            architecture: agent.architecture,
+            agent_version: agent.agent_version,
+            status: AgentStatus::from_str(&agent.status),
+            registered_at: agent.registered_at.and_utc(),
+            last_heartbeat: agent.last_heartbeat.map(|time| time.and_utc()),
+            tags: agent
+                .tags
+                .and_then(|tags| serde_json::from_value(tags).ok()),
+            wg_tunnel_ip: agent.wg_tunnel_ip,
+        }
+    }
 }

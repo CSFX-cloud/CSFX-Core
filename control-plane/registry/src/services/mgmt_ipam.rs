@@ -27,14 +27,11 @@ impl MgmtIpamService {
             .context("failed to connect to etcd")?;
         let base = site_base(&mut client, site_id).await?;
 
-        let taken = taken_addresses(&mut client, base).await?;
         let total = 1u32 << (32 - MGMT_CIDR_PREFIX_LEN);
+        let used = used_offsets(&mut client, base).await?;
 
-        for offset in 2..total - 1 {
+        for offset in (2..total - 1).filter(|offset| !used.contains(offset)) {
             let ip_str = ip_add(base, offset).to_string();
-            if taken.contains(&ip_str) {
-                continue;
-            }
             let key = format!("{}{}", MGMT_IPAM_PREFIX, ip_str);
 
             let claim = Txn::new()
@@ -63,12 +60,12 @@ impl MgmtIpamService {
     }
 }
 
-async fn taken_addresses(client: &mut Client, base: Ipv4Addr) -> Result<HashSet<String>> {
-    let octets = base.octets();
-    let block_prefix = format!("{}{}.{}.", MGMT_IPAM_PREFIX, octets[0], octets[1]);
+async fn used_offsets(client: &mut Client, base: Ipv4Addr) -> Result<HashSet<u32>> {
+    let [first, second, ..] = base.octets();
+    let prefix = format!("{}{}.{}.", MGMT_IPAM_PREFIX, first, second);
     let response = client
         .get(
-            block_prefix.as_str(),
+            prefix.as_str(),
             Some(GetOptions::new().with_prefix().with_keys_only()),
         )
         .await
@@ -76,9 +73,15 @@ async fn taken_addresses(client: &mut Client, base: Ipv4Addr) -> Result<HashSet<
     Ok(response
         .kvs()
         .iter()
-        .filter_map(|entry| entry.key_str().ok())
-        .filter_map(|key| key.strip_prefix(MGMT_IPAM_PREFIX))
-        .map(str::to_string)
+        .filter_map(|entry| {
+            entry
+                .key_str()
+                .ok()?
+                .strip_prefix(MGMT_IPAM_PREFIX)?
+                .parse::<Ipv4Addr>()
+                .ok()
+        })
+        .map(|ip| u32::from(ip) - u32::from(base))
         .collect())
 }
 

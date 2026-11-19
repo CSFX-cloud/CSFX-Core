@@ -23,7 +23,7 @@ impl Reconciler {
     }
 
     pub(super) async fn desired_workloads(&self) -> Option<Vec<client::AssignedWorkload>> {
-        let error = match self.client.fetch_assigned_workloads(&self.api_key).await {
+        let error = match self.client.fetch_assigned_workloads().await {
             Ok(workloads) => {
                 self.local_state.confirm_workloads(&workloads).await;
                 return Some(workloads);
@@ -105,11 +105,7 @@ impl Reconciler {
 
         let restart_fulfilled = self.start_or_restart(runtime, workload).await;
         if restart_fulfilled {
-            if let Err(e) = self
-                .client
-                .ack_workload_restart(&self.api_key, &workload_id)
-                .await
-            {
+            if let Err(e) = self.client.ack_workload_restart(&workload_id).await {
                 warn!(workload_id = %workload_id, error = %e, "Failed to ack workload restart");
             }
         }

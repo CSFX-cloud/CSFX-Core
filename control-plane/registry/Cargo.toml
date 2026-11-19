@@ -12,6 +12,7 @@ path = "src/main.rs"
 # Internal dependencies
 shared = { path = "../shared/shared" }
 entity = { path = "../shared/entity" }
+csfx-agent-api = { path = "../shared/agent-api" }
 migration = { path = "../shared/migration" }
 
 # Async runtime

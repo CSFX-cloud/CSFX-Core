@@ -71,7 +71,7 @@ async fn stats_updates_are_stored() {
     assert_eq!(workload["cpu_usage_percent"], 20.0);
     assert_eq!(workload["memory_usage_bytes"], 1024);
     assert_eq!(workload["network_rx_bytes"], 10);
-    assert!(workload["recommended_cpu_millicores"].is_i64());
+    assert_eq!(workload["recommended_cpu_millicores"], 960);
     assert!(workload["recommended_memory_bytes"].is_i64());
 }
 

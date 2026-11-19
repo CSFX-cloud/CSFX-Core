@@ -54,18 +54,12 @@ pub async fn run(gateway_url: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn authenticated_client(gateway_url: &str) -> Result<(ApiClient, String)> {
+pub(crate) async fn authenticated_client(gateway_url: &str) -> Result<ApiClient> {
     wait_for_registration().await?;
     let credentials = config::load_credentials().context("Failed to load credentials")?;
     let ca_pem = pki::AgentPki::load_ca_pem().context("Failed to load cluster CA")?;
-    let client = ApiClient::new(
-        gateway_url.to_string(),
-        String::new(),
-        None,
-        None,
-        Some(&ca_pem),
-    )?;
-    Ok((client, credentials.api_key))
+    let client = ApiClient::new(gateway_url.to_string(), String::new(), None, Some(&ca_pem))?;
+    Ok(client.with_api_key(credentials.api_key))
 }
 
 async fn wait_for_registration() -> Result<()> {
@@ -79,8 +73,8 @@ async fn wait_for_registration() -> Result<()> {
 }
 
 async fn join(gateway_url: &str) -> Result<()> {
-    let (client, api_key) = authenticated_client(gateway_url).await?;
-    let bundle = client.request_master_bundle(&api_key).await?;
+    let client = authenticated_client(gateway_url).await?;
+    let bundle = client.request_master_bundle().await?;
     reset_local_control_plane()?;
     apply_bundle(&bundle).await?;
     write_file(PROMOTE_MARKER, "", 0o600)?;
@@ -88,9 +82,9 @@ async fn join(gateway_url: &str) -> Result<()> {
 }
 
 async fn promote(gateway_url: &str) -> Result<()> {
-    let (client, api_key) = authenticated_client(gateway_url).await?;
+    let client = authenticated_client(gateway_url).await?;
     start_fresh_etcd().await?;
-    wait_for_promotion(&client, &api_key).await?;
+    wait_for_promotion(&client).await?;
     info!("etcd member promoted to voter");
     start_unit(CONTROL_PLANE_TARGET).await?;
     std::fs::remove_file(PROMOTE_MARKER).context("Failed to remove promote marker")?;
@@ -104,9 +98,9 @@ async fn start_fresh_etcd() -> Result<()> {
     start_unit(ETCD_UNIT).await
 }
 
-async fn wait_for_promotion(client: &ApiClient, api_key: &str) -> Result<()> {
+async fn wait_for_promotion(client: &ApiClient) -> Result<()> {
     for _ in 0..PROMOTE_ATTEMPTS {
-        if client.promote_master(api_key).await? {
+        if client.promote_master().await? {
             return Ok(());
         }
         sleep(POLL_INTERVAL).await;
@@ -408,7 +402,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = ApiClient::new(url, String::new(), None, None, None).unwrap();
-        wait_for_promotion(&client, "key").await.unwrap();
+        let client = ApiClient::new(url, String::new(), None, None).unwrap();
+        wait_for_promotion(&client).await.unwrap();
     }
 }

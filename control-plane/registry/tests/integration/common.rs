@@ -9,7 +9,6 @@ use http_body_util::BodyExt;
 use rcgen::{
     BasicConstraints, CertificateParams, IsCa, KeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
 };
-use registry::db::agents::NewAgent;
 use registry::server::{create_router, AppState};
 use registry::services::{
     api_keys::ApiKeyManager, bootstrap_tokens::BootstrapTokenManager, mgmt_ipam::MgmtIpamService,
@@ -93,15 +92,17 @@ pub async fn insert_agent_with(
     let id = Uuid::new_v4();
     registry::db::agents::create(
         db,
-        NewAgent {
+        registry::db::agents::NewAgent {
             id,
             name: format!("agent-{}", id.simple()),
             hostname: format!("host-{}", id.simple()),
-            agent_version: "0.2.2".to_string(),
-            os_type: "linux".to_string(),
-            os_version: "6.1".to_string(),
-            architecture: "x86_64".to_string(),
-            tags: None,
+            registration: registry::db::agents::Registration {
+                agent_version: "0.2.2".to_string(),
+                os_type: "linux".to_string(),
+                os_version: "6.1".to_string(),
+                architecture: "x86_64".to_string(),
+                tags: None,
+            },
             wg_tunnel_ip: Some("10.100.0.2".to_string()),
             role: role.to_string(),
             machine_id,

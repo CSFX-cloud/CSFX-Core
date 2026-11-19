@@ -33,7 +33,6 @@ pub struct ServerState {
     pub workloads: crate::state::WorkloadTable,
     pub agent_id: uuid::Uuid,
     pub api_client: Arc<crate::client::ApiClient>,
-    pub api_key: String,
     pub ca_key: Arc<Vec<u8>>,
 }
 
@@ -486,7 +485,6 @@ async fn ingress_config_handler(
     state
         .api_client
         .fetch_gateway_config(
-            &state.api_key,
             &group_id,
             &gateway_id.to_string(),
             &source_workload_id,
@@ -561,11 +559,9 @@ mod tests {
                     "pub".to_string(),
                     None,
                     None,
-                    None,
                 )
                 .unwrap(),
             ),
-            api_key: "key".to_string(),
             ca_key: Arc::new(Vec::new()),
         }
     }
