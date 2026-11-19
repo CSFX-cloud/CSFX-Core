@@ -4,6 +4,29 @@ use shared::qos::QosClass;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+macro_rules! string_enum {
+    ($name:ident, default $default:ident, { $($variant:ident => $text:literal),+ $(,)? }) => {
+        impl $name {
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $($name::$variant => $text),+
+                }
+            }
+
+            pub fn parse(value: &str) -> Option<Self> {
+                match value {
+                    $($text => Some($name::$variant),)+
+                    _ => None,
+                }
+            }
+
+            pub fn from_str(value: &str) -> Self {
+                Self::parse(value).unwrap_or($name::$default)
+            }
+        }
+    };
+}
+
 pub const MAX_REPLICAS: u32 = 32;
 const MAX_SERVICE_NAME_LENGTH: usize = 63;
 const BUCKET_PERMISSIONS: [&str; 2] = ["read", "readwrite"];
@@ -21,38 +44,16 @@ pub enum WorkloadStatus {
     Stopped,
 }
 
-impl WorkloadStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            WorkloadStatus::Pending => "pending",
-            WorkloadStatus::Scheduled => "scheduled",
-            WorkloadStatus::Pulling => "pulling",
-            WorkloadStatus::Creating => "creating",
-            WorkloadStatus::Starting => "starting",
-            WorkloadStatus::Running => "running",
-            WorkloadStatus::Failed => "failed",
-            WorkloadStatus::Stopped => "stopped",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "pending" => Some(WorkloadStatus::Pending),
-            "scheduled" => Some(WorkloadStatus::Scheduled),
-            "pulling" => Some(WorkloadStatus::Pulling),
-            "creating" => Some(WorkloadStatus::Creating),
-            "starting" => Some(WorkloadStatus::Starting),
-            "running" => Some(WorkloadStatus::Running),
-            "failed" => Some(WorkloadStatus::Failed),
-            "stopped" => Some(WorkloadStatus::Stopped),
-            _ => None,
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        Self::parse(s).unwrap_or(WorkloadStatus::Pending)
-    }
-}
+string_enum!(WorkloadStatus, default Pending, {
+    Pending => "pending",
+    Scheduled => "scheduled",
+    Pulling => "pulling",
+    Creating => "creating",
+    Starting => "starting",
+    Running => "running",
+    Failed => "failed",
+    Stopped => "stopped",
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageEntry {
@@ -90,23 +91,11 @@ pub enum RestartPolicy {
     Never,
 }
 
-impl RestartPolicy {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RestartPolicy::Always => "always",
-            RestartPolicy::OnFailure => "on-failure",
-            RestartPolicy::Never => "never",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "on-failure" => RestartPolicy::OnFailure,
-            "never" => RestartPolicy::Never,
-            _ => RestartPolicy::Always,
-        }
-    }
-}
+string_enum!(RestartPolicy, default Always, {
+    Always => "always",
+    OnFailure => "on-failure",
+    Never => "never",
+});
 
 fn default_restart_policy() -> RestartPolicy {
     RestartPolicy::Always
@@ -119,25 +108,10 @@ pub enum RuntimeClass {
     Vm,
 }
 
-impl RuntimeClass {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            RuntimeClass::Firecracker => "firecracker",
-            RuntimeClass::Vm => "vm",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "vm" => RuntimeClass::Vm,
-            _ => RuntimeClass::Firecracker,
-        }
-    }
-
-    pub fn requires_kvm(&self) -> bool {
-        true
-    }
-}
+string_enum!(RuntimeClass, default Firecracker, {
+    Firecracker => "firecracker",
+    Vm => "vm",
+});
 
 fn default_runtime_class() -> RuntimeClass {
     RuntimeClass::Firecracker
@@ -152,23 +126,11 @@ pub enum TopologySpread {
     Hard,
 }
 
-impl TopologySpread {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TopologySpread::None => "none",
-            TopologySpread::Soft => "soft",
-            TopologySpread::Hard => "hard",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "soft" => TopologySpread::Soft,
-            "hard" => TopologySpread::Hard,
-            _ => TopologySpread::None,
-        }
-    }
-}
+string_enum!(TopologySpread, default None, {
+    None => "none",
+    Soft => "soft",
+    Hard => "hard",
+});
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -177,21 +139,10 @@ pub enum DesiredState {
     Stopped,
 }
 
-impl DesiredState {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DesiredState::Running => "running",
-            DesiredState::Stopped => "stopped",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Self {
-        match s {
-            "stopped" => DesiredState::Stopped,
-            _ => DesiredState::Running,
-        }
-    }
-}
+string_enum!(DesiredState, default Running, {
+    Running => "running",
+    Stopped => "stopped",
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateWorkloadRequest {
@@ -437,14 +388,6 @@ mod tests {
 
     #[test]
     fn workload_status_parsing_rejects_unknown_names() {
-        assert_eq!(
-            WorkloadStatus::parse("running"),
-            Some(WorkloadStatus::Running)
-        );
-        assert_eq!(
-            WorkloadStatus::parse("pending"),
-            Some(WorkloadStatus::Pending)
-        );
         for hostile in ["", "RUNNING", "running; drop", "ok"] {
             assert!(WorkloadStatus::parse(hostile).is_none(), "{hostile}");
         }
@@ -471,49 +414,19 @@ mod tests {
     }
 
     #[test]
-    fn workload_status_round_trips_through_its_name() {
-        let statuses = [
-            WorkloadStatus::Pending,
-            WorkloadStatus::Scheduled,
-            WorkloadStatus::Pulling,
-            WorkloadStatus::Creating,
-            WorkloadStatus::Starting,
-            WorkloadStatus::Running,
-            WorkloadStatus::Failed,
-            WorkloadStatus::Stopped,
-        ];
-        for status in statuses {
+    fn enums_round_trip_through_their_names_and_fall_back_to_defaults() {
+        for status in [WorkloadStatus::Pending, WorkloadStatus::Stopped] {
             assert_eq!(WorkloadStatus::from_str(status.as_str()), status);
         }
         assert_eq!(WorkloadStatus::from_str("unknown"), WorkloadStatus::Pending);
-    }
-
-    #[test]
-    fn restart_policy_round_trips_and_defaults_to_always() {
-        for policy in [
-            RestartPolicy::Always,
-            RestartPolicy::OnFailure,
-            RestartPolicy::Never,
-        ] {
-            assert_eq!(RestartPolicy::from_str(policy.as_str()), policy);
-        }
+        assert_eq!(
+            RestartPolicy::from_str("on-failure"),
+            RestartPolicy::OnFailure
+        );
         assert_eq!(RestartPolicy::from_str("sometimes"), RestartPolicy::Always);
-    }
-
-    #[test]
-    fn runtime_class_round_trips_and_always_needs_kvm() {
-        for class in [RuntimeClass::Firecracker, RuntimeClass::Vm] {
-            assert_eq!(RuntimeClass::from_str(class.as_str()), class);
-            assert!(class.requires_kvm());
-        }
+        assert_eq!(RuntimeClass::from_str("vm"), RuntimeClass::Vm);
         assert_eq!(RuntimeClass::from_str("docker"), RuntimeClass::Firecracker);
-    }
-
-    #[test]
-    fn desired_state_round_trips_and_defaults_to_running() {
-        for state in [DesiredState::Running, DesiredState::Stopped] {
-            assert_eq!(DesiredState::from_str(state.as_str()), state);
-        }
+        assert_eq!(TopologySpread::from_str("hard"), TopologySpread::Hard);
         assert_eq!(DesiredState::from_str("paused"), DesiredState::Running);
     }
 

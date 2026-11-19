@@ -11,3 +11,7 @@ pub mod rightsizing;
 pub mod rolling;
 pub mod scheduler;
 pub mod stack_volumes;
+
+pub(crate) fn failed<E: std::fmt::Display>(action: &'static str) -> impl FnOnce(E) -> String {
+    move |cause| format!("Failed to {}: {}", action, cause)
+}

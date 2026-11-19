@@ -27,7 +27,6 @@ pub struct Demand<'a> {
     pub cpu_millicores: i32,
     pub memory_bytes: i64,
     pub disk_bytes: i64,
-    pub requires_kvm: bool,
     pub spread_key: Option<&'a str>,
     pub topology_spread: TopologySpread,
     pub preferred_agents: Option<&'a HashSet<Uuid>>,
@@ -88,7 +87,7 @@ fn fits(demand: &Demand, agent: &AgentResources) -> bool {
     agent.free_cpu_millicores >= demand.cpu_millicores
         && agent.free_memory_bytes >= demand.memory_bytes
         && agent.free_disk_bytes >= demand.disk_bytes
-        && (!demand.requires_kvm || agent.kvm_capable)
+        && agent.kvm_capable
         && node_ports_free(demand, agent)
 }
 
@@ -176,7 +175,6 @@ mod tests {
             cpu_millicores: 1000,
             memory_bytes: GIB,
             disk_bytes: GIB,
-            requires_kvm: true,
             spread_key,
             topology_spread: TopologySpread::None,
             preferred_agents: None,

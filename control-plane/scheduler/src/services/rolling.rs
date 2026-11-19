@@ -1,3 +1,4 @@
+use super::failed;
 use chrono::Utc;
 use entity::entities::{
     agents, dns_records, ingress_gateways, ingress_routes, logs, network_members, site_deployments,
@@ -293,7 +294,7 @@ impl SchedulerService {
     pub async fn reconcile_replacements(&self) -> Result<usize, String> {
         let pending = crate::db::workloads::replacements(&self.db)
             .await
-            .map_err(|e| format!("Failed to list replacements: {}", e))?;
+            .map_err(failed("list replacements"))?;
         let mut switched = 0;
         for replacement in pending {
             match self.advance(&replacement).await {
@@ -311,7 +312,7 @@ impl SchedulerService {
     async fn retire_due(&self) -> Result<(), String> {
         let due = crate::db::workloads::retiring_due(&self.db, Utc::now().naive_utc())
             .await
-            .map_err(|e| format!("Failed to list retiring workloads: {}", e))?;
+            .map_err(failed("list retiring workloads"))?;
         for old in due {
             match self.delete_workload(old.id).await {
                 Ok(()) => tracing::info!(workload = %old.id, "previous instance retired"),
