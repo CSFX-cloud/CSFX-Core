@@ -12,7 +12,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use site_builder::{images::registry_prefix, validate};
+use shared::{images::registry_prefix, validate};
 use uuid::Uuid;
 
 use crate::{

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::detect::Mode;
+use shared::detect::Mode;
 use crate::error::ServiceError;
 use crate::job::{builder_name, builder_request, stored_reference, BuildJob};
 use crate::prune::{self, Candidate};

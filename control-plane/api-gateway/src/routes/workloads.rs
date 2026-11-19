@@ -9,7 +9,7 @@ use axum::{
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{json, Value};
 use shared::env_secrets::VaultRef;
-use site_builder::images::{
+use shared::images::{
     configured_registry_endpoints, mentions_site_repository, uses_site_registry, SITE_IMAGE_HOST,
 };
 use uuid::Uuid;

@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::error::ServiceError;
 use crate::token::deployment_token;
-use crate::{detect::Mode, images::SITE_IMAGE_HOST, validate};
+use shared::{detect::Mode, images::SITE_IMAGE_HOST, validate};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;

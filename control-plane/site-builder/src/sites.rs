@@ -1,5 +1,5 @@
 use crate::builds::Builds;
-use crate::detect::Mode;
+use shared::detect::Mode;
 use crate::error::ServiceError;
 use crate::job::{runtime_request, RuntimeSpec};
 use crate::routes;

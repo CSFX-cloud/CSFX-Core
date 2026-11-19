@@ -1,4 +1,4 @@
-use crate::detect::RepoSnapshot;
+use shared::detect::RepoSnapshot;
 use crate::error::ServiceError;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
@@ -34,12 +34,12 @@ const DEFAULT_HTTPS_PORT: u16 = 443;
 
 fn validate(request: &SnapshotRequest, policy: RepoPolicy) -> Result<(), ServiceError> {
     let location = match policy {
-        RepoPolicy::PublicOnly => crate::validate::repo_url(&request.repo_url),
-        RepoPolicy::Unrestricted => crate::validate::repo_url_syntax(&request.repo_url),
+        RepoPolicy::PublicOnly => shared::validate::repo_url(&request.repo_url),
+        RepoPolicy::Unrestricted => shared::validate::repo_url_syntax(&request.repo_url),
     };
     location
-        .and_then(|()| crate::validate::branch(&request.branch))
-        .and_then(|()| crate::validate::root_dir(&request.root_dir))
+        .and_then(|()| shared::validate::branch(&request.branch))
+        .and_then(|()| shared::validate::root_dir(&request.root_dir))
         .map_err(|message| ServiceError::Invalid(message.to_string()))
 }
 
@@ -90,7 +90,7 @@ fn git_settings(request: &SnapshotRequest, pinned: &[String]) -> Vec<(String, St
 }
 
 async fn resolve_public(url: &str) -> Result<Vec<String>, ServiceError> {
-    let not_allowed = || ServiceError::Invalid(crate::validate::REPOSITORY_NOT_ALLOWED.to_string());
+    let not_allowed = || ServiceError::Invalid(shared::validate::REPOSITORY_NOT_ALLOWED.to_string());
     let url = reqwest::Url::parse(url).map_err(|_| not_allowed())?;
     let host = url.host_str().ok_or_else(not_allowed)?;
     let port = url.port().unwrap_or(DEFAULT_HTTPS_PORT);
@@ -106,7 +106,7 @@ async fn resolve_public(url: &str) -> Result<Vec<String>, ServiceError> {
     if addresses.is_empty()
         || !addresses
             .iter()
-            .all(|a| crate::validate::is_public_address(*a))
+            .all(|a| shared::validate::is_public_address(*a))
     {
         return Err(not_allowed());
     }

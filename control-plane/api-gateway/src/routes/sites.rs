@@ -17,7 +17,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use shared::env_secrets;
-use site_builder::{detect::Mode, validate};
+use shared::{detect::Mode, validate};
 use uuid::Uuid;
 
 use super::ingress::validate_hostname;

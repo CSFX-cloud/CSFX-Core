@@ -1,13 +1,11 @@
 pub mod artifacts;
 pub mod builds;
 pub mod config;
-pub mod detect;
 pub mod edge;
 pub mod edge_metrics;
 pub mod encoding;
 pub mod error;
 pub mod git;
-pub mod images;
 pub mod job;
 pub mod prune;
 pub mod registry;
@@ -17,4 +15,3 @@ pub mod server;
 pub mod sites;
 pub mod token;
 pub mod usage;
-pub mod validate;
