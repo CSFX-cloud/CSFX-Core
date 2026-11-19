@@ -55,6 +55,7 @@ pub fn app_state(db: DatabaseConnection) -> AppState {
         gateway_url: "http://127.0.0.1:1".to_string(),
         http_client: reqwest::Client::new(),
         etcd_endpoints: vec!["http://127.0.0.1:1".to_string()],
+        etcd: Default::default(),
     }
 }
 

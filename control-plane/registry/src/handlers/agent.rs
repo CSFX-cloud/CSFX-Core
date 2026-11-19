@@ -10,6 +10,8 @@ use csfx_agent_api::{
 use entity::agent_metrics;
 use sea_orm::{ActiveModelTrait, Set};
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::{
@@ -21,6 +23,11 @@ use crate::{
 
 const VIP_ADDRESS_VAR: &str = "CSFX_VIP_ADDRESS";
 const GATEWAY_PORT: u16 = 8000;
+const RELEASE_CACHE_TTL: Duration = Duration::from_secs(60);
+
+type ReleaseCache = Mutex<Option<(Instant, HashMap<String, SignedRelease>)>>;
+
+static RELEASE_CACHE: LazyLock<ReleaseCache> = LazyLock::new(|| Mutex::new(None));
 use shared::etcd::{
     WORKER_MANIFEST_PREFIX, WORKER_MANIFEST_SIGNATURE_PREFIX as WORKER_SIGNATURE_PREFIX,
 };
@@ -274,7 +281,7 @@ pub async fn heartbeat(
             }
 
             let worker_releases = read_worker_releases(
-                &state.etcd_endpoints,
+                &state,
                 agent_id,
                 &role,
                 request.release_version.as_deref().unwrap_or_default(),
@@ -330,12 +337,12 @@ async fn read_ssh_enabled(state: &AppState) -> bool {
 }
 
 async fn read_worker_releases(
-    etcd_endpoints: &[String],
+    state: &AppState,
     agent_id: Uuid,
     role: &str,
     release_version: &str,
 ) -> HashMap<String, SignedRelease> {
-    let mut client = match shared::etcd::connect(etcd_endpoints).await {
+    let mut client = match state.etcd_client().await {
         Ok(client) => client,
         Err(error) => {
             tracing::warn!(error = %error, "etcd unreachable while reading worker releases");
@@ -348,8 +355,32 @@ async fn read_worker_releases(
             return HashMap::new();
         }
     }
-    let manifests = read_prefix(&mut client, WORKER_MANIFEST_PREFIX).await;
-    let mut signatures = read_prefix(&mut client, WORKER_SIGNATURE_PREFIX).await;
+    cached_signed_releases(&mut client).await
+}
+
+async fn cached_signed_releases(
+    client: &mut etcd_client::Client,
+) -> HashMap<String, SignedRelease> {
+    if let Some(releases) = fresh_cached_releases() {
+        return releases;
+    }
+    let releases = read_signed_releases(client).await;
+    if !releases.is_empty() {
+        *RELEASE_CACHE.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((Instant::now(), releases.clone()));
+    }
+    releases
+}
+
+fn fresh_cached_releases() -> Option<HashMap<String, SignedRelease>> {
+    let cache = RELEASE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let (stored_at, releases) = cache.as_ref()?;
+    (stored_at.elapsed() < RELEASE_CACHE_TTL).then(|| releases.clone())
+}
+
+async fn read_signed_releases(client: &mut etcd_client::Client) -> HashMap<String, SignedRelease> {
+    let manifests = read_prefix(client, WORKER_MANIFEST_PREFIX).await;
+    let mut signatures = read_prefix(client, WORKER_SIGNATURE_PREFIX).await;
     manifests
         .into_iter()
         .filter_map(|(arch, manifest)| {
