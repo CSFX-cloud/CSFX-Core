@@ -1,3 +1,4 @@
+use crate::routes::agent_proxy::agent_port;
 use crate::service_client::Service;
 use axum::{
     extract::{Path, Query, State},
@@ -32,7 +33,6 @@ const GATEWAY_MEMORY_BYTES: i64 = 256 * 1024 * 1024;
 const GATEWAY_DISK_BYTES: i64 = 1024 * 1024 * 1024;
 const DEFAULT_HTTP_PORT: u16 = 80;
 const DEFAULT_HTTPS_PORT: u16 = 443;
-const DEFAULT_AGENT_PORT: u16 = 7443;
 const POLL_INTERVAL: &str = "10s";
 const MAX_NAME_LENGTH: usize = 40;
 pub const STATUS_PENDING: &str = "pending";
@@ -169,13 +169,6 @@ fn workload_request(
         "resource_group_id": group_id,
         "restart_policy": "always"
     })
-}
-
-fn agent_port() -> u16 {
-    std::env::var("CSFX_AGENT_PORT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_AGENT_PORT)
 }
 
 fn acme_settings() -> Option<(String, String)> {

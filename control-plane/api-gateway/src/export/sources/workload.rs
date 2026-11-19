@@ -11,15 +11,13 @@ use crate::{
         engine::{Exporter, Reader},
         ExportError,
     },
-    routes::agent_proxy::{fetch_proxy_ticket, resolve_agent_tunnel_ip},
+    routes::agent_proxy::{agent_url, fetch_proxy_ticket, resolve_agent_tunnel_ip},
     AppState,
 };
 
 const EXPORT_SCOPE_PREFIX: &str = "__export__";
 const TICKET_HEADER: &str = "X-Csfx-Proxy-Ticket";
 const VM_RUNTIME_CLASS: &str = "vm";
-const AGENT_PORT_VARIABLE: &str = "CSFX_AGENT_PORT";
-const DEFAULT_AGENT_PORT: u16 = 7443;
 const READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 fn client() -> &'static reqwest::Client {
@@ -59,11 +57,7 @@ async fn agent_request(
     let ticket = fetch_proxy_ticket(state, agent_id, &scope)
         .await
         .map_err(gateway_failure)?;
-    let port = std::env::var(AGENT_PORT_VARIABLE)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(DEFAULT_AGENT_PORT);
-    let url = format!("http://{address}:{port}/export/{workload_id}/boot");
+    let url = agent_url("http", &address, &format!("/export/{workload_id}/boot"));
     let mut request = client().request(method, url).header(TICKET_HEADER, ticket);
     if let Some(body) = body {
         request = request.body(body);

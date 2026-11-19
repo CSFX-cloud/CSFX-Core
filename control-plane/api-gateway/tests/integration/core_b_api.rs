@@ -2,8 +2,7 @@ use api_gateway::auth::crypto::{
     decrypt_password, generate_salt, hash_password, verify_password, RsaKeyPair,
 };
 use api_gateway::auth::jwt::{
-    create_exec_ticket, create_node_metrics_ticket, create_vnc_ticket, verify_exec_ticket,
-    verify_node_metrics_ticket, verify_vnc_ticket,
+    create_ticket, verify_ticket, EXEC_PURPOSE, NODE_METRICS_PURPOSE, VNC_PURPOSE,
 };
 use api_gateway::auth::rate_limit::{JwtOrIpKeyExtractor, RateLimitKey};
 use api_gateway::auth_service::AuthService;
@@ -140,25 +139,30 @@ async fn database_initialisation_is_idempotent() {
 fn tickets_are_bound_to_their_purpose() {
     std::env::set_var("JWT_SECRET", "integration-test-secret-0123456789abcdef");
     let (workload, user) = (Uuid::new_v4(), Uuid::new_v4());
-    let exec = create_exec_ticket(workload, user).unwrap();
-    let vnc = create_vnc_ticket(workload, user).unwrap();
-    let metrics = create_node_metrics_ticket(workload, user).unwrap();
+    let exec = create_ticket(EXEC_PURPOSE, workload, user).unwrap();
+    let vnc = create_ticket(VNC_PURPOSE, workload, user).unwrap();
+    let metrics = create_ticket(NODE_METRICS_PURPOSE, workload, user).unwrap();
 
-    assert_eq!(verify_exec_ticket(&exec, workload).unwrap().user_id, user);
     assert_eq!(
-        verify_vnc_ticket(&vnc, workload).unwrap().workload_id,
-        workload
-    );
-    assert_eq!(
-        verify_node_metrics_ticket(&metrics, workload)
+        verify_ticket(&exec, EXEC_PURPOSE, workload)
             .unwrap()
-            .agent_id,
+            .user_id,
+        user
+    );
+    assert_eq!(
+        verify_ticket(&vnc, VNC_PURPOSE, workload).unwrap().subject,
         workload
     );
-    assert!(verify_exec_ticket(&exec, Uuid::new_v4()).is_err());
-    assert!(verify_exec_ticket(&vnc, workload).is_err());
-    assert!(verify_vnc_ticket(&metrics, workload).is_err());
-    assert!(verify_node_metrics_ticket("garbage", workload).is_err());
+    assert_eq!(
+        verify_ticket(&metrics, NODE_METRICS_PURPOSE, workload)
+            .unwrap()
+            .subject,
+        workload
+    );
+    assert!(verify_ticket(&exec, EXEC_PURPOSE, Uuid::new_v4()).is_err());
+    assert!(verify_ticket(&vnc, EXEC_PURPOSE, workload).is_err());
+    assert!(verify_ticket(&metrics, VNC_PURPOSE, workload).is_err());
+    assert!(verify_ticket("garbage", NODE_METRICS_PURPOSE, workload).is_err());
 }
 
 #[tokio::test]
