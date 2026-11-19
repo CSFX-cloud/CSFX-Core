@@ -327,7 +327,7 @@ impl SchedulerService {
     async fn place_batch(
         &self,
         workloads: &[workloads::Model],
-        agents: &mut Vec<AgentResources>,
+        agents: &mut [AgentResources],
         expected_agent: Option<Uuid>,
     ) -> Result<Vec<Option<Uuid>>, String> {
         let mut placements = Vec::with_capacity(workloads.len());
@@ -353,7 +353,7 @@ impl SchedulerService {
     async fn place_next(
         &self,
         workload: &workloads::Model,
-        agents: &mut Vec<AgentResources>,
+        agents: &mut [AgentResources],
         expected_agent: Option<Uuid>,
     ) -> Result<Option<Uuid>, String> {
         let preferred = self.hosting_agents(workload.resource_group_id).await?;
