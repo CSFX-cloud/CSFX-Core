@@ -10,10 +10,12 @@ use std::time::Duration;
 
 const STREAM_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
-const FORWARDED_REQUEST_HEADERS: [header::HeaderName; 3] = [
+const FORWARDED_REQUEST_HEADERS: [header::HeaderName; 5] = [
     header::ACCEPT,
     header::ACCEPT_LANGUAGE,
     header::CONTENT_TYPE,
+    header::HeaderName::from_static("x-api-key"),
+    header::HeaderName::from_static("x-client-cert"),
 ];
 
 #[derive(Clone, Copy, Debug)]
