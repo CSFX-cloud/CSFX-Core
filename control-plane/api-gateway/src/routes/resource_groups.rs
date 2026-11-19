@@ -17,7 +17,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use shared::{env_secrets, validate::is_dns_label};
+use shared::{env_secrets, validate::is_dns_label, workload_status::LIVE_STATUSES};
 use uuid::Uuid;
 
 use super::resource_group_network::{
@@ -427,7 +427,7 @@ pub async fn delete_resource_group(
 
     let active_workloads = Workloads::find()
         .filter(workloads::Column::ResourceGroupId.eq(id))
-        .filter(workloads::Column::Status.is_in(["pending", "scheduled", "running"]))
+        .filter(workloads::Column::Status.is_in(LIVE_STATUSES))
         .count(&state.db_conn)
         .await
         .map_err(db_error("failed to count workloads"))?;

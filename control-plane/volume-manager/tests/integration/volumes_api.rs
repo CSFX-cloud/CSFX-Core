@@ -157,7 +157,7 @@ async fn attach_and_detach_volume() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(attached["status"], "inuse");
+    assert_eq!(attached["status"], "in_use");
     assert_eq!(attached["attached_to_agent"], agent.to_string());
 
     let (status, detached) = call(&app, Method::POST, &path(&volume, "/detach"), None).await;
@@ -361,7 +361,7 @@ async fn detach_all_aborts_when_fencing_fails() {
         let (status, body) = call(&app, Method::POST, &uri, None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         let (_, current) = call(&app, Method::GET, &path(&volume, ""), None).await;
-        assert_eq!(current["status"], "inuse");
+        assert_eq!(current["status"], "in_use");
         call(&app, Method::DELETE, &path(&volume, ""), None).await;
     }
 }

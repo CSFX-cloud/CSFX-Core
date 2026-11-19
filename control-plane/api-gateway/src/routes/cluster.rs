@@ -17,12 +17,12 @@ use super::{
     masters::{self, ROLE_MASTER},
 };
 use crate::{auth::rbac::CanManageSystem, setup::ca_fingerprint, AppState};
+use shared::workload_status::LIVE_STATUSES;
 
 const DEFAULT_TTL_HOURS: i64 = 1;
 const MAX_TTL_HOURS: i64 = 24 * 7;
 const DEFAULT_GATEWAY_PORT: &str = "8000";
 const ROLE_WORKER: &str = "worker";
-const ACTIVE_WORKLOAD_STATUSES: [&str; 3] = ["pending", "scheduled", "running"];
 
 pub(super) type ApiError = (StatusCode, Json<Value>);
 
@@ -183,7 +183,7 @@ pub async fn remove_node(
     }
     let active_workloads = workloads::Entity::find()
         .filter(workloads::Column::AssignedAgentId.eq(agent_id))
-        .filter(workloads::Column::Status.is_in(ACTIVE_WORKLOAD_STATUSES))
+        .filter(workloads::Column::Status.is_in(LIVE_STATUSES))
         .count(&state.db_conn)
         .await
         .map_err(internal)?;

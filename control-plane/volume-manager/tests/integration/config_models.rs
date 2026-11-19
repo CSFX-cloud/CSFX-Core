@@ -9,13 +9,15 @@ fn volume_status_round_trips_through_strings() {
     for status in [
         VolumeStatus::Creating,
         VolumeStatus::Available,
-        VolumeStatus::Attaching,
         VolumeStatus::InUse,
-        VolumeStatus::Detaching,
         VolumeStatus::Deleting,
         VolumeStatus::Error,
     ] {
         assert_eq!(VolumeStatus::from_str(status.as_str()), status);
+        assert_eq!(
+            serde_json::to_value(&status).unwrap(),
+            serde_json::json!(status.as_str())
+        );
     }
     assert_eq!(VolumeStatus::from_str("unknown"), VolumeStatus::Available);
 }

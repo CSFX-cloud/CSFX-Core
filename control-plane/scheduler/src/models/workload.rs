@@ -363,6 +363,10 @@ mod tests {
             RestartPolicy::from_name("on-failure"),
             RestartPolicy::OnFailure
         );
+        assert_eq!(
+            serde_json::from_str::<RestartPolicy>("\"on-failure\"").unwrap(),
+            RestartPolicy::OnFailure
+        );
         assert_eq!(DesiredState::Stopped.name(), "stopped");
         assert_eq!(RuntimeClass::Vm.name(), "vm");
         assert_eq!(TopologySpread::Hard.name(), "hard");
