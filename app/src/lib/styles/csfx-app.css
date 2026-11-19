@@ -340,7 +340,6 @@
 .ga-card:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
 .ga-card h3{margin:0;font:500 14px/20px var(--font-sans);color:var(--ink)}
 .ga-card p{margin:4px 0 0;font-size:13px;line-height:18px;color:var(--ink-soft)}
-.ga-card small{display:block;margin-top:8px;font:400 10px/14px var(--font-mono);letter-spacing:.06em;color:var(--ink-muted)}
 .ga-head{position:relative;display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:var(--space-5);padding:var(--space-5)}
 .bk-empty{min-height:360px}
 .tp-main{flex:1;display:grid;grid-template-columns:240px minmax(0,1fr);min-height:0}
