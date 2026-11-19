@@ -1,11 +1,3 @@
-use std::collections::HashSet;
-
-use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter};
-use serde_json::Value;
-use uuid::Uuid;
-
-use entity::entities::workloads;
-
 use crate::models::workload::PortMapping;
 
 const DEFAULT_NODE_PORT_RANGE_START: u16 = 30000;
@@ -23,37 +15,6 @@ fn node_port_range() -> (u16, u16) {
     (start, end)
 }
 
-async fn used_node_ports_on_agent(
-    db: &DatabaseConnection,
-    agent_id: Uuid,
-    exclude_workload_id: Uuid,
-    replaced_workload_id: Option<Uuid>,
-) -> Result<HashSet<u16>, DbErr> {
-    let rows = workloads::Entity::find()
-        .filter(workloads::Column::AssignedAgentId.eq(agent_id))
-        .filter(workloads::Column::DesiredState.ne("stopped"))
-        .filter(workloads::Column::Id.ne(exclude_workload_id))
-        .filter(workloads::Column::Id.ne(replaced_workload_id.unwrap_or(exclude_workload_id)))
-        .all(db)
-        .await?;
-
-    let mut used = HashSet::new();
-    for row in rows {
-        let Some(ports_json) = row.ports else {
-            continue;
-        };
-        let Ok(mappings) = serde_json::from_value::<Vec<PortMapping>>(ports_json) else {
-            continue;
-        };
-        for mapping in mappings {
-            if let Some(node_port) = mapping.node_port {
-                used.insert(node_port);
-            }
-        }
-    }
-    Ok(used)
-}
-
 pub fn ensure_requested_in_range(ports: &[PortMapping]) -> Result<(), String> {
     let (start, end) = node_port_range();
     match ports
@@ -66,34 +27,6 @@ pub fn ensure_requested_in_range(ports: &[PortMapping]) -> Result<(), String> {
         )),
         None => Ok(()),
     }
-}
-
-fn ensure_requested_free(ports: &[PortMapping], used: &HashSet<u16>) -> Result<(), String> {
-    match ports
-        .iter()
-        .filter_map(|mapping| mapping.node_port)
-        .find(|port| used.contains(port))
-    {
-        Some(port) => Err(format!("node port {port} is already in use on the agent")),
-        None => Ok(()),
-    }
-}
-
-pub async fn validate_node_ports(
-    db: &DatabaseConnection,
-    agent_id: Uuid,
-    workload_id: Uuid,
-    replaced_workload_id: Option<Uuid>,
-    ports: &[PortMapping],
-) -> Result<(), String> {
-    let used = used_node_ports_on_agent(db, agent_id, workload_id, replaced_workload_id)
-        .await
-        .map_err(|e| format!("failed to query used node ports: {}", e))?;
-    ensure_requested_free(ports, &used)
-}
-
-pub fn ports_to_json(ports: &[PortMapping]) -> Result<Value, String> {
-    serde_json::to_value(ports).map_err(|e| format!("failed to serialize ports: {}", e))
 }
 
 #[cfg(test)]
@@ -110,13 +43,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_port_already_used_is_rejected() {
-        let used = HashSet::from([80]);
-        let error = ensure_requested_free(&[mapping(Some(80))], &used).unwrap_err();
-        assert!(error.contains("80"));
-    }
-
-    #[test]
     fn explicit_port_outside_range_is_rejected() {
         for port in [22, 7443, 29999, 32768] {
             let error = ensure_requested_in_range(&[mapping(Some(port))]).unwrap_err();
@@ -127,11 +53,5 @@ mod tests {
     #[test]
     fn explicit_port_inside_range_is_accepted() {
         assert!(ensure_requested_in_range(&[mapping(Some(30000)), mapping(None)]).is_ok());
-    }
-
-    #[test]
-    fn free_and_unset_ports_are_accepted() {
-        let used = HashSet::from([80]);
-        assert!(ensure_requested_free(&[mapping(Some(443)), mapping(None)], &used).is_ok());
     }
 }

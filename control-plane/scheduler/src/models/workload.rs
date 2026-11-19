@@ -319,6 +319,14 @@ pub struct PortMapping {
     pub node_port: Option<u16>,
 }
 
+pub fn node_ports_of(ports: &serde_json::Value) -> Vec<u16> {
+    serde_json::from_value::<Vec<PortMapping>>(ports.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|mapping| mapping.node_port)
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateWorkloadResponse {
     pub workload_id: Uuid,
@@ -380,6 +388,7 @@ pub struct AgentResources {
     pub kvm_capable: bool,
     pub zone: String,
     pub spread_counts: HashMap<String, u32>,
+    pub used_node_ports: HashMap<u16, Uuid>,
 }
 
 #[cfg(test)]

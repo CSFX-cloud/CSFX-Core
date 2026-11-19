@@ -9,7 +9,7 @@ use crate::common::{
 async fn assigned_workload(app: &axum::Router) -> (String, Uuid) {
     let id = create_pending_workload(app).await;
     let agent = insert_agent(&migrated_database().await).await;
-    scheduler::db::workloads::assign(&migrated_database().await, id.parse().unwrap(), agent)
+    scheduler::db::workloads::assign(&migrated_database().await, id.parse().unwrap(), agent, None)
         .await
         .unwrap();
     (id, agent)

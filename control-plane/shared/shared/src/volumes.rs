@@ -16,18 +16,30 @@ pub async fn claim(
     agent_id: Uuid,
     workload_id: Option<Uuid>,
 ) -> Result<bool, DbErr> {
+    let transaction = db.begin().await?;
+    if !claim_all(&transaction, volume_ids, agent_id, workload_id).await? {
+        transaction.rollback().await?;
+        return Ok(false);
+    }
+    transaction.commit().await?;
+    Ok(true)
+}
+
+pub async fn claim_all(
+    db: &impl ConnectionTrait,
+    volume_ids: &[Uuid],
+    agent_id: Uuid,
+    workload_id: Option<Uuid>,
+) -> Result<bool, DbErr> {
     let mut ordered = volume_ids.to_vec();
     ordered.sort_unstable();
     ordered.dedup();
 
-    let transaction = db.begin().await?;
     for volume_id in ordered {
-        if !claim_one(&transaction, volume_id, agent_id, workload_id).await? {
-            transaction.rollback().await?;
+        if !claim_one(db, volume_id, agent_id, workload_id).await? {
             return Ok(false);
         }
     }
-    transaction.commit().await?;
     Ok(true)
 }
 

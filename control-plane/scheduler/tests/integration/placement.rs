@@ -383,3 +383,110 @@ async fn volumes_held_by_another_workload_leave_the_workload_pending() {
         Some(holder.id)
     );
 }
+
+fn oversized_request(name: &str) -> CreateWorkloadRequest {
+    CreateWorkloadRequest {
+        memory_bytes: i64::MAX / 4,
+        ..small_request(name)
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires postgres"]
+async fn concurrent_assignment_has_exactly_one_winner() {
+    let fixture = placing().await;
+    let pending = workloads::create(&fixture.db, &small_request(&unique_name("race")), None)
+        .await
+        .unwrap();
+    let mut agents = Vec::new();
+    for _ in 0..8 {
+        agents.push(insert_agent(&fixture.db).await);
+    }
+
+    let attempts: Vec<_> = agents
+        .into_iter()
+        .map(|agent| {
+            let db = fixture.db.clone();
+            tokio::spawn(async move { workloads::assign(&db, pending.id, agent, None).await })
+        })
+        .collect();
+    let mut winners = 0;
+    for attempt in attempts {
+        if attempt.await.unwrap().unwrap() {
+            winners += 1;
+        }
+    }
+    assert_eq!(winners, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires postgres"]
+async fn failover_without_capacity_releases_workloads_to_pending() {
+    let fixture = placing().await;
+    let dead_agent = insert_agent(&fixture.db).await;
+    let stranded = workloads::create(
+        &fixture.db,
+        &oversized_request(&unique_name("stranded")),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        workloads::assign(&fixture.db, stranded.id, dead_agent, None)
+            .await
+            .unwrap()
+    );
+
+    let responses = fixture
+        .service
+        .reschedule_from_agent(dead_agent, &[stranded.id])
+        .await
+        .unwrap();
+
+    assert!(responses[0].assigned_agent_id.is_none());
+    let stored = workloads::get_by_id(&fixture.db, stranded.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.assigned_agent_id, None);
+    assert_eq!(stored.status, WorkloadStatus::Pending.as_str());
+    assert!(workloads::get_pending(&fixture.db)
+        .await
+        .unwrap()
+        .iter()
+        .any(|workload| workload.id == stranded.id));
+}
+
+#[tokio::test]
+#[ignore = "requires postgres"]
+async fn replacement_placement_avoids_node_port_conflicts() {
+    let fixture = placing().await;
+    let host = insert_agent(&fixture.db).await;
+    let node_port =
+        30000 + u16::from_le_bytes(Uuid::new_v4().as_bytes()[..2].try_into().unwrap()) % 2768;
+    let holder = workloads::create(
+        &fixture.db,
+        &request_with_ports(&unique_name("holder"), node_port),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(workloads::assign(&fixture.db, holder.id, host, None)
+        .await
+        .unwrap());
+    let contender = workloads::create(
+        &fixture.db,
+        &request_with_ports(&unique_name("contender"), node_port),
+        None,
+    )
+    .await
+    .unwrap();
+
+    fixture.service.retry_pending().await.unwrap();
+
+    let stored = workloads::get_by_id(&fixture.db, contender.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(stored.assigned_agent_id, Some(host));
+}

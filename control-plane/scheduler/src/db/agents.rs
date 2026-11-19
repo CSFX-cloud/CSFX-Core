@@ -5,7 +5,7 @@ use sea_orm::{
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::models::workload::AgentResources;
+use crate::models::workload::{node_ports_of, AgentResources};
 use shared::workload_status::ACTIVE_STATUSES;
 
 const MILLICORES_PER_CORE: i32 = 1000;
@@ -25,6 +25,7 @@ pub async fn get_schedulable_agents(
         agent.free_memory_bytes -= reservation.memory_bytes;
         agent.free_disk_bytes -= reservation.disk_bytes;
         agent.spread_counts = reservation.spread_counts;
+        agent.used_node_ports = reservation.node_ports;
     }
 
     Ok(agents)
@@ -36,6 +37,7 @@ struct Reservation {
     memory_bytes: i64,
     disk_bytes: i64,
     spread_counts: HashMap<String, u32>,
+    node_ports: HashMap<u16, Uuid>,
 }
 
 async fn get_reserved_by_agent(
@@ -56,6 +58,17 @@ async fn get_reserved_by_agent(
         entry.cpu_millicores += workload.cpu_millicores;
         entry.memory_bytes += workload.memory_bytes;
         entry.disk_bytes += workload.disk_bytes;
+        if workload.desired_state != "stopped" {
+            entry.node_ports.extend(
+                workload
+                    .ports
+                    .as_ref()
+                    .map(node_ports_of)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|port| (port, workload.id)),
+            );
+        }
         if let Some(key) = workload.spread_key {
             *entry.spread_counts.entry(key).or_default() += 1;
         }
@@ -127,6 +140,7 @@ async fn get_online_agents_with_capacity(
             kvm_capable: agent.kvm_capable,
             zone: agent.zone,
             spread_counts: HashMap::new(),
+            used_node_ports: HashMap::new(),
         });
     }
 
