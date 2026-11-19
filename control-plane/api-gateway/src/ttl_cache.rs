@@ -39,6 +39,13 @@ impl<V: Clone> TtlCache<V> {
         true
     }
 
+    pub fn clear(&self) {
+        self.entries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+    }
+
     pub fn insert(&self, key: &str, value: V) {
         let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
         let ttl = self.ttl;

@@ -1,15 +1,7 @@
 <script lang="ts">
     import { ChevronLeft, Search } from "@lucide/svelte";
     import { goto } from "$app/navigation";
-    import { createRegistry, type Registry } from "$lib/api/registries";
-    import { createVault, type Vault } from "$lib/api/vaults";
     import EmptyState from "$lib/components/dashboard/empty-state.svelte";
-    import CreateBucketDialog from "$lib/components/resource-group/create-bucket-dialog.svelte";
-    import CreateGatewayDialog from "$lib/components/resource-group/create-gateway-dialog.svelte";
-    import CreateNamedDialog from "$lib/components/resource-group/create-named-dialog.svelte";
-    import CreateVolumeDialog from "$lib/components/resource-group/create-volume-dialog.svelte";
-    import DeployContainerDialog from "$lib/components/resource-group/deploy-container-dialog.svelte";
-    import DeployVmDialog from "$lib/components/resource-group/deploy-vm-dialog.svelte";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
     import { breadcrumb } from "$lib/components/shell/breadcrumb.svelte";
     import ServiceIcon from "$lib/components/shell/service-icon.svelte";
@@ -27,16 +19,9 @@
 
     let searchText = $state("");
     let filter = $state<Filter>("all");
-    let deployDialog = $state<DeployContainerDialog | null>(null);
-    let vmDialog = $state<DeployVmDialog | null>(null);
-    let volumeDialog = $state<CreateVolumeDialog | null>(null);
-    let bucketDialog = $state<CreateBucketDialog | null>(null);
-    let gatewayDialog = $state<CreateGatewayDialog | null>(null);
-    let vaultDialog = $state<CreateNamedDialog<Vault> | null>(null);
-    let registryDialog = $state<CreateNamedDialog<Registry> | null>(null);
 
     const matching = $derived(
-        RESOURCE_TYPES.filter((type) => `${type.label} ${type.description} ${type.equivalent}`.toLowerCase().includes(searchText.trim().toLowerCase())),
+        RESOURCE_TYPES.filter((type) => `${type.label} ${type.description}`.toLowerCase().includes(searchText.trim().toLowerCase())),
     );
     const sections = $derived(
         RESOURCE_CATEGORIES.map((category) => ({ ...category, types: matching.filter((type) => type.category === category.id) })).filter(
@@ -56,69 +41,22 @@
         return () => breadcrumb.set(null);
     });
 
-    async function finish() {
-        await rg.load();
-        goto(base);
-    }
-
-    async function openGateway(gatewayId: string) {
-        await rg.load();
-        goto(`${base}/gateway/${gatewayId}`);
-    }
-
-    async function openVault(vault: Vault) {
-        await rg.load();
-        goto(`${base}/vault/${vault.id}`);
-    }
-
-    async function openRegistry(registry: Registry) {
-        await rg.load();
-        goto(`${base}/registry/${registry.id}`);
-    }
+    const ROUTES: Record<ResourceTypeKey, string> = {
+        "docker-container": "container",
+        "docker-compose": "compose",
+        vm: "vm",
+        "api-gateway": "gateway",
+        volume: "volume",
+        bucket: "bucket",
+        "key-vault": "vault",
+        "web-app": "web-app",
+        "container-registry": "registry",
+    };
 
     function pick(key: ResourceTypeKey) {
-        const openers: Record<ResourceTypeKey, () => void> = {
-            "docker-container": () => deployDialog?.open(),
-            "docker-compose": () => goto(`${base}/add/compose`),
-            vm: () => vmDialog?.open(),
-            "api-gateway": () => gatewayDialog?.open(),
-            volume: () => volumeDialog?.open(),
-            bucket: () => bucketDialog?.open(),
-            "key-vault": () => vaultDialog?.open(),
-            "web-app": () => goto(`${base}/add/web-app`),
-            "container-registry": () => registryDialog?.open(),
-        };
-        openers[key]();
+        goto(`${base}/add/${ROUTES[key]}`);
     }
 </script>
-
-<DeployContainerDialog bind:this={deployDialog} rgId={rg.rgId} volumes={rg.volumes} onDeployed={finish} />
-<DeployVmDialog bind:this={vmDialog} rgId={rg.rgId} onDeployed={finish} />
-<CreateVolumeDialog bind:this={volumeDialog} rgId={rg.rgId} onCreated={finish} />
-<CreateBucketDialog bind:this={bucketDialog} rgId={rg.rgId} onCreated={finish} />
-<CreateGatewayDialog bind:this={gatewayDialog} rgId={rg.rgId} onCreated={openGateway} />
-<CreateNamedDialog
-    bind:this={vaultDialog}
-    title="Create key vault"
-    subtitle="Secrets stay encrypted. Resources read them at start."
-    hint="Lowercase letters, digits and hyphens."
-    placeholder="kv-prod"
-    inputId="kv-name"
-    failure="Failed to create vault"
-    create={(name) => createVault(rg.rgId, name)}
-    onCreated={openVault}
-/>
-<CreateNamedDialog
-    bind:this={registryDialog}
-    title="Create container registry"
-    subtitle="Push images here and deploy them in this resource group."
-    hint="Lowercase letters, digits and hyphens. Part of every image path."
-    placeholder="main"
-    inputId="cr-name"
-    failure="Failed to create registry"
-    create={(name) => createRegistry(rg.rgId, name)}
-    onCreated={openRegistry}
-/>
 
 <div class="db-content">
     <section class="cx-stage" aria-label="Add resource">
@@ -163,7 +101,6 @@
                                 <span>
                                     <h3>{type.label}</h3>
                                     <p>{type.description}</p>
-                                    <small>{type.equivalent}</small>
                                 </span>
                             </button>
                         {/each}

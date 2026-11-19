@@ -134,7 +134,7 @@
                     <tr>
                         {#each COLUMNS as entry (entry.column)}{@render sortHeader(entry.column, entry.label)}{/each}
                         <th>IP address</th>
-                        <th>OS</th>
+                        <th>Architecture</th>
                         {#each USAGE_COLUMNS as entry (entry.column)}{@render sortHeader(entry.column, entry.label)}{/each}
                         <th>Last heartbeat</th>
                         <th><span class="db-sr-only">Open</span></th>
@@ -162,7 +162,7 @@
                                 {/if}
                             </td>
                             <td class="cx-num">{node.ip_address ?? "—"}</td>
-                            <td class="cx-soft">{node.os_type} {node.os_version} &middot; {node.architecture}</td>
+                            <td class="cx-soft">{node.architecture}</td>
                             <td>{@render usage(entry?.cpu_usage_percent ?? null)}</td>
                             <td>{@render usage(memoryPercent(entry))}</td>
                             <td>{@render usage(diskPercent(entry))}</td>

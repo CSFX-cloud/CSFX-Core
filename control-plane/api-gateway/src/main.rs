@@ -1,6 +1,6 @@
 use api_gateway::{
-    db, gateway_reconciler, idempotency, ingress_sync, init, openbao, prune, recovery, routes,
-    service_client, site_client, telemetry, tls, vault_service, AppState,
+    cache_sync, db, gateway_reconciler, idempotency, ingress_sync, init, openbao, prune, recovery,
+    routes, service_client, site_client, telemetry, tls, vault_service, AppState,
 };
 use std::net::SocketAddr;
 #[cfg(debug_assertions)]
@@ -85,6 +85,8 @@ async fn main() {
         openbao: connect_openbao(),
         site_builder: site_client::SiteBuilder::from_environment(),
     };
+
+    cache_sync::spawn(state.db_conn.clone());
 
     tracing::info!("starting log prune job");
     prune::spawn_log_prune_job(state.clone());
