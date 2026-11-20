@@ -1,7 +1,7 @@
 <script lang="ts">
     import { untrack } from "svelte";
     import { Download, File, Folder, FolderOpen, Trash2, Upload } from "@lucide/svelte";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { auth } from "$lib/auth/store.svelte";
     import {
         deleteBucketObject,
@@ -32,9 +32,9 @@
 
     const SKELETON_ROWS = 3;
 
-    const bucketId: string = $page.params.id ?? "";
+    const bucketId: string = page.params.id ?? "";
 
-    const requestedTab = $page.url.searchParams.get("tab");
+    const requestedTab = page.url.searchParams.get("tab");
 
     let tab = $state<Tab>(TABS.find((entry) => entry.id === requestedTab)?.id ?? "objects");
     let bucket = $state<Bucket | null>(null);

@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { auth } from "$lib/auth/store.svelte";
     import { provideResourceGroupState, ResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
 
@@ -8,7 +8,7 @@
 
     let { children } = $props();
 
-    const rg = new ResourceGroupState($page.params.id ?? "");
+    const rg = new ResourceGroupState(page.params.id ?? "");
     provideResourceGroupState(rg);
 
     let loadStarted = false;
