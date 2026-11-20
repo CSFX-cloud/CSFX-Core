@@ -159,6 +159,11 @@ export interface Workload {
     updated_at: string | null;
 }
 
+export interface VmConfig {
+    architecture?: string;
+    nic_model?: string;
+}
+
 export interface CreateWorkloadRequest {
     name: string;
     image: string;
@@ -176,6 +181,7 @@ export interface CreateWorkloadRequest {
     restart_policy?: 'always' | 'on-failure' | 'never';
     max_restarts?: number | null;
     runtime_class?: 'firecracker' | 'vm';
+    vm_config?: VmConfig;
 }
 
 export interface CreateWorkloadResult {
