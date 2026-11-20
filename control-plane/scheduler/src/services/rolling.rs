@@ -601,6 +601,10 @@ fn replacement_request(
         replicas: None,
         spread_key: old.spread_key.clone(),
         topology_spread: TopologySpread::from_name(&old.topology_spread),
+        vm_config: old
+            .vm_config
+            .as_ref()
+            .and_then(|config| serde_json::from_value(config.clone()).ok()),
         replaces: None,
     })
 }
@@ -711,6 +715,7 @@ mod tests {
             observed_generation: 0,
             observed_status: None,
             topology_spread: "none".to_string(),
+            vm_config: None,
         }
     }
 

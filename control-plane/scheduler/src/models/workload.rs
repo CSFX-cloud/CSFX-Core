@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared::qos::QosClass;
+use shared::vm::VmConfig;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -163,11 +164,23 @@ pub struct CreateWorkloadRequest {
     pub spread_key: Option<String>,
     #[serde(default)]
     pub topology_spread: TopologySpread,
+    #[serde(default)]
+    pub vm_config: Option<VmConfig>,
     #[serde(skip)]
     pub replaces: Option<Uuid>,
 }
 
 impl CreateWorkloadRequest {
+    fn validate_vm_config(&self) -> Result<(), String> {
+        let Some(config) = &self.vm_config else {
+            return Ok(());
+        };
+        if self.runtime_class != RuntimeClass::Vm {
+            return Err("vm config requires the vm runtime class".to_string());
+        }
+        config.validate()
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.cpu_millicores < 0 || self.memory_bytes < 0 || self.disk_bytes < 0 {
             return Err("resource requests must not be negative".to_string());
@@ -190,6 +203,7 @@ impl CreateWorkloadRequest {
         {
             return Err(format!("replicas must be between 1 and {}", MAX_REPLICAS));
         }
+        self.validate_vm_config()?;
         self.validate_bucket_permissions()?;
         if self
             .service_name
@@ -303,6 +317,7 @@ pub struct AgentResources {
     pub zone: String,
     pub spread_counts: HashMap<String, u32>,
     pub used_node_ports: HashMap<u16, Uuid>,
+    pub architecture: String,
 }
 
 #[cfg(test)]

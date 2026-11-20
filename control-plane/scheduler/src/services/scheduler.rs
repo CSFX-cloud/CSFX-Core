@@ -700,6 +700,10 @@ fn demand_for<'a>(
             .as_ref()
             .map(node_ports_of)
             .unwrap_or_default(),
+        architecture: workload
+            .vm_config
+            .as_ref()
+            .and_then(|config| config["architecture"].as_str()),
     }
 }
 
@@ -754,6 +758,7 @@ fn stack_service_request(
         replicas: None,
         spread_key: Some(stack_id.to_string()),
         topology_spread: TopologySpread::None,
+        vm_config: None,
         replaces: None,
     }
 }
@@ -806,12 +811,13 @@ fn describe_agents(agents: &[AgentResources]) -> String {
         .iter()
         .map(|agent| {
             format!(
-                "agent={}(free_cpu={} free_memory={} free_disk={} kvm={})",
+                "agent={}(free_cpu={} free_memory={} free_disk={} kvm={} arch={})",
                 agent.agent_id,
                 agent.free_cpu_millicores,
                 agent.free_memory_bytes,
                 agent.free_disk_bytes,
-                agent.kvm_capable
+                agent.kvm_capable,
+                agent.architecture
             )
         })
         .collect();
