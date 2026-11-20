@@ -58,7 +58,7 @@ impl SchedulerService {
         }
 
         let spread_key = req.spread_key.clone().unwrap_or_else(|| req.name.clone());
-        let mut responses = Vec::with_capacity(count as usize);
+        let mut responses = Vec::new();
         for index in 1..=count {
             let replica = CreateWorkloadRequest {
                 name: format!("{}-{}", req.name, index),
