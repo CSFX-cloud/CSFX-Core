@@ -7,6 +7,21 @@ use crate::nix;
 
 const AGENT_UNIT: &str = "csfx-agent.service";
 
+const CA_CERT_PATH_ENV: &str = "CSFX_CA_CERT_PATH";
+
+fn gateway_client() -> reqwest::Client {
+    let builder = reqwest::Client::builder().timeout(Duration::from_secs(5));
+    let builder = match std::env::var(CA_CERT_PATH_ENV) {
+        Ok(path) => {
+            let pem = std::fs::read(path).expect("failed to read cluster ca");
+            let ca = reqwest::Certificate::from_pem(&pem).expect("failed to parse cluster ca");
+            builder.tls_certs_only([ca])
+        }
+        Err(_) => builder,
+    };
+    builder.build().expect("failed to build http client")
+}
+
 pub async fn wait_for_gateway(
     gateway_url: &str,
     timeout_secs: u64,
@@ -14,11 +29,7 @@ pub async fn wait_for_gateway(
 ) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
     let probe_url = format!("{}/api/public-key", gateway_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .danger_accept_invalid_certs(true)
-        .build()
-        .expect("failed to build http client");
+    let client = gateway_client();
 
     loop {
         match client.get(&probe_url).send().await {
