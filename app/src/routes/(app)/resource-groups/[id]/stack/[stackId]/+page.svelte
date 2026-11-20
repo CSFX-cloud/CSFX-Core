@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onDestroy, onMount } from "svelte";
     import { Layers, Package, RefreshCw, Square, Trash2 } from "@lucide/svelte";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
     import { deleteStack, getStack, restartStack, stopStack, type Stack } from "$lib/api/resource-groups";
@@ -29,7 +29,7 @@
     ];
 
     const rg = useResourceGroupState();
-    const stackId = $page.params.stackId ?? "";
+    const stackId = page.params.stackId ?? "";
     const base = `/resource-groups/${rg.rgId}`;
 
     let stack = $state<Stack | null>(null);

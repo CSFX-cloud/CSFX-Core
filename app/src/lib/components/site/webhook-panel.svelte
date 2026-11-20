@@ -1,13 +1,13 @@
 <script lang="ts">
     import { Check, Copy } from "@lucide/svelte";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import type { SiteDetail } from "$lib/api/sites";
     import { createClipboard } from "$lib/utils/clipboard.svelte";
 
     let { site }: { site: SiteDetail } = $props();
 
     const clipboard = createClipboard();
-    const url = $derived(site.webhook_path ? `${$page.url.origin}/api${site.webhook_path}` : "");
+    const url = $derived(site.webhook_path ? `${page.url.origin}/api${site.webhook_path}` : "");
 </script>
 
 {#if url}

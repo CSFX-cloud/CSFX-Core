@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
     import { Layers, Package, Play, RefreshCw, Server, Square, Trash2 } from "@lucide/svelte";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
     import { getNode } from "$lib/api/nodes";
@@ -24,7 +24,7 @@
 
     const POLL_INTERVAL_MS = 5000;
     const rg = useResourceGroupState();
-    const workloadId = $derived($page.params.workloadId);
+    const workloadId = $derived(page.params.workloadId);
 
     let tab = $state<Tab>("logs");
     let actionError = $state<string | null>(null);

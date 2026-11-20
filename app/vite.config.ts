@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import tailwindcss from '@tailwindcss/vite';
+import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import path from 'node:path';
@@ -10,7 +11,16 @@ const dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(file
 
 // More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
 export default defineConfig({
-  plugins: [tailwindcss(), sveltekit()],
+  plugins: [
+    tailwindcss(),
+    sveltekit({
+      adapter: adapter({ out: process.env.UI_OUT_DIR ?? 'build' }),
+      alias: { $lib: 'src/lib' },
+      compilerOptions: {
+        runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
+      }
+    })
+  ],
   optimizeDeps: {
     include: ['@xterm/xterm', '@xterm/addon-fit']
   },

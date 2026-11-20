@@ -1,6 +1,6 @@
 <script lang="ts">
     import { untrack } from "svelte";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { goto } from "$app/navigation";
     import Icon from "@iconify/svelte";
     import Trash2Icon from "@lucide/svelte/icons/trash-2";
@@ -17,7 +17,7 @@
     type Tab = "routes" | "logs" | "dns";
 
     const rg = useResourceGroupState();
-    const gatewayId = $page.params.gatewayId ?? "";
+    const gatewayId = page.params.gatewayId ?? "";
     const base = `/resource-groups/${rg.rgId}`;
     const tabs: [Tab, string][] = [
         ["routes", "Routes"],

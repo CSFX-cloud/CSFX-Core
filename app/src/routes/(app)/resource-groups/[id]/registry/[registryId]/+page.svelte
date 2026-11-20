@@ -2,7 +2,7 @@
     import { untrack } from "svelte";
     import { Trash2 } from "@lucide/svelte";
     import { goto } from "$app/navigation";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { auth } from "$lib/auth/store.svelte";
     import { deleteRegistry, getRegistry, type RegistryDetail, type Repository } from "$lib/api/registries";
     import AccessTab from "$lib/components/registry/access-tab.svelte";
@@ -21,9 +21,9 @@
     const REGISTRY_PORT = 5060;
 
     const rg = useResourceGroupState();
-    const registryId = $page.params.registryId ?? "";
+    const registryId = page.params.registryId ?? "";
     const base = `/resource-groups/${rg.rgId}`;
-    const host = `${$page.url.hostname}:${REGISTRY_PORT}`;
+    const host = `${page.url.hostname}:${REGISTRY_PORT}`;
 
     let registry = $state<RegistryDetail | null>(null);
     let repositories = $state<Repository[]>([]);

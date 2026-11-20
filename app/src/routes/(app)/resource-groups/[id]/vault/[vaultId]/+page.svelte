@@ -2,7 +2,7 @@
     import { untrack } from "svelte";
     import { Lock, LockOpen, ShieldCheck, Trash2 } from "@lucide/svelte";
     import { goto } from "$app/navigation";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { auth } from "$lib/auth/store.svelte";
     import {
         deleteVault,
@@ -31,7 +31,7 @@
     ];
 
     const rg = useResourceGroupState();
-    const vaultId = $page.params.vaultId ?? "";
+    const vaultId = page.params.vaultId ?? "";
     const base = `/resource-groups/${rg.rgId}`;
 
     let vault = $state<VaultOverview | null>(null);

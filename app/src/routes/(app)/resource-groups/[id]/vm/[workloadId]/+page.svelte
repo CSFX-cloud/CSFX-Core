@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onDestroy } from "svelte";
     import { Globe, HardDrive, Layers, Monitor, Play, RefreshCw, Square, Trash2 } from "@lucide/svelte";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
     import { deleteWorkload, restartWorkload, stopWorkload } from "$lib/api/resource-groups";
@@ -27,7 +27,7 @@
     ];
 
     const rg = useResourceGroupState();
-    const workloadId: string = $page.params.workloadId ?? "";
+    const workloadId: string = page.params.workloadId ?? "";
 
     let tab = $state<Tab>("summary");
     let actionError = $state<string | null>(null);

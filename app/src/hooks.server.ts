@@ -1,4 +1,5 @@
-import { error, type Handle } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
+import type { Handle } from '@sveltejs/kit/hooks';
 import { env } from '$env/dynamic/private';
 import type { UserProfile } from '$lib/auth/api';
 

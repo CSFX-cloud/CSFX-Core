@@ -3,7 +3,7 @@
     import { onMount, untrack } from "svelte";
     import { ExternalLink, Rocket, Trash2 } from "@lucide/svelte";
     import { goto } from "$app/navigation";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { auth } from "$lib/auth/store.svelte";
     import { deleteSite, getSite, redeploySite, type SiteDetail } from "$lib/api/sites";
     import { useResourceGroupState } from "$lib/components/resource-group/rg-state.svelte";
@@ -30,7 +30,7 @@
     const POLL_INTERVAL_MS = 4000;
 
     const rg = useResourceGroupState();
-    const siteId = $page.params.siteId ?? "";
+    const siteId = page.params.siteId ?? "";
     const base = `/resource-groups/${rg.rgId}`;
 
     let site = $state<SiteDetail | null>(null);

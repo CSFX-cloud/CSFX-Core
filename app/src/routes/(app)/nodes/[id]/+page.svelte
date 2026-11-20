@@ -1,6 +1,6 @@
 <script lang="ts">
     import { untrack } from "svelte";
-    import { page } from "$app/stores";
+    import { page } from "$app/state";
     import { goto } from "$app/navigation";
     import { auth } from "$lib/auth/store.svelte";
     import {
@@ -37,11 +37,11 @@
     import { NODE_TABS, type NodeActions, type NodeTab } from "$lib/components/nodes/detail/types";
     import { maintenanceLabel } from "$lib/utils/nodes";
 
-    const nodeId: string = $page.params.id ?? "";
+    const nodeId: string = page.params.id ?? "";
     const MAINTENANCE_TICK_MS = 30000;
     const live = new NodeLiveMetrics(nodeId);
 
-    const requestedTab = $page.url.searchParams.get("tab");
+    const requestedTab = page.url.searchParams.get("tab");
     let activeTab = $state<NodeTab>(NODE_TABS.find((tab) => tab.id === requestedTab)?.id ?? "summary");
 
     let node = $state<Node | null>(null);
