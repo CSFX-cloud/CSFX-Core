@@ -3,6 +3,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::process::Command;
 use tracing::{info, warn};
 
 use crate::cmd;
@@ -16,6 +17,68 @@ pub fn process_uid() -> u32 {
 
 pub fn process_gid() -> u32 {
     unsafe { libc::getgid() }
+}
+
+pub(crate) fn unit_slug(path: &Path) -> String {
+    path.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+pub(crate) async fn run_privileged(unit: &str, program: &str, args: &[&str]) -> Result<()> {
+    let status = Command::new("systemd-run")
+        .args(["--pipe", "--wait", "--collect", "--uid=0", "--gid=0"])
+        .arg(format!("--unit={unit}"))
+        .arg(format!(
+            "--setenv=PATH={}",
+            std::env::var("PATH").unwrap_or_default()
+        ))
+        .arg(program)
+        .args(args)
+        .status()
+        .await
+        .with_context(|| format!("Failed to spawn privileged {program}"))?;
+
+    anyhow::ensure!(status.success(), "privileged {program} failed");
+    Ok(())
+}
+
+pub(crate) async fn stage_block_device(
+    device_path: &str,
+    unit_prefix: &str,
+    target_dir: &Path,
+    device_name: &str,
+) -> Result<()> {
+    let metadata = tokio::fs::metadata(device_path)
+        .await
+        .context("Failed to stat volume block device")?;
+    let device_id = std::os::unix::fs::MetadataExt::rdev(&metadata) as libc::dev_t;
+    let major = libc::major(device_id);
+    let minor = libc::minor(device_id);
+    let owner_uid = process_uid();
+    let owner_gid = process_gid();
+    let target_path = target_dir.join(device_name);
+
+    let slug = unit_slug(&target_path);
+    let target = target_path.to_string_lossy();
+    let owner = format!("{owner_uid}:{owner_gid}");
+    let (major, minor) = (major.to_string(), minor.to_string());
+
+    let steps: [(&str, &str, Vec<&str>); 3] = [
+        ("rm", "rm", vec!["-f", &target]),
+        ("mknod", "mknod", vec![&target, "b", &major, &minor]),
+        ("chown", "chown", vec![&owner, &target]),
+    ];
+    for (step, program, args) in steps {
+        run_privileged(&format!("{unit_prefix}-{step}-{slug}"), program, &args)
+            .await
+            .with_context(|| {
+                format!("privileged staging of volume device {target_path:?} failed")
+            })?;
+    }
+
+    Ok(())
 }
 
 pub async fn create_tap(
@@ -91,6 +154,11 @@ pub async fn recover_once(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unit_slugs_replace_every_special_character() {
+        assert_eq!(unit_slug(Path::new("/a b/c.d")), "-a-b-c-d");
+    }
+
     use super::*;
     use crate::testing::FakeTools;
 

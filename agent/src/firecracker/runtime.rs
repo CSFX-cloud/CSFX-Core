@@ -881,36 +881,11 @@ async fn spawn_jailer(
     anyhow::bail!("jailer process for id {} did not appear", jailer_id)
 }
 
-fn unit_slug(path: &Path) -> String {
-    path.to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
-async fn run_privileged(unit: &str, program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new("systemd-run")
-        .args(["--pipe", "--wait", "--collect", "--uid=0", "--gid=0"])
-        .arg(format!("--unit={unit}"))
-        .arg(format!(
-            "--setenv=PATH={}",
-            std::env::var("PATH").unwrap_or_default()
-        ))
-        .arg(program)
-        .args(args)
-        .status()
-        .await
-        .with_context(|| format!("Failed to spawn privileged {program}"))?;
-
-    anyhow::ensure!(status.success(), "privileged {program} failed");
-    Ok(())
-}
-
 async fn remove_chroot_dir_privileged(path: &Path) -> Result<()> {
-    let unit = format!("csfx-jailer-cleanup-{}", unit_slug(path));
+    let unit = format!("csfx-jailer-cleanup-{}", vm_host::unit_slug(path));
     let target = path.to_string_lossy();
 
-    run_privileged(&unit, "rm", &["-rf", "--", &target])
+    vm_host::run_privileged(&unit, "rm", &["-rf", "--", &target])
         .await
         .with_context(|| format!("privileged cleanup of chroot directory {:?} failed", path))
 }
@@ -1281,9 +1256,14 @@ async fn attach_volume_drives(
             warn!(volume_id = %volume_mount.volume_id, device = %volume_mount.device_path, error = %e, "Volume filesystem not grown");
         }
 
-        stage_block_device_into_jail(&volume_mount.device_path, vm_root_dir, &jail_device_name)
-            .await
-            .context("Failed to stage volume block device into jailer chroot")?;
+        vm_host::stage_block_device(
+            &volume_mount.device_path,
+            "csfx-jailer",
+            vm_root_dir,
+            &jail_device_name,
+        )
+        .await
+        .context("Failed to stage volume block device into jailer chroot")?;
 
         client
             .put(
@@ -1306,42 +1286,6 @@ async fn attach_volume_drives(
     }
 
     Ok(mounted)
-}
-
-async fn stage_block_device_into_jail(
-    device_path: &str,
-    vm_root_dir: &Path,
-    jail_device_name: &str,
-) -> Result<()> {
-    let metadata = tokio::fs::metadata(device_path)
-        .await
-        .context("Failed to stat volume block device")?;
-    let device_id = std::os::unix::fs::MetadataExt::rdev(&metadata) as libc::dev_t;
-    let major = libc::major(device_id);
-    let minor = libc::minor(device_id);
-    let jailer_uid = process_uid();
-    let jailer_gid = process_gid();
-    let target_path = vm_root_dir.join(jail_device_name);
-
-    let slug = unit_slug(&target_path);
-    let target = target_path.to_string_lossy();
-    let owner = format!("{jailer_uid}:{jailer_gid}");
-    let (major, minor) = (major.to_string(), minor.to_string());
-
-    let steps: [(&str, &str, Vec<&str>); 3] = [
-        ("rm", "rm", vec!["-f", &target]),
-        ("mknod", "mknod", vec![&target, "b", &major, &minor]),
-        ("chown", "chown", vec![&owner, &target]),
-    ];
-    for (step, program, args) in steps {
-        run_privileged(&format!("csfx-jailer-{step}-{slug}"), program, &args)
-            .await
-            .with_context(|| {
-                format!("privileged staging of volume device {target_path:?} failed")
-            })?;
-    }
-
-    Ok(())
 }
 
 fn guest_device_letter(index: usize) -> String {
@@ -1869,11 +1813,6 @@ mod tests {
         assert!(stage_rootfs_into_jail(Path::new("/a"), Path::new("/jail"))
             .await
             .is_err());
-    }
-
-    #[test]
-    fn cleanup_unit_slugs_replace_every_special_character() {
-        assert_eq!(unit_slug(Path::new("/a b/c.d")), "-a-b-c-d");
     }
 
     #[test]
