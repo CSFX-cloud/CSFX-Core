@@ -35,6 +35,7 @@ pub mod system_collector;
 pub mod telemetry;
 pub mod tls;
 pub use shared::ttl_cache;
+pub mod resource_group_teardown;
 pub mod utils;
 pub mod vault_service;
 pub mod vault_store;

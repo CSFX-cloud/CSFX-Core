@@ -294,8 +294,8 @@ async fn finish_pending_deletions(state: &AppState) {
         }
     };
     for group in pending {
-        if let Err(error) = teardown_resource_group(state, group.id).await {
-            tracing::warn!(resource_group_id = %group.id, error = %error, "vault cleanup retry failed");
+        if let Err(error) = crate::resource_group_teardown::teardown(state, group.id).await {
+            tracing::warn!(resource_group_id = %group.id, error = %error, "resource group cleanup retry failed");
             continue;
         }
         if let Err(error) = ResourceGroups::delete_by_id(group.id)
