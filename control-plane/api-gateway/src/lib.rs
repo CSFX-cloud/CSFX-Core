@@ -38,6 +38,7 @@ pub use shared::ttl_cache;
 pub mod utils;
 pub mod vault_service;
 pub mod vault_store;
+pub mod workload_images;
 pub mod workload_secrets;
 pub mod zone_cert;
 

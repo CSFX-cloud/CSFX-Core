@@ -7,6 +7,14 @@ pub fn uses_site_registry(image: &str) -> bool {
         .is_some_and(|rest| rest.starts_with('/') || rest.starts_with(':') || rest.is_empty())
 }
 
+pub const BUCKET_IMAGE_SCHEME: &str = "bucket://";
+
+pub fn bucket_image_reference(image: &str) -> Option<(uuid::Uuid, &str)> {
+    let (bucket, key) = image.strip_prefix(BUCKET_IMAGE_SCHEME)?.split_once('/')?;
+    let bucket_id = uuid::Uuid::parse_str(bucket).ok()?;
+    (!key.is_empty()).then_some((bucket_id, key))
+}
+
 const GROUP_NAMESPACE_PATH: &str = "/rg-";
 
 pub const REGISTRY_ENDPOINT_VARIABLES: [&str; 2] =
@@ -68,6 +76,19 @@ mod tests {
         assert!(uses_site_registry("sites.csfx.invalid/abc:1"));
         assert!(uses_site_registry("  SITES.CSFX.INVALID/abc"));
         assert!(uses_site_registry("sites.csfx.invalid:443/abc"));
+    }
+
+    #[test]
+    fn bucket_image_references_carry_bucket_and_key() {
+        let bucket = uuid::Uuid::from_u128(0xabc);
+        let image = format!("bucket://{bucket}/dir/disk(1).iso");
+        assert_eq!(
+            bucket_image_reference(&image),
+            Some((bucket, "dir/disk(1).iso"))
+        );
+        assert_eq!(bucket_image_reference(&format!("bucket://{bucket}/")), None);
+        assert_eq!(bucket_image_reference("bucket://not-a-uuid/a.iso"), None);
+        assert_eq!(bucket_image_reference("https://host/a.iso"), None);
     }
 
     #[test]
