@@ -66,6 +66,11 @@ pub struct ListObjectsQuery {
     pub continuation_token: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PresignQuery {
+    pub origin: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PresignUploadRequest {
     pub key: String,

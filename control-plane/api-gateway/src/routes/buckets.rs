@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     auth::rbac::{CanManageBuckets, CanViewBuckets},
+    oidc::public_origin,
     routes::proxy::{proxy, with_query, ProxyError},
     service_client::Service,
     AppState,
@@ -164,6 +165,11 @@ pub async fn delete_object(
     object_storage(&state, Method::DELETE, &path, &headers, Bytes::new()).await
 }
 
+pub fn presign_path(path: String, headers: &HeaderMap) -> String {
+    let origin = utf8_percent_encode(&public_origin(headers), NON_ALPHANUMERIC).to_string();
+    format!("{path}?origin={origin}")
+}
+
 pub async fn presign_upload(
     CanManageBuckets(_claims): CanManageBuckets,
     State(state): State<AppState>,
@@ -171,7 +177,7 @@ pub async fn presign_upload(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ProxyError> {
-    let path = format!("/buckets/{id}/objects/presign-upload");
+    let path = presign_path(format!("/buckets/{id}/objects/presign-upload"), &headers);
     object_storage(&state, Method::POST, &path, &headers, body).await
 }
 
@@ -181,7 +187,10 @@ pub async fn presign_download(
     Path((bucket_id, key)): Path<(Uuid, String)>,
     headers: HeaderMap,
 ) -> Result<Response, ProxyError> {
-    let path = format!("/buckets/{bucket_id}/objects/presign-download/{key}");
+    let path = presign_path(
+        format!("/buckets/{bucket_id}/objects/presign-download/{key}"),
+        &headers,
+    );
     object_storage(&state, Method::GET, &path, &headers, Bytes::new()).await
 }
 

@@ -177,7 +177,7 @@ pub async fn router() -> Router {
     let state = AppState::new(
         database().await,
         GarageClient::new(url.clone(), "token".to_string()),
-        S3Client::new(url, "http://public.csfx.test".to_string()),
+        S3Client::new(url),
         Arc::new(SecretBox::from_env().unwrap()),
     );
     create_router(state)

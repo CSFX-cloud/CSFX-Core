@@ -34,8 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
     let s3_url =
         std::env::var("GARAGE_S3_URL").unwrap_or_else(|_| "http://127.0.0.1:3900".to_string());
-    let public_s3_url = std::env::var("GARAGE_PUBLIC_S3_URL").unwrap_or_else(|_| s3_url.clone());
-    let s3_client = garage::S3Client::new(s3_url, public_s3_url);
+    let s3_client = garage::S3Client::new(s3_url);
 
     let etcd = shared::etcd::connect_from_env()
         .await

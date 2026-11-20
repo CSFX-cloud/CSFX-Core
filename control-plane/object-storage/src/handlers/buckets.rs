@@ -115,7 +115,7 @@ pub async fn delete_bucket(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    match service::delete_bucket(&state.db, &state.garage, id).await {
+    match service::delete_bucket(&state.db, &state.garage, &state.s3, &state.secret_box, id).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err((
             StatusCode::NOT_FOUND,
