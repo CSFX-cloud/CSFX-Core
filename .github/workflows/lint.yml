@@ -102,8 +102,6 @@ jobs:
     if: always() && (needs.wait-for-format.result == 'success' || needs.wait-for-format.result == 'skipped')
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.ref }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
