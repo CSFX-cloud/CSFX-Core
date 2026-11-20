@@ -78,6 +78,7 @@ mod m20261117_020000_add_site_build_size_and_phases;
 mod m20261117_030000_add_workload_secret_versions;
 mod m20261117_040000_add_workload_replaces;
 mod m20261118_000000_add_exports;
+mod m20261120_000000_add_workload_vm_config;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -157,6 +158,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261117_030000_add_workload_secret_versions::Migration),
             Box::new(m20261117_040000_add_workload_replaces::Migration),
             Box::new(m20261118_000000_add_exports::Migration),
+            Box::new(m20261120_000000_add_workload_vm_config::Migration),
         ]
     }
 }

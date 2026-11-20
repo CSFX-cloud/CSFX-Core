@@ -17,7 +17,47 @@ fn owned<const N: usize>(args: [&str; N]) -> Vec<String> {
     args.iter().map(|arg| arg.to_string()).collect()
 }
 
+pub const DEFAULT_NIC_MODEL: &str = "virtio";
+
+pub fn nic_device_args(nic_model: Option<&str>, mac_address: &str) -> Vec<String> {
+    let device = match nic_model.unwrap_or(DEFAULT_NIC_MODEL) {
+        "e1000e" => "e1000e",
+        _ => "virtio-net-pci",
+    };
+    vec![
+        "-device".to_string(),
+        format!("{device},netdev=net0,mac={mac_address}"),
+    ]
+}
+
+pub fn data_disk_args(index: usize, device_path: &Path) -> Vec<String> {
+    vec![
+        "-drive".to_string(),
+        format!(
+            "file={},format=raw,if=none,id=data{index},cache=writeback",
+            device_path.display()
+        ),
+        "-device".to_string(),
+        format!("virtio-blk-pci,drive=data{index}"),
+    ]
+}
+
 impl Architecture {
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "x86_64" => Some(Self::X86_64),
+            "aarch64" => Some(Self::Aarch64),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Aarch64 => "aarch64",
+        }
+    }
+
     pub const HOST: Self = if cfg!(target_arch = "aarch64") {
         Self::Aarch64
     } else {

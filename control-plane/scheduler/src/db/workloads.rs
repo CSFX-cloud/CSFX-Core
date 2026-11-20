@@ -36,6 +36,10 @@ pub async fn create(
         .volume_mounts
         .as_ref()
         .and_then(|v| serde_json::to_value(v).ok());
+    let vm_config = req
+        .vm_config
+        .as_ref()
+        .and_then(|config| serde_json::to_value(config).ok());
 
     let model = workloads::ActiveModel {
         id: Set(id),
@@ -48,6 +52,7 @@ pub async fn create(
         memory_limit_bytes: Set(req.memory_limit_bytes),
         spread_key: Set(req.spread_key.clone()),
         topology_spread: Set(req.topology_spread.name().to_string()),
+        vm_config: Set(vm_config),
         guest_ip: Set(guest_ip),
         auto_resources: Set(req.auto_resources),
         cpu_usage_peak_percent: Set(None),

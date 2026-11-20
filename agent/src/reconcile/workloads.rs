@@ -297,6 +297,7 @@ fn build_spec(
         boot_disk_path: qemu::runtime::boot_disk_path(&workload.id),
         boot_disk_size_bytes: workload.disk_bytes,
         iso_url: Some(workload.image.clone()),
+        config: workload.vm_config.clone().unwrap_or_default(),
     });
 
     spec::WorkloadSpec {
