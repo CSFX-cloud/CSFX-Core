@@ -13,6 +13,7 @@ devenv.local.nix
 
 /postgres/
 
+.claude/
 
 finance.db
 

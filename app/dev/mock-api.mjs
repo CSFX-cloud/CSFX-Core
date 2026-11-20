@@ -454,7 +454,8 @@ function backupRoute(method, path) {
 
 createServer(async (request, response) => {
     const path = request.url.split("?")[0];
-    const route = routes[`${request.method} ${path}`] ?? agentRoute(request.method, path) ?? groupRoute(request.method, path) ?? bucketRoute(request.method, path) ?? backupRoute(request.method, path);
+    const routeKey = `${request.method} ${path}`;
+    const route = (Object.hasOwn(routes, routeKey) ? routes[routeKey] : undefined) ?? agentRoute(request.method, path) ?? groupRoute(request.method, path) ?? bucketRoute(request.method, path) ?? backupRoute(request.method, path);
     if (!route) return send(response, 404, { error: "not found" });
     route(await readBody(request), response, new URL(request.url, "http://localhost").searchParams, request);
 }).listen(PORT, () => {
