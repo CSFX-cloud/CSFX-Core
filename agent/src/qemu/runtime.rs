@@ -7,7 +7,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use crate::qemu::machine::{firmware_args, Architecture};
+use crate::qemu::machine::{data_disk_args, firmware_args, nic_device_args, Architecture};
 use crate::qemu::qmp::QmpClient;
 use crate::rg_dhcp::{mac_address_for_workload, RgDhcpSupervisor};
 use crate::spec::WorkloadSpec;
@@ -153,7 +153,9 @@ impl crate::runtime::Runtime for QemuRuntime {
         .await
         .context("Failed to write vm sidecar metadata")?;
 
+        ensure_architecture(&vm_spec.config)?;
         ensure_boot_disk(&vm_spec.boot_disk_path, vm_spec.boot_disk_size_bytes).await?;
+        let data_disks = stage_data_disks(&spec.workload_id, spec, &dir).await?;
 
         let iso_path = match &vm_spec.iso_url {
             Some(iso_url) => {
@@ -217,6 +219,7 @@ impl crate::runtime::Runtime for QemuRuntime {
             spec,
             vm_spec,
             iso_path.as_deref(),
+            &data_disks,
             &tap_device,
             &mac_address,
             &qmp_socket_path,
@@ -451,6 +454,35 @@ async fn ensure_raw_image(path: &Path) -> Result<()> {
     }
 }
 
+fn ensure_architecture(config: &crate::spec::VmConfig) -> Result<()> {
+    let Some(requested) = config.architecture.as_deref() else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        Architecture::from_name(requested) == Some(Architecture::HOST),
+        "vm requires {requested} but this node is {}",
+        Architecture::HOST.name()
+    );
+    Ok(())
+}
+
+async fn stage_data_disks(
+    workload_id: &str,
+    spec: &WorkloadSpec,
+    dir: &Path,
+) -> Result<Vec<PathBuf>> {
+    let mut staged = Vec::new();
+    let unit_prefix = unit_name(workload_id);
+    for mount in spec.volume_mounts.as_deref().unwrap_or_default() {
+        let name = format!("data-{}", mount.volume_id);
+        vm_host::stage_block_device(&mount.device_path, &unit_prefix, dir, &name)
+            .await
+            .context("Failed to stage volume block device for vm")?;
+        staged.push(dir.join(name));
+    }
+    Ok(staged)
+}
+
 async fn ensure_boot_disk(path: &str, size_bytes: i64) -> Result<()> {
     if tokio::fs::metadata(path).await.is_ok() {
         return Ok(());
@@ -475,6 +507,7 @@ async fn spawn_vm(
     spec: &WorkloadSpec,
     vm_spec: &crate::spec::VmSpec,
     iso_path: Option<&Path>,
+    data_disks: &[PathBuf],
     tap_device: &str,
     mac_address: &str,
     qmp_socket_path: &Path,
@@ -504,8 +537,12 @@ async fn spawn_vm(
     args.extend([
         "-netdev".to_string(),
         format!("tap,id=net0,ifname={},script=no,downscript=no", tap_device),
-        "-device".to_string(),
-        format!("virtio-net-pci,netdev=net0,mac={}", mac_address),
+    ]);
+    args.extend(nic_device_args(
+        vm_spec.config.nic_model.as_deref(),
+        mac_address,
+    ));
+    args.extend([
         "-device".to_string(),
         "virtio-balloon-pci,deflate-on-oom=on".to_string(),
         "-qmp".to_string(),
@@ -513,6 +550,9 @@ async fn spawn_vm(
         "-vnc".to_string(),
         format!("unix:{}", vnc_socket_path.display()),
     ]);
+    for (index, path) in data_disks.iter().enumerate() {
+        args.extend(data_disk_args(index, path));
+    }
     args.extend(firmware_args(architecture, &vm_dir(workload_id)).await?);
 
     if let Some(iso_path) = iso_path {
