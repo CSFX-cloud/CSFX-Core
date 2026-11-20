@@ -51,7 +51,10 @@ async fn presigned_urls_carry_a_signature() {
     let (status, upload) = call(
         &app,
         Method::POST,
-        &format!("/buckets/{}/objects/presign-upload", bucket),
+        &format!(
+            "/buckets/{}/objects/presign-upload?origin=http://public.csfx.test",
+            bucket
+        ),
         Some(json!({"key": "dir/file name.txt"})),
     )
     .await;
@@ -64,7 +67,10 @@ async fn presigned_urls_carry_a_signature() {
     let (status, download) = call(
         &app,
         Method::GET,
-        &format!("/buckets/{}/objects/presign-download/dir/file.txt", bucket),
+        &format!(
+            "/buckets/{}/objects/presign-download/dir/file.txt?origin=http://public.csfx.test",
+            bucket
+        ),
         None,
     )
     .await;
@@ -94,7 +100,10 @@ async fn object_operations_reject_unknown_buckets() {
     let (status, _) = call(
         &app,
         Method::POST,
-        &format!("/buckets/{}/objects/presign-upload", id),
+        &format!(
+            "/buckets/{}/objects/presign-upload?origin=http://public.csfx.test",
+            id
+        ),
         Some(json!({"key": "a"})),
     )
     .await;
@@ -102,7 +111,10 @@ async fn object_operations_reject_unknown_buckets() {
     let (status, _) = call(
         &app,
         Method::GET,
-        &format!("/buckets/{}/objects/presign-download/a", id),
+        &format!(
+            "/buckets/{}/objects/presign-download/a?origin=http://public.csfx.test",
+            id
+        ),
         None,
     )
     .await;

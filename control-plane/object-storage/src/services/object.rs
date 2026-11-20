@@ -87,6 +87,42 @@ pub async fn list_objects(
     }))
 }
 
+pub async fn purge_objects(
+    db: &DatabaseConnection,
+    s3: &S3Client,
+    secret_box: &SecretBox,
+    bucket_id: Uuid,
+) -> Result<()> {
+    let (global_alias, access_key_id, secret_access_key) =
+        resolve_master_credentials(db, secret_box, bucket_id).await?;
+    let mut continuation_token: Option<String> = None;
+    loop {
+        let page = s3
+            .list_objects(
+                &global_alias,
+                &access_key_id,
+                &secret_access_key,
+                "",
+                "",
+                continuation_token.as_deref(),
+            )
+            .await?;
+        for object in &page.objects {
+            s3.delete_object(
+                &global_alias,
+                &access_key_id,
+                &secret_access_key,
+                &object.key,
+            )
+            .await?;
+        }
+        continuation_token = page.next_continuation_token;
+        if continuation_token.is_none() {
+            return Ok(());
+        }
+    }
+}
+
 pub async fn delete_object(
     db: &DatabaseConnection,
     s3: &S3Client,
@@ -113,8 +149,9 @@ pub async fn presign_upload(
     secret_box: &SecretBox,
     bucket_id: Uuid,
     key: &str,
+    public_origin: &str,
 ) -> Result<Option<PresignResponse>> {
-    presign(db, s3, secret_box, bucket_id, key, "PUT").await
+    presign(db, s3, secret_box, bucket_id, key, public_origin, "PUT").await
 }
 
 pub async fn presign_download(
@@ -123,8 +160,9 @@ pub async fn presign_download(
     secret_box: &SecretBox,
     bucket_id: Uuid,
     key: &str,
+    public_origin: &str,
 ) -> Result<Option<PresignResponse>> {
-    presign(db, s3, secret_box, bucket_id, key, "GET").await
+    presign(db, s3, secret_box, bucket_id, key, public_origin, "GET").await
 }
 
 async fn presign(
@@ -133,6 +171,7 @@ async fn presign(
     secret_box: &SecretBox,
     bucket_id: Uuid,
     key: &str,
+    public_origin: &str,
     method: &str,
 ) -> Result<Option<PresignResponse>> {
     let (global_alias, access_key_id, secret_access_key) =
@@ -144,6 +183,7 @@ async fn presign(
 
     let expires_in = Duration::from_secs(PRESIGN_EXPIRY_SECONDS);
     let url = s3.presign_url(
+        public_origin.trim_end_matches('/'),
         method,
         &global_alias,
         key,

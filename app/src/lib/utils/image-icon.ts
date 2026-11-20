@@ -11,7 +11,7 @@ const KNOWN_IMAGE_ICONS: Record<string, string> = {
     rabbitmq: 'logos:rabbitmq-icon',
     memcached: 'logos:memcached',
     traefik: 'logos:traefik-proxy-icon',
-    caddy: 'logos:caddy-icon',
+    caddy: 'simple-icons:caddy',
     elasticsearch: 'logos:elasticsearch',
     grafana: 'logos:grafana',
     prometheus: 'logos:prometheus',
@@ -32,7 +32,7 @@ const VM_ICONS: Array<[string, string]> = [
     ['windows', 'logos:microsoft-windows-icon'],
     ['debian', 'logos:debian'],
     ['fedora', 'logos:fedora'],
-    ['alpine', 'logos:alpinelinux-icon'],
+    ['alpine', 'simple-icons:alpinelinux'],
 ];
 
 const VM_FALLBACK_ICON = 'mdi:monitor';
@@ -49,5 +49,5 @@ export function knownWorkloadIcon(image: string, runtimeClass: string): string |
 }
 
 export function resolveNodeOsIcon(osType: string): string {
-    return osType.toLowerCase().includes('nix') ? 'logos:nixos' : 'logos:linux-tux';
+    return osType.toLowerCase().includes('nix') ? 'simple-icons:nixos' : 'logos:linux-tux';
 }

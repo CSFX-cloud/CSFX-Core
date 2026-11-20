@@ -39,6 +39,7 @@ in
       gatewayUrl = "https://localhost:8000";
       enableSsh = true;
       enableFirecracker = true;
+      enableQemu = true;
       advertiseInterface = "enp0s2";
       localDns.servers = [ "127.0.0.1" ];
     };

@@ -1,5 +1,6 @@
 <script lang="ts">
     import { Upload } from "@lucide/svelte";
+    import ProgressRing from "$lib/components/vm/progress-ring.svelte";
     import { onMount } from "svelte";
     import { Select } from "$lib/components/ui/select";
     import {
@@ -8,7 +9,7 @@
         findIsoBucket,
         uploadIso,
         listBucketObjects,
-        presignObjectDownload,
+        bucketImageReference,
         type ObjectEntry,
     } from "$lib/api/resource-groups";
 
@@ -81,20 +82,19 @@
         vmUploadProgress = 0;
         vmError = null;
         try {
-            let isoUrl: string;
+            let isoImage: string;
             if (vmIsoMode === "existing" && vmIsoBucketId) {
-                const presigned = await presignObjectDownload(vmIsoBucketId, vmSelectedIsoKey);
-                isoUrl = presigned.url;
+                isoImage = bucketImageReference(vmIsoBucketId, vmSelectedIsoKey);
             } else {
                 const bucket = await ensureIsoBucket(rgId);
-                isoUrl = await uploadIso(bucket.id, vmFormIsoFile!, (fraction) => {
+                isoImage = await uploadIso(bucket.id, vmFormIsoFile!, (fraction) => {
                     vmUploadProgress = fraction;
                 });
             }
 
             await createWorkload({
                 name: vmFormName,
-                image: isoUrl,
+                image: isoImage,
                 cpu_millicores: vmEffectiveCpuMillicores,
                 memory_bytes: vmEffectiveMemoryMb * 1024 * 1024,
                 disk_bytes: vmEffectiveDiskMb * 1024 * 1024,
@@ -143,11 +143,14 @@
                     Choose ISO
                     <input id="vm-iso" type="file" accept=".iso" class="db-sr-only" onchange={handleVmIsoFileChange} />
                 </label>
+                {#if vmDeploying && vmFormIsoFile}
+                    <ProgressRing fraction={vmUploadProgress} />
+                {/if}
                 <span class="cx-hint">{vmFormIsoFile?.name ?? "No file selected"}</span>
+                {#if vmDeploying && vmFormIsoFile}
+                    <span class="cx-hint cx-mono">{Math.round(vmUploadProgress * 100)}%</span>
+                {/if}
             </div>
-            {#if vmDeploying && vmFormIsoFile}
-                <progress value={vmUploadProgress} max="1" style="width: 100%"></progress>
-            {/if}
         {/if}
     </div>
     {#if vmFormAdvanced}

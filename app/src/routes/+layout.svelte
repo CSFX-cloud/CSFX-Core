@@ -1,5 +1,6 @@
 <script lang="ts">
     import "./layout.css";
+    import "$lib/icons/offline";
     import { onMount } from "svelte";
     import { theme } from "$lib/utils/theme.svelte";
     import { Toaster } from "$lib/components/ui/sonner/index.js";

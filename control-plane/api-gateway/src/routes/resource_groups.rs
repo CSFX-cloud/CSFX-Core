@@ -451,11 +451,11 @@ pub async fn delete_resource_group(
         .await
         .map_err(db_error("failed to update resource group status"))?;
 
-    if let Err(cause) = crate::vault_service::teardown_resource_group(&state, id).await {
-        tracing::error!(resource_group_id = %id, error = %cause, "vault cleanup failed, deletion will be retried");
+    if let Err(cause) = crate::resource_group_teardown::teardown(&state, id).await {
+        tracing::error!(resource_group_id = %id, error = %cause, "resource group cleanup failed, deletion will be retried");
         return Err(error(
             StatusCode::BAD_GATEWAY,
-            "vault cleanup failed, deletion will be retried",
+            "resource group cleanup failed, deletion will be retried",
         ));
     }
 

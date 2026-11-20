@@ -278,7 +278,6 @@ services:
       GARAGE_ADMIN_URL: http://garage:3903
       GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:-dev-garage-admin-token}
       GARAGE_S3_URL: http://garage:3900
-      GARAGE_PUBLIC_S3_URL: ${GARAGE_PUBLIC_S3_URL:-http://localhost:8000}
       OBJECT_STORAGE_ENCRYPTION_KEY: ${OBJECT_STORAGE_ENCRYPTION_KEY:-9a29b5d4c92cbfd4abe14c2a645f39eff6b57b1fa13305d3a946a2221e630c29}
       RUST_LOG: ${RUST_LOG:-debug}
     ports:

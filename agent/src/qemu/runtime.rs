@@ -7,20 +7,21 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+use crate::qemu::machine::{firmware_args, Architecture};
 use crate::qemu::qmp::QmpClient;
 use crate::rg_dhcp::{mac_address_for_workload, RgDhcpSupervisor};
 use crate::spec::WorkloadSpec;
 use crate::vm_host::{self, process_gid, process_uid};
 
 const VM_STATE_DIR: &str = "/var/lib/csfx-agent/qemu";
-const DEFAULT_QEMU_BIN_PATH: &str = "/usr/bin/qemu-system-x86_64";
 const QMP_SOCKET_NAME: &str = "qmp.sock";
 const VNC_SOCKET_NAME: &str = "vnc.sock";
 const BYTES_PER_MIB: i64 = 1024 * 1024;
 const MIN_MEMORY_MIB: i64 = 512;
 
 fn qemu_bin_path() -> String {
-    std::env::var("CSFX_QEMU_BIN_PATH").unwrap_or_else(|_| DEFAULT_QEMU_BIN_PATH.to_string())
+    std::env::var("CSFX_QEMU_BIN_PATH")
+        .unwrap_or_else(|_| Architecture::HOST.default_qemu_bin_path().to_string())
 }
 
 fn vm_dir(workload_id: &str) -> PathBuf {
@@ -376,6 +377,15 @@ struct VmSidecarMetadata {
     resource_group_id: Option<String>,
 }
 
+fn iso_download_client() -> Result<reqwest::Client> {
+    let ca_pem = crate::pki::AgentPki::load_ca_pem().context("Failed to load cluster CA")?;
+    let ca = reqwest::Certificate::from_pem(ca_pem.as_bytes()).context("Invalid cluster CA")?;
+    reqwest::Client::builder()
+        .tls_certs_merge([ca])
+        .build()
+        .context("Failed to build iso download client")
+}
+
 async fn ensure_iso_cached(workload_id: &str, iso_url: &str) -> Result<PathBuf> {
     let path = iso_cache_path(workload_id);
     if tokio::fs::metadata(&path).await.is_ok() {
@@ -384,9 +394,7 @@ async fn ensure_iso_cached(workload_id: &str, iso_url: &str) -> Result<PathBuf> 
 
     info!(workload_id = %workload_id, "Downloading vm iso image");
 
-    let client = reqwest::Client::builder()
-        .build()
-        .context("Failed to build iso download client")?;
+    let client = iso_download_client()?;
 
     let response = client
         .get(iso_url)
@@ -417,18 +425,6 @@ async fn ensure_iso_cached(workload_id: &str, iso_url: &str) -> Result<PathBuf> 
     info!(workload_id = %workload_id, path = ?path, "Vm iso image cached");
 
     Ok(path)
-}
-
-fn iso_drive_args(iso_path: &Path) -> [String; 4] {
-    [
-        "-drive".to_string(),
-        format!(
-            "file={},media=cdrom,format=raw,readonly=on,if=ide",
-            iso_path.display()
-        ),
-        "-boot".to_string(),
-        "order=cd".to_string(),
-    ]
 }
 
 async fn ensure_raw_image(path: &Path) -> Result<()> {
@@ -488,14 +484,13 @@ async fn spawn_vm(
     let mem_size_mib = (spec.memory_limit_bytes / BYTES_PER_MIB).max(MIN_MEMORY_MIB);
     let qemu_bin = qemu_bin_path();
 
+    let architecture = Architecture::HOST;
     let mut args: Vec<String> = vec![
         "-sandbox".to_string(),
         "on,obsolete=deny,elevateprivileges=deny,spawn=deny,resourcecontrol=deny".to_string(),
-        "-enable-kvm".to_string(),
-        "-machine".to_string(),
-        "q35".to_string(),
-        "-cpu".to_string(),
-        "host".to_string(),
+    ];
+    args.extend(architecture.machine_args());
+    args.extend([
         "-smp".to_string(),
         vcpu_count.to_string(),
         "-m".to_string(),
@@ -504,11 +499,9 @@ async fn spawn_vm(
         format!("file={},format=raw,if=virtio", vm_spec.boot_disk_path),
         "-display".to_string(),
         "none".to_string(),
-        "-vga".to_string(),
-        "std".to_string(),
-        "-usb".to_string(),
-        "-device".to_string(),
-        "usb-tablet".to_string(),
+    ]);
+    args.extend(architecture.display_args());
+    args.extend([
         "-netdev".to_string(),
         format!("tap,id=net0,ifname={},script=no,downscript=no", tap_device),
         "-device".to_string(),
@@ -519,13 +512,14 @@ async fn spawn_vm(
         format!("unix:{},server,nowait", qmp_socket_path.display()),
         "-vnc".to_string(),
         format!("unix:{}", vnc_socket_path.display()),
-    ];
+    ]);
+    args.extend(firmware_args(architecture, &vm_dir(workload_id)).await?);
 
     if let Some(iso_path) = iso_path {
-        args.extend(iso_drive_args(iso_path));
+        args.extend(architecture.iso_drive_args(iso_path));
     }
 
-    debug!(workload_id = %workload_id, args = ?args, stage = "spawn_vm", "Launching qemu-system-x86_64");
+    debug!(workload_id = %workload_id, args = ?args, stage = "spawn_vm", "Launching qemu");
 
     let uid_arg = format!("--uid={}", process_uid());
     let gid_arg = format!("--gid={}", process_gid());
@@ -617,277 +611,4 @@ async fn wait_for_qmp(qmp_socket_path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runtime::Runtime;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::UnixListener;
-
-    fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("csfx-qemu-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn runtime() -> QemuRuntime {
-        QemuRuntime::new(
-            "key".to_string(),
-            Arc::new(crate::local_state::LocalState::open(
-                std::env::temp_dir().join(format!("csfx-ls-{}.json", uuid::Uuid::new_v4())),
-            )),
-            Arc::new(crate::rg_dns::RgDnsRegistry::new()),
-        )
-    }
-
-    fn spec(memory_mib: i64, limit_mib: i64) -> WorkloadSpec {
-        WorkloadSpec {
-            workload_id: "w".to_string(),
-            image: "i".to_string(),
-            cpu_millicores: 1000,
-            cpu_limit_millicores: 1000,
-            memory_bytes: memory_mib * BYTES_PER_MIB,
-            memory_limit_bytes: limit_mib * BYTES_PER_MIB,
-            env_vars: None,
-            ports: None,
-            volume_mounts: None,
-            resource_group_id: None,
-            resource_group_cidr: None,
-            guest_ip: None,
-            vm_spec: None,
-        }
-    }
-
-    async fn serve_qmp(path: &Path, replies: &'static [&'static str]) {
-        let listener = UnixListener::bind(path).unwrap();
-        tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let (read_half, mut write_half) = stream.into_split();
-            let mut reader = BufReader::new(read_half);
-            write_half.write_all(b"{\"QMP\":{}}\n").await.unwrap();
-            for reply in replies {
-                let mut request = String::new();
-                reader.read_line(&mut request).await.unwrap();
-                write_half.write_all(reply.as_bytes()).await.unwrap();
-            }
-        });
-    }
-
-    fn handle(dir: &Path) -> VmHandle {
-        VmHandle {
-            qmp_socket_path: dir.join(QMP_SOCKET_NAME),
-            vnc_socket_path: dir.join(VNC_SOCKET_NAME),
-            resource_group_id: Some("rg".to_string()),
-        }
-    }
-
-    #[test]
-    fn identifiers_fit_linux_interface_limits() {
-        let id = "12345678-1234-1234-1234-123456789abc";
-        assert_eq!(short_id(id), "12345678123");
-        assert_eq!(format!("{TAP_DEVICE_PREFIX}{}", short_id(id)).len(), 15);
-        assert_eq!(unit_name(id), "csfx-qemu-12345678123");
-        assert!(boot_disk_path(id).ends_with(&format!("{id}/boot.img")));
-        assert!(iso_cache_path(id).ends_with("install.iso"));
-        assert!(!qemu_bin_path().is_empty());
-    }
-
-    #[tokio::test]
-    async fn vnc_socket_is_known_only_for_tracked_vms() {
-        let runtime = runtime();
-        let dir = temp_dir();
-        assert!(runtime.vnc_socket_path("w").await.is_none());
-        runtime
-            .handles
-            .lock()
-            .await
-            .insert("w".to_string(), handle(&dir));
-        assert_eq!(
-            runtime.vnc_socket_path("w").await,
-            Some(dir.join(VNC_SOCKET_NAME))
-        );
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn status_is_derived_from_qmp() {
-        let runtime = runtime();
-        let dir = temp_dir();
-        assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
-        serve_qmp(
-            &dir.join(QMP_SOCKET_NAME),
-            &[
-                "{\"return\":{}}\n",
-                "{\"return\":{\"status\":\"running\"}}\n",
-            ],
-        )
-        .await;
-        runtime
-            .handles
-            .lock()
-            .await
-            .insert("w".to_string(), handle(&dir));
-        assert_eq!(runtime.inspect_status("w").await.unwrap(), "running");
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn panicked_guests_are_reported_as_failed() {
-        let dir = temp_dir();
-        let socket = dir.join(QMP_SOCKET_NAME);
-        serve_qmp(
-            &socket,
-            &[
-                "{\"return\":{}}\n",
-                "{\"return\":{\"status\":\"guest-panicked\"}}\n",
-            ],
-        )
-        .await;
-        assert_eq!(query_vm_status(&socket).await.as_deref(), Some("failed"));
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn balloon_target_is_clamped_to_the_minimum_memory() {
-        let dir = temp_dir();
-        let socket = dir.join(QMP_SOCKET_NAME);
-        set_balloon_target(&socket, &spec(512, 512), 512)
-            .await
-            .unwrap();
-        serve_qmp(&socket, &["{\"return\":{}}\n", "{\"return\":{}}\n"]).await;
-        set_balloon_target(&socket, &spec(256, 2048), 1024)
-            .await
-            .unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[tokio::test]
-    async fn trivial_runtime_operations_have_defaults() {
-        let runtime = runtime();
-        runtime.check_dhcp_liveness().await;
-        assert!(runtime.exec("w").await.is_err());
-        let stats = runtime.stats("w").await.unwrap();
-        assert!(stats.cpu_usage_percent.is_none());
-        let dir = temp_dir();
-        let existing = dir.join("boot.img");
-        std::fs::write(&existing, b"").unwrap();
-        ensure_boot_disk(existing.to_str().unwrap(), 1)
-            .await
-            .unwrap();
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    use crate::testing::FakeTools;
-
-    #[tokio::test]
-    async fn units_are_stopped_by_their_derived_name() {
-        {
-            let tools = FakeTools::install(&[("systemctl", "exit 0")]);
-            stop_unit("0123456789abcdef").await;
-            assert_eq!(
-                tools.calls("systemctl"),
-                vec![format!("stop {}", unit_name("0123456789abcdef"))]
-            );
-        }
-        let tools = FakeTools::install(&[("systemctl", "echo 'not loaded' >&2\nexit 5")]);
-        stop_unit("0123456789abcdef").await;
-        assert_eq!(tools.calls("systemctl").len(), 1);
-    }
-
-    #[tokio::test]
-    async fn unit_activity_follows_the_reported_state() {
-        {
-            let _tools = FakeTools::install(&[("systemctl", "echo active")]);
-            assert!(is_unit_active("csfx-qemu-x").await);
-        }
-        {
-            let _tools = FakeTools::install(&[("systemctl", "echo inactive\nexit 3")]);
-            assert!(!is_unit_active("csfx-qemu-x").await);
-        }
-        let _tools = FakeTools::install(&[]);
-        std::env::set_var("PATH", "/nonexistent");
-        assert!(!is_unit_active("csfx-qemu-x").await);
-    }
-
-    #[tokio::test]
-    async fn boot_disks_are_created_once() {
-        let dir = temp_dir();
-        let disk = dir.join("boot.raw");
-        let disk = disk.to_str().unwrap();
-        {
-            let tools = FakeTools::install(&[("qemu-img", "exit 0")]);
-            ensure_boot_disk(disk, 4096).await.unwrap();
-            assert_eq!(
-                tools.calls("qemu-img"),
-                vec![format!("create -f raw {disk} 4096")]
-            );
-        }
-        std::fs::write(disk, b"").unwrap();
-        let tools = FakeTools::install(&[("qemu-img", "exit 0")]);
-        ensure_boot_disk(disk, 4096).await.unwrap();
-        assert!(tools.calls("qemu-img").is_empty());
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[tokio::test]
-    async fn boot_disk_creation_failures_are_reported() {
-        let dir = temp_dir();
-        let disk = dir.join("boot.raw");
-        let _tools = FakeTools::install(&[("qemu-img", "exit 1")]);
-
-        let error = ensure_boot_disk(disk.to_str().unwrap(), 4096)
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("qemu-img create failed"));
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn iso_is_attached_as_a_readonly_raw_cdrom() {
-        let args = iso_drive_args(Path::new("/vm/install.iso"));
-
-        assert_eq!(args[0], "-drive");
-        assert_eq!(
-            args[1],
-            "file=/vm/install.iso,media=cdrom,format=raw,readonly=on,if=ide"
-        );
-        assert!(!args.contains(&"-cdrom".to_string()));
-    }
-
-    #[tokio::test]
-    async fn raw_isos_are_accepted() {
-        let _tools = FakeTools::install(&[("qemu-img", "echo '{\"format\": \"raw\"}'")]);
-
-        ensure_raw_image(Path::new("/vm/install.iso"))
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn non_raw_isos_are_rejected() {
-        for format in ["qcow2", "vmdk", "qed"] {
-            let behaviour = format!("echo '{{\"format\": \"{format}\"}}'");
-            let _tools = FakeTools::install(&[("qemu-img", behaviour.as_str())]);
-
-            let error = ensure_raw_image(Path::new("/vm/install.iso"))
-                .await
-                .unwrap_err()
-                .to_string();
-
-            assert!(error.contains(&format!("unsupported format {format}")));
-        }
-    }
-
-    #[tokio::test]
-    async fn unreadable_isos_are_rejected() {
-        let _tools = FakeTools::install(&[("qemu-img", "exit 1")]);
-
-        let error = ensure_raw_image(Path::new("/vm/install.iso"))
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("qemu-img info failed"));
-    }
-}
+mod tests;
