@@ -57,6 +57,8 @@ fn handle(dir: &Path) -> VmHandle {
         qmp_socket_path: dir.join(QMP_SOCKET_NAME),
         vnc_socket_path: dir.join(VNC_SOCKET_NAME),
         resource_group_id: Some("rg".to_string()),
+        extra_nic_count: 0,
+        previous_cpu_sample: Arc::default(),
     }
 }
 
@@ -107,6 +109,24 @@ async fn status_is_derived_from_qmp() {
         .await
         .insert("w".to_string(), handle(&dir));
     assert_eq!(runtime.inspect_status("w").await.unwrap(), "running");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[tokio::test]
+async fn unanswered_qmp_only_fails_the_vm_when_its_unit_is_gone() {
+    let dir = temp_dir();
+    let runtime = runtime();
+    runtime
+        .handles
+        .lock()
+        .await
+        .insert("w".to_string(), handle(&dir));
+    {
+        let _tools = FakeTools::install(&[("systemctl", "echo active")]);
+        assert_eq!(runtime.inspect_status("w").await.unwrap(), "running");
+    }
+    let _tools = FakeTools::install(&[("systemctl", "echo inactive\nexit 3")]);
+    assert_eq!(runtime.inspect_status("w").await.unwrap(), "failed");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

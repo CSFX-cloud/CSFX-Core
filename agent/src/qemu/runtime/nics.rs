@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::path::Path;
 use tracing::warn;
 
 use super::{short_id, QemuRuntime, TAP_DEVICE_PREFIX};
@@ -7,6 +8,7 @@ use crate::spec::{ExtraNic, WorkloadSpec};
 use crate::vm_host::{self, process_uid};
 
 const EXTRA_TAP_PREFIX: &str = "qtx";
+const SYS_CLASS_NET: &str = "/sys/class/net";
 
 pub(super) struct GuestNic {
     pub tap_device: String,
@@ -48,6 +50,30 @@ pub(super) fn tap_devices(workload_id: &str, extra_nic_count: usize) -> Vec<Stri
     (0..=extra_nic_count)
         .map(|index| tap_device_name(workload_id, index))
         .collect()
+}
+
+async fn read_tap_counter(base: &Path, tap_device: &str, counter: &str) -> Option<i64> {
+    let path = base.join(tap_device).join("statistics").join(counter);
+    tokio::fs::read_to_string(path)
+        .await
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+async fn tap_bytes_in(base: &Path, tap_devices: &[String]) -> Option<(i64, i64)> {
+    let mut received = 0;
+    let mut sent = 0;
+    for tap_device in tap_devices {
+        sent += read_tap_counter(base, tap_device, "rx_bytes").await?;
+        received += read_tap_counter(base, tap_device, "tx_bytes").await?;
+    }
+    Some((received, sent))
+}
+
+pub(super) async fn read_tap_bytes(tap_devices: &[String]) -> Option<(i64, i64)> {
+    tap_bytes_in(Path::new(SYS_CLASS_NET), tap_devices).await
 }
 
 pub(super) async fn remove_taps(workload_id: &str, tap_devices: &[String]) {
@@ -147,5 +173,20 @@ mod tests {
         assert_eq!(nics[0].mac_address, mac_address_for_workload("w"));
         assert_ne!(nics[1].mac_address, nics[0].mac_address);
         assert_eq!(nics[1].ip.as_deref(), Some("10.0.0.9"));
+    }
+
+    #[tokio::test]
+    async fn tap_counters_are_summed_from_the_guest_point_of_view() {
+        let base = std::env::temp_dir().join(format!("csfx-tap-test-{}", uuid::Uuid::new_v4()));
+        for (tap, rx, tx) in [("a", 5, 7), ("b", 1, 2)] {
+            let stats = base.join(tap).join("statistics");
+            std::fs::create_dir_all(&stats).unwrap();
+            std::fs::write(stats.join("rx_bytes"), format!("{rx}\n")).unwrap();
+            std::fs::write(stats.join("tx_bytes"), format!("{tx}\n")).unwrap();
+        }
+        let taps = ["a".to_string(), "b".to_string()];
+        assert_eq!(tap_bytes_in(&base, &taps).await, Some((9, 6)));
+        assert_eq!(tap_bytes_in(&base, &["missing".to_string()]).await, None);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

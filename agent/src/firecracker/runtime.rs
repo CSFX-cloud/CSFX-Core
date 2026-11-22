@@ -10,6 +10,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+use crate::cgroup_stats::{read_cpu_usage_percent, read_memory_usage_bytes, service_cgroup_path};
 use crate::firecracker::api::FirecrackerApiClient;
 use crate::firecracker::rootfs::RootfsBuilder;
 use crate::firecracker::site_registry::SiteRegistry;
@@ -21,7 +22,6 @@ use crate::vm_host::{self, process_gid, process_uid};
 const JAILER_BASE_DIR: &str = "/var/lib/csfx-agent/firecracker";
 const GUEST_KERNEL_PATH: &str = "/var/lib/csfx-agent/vmlinux";
 const GUEST_CID_BASE: u32 = 1000;
-const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const CGROUP_PARENT: &str = "csfx-firecracker";
 const BYTES_PER_MIB: i64 = 1024 * 1024;
 const MIN_MEMORY_MIB: i64 = 128;
@@ -606,62 +606,6 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 }
 
-async fn read_cpu_usage_percent(
-    cgroup_path: &Path,
-    previous_sample: &Mutex<Option<(std::time::Instant, u64)>>,
-) -> Option<f64> {
-    let usage_usec = read_cgroup_u64(cgroup_path, "cpu.stat", "usage_usec").await?;
-    let now = std::time::Instant::now();
-
-    let mut previous = previous_sample.lock().await;
-    let percent = match *previous {
-        Some((previous_time, previous_usage)) => {
-            let elapsed_usec = now.duration_since(previous_time).as_micros() as u64;
-            if elapsed_usec == 0 || usage_usec < previous_usage {
-                None
-            } else {
-                let delta_usec = usage_usec - previous_usage;
-                Some((delta_usec as f64 / elapsed_usec as f64) * 100.0)
-            }
-        }
-        None => None,
-    };
-
-    *previous = Some((now, usage_usec));
-    percent
-}
-
-async fn read_memory_usage_bytes(cgroup_path: &Path) -> Option<i64> {
-    let path = cgroup_path.join("memory.current");
-    match tokio::fs::read_to_string(&path).await {
-        Ok(content) => content.trim().parse::<i64>().ok(),
-        Err(e) => {
-            warn!(path = %path.display(), error = %e, "failed to read workload memory cgroup");
-            None
-        }
-    }
-}
-
-async fn read_cgroup_u64(cgroup_path: &Path, file: &str, key: &str) -> Option<u64> {
-    let path = cgroup_path.join(file);
-    let content = match tokio::fs::read_to_string(&path).await {
-        Ok(content) => content,
-        Err(e) => {
-            warn!(path = %path.display(), error = %e, "failed to read workload cgroup file");
-            return None;
-        }
-    };
-
-    content.lines().find_map(|line| {
-        let (line_key, value) = line.split_once(' ')?;
-        if line_key == key {
-            value.trim().parse::<u64>().ok()
-        } else {
-            None
-        }
-    })
-}
-
 async fn read_network_bytes(metrics_path: &Path) -> Option<(i64, i64)> {
     let content = tokio::time::timeout(
         std::time::Duration::from_millis(500),
@@ -935,10 +879,7 @@ fn create_metrics_fifo(path: &Path) -> Result<()> {
 }
 
 fn cgroup_path_for(jailer_id: &str) -> PathBuf {
-    let unit_name = jailer_unit_name(jailer_id);
-    Path::new(CGROUP_ROOT)
-        .join("system.slice")
-        .join(format!("{}.service", unit_name))
+    service_cgroup_path(&jailer_unit_name(jailer_id))
 }
 
 async fn apply_port_dnat(workload_id: &str, guest_ip: &str, spec: &WorkloadSpec) -> Result<()> {
@@ -1348,6 +1289,7 @@ async fn configure_mmds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cgroup_stats::read_cgroup_u64;
     use crate::runtime::Runtime;
 
     #[tokio::test]
