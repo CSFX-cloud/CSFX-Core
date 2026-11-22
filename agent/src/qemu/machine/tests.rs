@@ -85,16 +85,16 @@ fn architectures_round_trip_through_their_names() {
 #[test]
 fn nic_models_map_to_qemu_devices() {
     assert_eq!(
-        nic_device_args(None, "52:54:00:00:00:01")[1],
+        nic_device_args(None, "52:54:00:00:00:01", 0)[1],
         "virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01"
     );
     assert_eq!(
-        nic_device_args(Some("e1000e"), "52:54:00:00:00:01")[1],
+        nic_device_args(Some("e1000e"), "52:54:00:00:00:01", 0)[1],
         "e1000e,netdev=net0,mac=52:54:00:00:00:01"
     );
     assert_eq!(
-        nic_device_args(Some("unknown"), "m")[1],
-        "virtio-net-pci,netdev=net0,mac=m"
+        nic_device_args(Some("unknown"), "m", 2)[1],
+        "virtio-net-pci,netdev=net2,mac=m"
     );
 }
 

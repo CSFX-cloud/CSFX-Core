@@ -9,15 +9,18 @@ use tracing::{debug, info, warn};
 
 use crate::qemu::machine::{data_disk_args, firmware_args, nic_device_args, Architecture};
 use crate::qemu::qmp::QmpClient;
-use crate::rg_dhcp::{mac_address_for_workload, RgDhcpSupervisor};
+use crate::rg_dhcp::RgDhcpSupervisor;
 use crate::spec::WorkloadSpec;
 use crate::vm_host::{self, process_gid, process_uid};
+use nics::{remove_taps, tap_devices, GuestNic};
 
 const VM_STATE_DIR: &str = "/var/lib/csfx-agent/qemu";
 const QMP_SOCKET_NAME: &str = "qmp.sock";
 const VNC_SOCKET_NAME: &str = "vnc.sock";
 const BYTES_PER_MIB: i64 = 1024 * 1024;
 const MIN_MEMORY_MIB: i64 = 512;
+
+mod nics;
 
 fn qemu_bin_path() -> String {
     std::env::var("CSFX_QEMU_BIN_PATH")
@@ -148,6 +151,7 @@ impl crate::runtime::Runtime for QemuRuntime {
             &dir,
             &VmSidecarMetadata {
                 resource_group_id: spec.resource_group_id.clone(),
+                extra_nic_count: vm_spec.config.extra_nics.len(),
             },
         )
         .await
@@ -174,42 +178,9 @@ impl crate::runtime::Runtime for QemuRuntime {
             None => None,
         };
 
-        let guest_ip = match (&spec.resource_group_id, &spec.resource_group_cidr) {
-            (Some(resource_group_id), Some(cidr)) => Some(
-                crate::rg_ipam::allocate(
-                    resource_group_id,
-                    cidr,
-                    &spec.workload_id,
-                    spec.guest_ip.as_deref(),
-                )
-                .await?,
-            ),
-            _ => None,
-        };
-
-        let mac_address = mac_address_for_workload(&spec.workload_id);
-
-        if let (Some(resource_group_id), Some(cidr), Some(bridge_iface), Some(guest_ip)) = (
-            &spec.resource_group_id,
-            &spec.resource_group_cidr,
-            &bridge_iface,
-            &guest_ip,
-        ) {
-            self.dhcp_supervisor
-                .add_reservation(
-                    resource_group_id,
-                    cidr,
-                    bridge_iface,
-                    &spec.workload_id,
-                    &mac_address,
-                    guest_ip,
-                )
-                .await
-                .context("Failed to register resource group dhcp reservation")?;
-        }
-
-        let tap_device = format!("{}{}", TAP_DEVICE_PREFIX, short_id(&spec.workload_id));
-        vm_host::create_tap(&tap_device, bridge_iface.as_deref(), process_uid()).await?;
+        let nics = self
+            .attach_networks(spec, &vm_spec.config.extra_nics, bridge_iface.as_deref())
+            .await?;
 
         let qmp_socket_path = dir.join(QMP_SOCKET_NAME);
         let vnc_socket_path = dir.join(VNC_SOCKET_NAME);
@@ -220,8 +191,7 @@ impl crate::runtime::Runtime for QemuRuntime {
             vm_spec,
             iso_path.as_deref(),
             &data_disks,
-            &tap_device,
-            &mac_address,
+            &nics,
             &qmp_socket_path,
             &vnc_socket_path,
         )
@@ -229,7 +199,8 @@ impl crate::runtime::Runtime for QemuRuntime {
 
         if let Err(e) = boot_result {
             stop_unit(&spec.workload_id).await;
-            let _ = vm_host::remove_tap(&tap_device).await;
+            let tap_devices: Vec<String> = nics.iter().map(|nic| nic.tap_device.clone()).collect();
+            remove_taps(&spec.workload_id, &tap_devices).await;
             return Err(e);
         }
 
@@ -242,7 +213,7 @@ impl crate::runtime::Runtime for QemuRuntime {
             },
         );
 
-        info!(workload_id = %spec.workload_id, guest_ip = ?guest_ip, "QEMU VM started");
+        info!(workload_id = %spec.workload_id, guest_ip = ?nics[0].ip, nic_count = nics.len(), "QEMU VM started");
 
         Ok(spec.workload_id.clone())
     }
@@ -273,17 +244,20 @@ impl crate::runtime::Runtime for QemuRuntime {
 
         stop_unit(workload_handle).await;
 
-        let tap_device = format!("{}{}", TAP_DEVICE_PREFIX, short_id(workload_handle));
-        if let Err(e) = vm_host::remove_tap(&tap_device).await {
-            warn!(workload_id = %workload_handle, error = %e, "Failed to remove tap device");
-        }
-
         let dir = vm_dir(workload_handle);
+        let sidecar = vm_host::read_sidecar::<VmSidecarMetadata>(&dir).await;
+        let extra_nic_count = sidecar
+            .as_ref()
+            .map_or(0, |sidecar| sidecar.extra_nic_count);
+        remove_taps(
+            workload_handle,
+            &tap_devices(workload_handle, extra_nic_count),
+        )
+        .await;
+
         let resource_group_id = match handle {
             Some(handle) => handle.resource_group_id,
-            None => vm_host::read_sidecar::<VmSidecarMetadata>(&dir)
-                .await
-                .and_then(|sidecar| sidecar.resource_group_id),
+            None => sidecar.and_then(|sidecar| sidecar.resource_group_id),
         };
 
         if let Some(resource_group_id) = &resource_group_id {
@@ -378,6 +352,8 @@ async fn is_unit_active(unit: &str) -> bool {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct VmSidecarMetadata {
     resource_group_id: Option<String>,
+    #[serde(default)]
+    extra_nic_count: usize,
 }
 
 fn iso_download_client() -> Result<reqwest::Client> {
@@ -508,8 +484,7 @@ async fn spawn_vm(
     vm_spec: &crate::spec::VmSpec,
     iso_path: Option<&Path>,
     data_disks: &[PathBuf],
-    tap_device: &str,
-    mac_address: &str,
+    nics: &[GuestNic],
     qmp_socket_path: &Path,
     vnc_socket_path: &Path,
 ) -> Result<()> {
@@ -534,14 +509,20 @@ async fn spawn_vm(
         "none".to_string(),
     ]);
     args.extend(architecture.display_args());
-    args.extend([
-        "-netdev".to_string(),
-        format!("tap,id=net0,ifname={},script=no,downscript=no", tap_device),
-    ]);
-    args.extend(nic_device_args(
-        vm_spec.config.nic_model.as_deref(),
-        mac_address,
-    ));
+    for (index, nic) in nics.iter().enumerate() {
+        args.extend([
+            "-netdev".to_string(),
+            format!(
+                "tap,id=net{index},ifname={},script=no,downscript=no",
+                nic.tap_device
+            ),
+        ]);
+        args.extend(nic_device_args(
+            vm_spec.config.nic_model.as_deref(),
+            &nic.mac_address,
+            index,
+        ));
+    }
     args.extend([
         "-device".to_string(),
         "virtio-balloon-pci,deflate-on-oom=on".to_string(),

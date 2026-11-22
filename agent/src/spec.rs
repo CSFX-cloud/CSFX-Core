@@ -90,6 +90,14 @@ pub struct VmConfig {
     pub architecture: Option<String>,
     #[serde(default)]
     pub nic_model: Option<String>,
+    #[serde(default)]
+    pub extra_nics: Vec<ExtraNic>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExtraNic {
+    #[serde(default)]
+    pub ip: Option<String>,
 }
 
 #[derive(Debug, Clone)]

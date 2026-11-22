@@ -16,6 +16,7 @@ use crate::models::workload::{
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
 use shared::pagination::{keyset_by_id, PageParams};
 use shared::qos::QosClass;
+use shared::vm::VmConfig;
 
 pub async fn create(
     db: &DatabaseConnection,
@@ -95,11 +96,17 @@ pub async fn used_guest_ips(
 ) -> Result<HashSet<String>, sea_orm::DbErr> {
     Ok(workloads::Entity::find()
         .filter(workloads::Column::ResourceGroupId.eq(resource_group_id))
-        .filter(workloads::Column::GuestIp.is_not_null())
         .all(db)
         .await?
         .into_iter()
-        .filter_map(|workload| workload.guest_ip)
+        .flat_map(|workload| {
+            let extras = workload
+                .vm_config
+                .and_then(|config| serde_json::from_value::<VmConfig>(config).ok())
+                .map(|config| config.extra_ips().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            workload.guest_ip.into_iter().chain(extras)
+        })
         .collect())
 }
 

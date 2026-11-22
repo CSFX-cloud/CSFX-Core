@@ -19,14 +19,14 @@ fn owned<const N: usize>(args: [&str; N]) -> Vec<String> {
 
 pub const DEFAULT_NIC_MODEL: &str = "virtio";
 
-pub fn nic_device_args(nic_model: Option<&str>, mac_address: &str) -> Vec<String> {
+pub fn nic_device_args(nic_model: Option<&str>, mac_address: &str, index: usize) -> Vec<String> {
     let device = match nic_model.unwrap_or(DEFAULT_NIC_MODEL) {
         "e1000e" => "e1000e",
         _ => "virtio-net-pci",
     };
     vec![
         "-device".to_string(),
-        format!("{device},netdev=net0,mac={mac_address}"),
+        format!("{device},netdev=net{index},mac={mac_address}"),
     ]
 }
 
