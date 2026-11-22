@@ -11,12 +11,13 @@
     import VncConsole from "$lib/components/vnc-console.svelte";
     import VmConsolePreview from "$lib/components/vm/vm-console-preview.svelte";
     import VmDetailsTab from "$lib/components/vm/vm-details-tab.svelte";
+        import VmSettingsTab from "$lib/components/vm/vm-settings-tab.svelte";
     import VmSummaryTab from "$lib/components/vm/vm-summary-tab.svelte";
     import WorkloadHero, { type MetaItem } from "$lib/components/workload/workload-hero.svelte";
     import WorkloadTabs from "$lib/components/workload/workload-tabs.svelte";
     import { formatCapacity } from "$lib/utils/format";
 
-    type Tab = "summary" | "console" | "details";
+    type Tab = "summary" | "console" | "settings" | "details";
 
     const POLL_INTERVAL_MS = 5000;
     const MILLICORES_PER_CORE = 1000;
@@ -24,6 +25,7 @@
         { id: "summary", label: "Summary" },
         { id: "console", label: "Console" },
         { id: "details", label: "Details" },
+        { id: "settings", label: "Settings" },
     ];
 
     const rg = useResourceGroupState();
@@ -38,6 +40,12 @@
     const name = $derived(workload?.service_name ?? workload?.name ?? "");
     const running = $derived(workload?.status === "running");
     const stopped = $derived(workload?.desired_state === "stopped" || workload?.status === "stopped");
+    const usedIps = $derived(
+        rg.workloads
+            .filter((candidate) => candidate.id !== workloadId)
+            .flatMap((candidate) => [candidate.guest_ip, ...(candidate.vm_config?.extra_nics ?? []).map((nic) => nic.ip)])
+            .filter((ip): ip is string => ip !== null && ip !== undefined),
+    );
     const meta = $derived<MetaItem[]>(
         workload
             ? [
@@ -145,6 +153,8 @@
                     </div>
                 </section>
             {/if}
+        {:else if tab === "settings"}
+            <VmSettingsTab {workload} rgId={rg.rgId} volumes={rg.volumes} cidr={rg.group?.internal_cidr ?? ""} {usedIps} onSaved={rg.load} />
         {:else}
             <VmDetailsTab {workload} {nodeIp} groupName={rg.group?.name ?? "Resource group"} groupHref={`/resource-groups/${rg.rgId}`} />
         {/if}

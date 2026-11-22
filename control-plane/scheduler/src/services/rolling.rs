@@ -189,15 +189,10 @@ impl SchedulerService {
             .ok_or(DbErr::RecordNotFound(workload_id.to_string()))?;
         self.ensure_not_in_rollout(&old).await?;
         self.set_rollout_error(&old, None).await?;
-        let unchanged = UpdateWorkloadRequest {
-            image: None,
-            env_vars: None,
-            ports: None,
-            restart_policy: None,
-            max_restarts: None,
-            volume_mounts: None,
-        };
-        if self.try_replace(&old, &unchanged).await? {
+        if self
+            .try_replace(&old, &UpdateWorkloadRequest::default())
+            .await?
+        {
             return Ok(old);
         }
         crate::db::workloads::request_restart(&self.db, workload_id).await

@@ -17,7 +17,7 @@ use crate::spec::WorkloadSpec;
 use crate::vm_host::{self, process_gid, process_uid};
 use nics::{read_tap_bytes, remove_taps, tap_devices, GuestNic};
 
-const VM_STATE_DIR: &str = "/var/lib/csfx-agent/qemu";
+pub(crate) const VM_STATE_DIR: &str = "/var/lib/csfx-agent/qemu";
 const QMP_SOCKET_NAME: &str = "qmp.sock";
 const VNC_SOCKET_NAME: &str = "vnc.sock";
 const BYTES_PER_MIB: i64 = 1024 * 1024;
@@ -242,6 +242,7 @@ impl crate::runtime::Runtime for QemuRuntime {
             warn!(workload_id = %workload_handle, "QMP did not answer but the qemu unit is active, keeping the vm");
             return Ok("running".to_string());
         }
+        warn!(workload_id = %workload_handle, "qemu unit is not active and qmp does not answer");
         Ok("failed".to_string())
     }
 
@@ -498,18 +499,27 @@ async fn stage_data_disks(
 }
 
 async fn ensure_boot_disk(path: &str, size_bytes: i64) -> Result<()> {
-    if tokio::fs::metadata(path).await.is_ok() {
-        return Ok(());
+    let size = size_bytes.to_string();
+    match tokio::fs::metadata(path).await {
+        Ok(metadata)
+            if i64::try_from(metadata.len()).is_ok_and(|current| current >= size_bytes) =>
+        {
+            Ok(())
+        }
+        Ok(_) => run_qemu_img(&["resize", "-f", "raw", path, &size], "resize", path).await,
+        Err(_) => run_qemu_img(&["create", "-f", "raw", path, &size], "create", path).await,
     }
+}
 
+async fn run_qemu_img(args: &[&str], action: &str, path: &str) -> Result<()> {
     let status = Command::new("qemu-img")
-        .args(["create", "-f", "raw", path, &size_bytes.to_string()])
+        .args(args)
         .status()
         .await
-        .context("Failed to execute qemu-img create")?;
+        .with_context(|| format!("Failed to execute qemu-img {action}"))?;
 
     if !status.success() {
-        anyhow::bail!("qemu-img create failed for boot disk {}", path);
+        anyhow::bail!("qemu-img {} failed for boot disk {}", action, path);
     }
 
     Ok(())
@@ -656,7 +666,10 @@ async fn query_vm_status(qmp_socket_path: &Path) -> Option<String> {
     let status = response.get("status")?.as_str()?;
 
     Some(match status {
-        "guest-panicked" | "internal-error" | "io-error" | "shutdown" => "failed".to_string(),
+        "guest-panicked" | "internal-error" | "io-error" | "shutdown" => {
+            warn!(qmp_status = %status, "qemu reported a failed run state");
+            "failed".to_string()
+        }
         _ => "running".to_string(),
     })
 }

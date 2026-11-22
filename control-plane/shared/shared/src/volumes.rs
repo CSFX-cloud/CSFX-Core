@@ -55,6 +55,17 @@ pub async fn release_for_workload(
     release_where(db, volumes::Column::AttachedToWorkload.eq(workload_id)).await
 }
 
+pub async fn release_unlisted(
+    db: &impl ConnectionTrait,
+    workload_id: Uuid,
+    keep: &[Uuid],
+) -> Result<u64, DbErr> {
+    let filter = Condition::all()
+        .add(volumes::Column::AttachedToWorkload.eq(workload_id))
+        .add(volumes::Column::Id.is_not_in(keep.to_vec()));
+    release_where(db, filter).await
+}
+
 async fn claim_one(
     db: &impl ConnectionTrait,
     volume_id: Uuid,

@@ -16,6 +16,8 @@ export const NIC_MODELS: VmOption[] = [
 
 export const DEFAULT_NIC_MODEL = "virtio";
 export const MAX_EXTRA_NICS = 3;
+export const BYTES_PER_GIB = 1024 * 1024 * 1024;
+export const MILLICORES_PER_VCPU = 1000;
 
 const IPV4_PATTERN = /^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$/;
 
@@ -40,4 +42,15 @@ export function isGuestAddress(cidr: string, ip: string): boolean {
     const hostCount = 2 ** (32 - prefix);
     const offset = ipv4ToNumber(ip) - Math.floor(ipv4ToNumber(network) / hostCount) * hostCount;
     return offset >= FIRST_GUEST_OFFSET && offset < hostCount - 1;
+}
+
+export function guestAddressError(cidr: string, usedIps: string[], ips: string[]): string | null {
+    const seen = new Set<string>();
+    for (const ip of ips) {
+        if (!isIpv4(ip)) return `${ip || "An empty address"} is not a valid IPv4 address`;
+        if (!isGuestAddress(cidr, ip)) return `${ip} is not an assignable address in ${cidr}`;
+        if (usedIps.includes(ip) || seen.has(ip)) return `${ip} is already in use`;
+        seen.add(ip);
+    }
+    return null;
 }

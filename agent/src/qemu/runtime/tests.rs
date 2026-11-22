@@ -169,7 +169,7 @@ async fn trivial_runtime_operations_have_defaults() {
     assert!(stats.cpu_usage_percent.is_none());
     let dir = temp_dir();
     let existing = dir.join("boot.img");
-    std::fs::write(&existing, b"").unwrap();
+    std::fs::write(&existing, b"x").unwrap();
     ensure_boot_disk(existing.to_str().unwrap(), 1)
         .await
         .unwrap();
@@ -221,10 +221,43 @@ async fn boot_disks_are_created_once() {
             vec![format!("create -f raw {disk} 4096")]
         );
     }
-    std::fs::write(disk, b"").unwrap();
+    std::fs::File::create(disk).unwrap().set_len(4096).unwrap();
     let tools = FakeTools::install(&[("qemu-img", "exit 0")]);
     ensure_boot_disk(disk, 4096).await.unwrap();
     assert!(tools.calls("qemu-img").is_empty());
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[tokio::test]
+async fn boot_disks_grow_when_the_workload_asks_for_more() {
+    let dir = temp_dir();
+    let disk = dir.join("boot.raw");
+    let disk = disk.to_str().unwrap();
+    std::fs::File::create(disk).unwrap().set_len(4096).unwrap();
+    let tools = FakeTools::install(&[("qemu-img", "exit 0")]);
+
+    ensure_boot_disk(disk, 8192).await.unwrap();
+
+    assert_eq!(
+        tools.calls("qemu-img"),
+        vec![format!("resize -f raw {disk} 8192")]
+    );
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[tokio::test]
+async fn boot_disk_resize_failures_are_reported() {
+    let dir = temp_dir();
+    let disk = dir.join("boot.raw");
+    std::fs::File::create(&disk).unwrap().set_len(4096).unwrap();
+    let _tools = FakeTools::install(&[("qemu-img", "exit 1")]);
+
+    let error = ensure_boot_disk(disk.to_str().unwrap(), 8192)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("qemu-img resize failed"));
     std::fs::remove_dir_all(dir).ok();
 }
 

@@ -396,6 +396,13 @@
 .st-main{flex:1;display:grid;grid-template-columns:220px minmax(0,1fr);min-height:0}
 .st-nav{display:flex;flex-direction:column;gap:2px;padding:var(--space-4) var(--space-3);border-right:1px solid var(--border-100);overflow-y:auto}
 .st-nav h1{margin:0 10px 10px;font-size:18px;line-height:1.4;font-weight:500;letter-spacing:-0.01em;color:var(--ink)}
+.st-nav button.cx-side__item{width:100%;border:0;background:transparent;text-align:left;cursor:pointer}
+.st-nav button.cx-side__item[aria-current="page"]{background:var(--bg-200)}
+.vm-settings{flex:none;min-height:360px}
+.vm-settings .st-body{max-width:760px}
+.vm-storage-tabs{width:fit-content;justify-self:start;align-self:flex-start}
+.vm-settings__bar{display:flex;align-items:center;justify-content:flex-end;gap:var(--space-3);margin-top:var(--space-4)}
+.vm-settings__note{margin-right:auto}
 .st-body{min-width:0;padding:var(--space-5) var(--space-5) var(--space-6);overflow-y:auto}
 .st-wrap{max-width:760px;display:grid;gap:var(--space-4)}
 .st-head{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:var(--space-4)}
