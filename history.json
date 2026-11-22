@@ -1220,5 +1220,30 @@
       "test-support": 100,
       "volume-manager": 76.18
     }
+  },
+  {
+    "sha": "fd2dc37",
+    "date": "2026-11-22",
+    "lines": 77.91,
+    "crates": {
+      "agent": 75.05,
+      "agent-api": 100,
+      "api-gateway": 85.24,
+      "csfx-guest-init": 20.09,
+      "csfx-migrate": 0,
+      "csfx-release-notes": 77.05,
+      "csfx-updater": 40.81,
+      "entity": 29.03,
+      "failover-controller": 80.35,
+      "migration": 67.41,
+      "object-storage": 64.9,
+      "registry": 74.57,
+      "scheduler": 81.87,
+      "sdn-controller": 65.86,
+      "shared": 75.88,
+      "site-builder": 90.73,
+      "test-support": 100,
+      "volume-manager": 76.18
+    }
   }
 ]
