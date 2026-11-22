@@ -7,12 +7,22 @@ import {
     uploadIso,
     type ObjectEntry,
 } from "$lib/api/resource-groups";
-import { DEFAULT_NIC_MODEL } from "$lib/utils/vm-options";
+import { DEFAULT_NIC_MODEL, isGuestAddress, isIpv4, MAX_EXTRA_NICS } from "$lib/utils/vm-options";
 
 const BYTES_PER_GIB = 1024 * 1024 * 1024;
 const MILLICORES_PER_VCPU = 1000;
 
 export type IsoMode = "existing" | "upload";
+export type AddressMode = "dhcp" | "static";
+
+export interface NicDraft {
+    mode: AddressMode;
+    ip: string;
+}
+
+function requestedIp(nic: NicDraft): string | null {
+    return nic.mode === "static" ? nic.ip.trim() : null;
+}
 
 export class VmDraft {
     name = $state("");
@@ -27,6 +37,7 @@ export class VmDraft {
     memoryGb = $state(2);
     diskGb = $state(20);
     nicModel = $state(DEFAULT_NIC_MODEL);
+    nics = $state<NicDraft[]>([{ mode: "dhcp", ip: "" }]);
     volumeIds = $state<string[]>([]);
     uploadProgress = $state(0);
     deploying = $state(false);
@@ -36,6 +47,8 @@ export class VmDraft {
     nameReady = $derived(this.name.trim() !== "");
     computeReady = $derived(this.architecture !== "" && this.vcpus >= 1 && this.memoryGb >= 0.5);
     storageReady = $derived(this.diskGb >= 1);
+    staticIps = $derived(this.nics.map(requestedIp).filter((ip): ip is string => ip !== null));
+    canAddNic = $derived(this.nics.length <= MAX_EXTRA_NICS);
 
     async loadExistingIsos(rgId: string) {
         this.existingLoading = true;
@@ -50,20 +63,45 @@ export class VmDraft {
         }
     }
 
+    networkError(cidr: string, usedIps: string[]): string | null {
+        const seen = new Set<string>();
+        for (const ip of this.staticIps) {
+            if (!isIpv4(ip)) return `${ip || "An empty address"} is not a valid IPv4 address`;
+            if (!isGuestAddress(cidr, ip)) return `${ip} is not an assignable address in ${cidr}`;
+            if (usedIps.includes(ip) || seen.has(ip)) return `${ip} is already in use`;
+            seen.add(ip);
+        }
+        return null;
+    }
+
+    addNic() {
+        if (this.canAddNic) this.nics = [...this.nics, { mode: "dhcp", ip: "" }];
+    }
+
+    removeNic(index: number) {
+        this.nics = this.nics.filter((_, position) => position !== index);
+    }
+
     toggleVolume(volumeId: string) {
         this.volumeIds = this.volumeIds.includes(volumeId)
             ? this.volumeIds.filter((id) => id !== volumeId)
             : [...this.volumeIds, volumeId];
     }
 
+    private uploaded: { file: File; reference: string } | null = null;
+
     private async resolveImage(rgId: string): Promise<string> {
         if (this.isoMode === "existing" && this.isoBucketId) {
             return bucketImageReference(this.isoBucketId, this.selectedIsoKey);
         }
+        const file = this.isoFile!;
+        if (this.uploaded?.file === file) return this.uploaded.reference;
         const bucket = await ensureIsoBucket(rgId);
-        return uploadIso(bucket.id, this.isoFile!, (fraction) => {
+        const reference = await uploadIso(bucket.id, file, (fraction) => {
             this.uploadProgress = fraction;
         });
+        this.uploaded = { file, reference };
+        return reference;
     }
 
     async deploy(rgId: string) {
@@ -85,7 +123,12 @@ export class VmDraft {
                 })),
                 resource_group_id: rgId,
                 runtime_class: "vm",
-                vm_config: { architecture: this.architecture, nic_model: this.nicModel },
+                vm_config: {
+                    architecture: this.architecture,
+                    nic_model: this.nicModel,
+                    guest_ip: requestedIp(this.nics[0]),
+                    extra_nics: this.nics.slice(1).map((nic) => ({ ip: requestedIp(nic) })),
+                },
             });
         } finally {
             this.deploying = false;

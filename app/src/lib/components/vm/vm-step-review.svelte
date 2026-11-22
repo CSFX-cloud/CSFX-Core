@@ -8,6 +8,7 @@
 
     const attached = $derived(volumes.filter((volume) => draft.volumeIds.includes(volume.id)));
     const nicLabel = $derived(NIC_MODELS.find((model) => model.id === draft.nicModel)?.label ?? draft.nicModel);
+    const addresses = $derived(draft.nics.map((nic) => (nic.mode === "static" ? nic.ip.trim() : "DHCP")).join(", "));
     const rows = $derived([
         ["Name", draft.name.trim()],
         ["Image", draft.imageLabel],
@@ -16,6 +17,7 @@
         ["Boot disk", `${draft.diskGb} GB`],
         ["Block storage", attached.length > 0 ? attached.map((volume) => volume.name).join(", ") : "None"],
         ["Network", `${cidr}, ${nicLabel}`],
+        ["IP addresses", addresses],
     ]);
 </script>
 

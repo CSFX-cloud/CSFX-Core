@@ -16,12 +16,14 @@
     const rg = useResourceGroupState();
     const base = `/resource-groups/${rg.rgId}`;
     const draft = new VmDraft();
+    const cidr = $derived(rg.group?.internal_cidr ?? "");
+    const usedIps = $derived(rg.workloads.flatMap((workload) => (workload.guest_ip ? [workload.guest_ip] : [])));
 
     let stepIndex = $state(0);
     let error = $state<string | null>(null);
 
     const stepReady = $derived(
-        [draft.nameReady && draft.imageReady, draft.computeReady, draft.storageReady, true, true][stepIndex]
+        [draft.nameReady && draft.imageReady, draft.computeReady, draft.storageReady, draft.networkError(cidr, usedIps) === null, true][stepIndex]
     );
 
     function back() {
@@ -57,17 +59,19 @@
     >
         <WizardSteps steps={STEPS} current={stepIndex} label="Deploy a virtual machine" />
 
-        {#if stepIndex === 0}
-            <VmStepImage {draft} rgId={rg.rgId} onerror={(message) => (error = message)} />
-        {:else if stepIndex === 1}
-            <VmStepCompute {draft} />
-        {:else if stepIndex === 2}
-            <VmStepStorage {draft} volumes={rg.volumes} />
-        {:else if stepIndex === 3}
-            <VmStepNetwork {draft} groupName={rg.group?.name ?? ""} cidr={rg.group?.internal_cidr ?? ""} />
-        {:else}
-            <VmStepReview {draft} volumes={rg.volumes} cidr={rg.group?.internal_cidr ?? ""} />
-        {/if}
+        <div class="md__step">
+            {#if stepIndex === 0}
+                <VmStepImage {draft} rgId={rg.rgId} onerror={(message) => (error = message)} />
+            {:else if stepIndex === 1}
+                <VmStepCompute {draft} />
+            {:else if stepIndex === 2}
+                <VmStepStorage {draft} volumes={rg.volumes} />
+            {:else if stepIndex === 3}
+                <VmStepNetwork {draft} groupName={rg.group?.name ?? ""} {cidr} {usedIps} />
+            {:else}
+                <VmStepReview {draft} volumes={rg.volumes} {cidr} />
+            {/if}
+        </div>
 
         {#if error}<p class="cx-hint cx-hint--error">{error}</p>{/if}
 

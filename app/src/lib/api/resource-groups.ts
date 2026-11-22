@@ -162,6 +162,8 @@ export interface Workload {
 export interface VmConfig {
     architecture?: string;
     nic_model?: string;
+    guest_ip?: string | null;
+    extra_nics?: { ip: string | null }[];
 }
 
 export interface CreateWorkloadRequest {
