@@ -26,7 +26,7 @@ const DOCKER_HUB_REGISTRY: &str = "docker.io";
 const CONTAINER_BUNDLE_DIR: &str = "csfx-bundle";
 const CONTAINER_ROOTFS_DIR: &str = "rootfs";
 
-const ROOTFS_CACHE_DIR: &str = "/var/lib/csfx-agent/rootfs";
+pub(crate) const ROOTFS_CACHE_DIR: &str = "/var/lib/csfx-agent/rootfs";
 const ROOTFS_SIZE_MB: u64 = 2048;
 const MAX_LAYER_COUNT: usize = 128;
 const MAX_COMPRESSED_IMAGE_BYTES: u64 = ROOTFS_SIZE_MB * 1024 * 1024;

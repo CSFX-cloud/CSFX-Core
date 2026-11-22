@@ -36,6 +36,7 @@ mod ssh_control;
 mod ssh_keys;
 mod start_tracker;
 mod state;
+mod storage_cleanup;
 mod system;
 #[cfg(test)]
 mod testing;

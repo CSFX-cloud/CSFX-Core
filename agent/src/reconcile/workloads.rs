@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
+use std::time::SystemTime;
 use tracing::{info, warn};
 
 use super::Reconciler;
 use crate::runtime::Runtime;
 use crate::state::{Kind, Phase, WorkloadEntry};
-use crate::{client, isolation, qemu, spec};
+use crate::{client, firecracker, isolation, qemu, spec, storage_cleanup};
 
 impl Reconciler {
     pub(super) async fn process_workloads(&self) -> Vec<String> {
@@ -16,10 +18,27 @@ impl Reconciler {
         self.prepare_networks(&workloads).await;
         self.adopt_running(&workloads).await;
         self.reap_stale(&workloads).await;
+        self.prune_stale_storage(&workloads).await;
 
         let resource_group_ids = resource_group_ids(&workloads);
         self.spawn_starts(workloads).await;
         resource_group_ids
+    }
+
+    async fn prune_stale_storage(&self, workloads: &[client::AssignedWorkload]) {
+        let desired_ids: HashSet<&str> = workloads.iter().map(|w| w.id.as_str()).collect();
+        let now = SystemTime::now();
+        storage_cleanup::remove_orphaned_vm_dirs(
+            Path::new(qemu::runtime::VM_STATE_DIR),
+            &desired_ids,
+            now,
+        )
+        .await;
+        storage_cleanup::remove_superseded_rootfs(
+            Path::new(firecracker::rootfs::ROOTFS_CACHE_DIR),
+            now,
+        )
+        .await;
     }
 
     pub(super) async fn desired_workloads(&self) -> Option<Vec<client::AssignedWorkload>> {
