@@ -17,6 +17,7 @@ pub mod rollout;
 pub mod ssh_access;
 pub mod ttl_cache;
 pub mod validate;
+pub mod vm;
 pub mod volumes;
 pub mod workload_status;
 

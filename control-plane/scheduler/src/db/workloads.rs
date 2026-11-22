@@ -16,6 +16,7 @@ use crate::models::workload::{
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
 use shared::pagination::{keyset_by_id, PageParams};
 use shared::qos::QosClass;
+use shared::vm::VmConfig;
 
 pub async fn create(
     db: &DatabaseConnection,
@@ -36,6 +37,10 @@ pub async fn create(
         .volume_mounts
         .as_ref()
         .and_then(|v| serde_json::to_value(v).ok());
+    let vm_config = req
+        .vm_config
+        .as_ref()
+        .and_then(|config| serde_json::to_value(config).ok());
 
     let model = workloads::ActiveModel {
         id: Set(id),
@@ -48,6 +53,7 @@ pub async fn create(
         memory_limit_bytes: Set(req.memory_limit_bytes),
         spread_key: Set(req.spread_key.clone()),
         topology_spread: Set(req.topology_spread.name().to_string()),
+        vm_config: Set(vm_config),
         guest_ip: Set(guest_ip),
         auto_resources: Set(req.auto_resources),
         cpu_usage_peak_percent: Set(None),
@@ -90,11 +96,17 @@ pub async fn used_guest_ips(
 ) -> Result<HashSet<String>, sea_orm::DbErr> {
     Ok(workloads::Entity::find()
         .filter(workloads::Column::ResourceGroupId.eq(resource_group_id))
-        .filter(workloads::Column::GuestIp.is_not_null())
         .all(db)
         .await?
         .into_iter()
-        .filter_map(|workload| workload.guest_ip)
+        .flat_map(|workload| {
+            let extras = workload
+                .vm_config
+                .and_then(|config| serde_json::from_value::<VmConfig>(config).ok())
+                .map(|config| config.extra_ips().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            workload.guest_ip.into_iter().chain(extras)
+        })
         .collect())
 }
 

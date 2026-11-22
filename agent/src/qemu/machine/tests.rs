@@ -70,3 +70,38 @@ async fn aarch64_firmware_gets_a_private_variable_store() {
     std::env::remove_var(FIRMWARE_VARS_ENV);
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn architectures_round_trip_through_their_names() {
+    for architecture in [Architecture::X86_64, Architecture::Aarch64] {
+        assert_eq!(
+            Architecture::from_name(architecture.name()),
+            Some(architecture)
+        );
+    }
+    assert_eq!(Architecture::from_name("riscv64"), None);
+}
+
+#[test]
+fn nic_models_map_to_qemu_devices() {
+    assert_eq!(
+        nic_device_args(None, "52:54:00:00:00:01", 0)[1],
+        "virtio-net-pci,netdev=net0,mac=52:54:00:00:00:01"
+    );
+    assert_eq!(
+        nic_device_args(Some("e1000e"), "52:54:00:00:00:01", 0)[1],
+        "e1000e,netdev=net0,mac=52:54:00:00:00:01"
+    );
+    assert_eq!(
+        nic_device_args(Some("unknown"), "m", 2)[1],
+        "virtio-net-pci,netdev=net2,mac=m"
+    );
+}
+
+#[test]
+fn data_disks_are_virtio_block_devices() {
+    let args = data_disk_args(1, Path::new("/vm/data-1"));
+
+    assert!(args[1].starts_with("file=/vm/data-1,format=raw,if=none,id=data1"));
+    assert_eq!(args[3], "virtio-blk-pci,drive=data1");
+}

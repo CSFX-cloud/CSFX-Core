@@ -40,7 +40,7 @@ pub fn mac_address_for_workload(workload_id: &str) -> String {
     )
 }
 
-type Reservations = HashMap<String, HashMap<String, (String, String)>>;
+type Reservations = HashMap<String, HashMap<String, Vec<(String, String)>>>;
 
 pub struct RgDhcpSupervisor {
     processes: Mutex<HashMap<String, Child>>,
@@ -75,10 +75,9 @@ impl RgDhcpSupervisor {
             let rg_reservations = reservations
                 .entry(resource_group_id.to_string())
                 .or_default();
-            rg_reservations.insert(
-                workload_id.to_string(),
-                (mac_address.to_string(), guest_ip.to_string()),
-            );
+            let workload_reservations = rg_reservations.entry(workload_id.to_string()).or_default();
+            workload_reservations.retain(|(existing_mac, _)| existing_mac != mac_address);
+            workload_reservations.push((mac_address.to_string(), guest_ip.to_string()));
         }
 
         self.write_hosts_file(resource_group_id).await?;
@@ -109,7 +108,7 @@ impl RgDhcpSupervisor {
         let rg_reservations = reservations.get(resource_group_id).unwrap_or(&empty);
 
         let mut contents = String::new();
-        for (mac_address, guest_ip) in rg_reservations.values() {
+        for (mac_address, guest_ip) in rg_reservations.values().flatten() {
             contents.push_str(&format!("{},{}\n", mac_address, guest_ip));
         }
 

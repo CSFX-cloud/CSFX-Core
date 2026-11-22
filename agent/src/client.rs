@@ -93,6 +93,8 @@ pub struct AssignedWorkload {
     pub replaces_workload_id: Option<String>,
     #[serde(default)]
     pub env_unresolved: bool,
+    #[serde(default)]
+    pub vm_config: Option<crate::spec::VmConfig>,
 }
 
 fn readable_ports<'de, D>(

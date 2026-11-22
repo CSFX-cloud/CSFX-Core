@@ -7,17 +7,24 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-use crate::qemu::machine::{firmware_args, Architecture};
+use crate::cgroup_stats::{
+    read_cpu_usage_percent, read_memory_working_set_bytes, service_cgroup_path,
+};
+use crate::qemu::machine::{data_disk_args, firmware_args, nic_device_args, Architecture};
 use crate::qemu::qmp::QmpClient;
-use crate::rg_dhcp::{mac_address_for_workload, RgDhcpSupervisor};
+use crate::rg_dhcp::RgDhcpSupervisor;
 use crate::spec::WorkloadSpec;
 use crate::vm_host::{self, process_gid, process_uid};
+use nics::{read_tap_bytes, remove_taps, tap_devices, GuestNic};
 
 const VM_STATE_DIR: &str = "/var/lib/csfx-agent/qemu";
 const QMP_SOCKET_NAME: &str = "qmp.sock";
 const VNC_SOCKET_NAME: &str = "vnc.sock";
 const BYTES_PER_MIB: i64 = 1024 * 1024;
 const MIN_MEMORY_MIB: i64 = 512;
+const HOST_MEMORY_OVERHEAD_MIB: i64 = 1024;
+
+mod nics;
 
 fn qemu_bin_path() -> String {
     std::env::var("CSFX_QEMU_BIN_PATH")
@@ -59,6 +66,8 @@ struct VmHandle {
     qmp_socket_path: PathBuf,
     vnc_socket_path: PathBuf,
     resource_group_id: Option<String>,
+    extra_nic_count: usize,
+    previous_cpu_sample: Arc<Mutex<Option<(std::time::Instant, u64)>>>,
 }
 
 pub struct QemuRuntime {
@@ -148,12 +157,15 @@ impl crate::runtime::Runtime for QemuRuntime {
             &dir,
             &VmSidecarMetadata {
                 resource_group_id: spec.resource_group_id.clone(),
+                extra_nic_count: vm_spec.config.extra_nics.len(),
             },
         )
         .await
         .context("Failed to write vm sidecar metadata")?;
 
+        ensure_architecture(&vm_spec.config)?;
         ensure_boot_disk(&vm_spec.boot_disk_path, vm_spec.boot_disk_size_bytes).await?;
+        let data_disks = stage_data_disks(&spec.workload_id, spec, &dir).await?;
 
         let iso_path = match &vm_spec.iso_url {
             Some(iso_url) => {
@@ -172,42 +184,9 @@ impl crate::runtime::Runtime for QemuRuntime {
             None => None,
         };
 
-        let guest_ip = match (&spec.resource_group_id, &spec.resource_group_cidr) {
-            (Some(resource_group_id), Some(cidr)) => Some(
-                crate::rg_ipam::allocate(
-                    resource_group_id,
-                    cidr,
-                    &spec.workload_id,
-                    spec.guest_ip.as_deref(),
-                )
-                .await?,
-            ),
-            _ => None,
-        };
-
-        let mac_address = mac_address_for_workload(&spec.workload_id);
-
-        if let (Some(resource_group_id), Some(cidr), Some(bridge_iface), Some(guest_ip)) = (
-            &spec.resource_group_id,
-            &spec.resource_group_cidr,
-            &bridge_iface,
-            &guest_ip,
-        ) {
-            self.dhcp_supervisor
-                .add_reservation(
-                    resource_group_id,
-                    cidr,
-                    bridge_iface,
-                    &spec.workload_id,
-                    &mac_address,
-                    guest_ip,
-                )
-                .await
-                .context("Failed to register resource group dhcp reservation")?;
-        }
-
-        let tap_device = format!("{}{}", TAP_DEVICE_PREFIX, short_id(&spec.workload_id));
-        vm_host::create_tap(&tap_device, bridge_iface.as_deref(), process_uid()).await?;
+        let nics = self
+            .attach_networks(spec, &vm_spec.config.extra_nics, bridge_iface.as_deref())
+            .await?;
 
         let qmp_socket_path = dir.join(QMP_SOCKET_NAME);
         let vnc_socket_path = dir.join(VNC_SOCKET_NAME);
@@ -217,8 +196,8 @@ impl crate::runtime::Runtime for QemuRuntime {
             spec,
             vm_spec,
             iso_path.as_deref(),
-            &tap_device,
-            &mac_address,
+            &data_disks,
+            &nics,
             &qmp_socket_path,
             &vnc_socket_path,
         )
@@ -226,7 +205,8 @@ impl crate::runtime::Runtime for QemuRuntime {
 
         if let Err(e) = boot_result {
             stop_unit(&spec.workload_id).await;
-            let _ = vm_host::remove_tap(&tap_device).await;
+            let tap_devices: Vec<String> = nics.iter().map(|nic| nic.tap_device.clone()).collect();
+            remove_taps(&spec.workload_id, &tap_devices).await;
             return Err(e);
         }
 
@@ -236,10 +216,12 @@ impl crate::runtime::Runtime for QemuRuntime {
                 qmp_socket_path,
                 vnc_socket_path,
                 resource_group_id: spec.resource_group_id.clone(),
+                extra_nic_count: vm_spec.config.extra_nics.len(),
+                previous_cpu_sample: Arc::default(),
             },
         );
 
-        info!(workload_id = %spec.workload_id, guest_ip = ?guest_ip, "QEMU VM started");
+        info!(workload_id = %spec.workload_id, guest_ip = ?nics[0].ip, nic_count = nics.len(), "QEMU VM started");
 
         Ok(spec.workload_id.clone())
     }
@@ -253,8 +235,14 @@ impl crate::runtime::Runtime for QemuRuntime {
             handle.qmp_socket_path.clone()
         };
 
-        let status = query_vm_status(&qmp_socket_path).await;
-        Ok(status.unwrap_or_else(|| "failed".to_string()))
+        if let Some(status) = query_vm_status(&qmp_socket_path).await {
+            return Ok(status);
+        }
+        if is_unit_active(&unit_name(workload_handle)).await {
+            warn!(workload_id = %workload_handle, "QMP did not answer but the qemu unit is active, keeping the vm");
+            return Ok("running".to_string());
+        }
+        Ok("failed".to_string())
     }
 
     fn logs(&self, _workload_handle: &str) -> crate::runtime::LogStream {
@@ -270,17 +258,20 @@ impl crate::runtime::Runtime for QemuRuntime {
 
         stop_unit(workload_handle).await;
 
-        let tap_device = format!("{}{}", TAP_DEVICE_PREFIX, short_id(workload_handle));
-        if let Err(e) = vm_host::remove_tap(&tap_device).await {
-            warn!(workload_id = %workload_handle, error = %e, "Failed to remove tap device");
-        }
-
         let dir = vm_dir(workload_handle);
+        let sidecar = vm_host::read_sidecar::<VmSidecarMetadata>(&dir).await;
+        let extra_nic_count = sidecar
+            .as_ref()
+            .map_or(0, |sidecar| sidecar.extra_nic_count);
+        remove_taps(
+            workload_handle,
+            &tap_devices(workload_handle, extra_nic_count),
+        )
+        .await;
+
         let resource_group_id = match handle {
             Some(handle) => handle.resource_group_id,
-            None => vm_host::read_sidecar::<VmSidecarMetadata>(&dir)
-                .await
-                .and_then(|sidecar| sidecar.resource_group_id),
+            None => sidecar.and_then(|sidecar| sidecar.resource_group_id),
         };
 
         if let Some(resource_group_id) = &resource_group_id {
@@ -299,8 +290,30 @@ impl crate::runtime::Runtime for QemuRuntime {
         Ok(())
     }
 
-    async fn stats(&self, _workload_handle: &str) -> Result<crate::runtime::ContainerStats> {
-        Ok(crate::runtime::ContainerStats::default())
+    async fn stats(&self, workload_handle: &str) -> Result<crate::runtime::ContainerStats> {
+        let (previous_cpu_sample, extra_nic_count) = {
+            let handles = self.handles.lock().await;
+            let Some(handle) = handles.get(workload_handle) else {
+                return Ok(crate::runtime::ContainerStats::default());
+            };
+            (
+                Arc::clone(&handle.previous_cpu_sample),
+                handle.extra_nic_count,
+            )
+        };
+        let cgroup_path = service_cgroup_path(&unit_name(workload_handle));
+        let (network_rx_bytes, network_tx_bytes) =
+            read_tap_bytes(&tap_devices(workload_handle, extra_nic_count))
+                .await
+                .unzip();
+
+        Ok(crate::runtime::ContainerStats {
+            cpu_usage_percent: read_cpu_usage_percent(&cgroup_path, &previous_cpu_sample).await,
+            memory_usage_bytes: read_memory_working_set_bytes(&cgroup_path).await,
+            network_rx_bytes,
+            network_tx_bytes,
+            volume_usage: Vec::new(),
+        })
     }
 
     async fn list_managed_workloads(&self) -> Result<Vec<(String, String)>> {
@@ -331,7 +344,9 @@ impl crate::runtime::Runtime for QemuRuntime {
             let handle = VmHandle {
                 qmp_socket_path: dir.join(QMP_SOCKET_NAME),
                 vnc_socket_path: dir.join(VNC_SOCKET_NAME),
+                extra_nic_count: sidecar.as_ref().map_or(0, |s| s.extra_nic_count),
                 resource_group_id: sidecar.and_then(|s| s.resource_group_id),
+                previous_cpu_sample: Arc::default(),
             };
 
             self.handles
@@ -375,6 +390,8 @@ async fn is_unit_active(unit: &str) -> bool {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct VmSidecarMetadata {
     resource_group_id: Option<String>,
+    #[serde(default)]
+    extra_nic_count: usize,
 }
 
 fn iso_download_client() -> Result<reqwest::Client> {
@@ -451,6 +468,35 @@ async fn ensure_raw_image(path: &Path) -> Result<()> {
     }
 }
 
+fn ensure_architecture(config: &crate::spec::VmConfig) -> Result<()> {
+    let Some(requested) = config.architecture.as_deref() else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        Architecture::from_name(requested) == Some(Architecture::HOST),
+        "vm requires {requested} but this node is {}",
+        Architecture::HOST.name()
+    );
+    Ok(())
+}
+
+async fn stage_data_disks(
+    workload_id: &str,
+    spec: &WorkloadSpec,
+    dir: &Path,
+) -> Result<Vec<PathBuf>> {
+    let mut staged = Vec::new();
+    let unit_prefix = unit_name(workload_id);
+    for mount in spec.volume_mounts.as_deref().unwrap_or_default() {
+        let name = format!("data-{}", mount.volume_id);
+        vm_host::stage_block_device(&mount.device_path, &unit_prefix, dir, &name)
+            .await
+            .context("Failed to stage volume block device for vm")?;
+        staged.push(dir.join(name));
+    }
+    Ok(staged)
+}
+
 async fn ensure_boot_disk(path: &str, size_bytes: i64) -> Result<()> {
     if tokio::fs::metadata(path).await.is_ok() {
         return Ok(());
@@ -475,8 +521,8 @@ async fn spawn_vm(
     spec: &WorkloadSpec,
     vm_spec: &crate::spec::VmSpec,
     iso_path: Option<&Path>,
-    tap_device: &str,
-    mac_address: &str,
+    data_disks: &[PathBuf],
+    nics: &[GuestNic],
     qmp_socket_path: &Path,
     vnc_socket_path: &Path,
 ) -> Result<()> {
@@ -501,11 +547,21 @@ async fn spawn_vm(
         "none".to_string(),
     ]);
     args.extend(architecture.display_args());
+    for (index, nic) in nics.iter().enumerate() {
+        args.extend([
+            "-netdev".to_string(),
+            format!(
+                "tap,id=net{index},ifname={},script=no,downscript=no",
+                nic.tap_device
+            ),
+        ]);
+        args.extend(nic_device_args(
+            vm_spec.config.nic_model.as_deref(),
+            &nic.mac_address,
+            index,
+        ));
+    }
     args.extend([
-        "-netdev".to_string(),
-        format!("tap,id=net0,ifname={},script=no,downscript=no", tap_device),
-        "-device".to_string(),
-        format!("virtio-net-pci,netdev=net0,mac={}", mac_address),
         "-device".to_string(),
         "virtio-balloon-pci,deflate-on-oom=on".to_string(),
         "-qmp".to_string(),
@@ -513,6 +569,9 @@ async fn spawn_vm(
         "-vnc".to_string(),
         format!("unix:{}", vnc_socket_path.display()),
     ]);
+    for (index, path) in data_disks.iter().enumerate() {
+        args.extend(data_disk_args(index, path));
+    }
     args.extend(firmware_args(architecture, &vm_dir(workload_id)).await?);
 
     if let Some(iso_path) = iso_path {
@@ -525,6 +584,10 @@ async fn spawn_vm(
     let gid_arg = format!("--gid={}", process_gid());
     let cpu_weight_arg = format!("--property=CPUWeight={}", spec.cpu_weight());
     let cpu_quota_arg = format!("--property=CPUQuota={}%", spec.cpu_quota_percent());
+    let memory_max_arg = format!(
+        "--property=MemoryMax={}M",
+        mem_size_mib + HOST_MEMORY_OVERHEAD_MIB
+    );
 
     let status = Command::new("systemd-run")
         .args([
@@ -535,6 +598,7 @@ async fn spawn_vm(
             &gid_arg,
             &cpu_weight_arg,
             &cpu_quota_arg,
+            &memory_max_arg,
             "--property=SupplementaryGroups=kvm",
             "--property=StandardOutput=journal",
             "--property=StandardError=journal",

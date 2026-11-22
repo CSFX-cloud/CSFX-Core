@@ -18,6 +18,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use shared::ttl_cache::TtlCache;
+use shared::vm::VmConfig;
 use shared::workload_status::ACTIVE_STATUSES;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -193,19 +194,35 @@ pub async fn list_resource_group_members(
         .await
         .map_err(db_error("failed to list resource group members"))?;
 
-    let members: Vec<ResourceGroupMember> = rows
-        .into_iter()
-        .filter_map(|w| {
-            Some(ResourceGroupMember {
-                workload_id: w.id,
-                agent_id: w.assigned_agent_id?,
-                service_name: w.service_name,
-                guest_ip: w.guest_ip?,
-            })
-        })
-        .collect();
+    let members: Vec<ResourceGroupMember> = rows.into_iter().flat_map(members_of).collect();
 
     Ok((StatusCode::OK, Json(json!(members))))
+}
+
+fn members_of(workload: workloads::Model) -> Vec<ResourceGroupMember> {
+    let Some(agent_id) = workload.assigned_agent_id else {
+        return Vec::new();
+    };
+    let extra_ips: Vec<String> = workload
+        .vm_config
+        .and_then(|config| serde_json::from_value::<VmConfig>(config).ok())
+        .map(|config| config.extra_ips().cloned().collect())
+        .unwrap_or_default();
+    let primary = workload.guest_ip.map(|guest_ip| ResourceGroupMember {
+        workload_id: workload.id,
+        agent_id,
+        service_name: workload.service_name,
+        guest_ip,
+    });
+    primary
+        .into_iter()
+        .chain(extra_ips.into_iter().map(|guest_ip| ResourceGroupMember {
+            workload_id: workload.id,
+            agent_id,
+            service_name: None,
+            guest_ip,
+        }))
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
