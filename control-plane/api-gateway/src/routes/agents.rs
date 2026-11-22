@@ -1,7 +1,7 @@
 use crate::service_client::Service;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post, put},
     Router,
@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::auth::agent::AgentApiKey;
 use crate::auth::rbac::{CanManageSystem, CanViewAgents};
+use crate::workload_images::resolve_bucket_image;
 use crate::workload_secrets;
 use crate::AppState;
 
@@ -233,6 +234,7 @@ async fn group_cidrs(
 pub async fn get_self_workloads(
     agent: AgentApiKey,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, StatusCode> {
     let rows = workloads::Entity::find()
         .filter(workloads::Column::AssignedAgentId.eq(agent.agent_id))
@@ -249,6 +251,7 @@ pub async fn get_self_workloads(
     let mut response = Vec::with_capacity(rows.len());
     for mut workload in rows {
         let env_unresolved = prepare_env(&state, &mut workload, deadline).await;
+        resolve_bucket_image(&state, &headers, &mut workload).await;
         let resource_group_cidr = workload
             .resource_group_id
             .and_then(|group_id| cidrs.get(&group_id).cloned());

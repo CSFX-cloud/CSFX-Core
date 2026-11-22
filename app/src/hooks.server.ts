@@ -1,14 +1,12 @@
 import { error } from '@sveltejs/kit';
 import type { Handle } from '@sveltejs/kit/hooks';
-import { env } from '$env/dynamic/private';
+import { API_GATEWAY_URL } from '$app/env/private';
 import type { UserProfile } from '$lib/auth/api';
 
 const SESSION_COOKIE = 'auth_token';
-const DEFAULT_GATEWAY_URL = 'https://localhost:8000';
 
 async function validateSession(token: string): Promise<UserProfile | null> {
-    const gatewayUrl = env.API_GATEWAY_URL ?? DEFAULT_GATEWAY_URL;
-    const response = await fetch(`${gatewayUrl}/api/validate-session`, {
+    const response = await fetch(`${API_GATEWAY_URL}/api/validate-session`, {
         headers: { cookie: `${SESSION_COOKIE}=${token}` },
     });
     if (response.status === 401) return null;

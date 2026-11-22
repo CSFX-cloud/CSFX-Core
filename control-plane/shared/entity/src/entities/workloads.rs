@@ -57,6 +57,8 @@ pub struct Model {
     pub observed_generation: i64,
     pub observed_status: Option<String>,
     pub topology_spread: String,
+    #[serde(default)]
+    pub vm_config: Option<Json>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -9,10 +9,11 @@ use crate::{
     db::buckets as db,
     garage::{
         client::{GarageBucket, GarageKey},
-        GarageClient,
+        GarageClient, S3Client,
     },
     log_error, log_info,
     models::{BucketResponse, CreateBucketRequest, UpdateBucketRequest},
+    services::object::purge_objects,
 };
 
 pub async fn create_bucket(
@@ -182,11 +183,17 @@ pub async fn update_bucket(
 pub async fn delete_bucket(
     db_conn: &DatabaseConnection,
     garage: &GarageClient,
+    s3: &S3Client,
+    secret_box: &SecretBox,
     id: Uuid,
 ) -> Result<bool> {
     let Some(existing) = db::get_by_id(db_conn, id).await? else {
         return Ok(false);
     };
+
+    if existing.master_key_id.is_some() {
+        purge_objects(db_conn, s3, secret_box, id).await?;
+    }
 
     if let Some(garage_bucket_id) = &existing.garage_bucket_id {
         garage.delete_bucket(garage_bucket_id).await?;

@@ -216,6 +216,7 @@ mod tests {
             observed_generation: 0,
             observed_status: None,
             topology_spread: "none".to_string(),
+            vm_config: None,
         }
     }
 

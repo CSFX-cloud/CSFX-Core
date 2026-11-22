@@ -33,6 +33,7 @@ pub struct Demand<'a> {
     pub workload_id: Uuid,
     pub replaces: Option<Uuid>,
     pub node_ports: Vec<u16>,
+    pub architecture: Option<&'a str>,
 }
 
 pub fn pick(demand: &Demand, agents: &[AgentResources], strategy: Strategy) -> Option<Uuid> {
@@ -88,7 +89,14 @@ fn fits(demand: &Demand, agent: &AgentResources) -> bool {
         && agent.free_memory_bytes >= demand.memory_bytes
         && agent.free_disk_bytes >= demand.disk_bytes
         && agent.kvm_capable
+        && architecture_matches(demand, agent)
         && node_ports_free(demand, agent)
+}
+
+fn architecture_matches(demand: &Demand, agent: &AgentResources) -> bool {
+    demand
+        .architecture
+        .is_none_or(|architecture| architecture == agent.architecture)
 }
 
 fn node_ports_free(demand: &Demand, agent: &AgentResources) -> bool {
@@ -167,6 +175,7 @@ mod tests {
             zone: "default".to_string(),
             spread_counts: HashMap::new(),
             used_node_ports: HashMap::new(),
+            architecture: "x86_64".to_string(),
         }
     }
 
@@ -181,7 +190,30 @@ mod tests {
             workload_id: Uuid::new_v4(),
             replaces: None,
             node_ports: Vec::new(),
+            architecture: None,
         }
+    }
+
+    #[test]
+    fn vms_only_land_on_agents_with_the_requested_architecture() {
+        let x86 = agent(7000, 14, true);
+        let arm = AgentResources {
+            architecture: "aarch64".to_string(),
+            ..agent(7000, 14, true)
+        };
+        let agents = vec![x86, arm.clone()];
+        let wanted = Demand {
+            architecture: Some("aarch64"),
+            ..demand(None)
+        };
+
+        assert_eq!(pick(&wanted, &agents, Strategy::Spread), Some(arm.agent_id));
+        let unavailable = Demand {
+            architecture: Some("riscv64"),
+            ..demand(None)
+        };
+        assert_eq!(pick(&unavailable, &agents, Strategy::Spread), None);
+        assert!(pick(&demand(None), &agents, Strategy::Spread).is_some());
     }
 
     #[test]

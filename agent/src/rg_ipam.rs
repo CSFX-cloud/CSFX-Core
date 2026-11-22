@@ -92,6 +92,16 @@ async fn claim_assigned(rg_dir: &Path, workload_id: &str, assigned_ip: &str) -> 
     Ok(assigned_ip.to_string())
 }
 
+pub async fn claim(resource_group_id: &str, workload_id: &str, ip: &str) -> Result<()> {
+    let rg_dir = registry_dir(resource_group_id);
+    tokio::fs::create_dir_all(&rg_dir)
+        .await
+        .context("failed to create rg ipam registry directory")?;
+    tokio::fs::write(rg_dir.join(ip), workload_id.as_bytes())
+        .await
+        .context("failed to write ipam claim")
+}
+
 pub async fn claimed_by(resource_group_id: &str, ip: &str) -> Option<String> {
     tokio::fs::read_to_string(registry_dir(resource_group_id).join(ip))
         .await

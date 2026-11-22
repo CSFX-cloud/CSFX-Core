@@ -138,6 +138,7 @@ async fn get_online_agents_with_capacity(
             free_memory_bytes: memory_bytes,
             free_disk_bytes: disk_bytes,
             kvm_capable: agent.kvm_capable,
+            architecture: agent.architecture,
             zone: agent.zone,
             spread_counts: HashMap::new(),
             used_node_ports: HashMap::new(),

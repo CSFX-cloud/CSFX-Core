@@ -22,7 +22,6 @@ const SIGV4_UNRESERVED: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC
 #[derive(Clone)]
 pub struct S3Client {
     s3_url: String,
-    public_s3_url: String,
     http: reqwest::Client,
 }
 
@@ -41,10 +40,9 @@ pub struct ListObjectsResult {
 }
 
 impl S3Client {
-    pub fn new(s3_url: String, public_s3_url: String) -> Self {
+    pub fn new(s3_url: String) -> Self {
         Self {
             s3_url,
-            public_s3_url,
             http: shared::http::client(shared::http::DEFAULT_TIMEOUT),
         }
     }
@@ -167,7 +165,9 @@ impl S3Client {
         );
 
         let identity = Self::identity(access_key_id, secret_access_key);
-        let params = Self::signing_params(&identity, SigningSettings::default())?;
+        let mut settings = SigningSettings::default();
+        settings.percent_encoding_mode = PercentEncodingMode::Single;
+        let params = Self::signing_params(&identity, settings)?;
 
         let signable = SignableRequest::new(
             "DELETE",
@@ -296,6 +296,7 @@ impl S3Client {
 
     pub fn presign_url(
         &self,
+        public_origin: &str,
         method: &str,
         bucket: &str,
         key: &str,
@@ -305,7 +306,7 @@ impl S3Client {
     ) -> Result<String> {
         let url = format!(
             "{}/{}/{}",
-            self.public_s3_url,
+            public_origin,
             bucket,
             percent_encoding::utf8_percent_encode(key, SIGV4_UNRESERVED)
         );
@@ -342,7 +343,7 @@ impl S3Client {
             .context("presigned uri has no path")?
             .as_str();
 
-        Ok(format!("{}/s3data{}", self.public_s3_url, path_and_query))
+        Ok(format!("{public_origin}/s3data{path_and_query}"))
     }
 }
 

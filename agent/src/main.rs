@@ -2,6 +2,7 @@ mod agent_stream;
 mod arp;
 mod backoff;
 mod bootstrap;
+mod cgroup_stats;
 mod cidr;
 mod client;
 mod cmd;

@@ -84,11 +84,28 @@ impl WorkloadSpec {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct VmConfig {
+    #[serde(default)]
+    pub architecture: Option<String>,
+    #[serde(default)]
+    pub nic_model: Option<String>,
+    #[serde(default)]
+    pub extra_nics: Vec<ExtraNic>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExtraNic {
+    #[serde(default)]
+    pub ip: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct VmSpec {
     pub boot_disk_path: String,
     pub boot_disk_size_bytes: i64,
     pub iso_url: Option<String>,
+    pub config: VmConfig,
 }
 
 pub fn second_host_ip(cidr: &str) -> Option<String> {

@@ -10,6 +10,7 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
+use crate::cgroup_stats::{read_cpu_usage_percent, read_memory_usage_bytes, service_cgroup_path};
 use crate::firecracker::api::FirecrackerApiClient;
 use crate::firecracker::rootfs::RootfsBuilder;
 use crate::firecracker::site_registry::SiteRegistry;
@@ -21,7 +22,6 @@ use crate::vm_host::{self, process_gid, process_uid};
 const JAILER_BASE_DIR: &str = "/var/lib/csfx-agent/firecracker";
 const GUEST_KERNEL_PATH: &str = "/var/lib/csfx-agent/vmlinux";
 const GUEST_CID_BASE: u32 = 1000;
-const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const CGROUP_PARENT: &str = "csfx-firecracker";
 const BYTES_PER_MIB: i64 = 1024 * 1024;
 const MIN_MEMORY_MIB: i64 = 128;
@@ -606,62 +606,6 @@ impl crate::runtime::Runtime for FirecrackerRuntime {
     }
 }
 
-async fn read_cpu_usage_percent(
-    cgroup_path: &Path,
-    previous_sample: &Mutex<Option<(std::time::Instant, u64)>>,
-) -> Option<f64> {
-    let usage_usec = read_cgroup_u64(cgroup_path, "cpu.stat", "usage_usec").await?;
-    let now = std::time::Instant::now();
-
-    let mut previous = previous_sample.lock().await;
-    let percent = match *previous {
-        Some((previous_time, previous_usage)) => {
-            let elapsed_usec = now.duration_since(previous_time).as_micros() as u64;
-            if elapsed_usec == 0 || usage_usec < previous_usage {
-                None
-            } else {
-                let delta_usec = usage_usec - previous_usage;
-                Some((delta_usec as f64 / elapsed_usec as f64) * 100.0)
-            }
-        }
-        None => None,
-    };
-
-    *previous = Some((now, usage_usec));
-    percent
-}
-
-async fn read_memory_usage_bytes(cgroup_path: &Path) -> Option<i64> {
-    let path = cgroup_path.join("memory.current");
-    match tokio::fs::read_to_string(&path).await {
-        Ok(content) => content.trim().parse::<i64>().ok(),
-        Err(e) => {
-            warn!(path = %path.display(), error = %e, "failed to read workload memory cgroup");
-            None
-        }
-    }
-}
-
-async fn read_cgroup_u64(cgroup_path: &Path, file: &str, key: &str) -> Option<u64> {
-    let path = cgroup_path.join(file);
-    let content = match tokio::fs::read_to_string(&path).await {
-        Ok(content) => content,
-        Err(e) => {
-            warn!(path = %path.display(), error = %e, "failed to read workload cgroup file");
-            return None;
-        }
-    };
-
-    content.lines().find_map(|line| {
-        let (line_key, value) = line.split_once(' ')?;
-        if line_key == key {
-            value.trim().parse::<u64>().ok()
-        } else {
-            None
-        }
-    })
-}
-
 async fn read_network_bytes(metrics_path: &Path) -> Option<(i64, i64)> {
     let content = tokio::time::timeout(
         std::time::Duration::from_millis(500),
@@ -881,36 +825,11 @@ async fn spawn_jailer(
     anyhow::bail!("jailer process for id {} did not appear", jailer_id)
 }
 
-fn unit_slug(path: &Path) -> String {
-    path.to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
-}
-
-async fn run_privileged(unit: &str, program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new("systemd-run")
-        .args(["--pipe", "--wait", "--collect", "--uid=0", "--gid=0"])
-        .arg(format!("--unit={unit}"))
-        .arg(format!(
-            "--setenv=PATH={}",
-            std::env::var("PATH").unwrap_or_default()
-        ))
-        .arg(program)
-        .args(args)
-        .status()
-        .await
-        .with_context(|| format!("Failed to spawn privileged {program}"))?;
-
-    anyhow::ensure!(status.success(), "privileged {program} failed");
-    Ok(())
-}
-
 async fn remove_chroot_dir_privileged(path: &Path) -> Result<()> {
-    let unit = format!("csfx-jailer-cleanup-{}", unit_slug(path));
+    let unit = format!("csfx-jailer-cleanup-{}", vm_host::unit_slug(path));
     let target = path.to_string_lossy();
 
-    run_privileged(&unit, "rm", &["-rf", "--", &target])
+    vm_host::run_privileged(&unit, "rm", &["-rf", "--", &target])
         .await
         .with_context(|| format!("privileged cleanup of chroot directory {:?} failed", path))
 }
@@ -960,10 +879,7 @@ fn create_metrics_fifo(path: &Path) -> Result<()> {
 }
 
 fn cgroup_path_for(jailer_id: &str) -> PathBuf {
-    let unit_name = jailer_unit_name(jailer_id);
-    Path::new(CGROUP_ROOT)
-        .join("system.slice")
-        .join(format!("{}.service", unit_name))
+    service_cgroup_path(&jailer_unit_name(jailer_id))
 }
 
 async fn apply_port_dnat(workload_id: &str, guest_ip: &str, spec: &WorkloadSpec) -> Result<()> {
@@ -1281,9 +1197,14 @@ async fn attach_volume_drives(
             warn!(volume_id = %volume_mount.volume_id, device = %volume_mount.device_path, error = %e, "Volume filesystem not grown");
         }
 
-        stage_block_device_into_jail(&volume_mount.device_path, vm_root_dir, &jail_device_name)
-            .await
-            .context("Failed to stage volume block device into jailer chroot")?;
+        vm_host::stage_block_device(
+            &volume_mount.device_path,
+            "csfx-jailer",
+            vm_root_dir,
+            &jail_device_name,
+        )
+        .await
+        .context("Failed to stage volume block device into jailer chroot")?;
 
         client
             .put(
@@ -1306,42 +1227,6 @@ async fn attach_volume_drives(
     }
 
     Ok(mounted)
-}
-
-async fn stage_block_device_into_jail(
-    device_path: &str,
-    vm_root_dir: &Path,
-    jail_device_name: &str,
-) -> Result<()> {
-    let metadata = tokio::fs::metadata(device_path)
-        .await
-        .context("Failed to stat volume block device")?;
-    let device_id = std::os::unix::fs::MetadataExt::rdev(&metadata) as libc::dev_t;
-    let major = libc::major(device_id);
-    let minor = libc::minor(device_id);
-    let jailer_uid = process_uid();
-    let jailer_gid = process_gid();
-    let target_path = vm_root_dir.join(jail_device_name);
-
-    let slug = unit_slug(&target_path);
-    let target = target_path.to_string_lossy();
-    let owner = format!("{jailer_uid}:{jailer_gid}");
-    let (major, minor) = (major.to_string(), minor.to_string());
-
-    let steps: [(&str, &str, Vec<&str>); 3] = [
-        ("rm", "rm", vec!["-f", &target]),
-        ("mknod", "mknod", vec![&target, "b", &major, &minor]),
-        ("chown", "chown", vec![&owner, &target]),
-    ];
-    for (step, program, args) in steps {
-        run_privileged(&format!("csfx-jailer-{step}-{slug}"), program, &args)
-            .await
-            .with_context(|| {
-                format!("privileged staging of volume device {target_path:?} failed")
-            })?;
-    }
-
-    Ok(())
 }
 
 fn guest_device_letter(index: usize) -> String {
@@ -1404,6 +1289,7 @@ async fn configure_mmds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cgroup_stats::read_cgroup_u64;
     use crate::runtime::Runtime;
 
     #[tokio::test]
@@ -1869,11 +1755,6 @@ mod tests {
         assert!(stage_rootfs_into_jail(Path::new("/a"), Path::new("/jail"))
             .await
             .is_err());
-    }
-
-    #[test]
-    fn cleanup_unit_slugs_replace_every_special_character() {
-        assert_eq!(unit_slug(Path::new("/a b/c.d")), "-a-b-c-d");
     }
 
     #[test]

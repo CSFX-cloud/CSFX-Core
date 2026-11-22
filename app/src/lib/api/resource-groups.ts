@@ -159,6 +159,13 @@ export interface Workload {
     updated_at: string | null;
 }
 
+export interface VmConfig {
+    architecture?: string;
+    nic_model?: string;
+    guest_ip?: string | null;
+    extra_nics?: { ip: string | null }[];
+}
+
 export interface CreateWorkloadRequest {
     name: string;
     image: string;
@@ -176,6 +183,7 @@ export interface CreateWorkloadRequest {
     restart_policy?: 'always' | 'on-failure' | 'never';
     max_restarts?: number | null;
     runtime_class?: 'firecracker' | 'vm';
+    vm_config?: VmConfig;
 }
 
 export interface CreateWorkloadResult {
@@ -415,9 +423,10 @@ export async function uploadIso(
         xhr.send(file);
     });
 
-    const { url: downloadUrl } = await presignObjectDownload(bucketId, key);
-    return downloadUrl;
+    return bucketImageReference(bucketId, key);
 }
+
+export const bucketImageReference = (bucketId: string, key: string) => `bucket://${bucketId}/${key}`;
 
 export const presignObjectDownload = (bucketId: string, key: string) =>
     api<PresignResult>('GET', `/buckets/${bucketId}/objects/presign-download/${key}`);

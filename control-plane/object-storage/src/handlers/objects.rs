@@ -8,7 +8,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    models::{ListObjectsQuery, PresignUploadRequest},
+    models::{ListObjectsQuery, PresignQuery, PresignUploadRequest},
     server::AppState,
     services::object as service,
 };
@@ -66,10 +66,18 @@ pub async fn delete_object(
 pub async fn presign_upload(
     State(state): State<AppState>,
     Path(bucket_id): Path<Uuid>,
+    Query(query): Query<PresignQuery>,
     Json(req): Json<PresignUploadRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    match service::presign_upload(&state.db, &state.s3, &state.secret_box, bucket_id, &req.key)
-        .await
+    match service::presign_upload(
+        &state.db,
+        &state.s3,
+        &state.secret_box,
+        bucket_id,
+        &req.key,
+        &query.origin,
+    )
+    .await
     {
         Ok(Some(result)) => Ok(Json(json!(result))),
         Ok(None) => Err((
@@ -89,8 +97,17 @@ pub async fn presign_upload(
 pub async fn presign_download(
     State(state): State<AppState>,
     Path((bucket_id, key)): Path<(Uuid, String)>,
+    Query(query): Query<PresignQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    match service::presign_download(&state.db, &state.s3, &state.secret_box, bucket_id, &key).await
+    match service::presign_download(
+        &state.db,
+        &state.s3,
+        &state.secret_box,
+        bucket_id,
+        &key,
+        &query.origin,
+    )
+    .await
     {
         Ok(Some(result)) => Ok(Json(json!(result))),
         Ok(None) => Err((

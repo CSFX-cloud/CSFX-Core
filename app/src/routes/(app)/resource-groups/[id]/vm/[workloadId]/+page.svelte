@@ -138,11 +138,6 @@
                 </section>
             {:else}
                 <section class="vm-console" aria-label="Console">
-                    <div class="term__bar">
-                        <span class="term__ok" style="display: inline-flex; align-items: center; gap: 8px; font: 400 12px/16px var(--font-mono)">
-                            <i style="width: 6px; height: 6px; border-radius: 50%; background: var(--success); display: inline-block"></i>Connected
-                        </span>
-                    </div>
                     <div class="vm-console__screen">
                         {#key workload.id}
                             <VncConsole workloadId={workload.id} />
