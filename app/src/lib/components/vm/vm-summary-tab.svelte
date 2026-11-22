@@ -5,16 +5,20 @@
     import UsageChart from "$lib/components/dashboard/usage-chart.svelte";
     import { chartCeiling, usageTone, USAGE_SERIES } from "$lib/utils/dashboard";
     import { formatBytes, formatCapacity, formatPercent } from "$lib/utils/format";
+    import { loadUsageSamples, SAMPLE_CAPACITY, saveUsageSamples } from "$lib/utils/usage-history-storage";
 
-    const SAMPLE_CAPACITY = 60;
     const PERCENT = 100;
 
     let { workload, nodeIp }: { workload: Workload; nodeIp: string | null } = $props();
 
     let samples = $state<UsageHistoryPoint[]>([]);
 
-    const cpu = $derived(workload.cpu_usage_percent);
-    const memory = $derived(workload.memory_usage_bytes !== null && workload.memory_bytes > 0 ? (workload.memory_usage_bytes / workload.memory_bytes) * PERCENT : null);
+    const live = $derived(workload.status === "running");
+    const cpu = $derived(live ? workload.cpu_usage_percent : null);
+    const memoryBytes = $derived(live ? workload.memory_usage_bytes : null);
+    const networkRx = $derived(live ? workload.network_rx_bytes : null);
+    const networkTx = $derived(live ? workload.network_tx_bytes : null);
+    const memory = $derived(memoryBytes !== null && workload.memory_bytes > 0 ? (memoryBytes / workload.memory_bytes) * PERCENT : null);
     const ceiling = $derived(chartCeiling(samples, ["cpu", "memory"]));
     const latest = $derived(samples.length ? samples[samples.length - 1] : null);
     const glance = $derived([
@@ -24,18 +28,17 @@
         { label: "Created", value: workload.created_at.slice(0, 16).replace("T", " "), mono: true },
     ]);
 
+    $effect.pre(() => {
+        samples = loadUsageSamples(workload.id);
+    });
+
     $effect(() => {
-        const cpuUsage = workload.cpu_usage_percent;
-        const memoryBytes = workload.memory_usage_bytes;
         void workload.stats_updated_at;
-        if (cpuUsage === null || memoryBytes === null) return;
-        const point: UsageHistoryPoint = {
-            bucket: new Date().toISOString(),
-            cpu: cpuUsage,
-            memory: workload.memory_bytes > 0 ? (memoryBytes / workload.memory_bytes) * PERCENT : 0,
-            disk: 0,
-        };
-        samples = [...untrack(() => samples), point].slice(-SAMPLE_CAPACITY);
+        if (cpu === null || memory === null) return;
+        const point: UsageHistoryPoint = { bucket: new Date().toISOString(), cpu, memory, disk: 0 };
+        const next = [...untrack(() => samples), point].slice(-SAMPLE_CAPACITY);
+        samples = next;
+        saveUsageSamples(untrack(() => workload.id), next);
     });
 </script>
 
@@ -60,7 +63,7 @@
         <div class="cx-stat">
             <p class="cx-stat__label">Memory</p>
             <p class="cx-stat__value stat">{memory !== null ? formatPercent(memory) : "—"}</p>
-            {@render meter(memory, `${workload.memory_usage_bytes !== null ? `${formatBytes(workload.memory_usage_bytes)} / ` : ""}${formatCapacity(workload.memory_bytes)}`)}
+            {@render meter(memory, `${memoryBytes !== null ? `${formatBytes(memoryBytes)} / ` : ""}${formatCapacity(workload.memory_bytes)}`)}
         </div>
         <div class="cx-stat">
             <p class="cx-stat__label">Disk</p>
@@ -70,17 +73,17 @@
         <div class="cx-stat">
             <p class="cx-stat__label">Network</p>
             <p class="db-stat-value" style="margin-top: 4px">
-                {workload.network_rx_bytes !== null ? formatBytes(workload.network_rx_bytes) : "—"} <small>in</small> &middot;
-                {workload.network_tx_bytes !== null ? formatBytes(workload.network_tx_bytes) : "—"} <small>out</small>
+                {networkRx !== null ? formatBytes(networkRx) : "—"} <small>in</small> &middot;
+                {networkTx !== null ? formatBytes(networkTx) : "—"} <small>out</small>
             </p>
-            <div class="cx-stat__foot">{workload.stats_updated_at ? `Updated ${new Date(workload.stats_updated_at).toLocaleTimeString()}` : "No stats reported yet"}</div>
+            <div class="cx-stat__foot">{!live ? "VM is not running" : workload.stats_updated_at ? `Updated ${new Date(workload.stats_updated_at).toLocaleTimeString()}` : "No stats reported yet"}</div>
         </div>
     </section>
 
     <div class="vm-grid">
         <section class="cx-panel" aria-labelledby="vm-hist">
             <div class="cx-panel__head">
-                <div><h2 class="cx-panel__title" id="vm-hist">Usage history</h2><p class="cx-panel__sub">Live, since you opened this page</p></div>
+                <div><h2 class="cx-panel__title" id="vm-hist">Usage history</h2><p class="cx-panel__sub">Collected while this page is open, kept for one hour</p></div>
             </div>
             {#if samples.length < 2}
                 <p class="cx-hint" style="padding: 32px 0; text-align: center">{workload.status === "running" ? "Collecting samples." : "No stats while the VM is stopped."}</p>

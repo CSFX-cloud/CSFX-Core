@@ -17,7 +17,6 @@
                 <VncConsole workloadId={workload.id} viewOnly />
             </div>
         {/key}
-        <span class="vm-screen__live"><i></i>LIVE</span>
     {:else}
         <span class="vm-screen__off">
             <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{@html glyph}</svg>
