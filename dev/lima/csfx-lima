@@ -118,7 +118,7 @@ create_node() {
   name="$(instance "$node")"
   [ -n "$(node_state "$node")" ] && return 0
   log INFO "creating node=$node"
-  limactl disk create "$name-data" --size 20GiB > /dev/null 2>&1 || true
+  limactl disk create "$name-data" --size 60GiB > /dev/null 2>&1 || true
   local forwards='.portForwards = .portForwards'
   [ "$node" = cp1 ] && forwards=".portForwards = [{\"guestPort\": $API_PORT, \"hostPort\": $API_PORT, \"hostIP\": \"127.0.0.1\"}] + .portForwards"
   limactl create --name "$name" --tty=false \
