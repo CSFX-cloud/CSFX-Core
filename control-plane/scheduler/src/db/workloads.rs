@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::models::workload::{
-    CreateWorkloadRequest, DesiredState, Named, RestartPolicy, RuntimeClass, VolumeUsage,
-    WorkloadResponse, WorkloadStatus,
+    CreateWorkloadRequest, DesiredState, Named, RestartPolicy, RuntimeClass, UpdateWorkloadRequest,
+    VolumeUsage, WorkloadResponse, WorkloadStatus,
 };
 use crate::services::rightsizing::{recommend_cpu_millicores, recommend_memory_bytes};
 use shared::pagination::{keyset_by_id, PageParams};
@@ -196,7 +196,7 @@ async fn move_workload(
 pub async fn update_spec(
     db: &DatabaseConnection,
     workload_id: Uuid,
-    req: &crate::models::workload::UpdateWorkloadRequest,
+    req: &UpdateWorkloadRequest,
 ) -> Result<workloads::Model, DbErr> {
     let workload = require(get_by_id(db, workload_id).await?, workload_id)?;
     let mut active: workloads::ActiveModel = workload.clone().into();
@@ -221,9 +221,31 @@ pub async fn update_spec(
     if let Some(ref volume_mounts) = req.volume_mounts {
         active.volume_mounts = Set(serde_json::to_value(volume_mounts).ok());
     }
+    apply_vm_resources(&mut active, req);
     active.generation = Set(workload.generation + 1);
 
+    if req.touches_vm() && workload.desired_state == DesiredState::Stopped.name() {
+        return save_spec(db, &workload, active).await;
+    }
     request_rollout(db, &workload, active).await
+}
+
+fn apply_vm_resources(active: &mut workloads::ActiveModel, req: &UpdateWorkloadRequest) {
+    if let Some(cpu_millicores) = req.cpu_millicores {
+        active.cpu_millicores = Set(cpu_millicores);
+        active.cpu_limit_millicores = Set(None);
+    }
+    if let Some(memory_bytes) = req.memory_bytes {
+        active.memory_bytes = Set(memory_bytes);
+        active.memory_limit_bytes = Set(None);
+    }
+    if let Some(disk_bytes) = req.disk_bytes {
+        active.disk_bytes = Set(disk_bytes);
+    }
+    if let Some(ref vm_config) = req.vm_config {
+        active.vm_config = Set(serde_json::to_value(vm_config).ok());
+        active.guest_ip = Set(req.guest_ip.clone());
+    }
 }
 
 pub async fn get_page(
@@ -523,6 +545,14 @@ async fn request_rollout(
     apply_auto_resources(workload, &mut active);
     active.restart_requested = Set(true);
     active.status = Set(WorkloadStatus::Starting.name().to_string());
+    save_spec(db, workload, active).await
+}
+
+async fn save_spec(
+    db: &DatabaseConnection,
+    workload: &workloads::Model,
+    mut active: workloads::ActiveModel,
+) -> Result<workloads::Model, DbErr> {
     active.updated_at = Set(Some(Utc::now().naive_utc()));
 
     let applied = workloads::Entity::update_many()
@@ -667,6 +697,9 @@ fn into_response(m: workloads::Model) -> WorkloadResponse {
         restart_count: m.restart_count,
         runtime_class: RuntimeClass::from_name(&m.runtime_class),
         desired_state: DesiredState::from_name(&m.desired_state),
+        vm_config: m
+            .vm_config
+            .and_then(|config| serde_json::from_value(config).ok()),
         cpu_usage_percent: m.cpu_usage_percent,
         memory_usage_bytes: m.memory_usage_bytes,
         network_rx_bytes: m.network_rx_bytes,

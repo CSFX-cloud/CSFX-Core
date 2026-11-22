@@ -143,26 +143,11 @@ impl RgDhcpSupervisor {
             .context("Failed to create dhcp directory")?;
 
         let child = Command::new("dnsmasq")
-            .arg("--keep-in-foreground")
-            .arg("--no-daemon")
-            .arg("--port=0")
-            .arg("--no-resolv")
-            .arg("--no-hosts")
-            .arg(format!("--interface={}", bridge_iface))
-            .arg("--bind-interfaces")
-            .arg(format!("--dhcp-range={},{},12h", range_start, range_end))
-            .arg(format!("--dhcp-option=option:router,{}", gateway))
-            .arg(format!(
-                "--dhcp-hostsfile={}",
-                hosts_file_path(resource_group_id).display()
-            ))
-            .arg(format!(
-                "--dhcp-leasefile={}",
-                leases_file_path(resource_group_id).display()
-            ))
-            .arg(format!(
-                "--pid-file={}",
-                pid_file_path(resource_group_id).display()
+            .args(dnsmasq_args(
+                resource_group_id,
+                bridge_iface,
+                (&range_start, &range_end),
+                &gateway,
             ))
             .kill_on_drop(true)
             .spawn()
@@ -213,6 +198,35 @@ fn dhcp_range(cidr: &str) -> Option<(String, String)> {
     Some((start, end))
 }
 
+fn dnsmasq_args(
+    resource_group_id: &str,
+    bridge_iface: &str,
+    (range_start, range_end): (&str, &str),
+    gateway: &str,
+) -> Vec<String> {
+    vec![
+        "--keep-in-foreground".to_string(),
+        "--no-daemon".to_string(),
+        "--port=0".to_string(),
+        "--no-resolv".to_string(),
+        "--no-hosts".to_string(),
+        format!("--interface={}", bridge_iface),
+        "--bind-interfaces".to_string(),
+        format!("--dhcp-range={},{},12h", range_start, range_end),
+        format!("--dhcp-option=option:router,{}", gateway),
+        format!("--dhcp-option=option:dns-server,{}", gateway),
+        format!(
+            "--dhcp-hostsfile={}",
+            hosts_file_path(resource_group_id).display()
+        ),
+        format!(
+            "--dhcp-leasefile={}",
+            leases_file_path(resource_group_id).display()
+        ),
+        format!("--pid-file={}", pid_file_path(resource_group_id).display()),
+    ]
+}
+
 async fn is_alive(child: &mut Child) -> bool {
     matches!(child.try_wait(), Ok(None))
 }
@@ -252,5 +266,14 @@ mod tests {
         let supervisor = RgDhcpSupervisor::default();
         supervisor.check_liveness().await;
         assert!(supervisor.processes.lock().await.is_empty());
+    }
+
+    #[test]
+    fn dnsmasq_hands_out_the_gateway_as_router_and_dns_server() {
+        let args = dnsmasq_args("rg", "br0", ("10.0.0.3", "10.0.0.254"), "10.0.0.2");
+
+        assert!(args.contains(&"--dhcp-option=option:router,10.0.0.2".to_string()));
+        assert!(args.contains(&"--dhcp-option=option:dns-server,10.0.0.2".to_string()));
+        assert!(args.contains(&"--interface=br0".to_string()));
     }
 }

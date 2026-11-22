@@ -7,10 +7,7 @@ import {
     uploadIso,
     type ObjectEntry,
 } from "$lib/api/resource-groups";
-import { DEFAULT_NIC_MODEL, isGuestAddress, isIpv4, MAX_EXTRA_NICS } from "$lib/utils/vm-options";
-
-const BYTES_PER_GIB = 1024 * 1024 * 1024;
-const MILLICORES_PER_VCPU = 1000;
+import { BYTES_PER_GIB, DEFAULT_NIC_MODEL, guestAddressError, MAX_EXTRA_NICS, MILLICORES_PER_VCPU } from "$lib/utils/vm-options";
 
 export type IsoMode = "existing" | "upload";
 export type AddressMode = "dhcp" | "static";
@@ -64,14 +61,7 @@ export class VmDraft {
     }
 
     networkError(cidr: string, usedIps: string[]): string | null {
-        const seen = new Set<string>();
-        for (const ip of this.staticIps) {
-            if (!isIpv4(ip)) return `${ip || "An empty address"} is not a valid IPv4 address`;
-            if (!isGuestAddress(cidr, ip)) return `${ip} is not an assignable address in ${cidr}`;
-            if (usedIps.includes(ip) || seen.has(ip)) return `${ip} is already in use`;
-            seen.add(ip);
-        }
-        return null;
+        return guestAddressError(cidr, usedIps, this.staticIps);
     }
 
     addNic() {

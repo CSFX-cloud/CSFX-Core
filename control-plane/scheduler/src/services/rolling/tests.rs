@@ -117,12 +117,8 @@ fn the_toggle_accepts_common_spellings_of_off() {
 #[test]
 fn only_spec_changes_trigger_a_replacement() {
     let mut update = UpdateWorkloadRequest {
-        image: None,
-        env_vars: None,
-        ports: None,
-        restart_policy: None,
         max_restarts: Some(3),
-        volume_mounts: None,
+        ..Default::default()
     };
     assert!(!touches_spec(&update));
     update.image = Some("nginx:2".to_string());

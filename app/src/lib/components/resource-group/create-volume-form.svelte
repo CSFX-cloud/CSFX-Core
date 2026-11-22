@@ -1,9 +1,9 @@
 <script lang="ts">
-    import { createVolume } from "$lib/api/resource-groups";
+    import { createVolume, type Volume } from "$lib/api/resource-groups";
 
     const DEFAULT_SIZE_GB = "10";
 
-    let { rgId, onCreated, oncancel }: { rgId: string; onCreated: () => Promise<void>; oncancel: () => void } = $props();
+    let { rgId, onCreated, oncancel }: { rgId: string; onCreated: (volume: Volume) => Promise<void>; oncancel: () => void } = $props();
 
     let name = $state("");
     let sizeGb = $state(DEFAULT_SIZE_GB);
@@ -18,8 +18,8 @@
         creating = true;
         error = null;
         try {
-            await createVolume({ name: name.trim(), size_gb: size, resource_group_id: rgId });
-            await onCreated();
+            const volume = await createVolume({ name: name.trim(), size_gb: size, resource_group_id: rgId });
+            await onCreated(volume);
         } catch (e) {
             error = e instanceof Error ? e.message : "Failed to create volume";
         } finally {

@@ -108,7 +108,7 @@ pub enum DesiredState {
     Stopped,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateWorkloadRequest {
     pub image: Option<String>,
     pub env_vars: Option<HashMap<String, String>>,
@@ -117,6 +117,21 @@ pub struct UpdateWorkloadRequest {
     pub max_restarts: Option<i32>,
     #[serde(default)]
     pub volume_mounts: Option<Vec<VolumeMount>>,
+    pub cpu_millicores: Option<i32>,
+    pub memory_bytes: Option<i64>,
+    pub disk_bytes: Option<i64>,
+    pub vm_config: Option<VmConfig>,
+    #[serde(skip)]
+    pub guest_ip: Option<String>,
+}
+
+impl UpdateWorkloadRequest {
+    pub fn touches_vm(&self) -> bool {
+        self.cpu_millicores.is_some()
+            || self.memory_bytes.is_some()
+            || self.disk_bytes.is_some()
+            || self.vm_config.is_some()
+    }
 }
 
 pub fn is_valid_service_name(name: &str) -> bool {
@@ -295,6 +310,7 @@ pub struct WorkloadResponse {
     pub restart_count: i32,
     pub runtime_class: RuntimeClass,
     pub desired_state: DesiredState,
+    pub vm_config: Option<VmConfig>,
     pub cpu_usage_percent: Option<f64>,
     pub memory_usage_bytes: Option<i64>,
     pub network_rx_bytes: Option<i64>,

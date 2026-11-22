@@ -150,6 +150,7 @@ export interface Workload {
     restart_count: number;
     runtime_class: 'firecracker' | 'vm';
     desired_state: string;
+    vm_config?: VmConfig | null;
     cpu_usage_percent: number | null;
     memory_usage_bytes: number | null;
     network_rx_bytes: number | null;
@@ -200,6 +201,10 @@ export interface UpdateWorkloadRequest {
     restart_policy?: 'always' | 'on-failure' | 'never';
     max_restarts?: number | null;
     volume_mounts?: VolumeMount[];
+    cpu_millicores?: number;
+    memory_bytes?: number;
+    disk_bytes?: number;
+    vm_config?: VmConfig;
 }
 
 export interface CreateVolumeRequest {

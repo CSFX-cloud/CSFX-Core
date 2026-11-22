@@ -133,9 +133,7 @@ impl SchedulerService {
                 image: Some(service.image.clone()),
                 env_vars: Some(service.env_vars.clone().unwrap_or_default()),
                 ports: service.ports.clone(),
-                restart_policy: None,
-                max_restarts: None,
-                volume_mounts: None,
+                ..Default::default()
             };
 
             let model = self

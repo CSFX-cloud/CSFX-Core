@@ -14,11 +14,7 @@ use crate::common::{placing, small_request, unique_name};
 fn image_update(image: &str) -> UpdateWorkloadRequest {
     UpdateWorkloadRequest {
         image: Some(image.to_string()),
-        env_vars: None,
-        ports: None,
-        restart_policy: None,
-        max_restarts: None,
-        volume_mounts: None,
+        ..Default::default()
     }
 }
 

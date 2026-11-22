@@ -138,11 +138,23 @@ async fn claim_requested_volumes(
     )
     .await
     .map_err(attachment_error_response)?;
-    let Some(agent_id) = workload.assigned_agent_id else {
-        return Ok(());
-    };
     let volume_ids: Vec<Uuid> = mounts.iter().map(|mount| mount.volume_id).collect();
-    match shared::volumes::claim(&state.db, &volume_ids, agent_id, Some(workload_id)).await {
+    if let Some(agent_id) = workload.assigned_agent_id {
+        claim_for_agent(state, workload_id, agent_id, &volume_ids).await?;
+    }
+    shared::volumes::release_unlisted(&state.db, workload_id, &volume_ids)
+        .await
+        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(())
+}
+
+async fn claim_for_agent(
+    state: &AppState,
+    workload_id: Uuid,
+    agent_id: Uuid,
+    volume_ids: &[Uuid],
+) -> Result<(), axum::response::Response> {
+    match shared::volumes::claim(&state.db, volume_ids, agent_id, Some(workload_id)).await {
         Ok(true) => Ok(()),
         Ok(false) => Err(error_response(
             StatusCode::CONFLICT,
@@ -176,6 +188,11 @@ pub async fn update_workload(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateWorkloadRequest>,
 ) -> impl IntoResponse {
+    let req = match state.scheduler.prepare_vm_update(id, req).await {
+        Ok(Some(req)) => req,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(message) => return error_response(StatusCode::BAD_REQUEST, message),
+    };
     if let Err(response) = claim_requested_volumes(&state, id, &req).await {
         return response;
     }
