@@ -1,0 +1,20 @@
+name: Migration guard
+
+on:
+  pull_request:
+    paths:
+      - ".github/actions/migration-guard/**"
+      - ".github/workflows/migration-guard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Migration guard tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Run migration guard tests
+        run: bash .github/actions/migration-guard/check.test.sh
