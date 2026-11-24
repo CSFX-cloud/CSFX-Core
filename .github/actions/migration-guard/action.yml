@@ -1,0 +1,18 @@
+name: Migration guard
+description: Fail when this build lacks a migration that the previous release already contains
+
+runs:
+  using: composite
+  steps:
+    - name: Compare migrations with the previous release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        previous=$(gh release list --repo "${{ github.repository }}" --limit 1 --json tagName -q '.[0].tagName')
+        if [ -z "$previous" ]; then
+          echo "[INFO] no previous release, migration guard skipped"
+          exit 0
+        fi
+        git fetch --no-tags --depth=1 origin "refs/tags/${previous}:refs/tags/${previous}"
+        bash "${{ github.action_path }}/check.sh" "refs/tags/${previous}"

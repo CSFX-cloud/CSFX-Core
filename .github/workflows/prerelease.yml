@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Guard migrations
+        uses: ./.github/actions/migration-guard
+
       - name: Validate version
         id: v
         env:
