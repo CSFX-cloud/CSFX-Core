@@ -3,6 +3,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::client::build_http_client;
+use crate::config::load_credentials;
 use crate::pki::AgentPki;
 
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -21,9 +22,11 @@ pub async fn fetch_authorized_keys(
 
     let ca_pem = AgentPki::load_ca_pem()?;
     let client = build_http_client(Some(&ca_pem))?;
+    let credentials = load_credentials()?;
 
     let resp = client
         .get(&url)
+        .header("X-API-Key", credentials.api_key)
         .query(&[("user", username)])
         .timeout(REQUEST_TIMEOUT)
         .send()

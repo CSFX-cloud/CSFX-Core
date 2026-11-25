@@ -14,7 +14,11 @@ use sha2::{Digest, Sha256};
 use shared::ssh_access;
 use uuid::Uuid;
 
-use crate::{admins::admin_users, auth::middleware::AuthenticatedUser, AppState};
+use crate::{
+    admins::admin_users,
+    auth::{agent::AgentApiKey, middleware::AuthenticatedUser},
+    AppState,
+};
 
 #[derive(Deserialize)]
 pub struct AddSshKeyRequest {
@@ -141,9 +145,13 @@ pub struct AuthorizedKeysQuery {
 
 pub async fn get_keys_for_agent(
     State(state): State<AppState>,
-    Path(agent_id): Path<String>,
+    agent: AgentApiKey,
+    Path(agent_id): Path<Uuid>,
     Query(query): Query<AuthorizedKeysQuery>,
 ) -> Result<Json<SshKeysForAgentResponse>, StatusCode> {
+    if agent.agent_id != agent_id {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let internal = |_| StatusCode::INTERNAL_SERVER_ERROR;
     let login_allowed = query
         .user
@@ -182,7 +190,7 @@ pub fn ssh_keys_routes() -> Router<AppState> {
         .route("/ssh-keys/{id}", delete(delete_ssh_key))
 }
 
-pub fn ssh_keys_internal_routes() -> Router<AppState> {
+pub fn ssh_keys_agent_routes() -> Router<AppState> {
     Router::new().route(
         "/agents/{agent_id}/authorized-keys",
         get(get_keys_for_agent),
