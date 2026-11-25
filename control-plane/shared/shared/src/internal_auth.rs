@@ -16,8 +16,8 @@ const MAX_SKEW_SECONDS: u64 = 60;
 pub const INTERNAL_TOKEN_ENV: &str = "CSFX_INTERNAL_TOKEN";
 pub const GATEWAY_INTERNAL_ADDR_ENV: &str = "GATEWAY_INTERNAL_ADDR";
 pub const GATEWAY_INTERNAL_URL_ENV: &str = "API_GATEWAY_INTERNAL_URL";
-const DEFAULT_GATEWAY_INTERNAL_ADDR: &str = "127.0.0.1:8010";
-const DEFAULT_GATEWAY_INTERNAL_URL: &str = "http://127.0.0.1:8010";
+const DEFAULT_GATEWAY_INTERNAL_ADDR: &str = "127.0.0.1:8020";
+const DEFAULT_GATEWAY_INTERNAL_URL: &str = "http://127.0.0.1:8020";
 
 pub fn gateway_internal_addr() -> String {
     std::env::var(GATEWAY_INTERNAL_ADDR_ENV)

@@ -79,7 +79,7 @@ services:
       ETCD_ENDPOINTS: http://etcd:2379
       RUST_LOG: ${RUST_LOG:-debug}
       CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
-      GATEWAY_INTERNAL_ADDR: 0.0.0.0:8010
+      GATEWAY_INTERNAL_ADDR: 0.0.0.0:8020
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       RSA_KEY_SIZE: "2048"
       REGISTRY_SERVICE_URL: http://registry:8001
@@ -201,7 +201,7 @@ services:
       LISTEN_ADDR: "0.0.0.0"
       RUST_LOG: ${RUST_LOG:-debug}
       CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
-      API_GATEWAY_INTERNAL_URL: http://api-gateway:8010
+      API_GATEWAY_INTERNAL_URL: http://api-gateway:8020
     ports:
       - "8002:8002"
     depends_on:
