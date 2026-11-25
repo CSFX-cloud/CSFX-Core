@@ -67,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         .install_default()
         .map_err(|_| anyhow::anyhow!("failed to install crypto provider"))?;
     dotenvy::dotenv().ok();
+    shared::internal_auth::ensure_configured().map_err(anyhow::Error::msg)?;
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();

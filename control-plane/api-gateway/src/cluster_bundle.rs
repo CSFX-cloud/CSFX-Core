@@ -156,6 +156,7 @@ fn optional_credential(directory: &Path, name: &str) -> Option<String> {
 fn peer_scheme_for(credentials: Option<&Path>) -> &'static str {
     let secured = credentials.is_some_and(|directory| {
         optional_credential(directory, CREDENTIAL_ETCD_PEER_CA_CERT).is_some()
+            && optional_credential(directory, CREDENTIAL_ETCD_PEER_CA_KEY).is_some()
     });
     if secured {
         "https"
@@ -379,6 +380,8 @@ mod tests {
         let secured = ClusterSecrets::load().unwrap();
         assert_eq!(secured.etcd_peer_ca_cert_pem.as_deref(), Some("cert"));
         assert!(secured.etcd_peer_ca_key_pem.is_none());
+        assert_eq!(peer_scheme_for(Some(&directory)), "http");
+        std::fs::write(directory.join(CREDENTIAL_ETCD_PEER_CA_KEY), "key\n").unwrap();
         assert_eq!(peer_scheme_for(Some(&directory)), "https");
         std::fs::remove_file(directory.join(CREDENTIAL_ETCD_PEER_CA_CERT)).unwrap();
         std::fs::remove_file(directory.join(CREDENTIAL_ETCD_PEER_CA_KEY)).unwrap();

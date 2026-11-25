@@ -1,6 +1,5 @@
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
     routing::post,
     Json, Router,
 };
@@ -112,16 +111,11 @@ async fn resolve(state: &AppState, group_id: Uuid, image: &str) -> String {
 
 pub async fn resolve_image_handler(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(group_id): Path<Uuid>,
     Json(request): Json<ResolveImageRequest>,
-) -> Result<Json<ResolveImageResponse>, StatusCode> {
-    if !shared::internal_auth::is_authorized(&headers) {
-        warn!("rejected image resolution without valid service token");
-        return Err(StatusCode::FORBIDDEN);
-    }
+) -> Json<ResolveImageResponse> {
     let image = resolve(&state, group_id, &request.image).await;
-    Ok(Json(ResolveImageResponse { image }))
+    Json(ResolveImageResponse { image })
 }
 
 pub fn image_resolution_internal_routes() -> Router<AppState> {

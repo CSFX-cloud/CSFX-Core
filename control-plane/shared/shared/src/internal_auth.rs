@@ -29,6 +29,12 @@ pub fn gateway_internal_url() -> String {
         .unwrap_or_else(|_| DEFAULT_GATEWAY_INTERNAL_URL.to_string())
 }
 
+pub fn ensure_configured() -> Result<(), &'static str> {
+    configured_token()
+        .map(|_| ())
+        .ok_or("CSFX_INTERNAL_TOKEN is not set")
+}
+
 pub fn configured_token() -> Option<String> {
     std::env::var(INTERNAL_TOKEN_ENV)
         .ok()
@@ -50,23 +56,13 @@ fn caller_name() -> &'static str {
                 path.file_stem()
                     .map(|stem| stem.to_string_lossy().into_owned())
             })
-            .map(|name| name.replace('.', "-"))
+            .map(|name| {
+                name.chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                    .collect::<String>()
+            })
             .unwrap_or_else(|| "unknown".to_string())
     })
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn hex_decode(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) || !text.is_ascii() {
-        return None;
-    }
-    (0..text.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&text[index..index + 2], 16).ok())
-        .collect()
 }
 
 fn payload(caller: &str, issued_at: u64) -> String {
@@ -77,7 +73,7 @@ fn sign(secret: &str, caller: &str, issued_at: u64) -> String {
     let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
     let payload = payload(caller, issued_at);
     let tag = hmac::sign(&key, payload.as_bytes());
-    format!("{payload}.{}", hex_encode(tag.as_ref()))
+    format!("{payload}.{}", crate::hex::encode(tag.as_ref()))
 }
 
 fn verified_caller(token: &str, secret: &str, now: u64) -> Option<String> {
@@ -95,7 +91,7 @@ fn verified_caller(token: &str, secret: &str, now: u64) -> Option<String> {
     hmac::verify(
         &key,
         payload(caller, issued_at).as_bytes(),
-        &hex_decode(tag)?,
+        &crate::hex::decode(tag)?,
     )
     .ok()?;
     Some(caller.to_string())

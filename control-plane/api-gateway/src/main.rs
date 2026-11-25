@@ -66,6 +66,11 @@ async fn main() {
     let log_receiver = telemetry::init_tracing();
     tracing::info!("api-gateway starting");
 
+    if let Err(error) = shared::internal_auth::ensure_configured() {
+        tracing::error!(error = %error, "invalid gateway configuration");
+        std::process::exit(1);
+    }
+
     if let Err(error) = api_gateway::auth::jwt::init_jwt_secret() {
         tracing::error!(error = %error, "invalid gateway configuration");
         std::process::exit(1);

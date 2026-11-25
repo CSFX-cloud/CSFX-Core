@@ -18,6 +18,13 @@ const CA_CERT_PATH: &str = "/var/lib/csfx-cp/ca.crt";
 const CA_KEY_PATH: &str = "/var/lib/csfx-cp/ca.key";
 const ETCD_PEER_CA_CERT_PATH: &str = "/etc/csfx/etcd-peer-ca.crt";
 const ETCD_PEER_CA_KEY_PATH: &str = "/etc/csfx/etcd-peer-ca.key";
+const ETCD_PEER_MATERIAL_PATHS: [&str; 5] = [
+    ETCD_PEER_CA_CERT_PATH,
+    ETCD_PEER_CA_KEY_PATH,
+    "/etc/csfx/etcd-peer.crt",
+    "/etc/csfx/etcd-peer.crt.sans",
+    "/etc/csfx/etcd-peer.key",
+];
 const CP_ENV_PATH: &str = "/etc/csfx/cp.env";
 const GARAGE_ENV_PATH: &str = "/etc/csfx/garage.env";
 pub(crate) const CLUSTER_ENV_PATH: &str = "/etc/csfx/cluster.env";
@@ -240,10 +247,21 @@ pub(crate) fn write_file(path: &str, contents: &str, mode: u32) -> Result<()> {
 fn write_etcd_peer_ca(bundle: &MasterBundle) -> Result<()> {
     let (Some(cert), Some(key)) = (&bundle.etcd_peer_ca_cert_pem, &bundle.etcd_peer_ca_key_pem)
     else {
-        return Ok(());
+        return remove_etcd_peer_material();
     };
     write_file(ETCD_PEER_CA_CERT_PATH, cert, 0o644)?;
     write_file(ETCD_PEER_CA_KEY_PATH, key, 0o600)
+}
+
+fn remove_etcd_peer_material() -> Result<()> {
+    for path in ETCD_PEER_MATERIAL_PATHS {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err).with_context(|| format!("Failed to remove {path}")),
+        }
+    }
+    Ok(())
 }
 
 fn render_cp_env(bundle: &MasterBundle) -> String {

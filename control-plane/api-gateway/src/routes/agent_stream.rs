@@ -4,7 +4,7 @@ use std::sync::Arc;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Router,
@@ -91,20 +91,14 @@ async fn handle_agent_stream(socket: WebSocket, state: AppState, agent_id: Uuid)
 
 pub async fn notify_assignment_handler(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(agent_id): Path<Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    if !shared::internal_auth::is_authorized(&headers) {
-        warn!("rejected notify-assignment without valid service token");
-        return Err(StatusCode::FORBIDDEN);
-    }
-
+) -> StatusCode {
     let delivered = state
         .agent_stream_registry
         .notify_assignment(agent_id)
         .await;
     info!(agent_id = %agent_id, delivered, "assignment notification processed");
-    Ok(StatusCode::NO_CONTENT)
+    StatusCode::NO_CONTENT
 }
 
 pub fn agent_stream_routes() -> Router<AppState> {

@@ -5,6 +5,7 @@ pub mod detect;
 pub mod env;
 pub mod env_secrets;
 pub mod etcd;
+pub mod hex;
 pub mod http;
 pub mod images;
 pub mod internal_auth;

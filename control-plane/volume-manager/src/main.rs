@@ -13,6 +13,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("failed to install ring crypto provider");
 
     dotenvy::dotenv().ok();
+    shared::internal_auth::ensure_configured().map_err(anyhow::Error::msg)?;
 
     let log_receiver = logger::init_logger();
 

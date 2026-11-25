@@ -85,13 +85,16 @@ fn cors_origins() -> Vec<HeaderValue> {
         .collect()
 }
 
-/// Creates the main application router and logs all registered routes.
 pub fn create_internal_router() -> Router<AppState> {
     Router::new()
         .merge(agent_stream::agent_stream_internal_routes())
         .merge(image_resolution::image_resolution_internal_routes())
+        .layer(axum::middleware::from_fn(
+            shared::internal_auth::require_service_token,
+        ))
 }
 
+/// Creates the main application router and logs all registered routes.
 pub fn create_router(state: AppState) -> Router<AppState> {
     let rate_limit_per_second: u64 = std::env::var("RATE_LIMIT_PER_SECOND")
         .ok()
