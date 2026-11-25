@@ -230,6 +230,17 @@ impl Harness {
             .await
     }
 
+    pub async fn send_internal(
+        &self,
+        peer: &str,
+        method: Method,
+        uri: &str,
+        service_token: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let extra = service_token.map(|value| ("x-csfx-internal-token", value));
+        self.send_with(peer, method, uri, None, None, extra).await
+    }
+
     pub async fn send_from(
         &self,
         peer: &str,
@@ -238,12 +249,27 @@ impl Harness {
         token: Option<&str>,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
+        self.send_with(peer, method, uri, token, body, None).await
+    }
+
+    async fn send_with(
+        &self,
+        peer: &str,
+        method: Method,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+        extra_header: Option<(&str, &str)>,
+    ) -> (StatusCode, Value) {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
             .header("content-type", "application/json");
         if let Some(token) = token {
             builder = builder.header("authorization", format!("Bearer {}", token));
+        }
+        if let Some((name, value)) = extra_header {
+            builder = builder.header(name, value);
         }
         let payload = body.map_or_else(Body::empty, |value| Body::from(value.to_string()));
         let mut request = builder.body(payload).unwrap();

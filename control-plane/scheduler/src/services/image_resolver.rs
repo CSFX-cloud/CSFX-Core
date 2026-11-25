@@ -19,8 +19,7 @@ async fn request_resolution(resource_group_id: Uuid, image: &str) -> Result<Stri
         base_url, resource_group_id
     );
 
-    let response = http_client()
-        .post(&url)
+    let response = shared::internal_auth::authenticate(http_client().post(&url))
         .json(&serde_json::json!({ "image": image }))
         .send()
         .await

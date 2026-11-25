@@ -161,29 +161,33 @@ async fn agent_endpoint_exposes_public_key_after_issue() {
 
 #[tokio::test]
 #[ignore = "requires postgres via DATABASE_URL"]
-async fn proxy_ticket_is_limited_to_private_networks() {
+async fn proxy_ticket_requires_the_service_token() {
+    unsafe { std::env::set_var("CSFX_INTERNAL_TOKEN", "test-service-token") };
     let app = common::router().await;
     let body = json!({"agent_id": Uuid::new_v4(), "workload_id": "workload-1"});
+    let peer = "8.8.8.8:9000".parse().unwrap();
 
-    for (peer, expected) in [
-        ("127.0.0.1:9000", StatusCode::OK),
-        ("10.1.2.3:9000", StatusCode::OK),
-        ("172.20.0.5:9000", StatusCode::OK),
-        ("192.168.1.9:9000", StatusCode::OK),
-        ("8.8.8.8:9000", StatusCode::FORBIDDEN),
-        ("172.32.0.1:9000", StatusCode::FORBIDDEN),
-        ("[2001:db8::1]:9000", StatusCode::FORBIDDEN),
+    for (headers, expected) in [
+        (vec![], StatusCode::FORBIDDEN),
+        (
+            vec![("x-csfx-internal-token", "wrong")],
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            vec![("x-csfx-internal-token", "test-service-token")],
+            StatusCode::OK,
+        ),
     ] {
         let (status, _) = send(
             &app,
             Method::POST,
             "/internal/agent-proxy-ticket",
             Some(body.clone()),
-            &[],
-            peer.parse().unwrap(),
+            &headers,
+            peer,
         )
         .await;
-        assert_eq!(status, expected, "peer {}", peer);
+        assert_eq!(status, expected, "headers {:?}", headers);
     }
 }
 

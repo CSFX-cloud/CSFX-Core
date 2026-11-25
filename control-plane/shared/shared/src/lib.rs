@@ -7,6 +7,7 @@ pub mod env_secrets;
 pub mod etcd;
 pub mod http;
 pub mod images;
+pub mod internal_auth;
 pub mod leader;
 pub mod log_writer;
 pub mod ntfy;

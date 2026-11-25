@@ -62,6 +62,14 @@ fn request_headers(source: &HeaderMap, has_body: bool) -> HeaderMap {
     if let Some(id) = current_request_id() {
         headers.insert(REQUEST_ID_HEADER.clone(), id);
     }
+    if let Some(token) = shared::internal_auth::configured_token()
+        .and_then(|token| HeaderValue::from_str(&token).ok())
+    {
+        headers.insert(
+            header::HeaderName::from_static(shared::internal_auth::INTERNAL_TOKEN_HEADER),
+            token,
+        );
+    }
     headers
 }
 
