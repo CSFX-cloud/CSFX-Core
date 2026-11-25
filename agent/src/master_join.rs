@@ -16,6 +16,8 @@ const PROMOTE_MARKER: &str = "/etc/csfx/master-join-promote";
 const SETUP_DONE_FILE: &str = "/var/lib/csfx-data/csfx/.setup-complete";
 const CA_CERT_PATH: &str = "/var/lib/csfx-cp/ca.crt";
 const CA_KEY_PATH: &str = "/var/lib/csfx-cp/ca.key";
+const ETCD_PEER_CA_CERT_PATH: &str = "/etc/csfx/etcd-peer-ca.crt";
+const ETCD_PEER_CA_KEY_PATH: &str = "/etc/csfx/etcd-peer-ca.key";
 const CP_ENV_PATH: &str = "/etc/csfx/cp.env";
 const GARAGE_ENV_PATH: &str = "/etc/csfx/garage.env";
 pub(crate) const CLUSTER_ENV_PATH: &str = "/etc/csfx/cluster.env";
@@ -140,6 +142,7 @@ async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
     write_file(CA_CERT_PATH, &bundle.ca_cert_pem, 0o644)?;
     write_file(CA_KEY_PATH, &bundle.ca_key_pem, 0o600)?;
     adopt_directory_owner(&[CA_CERT_PATH, CA_KEY_PATH])?;
+    write_etcd_peer_ca(bundle)?;
     write_file(CP_ENV_PATH, &render_cp_env(bundle), 0o600)?;
     write_file(GARAGE_ENV_PATH, &render_garage_env(bundle), 0o600)?;
     write_file(ETCD_JOIN_ENV_PATH, &render_etcd_env(bundle), 0o600)?;
@@ -234,6 +237,15 @@ pub(crate) fn write_file(path: &str, contents: &str, mode: u32) -> Result<()> {
         .with_context(|| format!("Failed to set permissions on {path}"))
 }
 
+fn write_etcd_peer_ca(bundle: &MasterBundle) -> Result<()> {
+    let (Some(cert), Some(key)) = (&bundle.etcd_peer_ca_cert_pem, &bundle.etcd_peer_ca_key_pem)
+    else {
+        return Ok(());
+    };
+    write_file(ETCD_PEER_CA_CERT_PATH, cert, 0o644)?;
+    write_file(ETCD_PEER_CA_KEY_PATH, key, 0o600)
+}
+
 fn render_cp_env(bundle: &MasterBundle) -> String {
     let optional = [
         ("CSFX_SITE_SECRET", &bundle.site_secret),
@@ -295,6 +307,8 @@ mod tests {
             openbao_secret_id: "secret".into(),
             site_secret: Some("site".into()),
             internal_token: Some("internal".into()),
+            etcd_peer_ca_cert_pem: None,
+            etcd_peer_ca_key_pem: None,
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),
