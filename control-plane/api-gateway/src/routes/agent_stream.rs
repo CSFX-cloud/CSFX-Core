@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    extract::{ConnectInfo, Path, State},
-    http::StatusCode,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Router,
@@ -18,20 +17,6 @@ use uuid::Uuid;
 use crate::{auth::agent::AgentApiKey, AppState};
 
 const ASSIGNMENT_SIGNAL: &str = "assignment";
-
-pub(crate) fn is_internal_source(addr: &SocketAddr) -> bool {
-    let ip = addr.ip();
-    ip.is_loopback()
-        || match ip {
-            IpAddr::V4(v4) => {
-                let octets = v4.octets();
-                octets[0] == 10
-                    || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31)
-                    || (octets[0] == 192 && octets[1] == 168)
-            }
-            IpAddr::V6(_) => false,
-        }
-}
 
 #[derive(Clone, Default)]
 pub struct AgentStreamRegistry {
@@ -105,12 +90,12 @@ async fn handle_agent_stream(socket: WebSocket, state: AppState, agent_id: Uuid)
 }
 
 pub async fn notify_assignment_handler(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(agent_id): Path<Uuid>,
 ) -> Result<StatusCode, StatusCode> {
-    if !is_internal_source(&addr) {
-        warn!(source = %addr, "rejected notify-assignment from non-internal source");
+    if !shared::internal_auth::is_authorized(&headers) {
+        warn!("rejected notify-assignment without valid service token");
         return Err(StatusCode::FORBIDDEN);
     }
 

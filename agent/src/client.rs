@@ -213,6 +213,8 @@ pub struct MasterBundle {
     pub openbao_secret_id: String,
     #[serde(default)]
     pub site_secret: Option<String>,
+    #[serde(default)]
+    pub internal_token: Option<String>,
     pub etcd_name: String,
     pub etcd_initial_cluster: String,
     #[serde(default)]

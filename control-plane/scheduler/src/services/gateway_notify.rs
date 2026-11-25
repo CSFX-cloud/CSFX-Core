@@ -19,8 +19,7 @@ pub async fn notify_assignment(agent_id: Uuid) {
         base_url, agent_id
     );
 
-    let result = http_client()
-        .post(&url)
+    let result = shared::internal_auth::authenticate(http_client().post(&url))
         .send()
         .await
         .and_then(|response| response.error_for_status());

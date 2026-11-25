@@ -73,20 +73,6 @@ async fn serve(state: ServerState, listener: tokio::net::TcpListener) -> Result<
     .context("Agent inbound server stopped unexpectedly")
 }
 
-fn is_internal_source(addr: &SocketAddr) -> bool {
-    let ip = addr.ip();
-    ip.is_loopback()
-        || match ip {
-            IpAddr::V4(v4) => {
-                let octets = v4.octets();
-                octets[0] == 10
-                    || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31)
-                    || (octets[0] == 192 && octets[1] == 168)
-            }
-            IpAddr::V6(_) => false,
-        }
-}
-
 struct TicketClaims {
     agent_id: String,
     workload_id: String,
@@ -167,14 +153,9 @@ pub fn load_ca_key() -> Result<Vec<u8>> {
 
 fn authorize(
     state: &ServerState,
-    addr: &SocketAddr,
     headers: &HeaderMap,
     scope: &str,
 ) -> Result<(), (StatusCode, String)> {
-    if !is_internal_source(addr) {
-        warn!(source = %addr, "rejected agent inbound request from non-internal source");
-        return Err((StatusCode::FORBIDDEN, "source not allowed".to_string()));
-    }
     verify_ticket(headers, scope, &state.agent_id.to_string(), &state.ca_key).map_err(|e| {
         warn!(scope = %scope, error = %e, "rejected request with invalid proxy ticket");
         (StatusCode::UNAUTHORIZED, e.to_string())
@@ -196,12 +177,11 @@ fn extract_ca_public_key(ca_pem: &str) -> Result<Vec<u8>> {
 async fn logs_handler(
     State(state): State<ServerState>,
     Path(workload_id): Path<String>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    info!(workload_id = %workload_id, source = %addr, "log stream request received");
+    info!(workload_id = %workload_id, "log stream request received");
 
-    authorize(&state, &addr, &headers, &workload_id)?;
+    authorize(&state, &headers, &workload_id)?;
 
     let container_id = state.workloads.handle(&workload_id).await.ok_or_else(|| {
         warn!(workload_id = %workload_id, "log stream requested for workload not running here");
@@ -228,11 +208,10 @@ async fn logs_handler(
 async fn exec_handler(
     State(state): State<ServerState>,
     Path(workload_id): Path<String>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    authorize(&state, &addr, &headers, &workload_id)?;
+    authorize(&state, &headers, &workload_id)?;
 
     let container_id = state.workloads.handle(&workload_id).await.ok_or((
         StatusCode::NOT_FOUND,
@@ -298,11 +277,10 @@ where
 async fn vnc_handler(
     State(state): State<ServerState>,
     Path(workload_id): Path<String>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    authorize(&state, &addr, &headers, &workload_id)?;
+    authorize(&state, &headers, &workload_id)?;
 
     let vnc_socket_path = state
         .qemu
@@ -333,11 +311,10 @@ async fn handle_vnc_socket(
 
 async fn metrics_stream_handler(
     State(state): State<ServerState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<axum::response::Response, (StatusCode, String)> {
-    authorize(&state, &addr, &headers, METRICS_TICKET_SCOPE)?;
+    authorize(&state, &headers, METRICS_TICKET_SCOPE)?;
 
     Ok(ws.on_upgrade(handle_metrics_socket))
 }
@@ -396,16 +373,14 @@ impl PowerAction {
 
 async fn disks_handler(
     State(state): State<ServerState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<crate::disks::DiskInfo>>, (StatusCode, String)> {
-    authorize(&state, &addr, &headers, DISKS_TICKET_SCOPE)?;
+    authorize(&state, &headers, DISKS_TICKET_SCOPE)?;
 
     Ok(Json(crate::disks::collect_disks().await))
 }
 
 fn authorize_export(
-    addr: &SocketAddr,
     headers: &HeaderMap,
     state: &ServerState,
     workload_id: &str,
@@ -415,7 +390,6 @@ fn authorize_export(
     }
     authorize(
         state,
-        addr,
         headers,
         &format!("{EXPORT_TICKET_PREFIX}{workload_id}"),
     )
@@ -432,10 +406,9 @@ fn export_failure(workload_id: &str, error: anyhow::Error) -> (StatusCode, Strin
 async fn export_boot_handler(
     State(state): State<ServerState>,
     Path(workload_id): Path<String>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    authorize_export(&addr, &headers, &state, &workload_id)?;
+    authorize_export(&headers, &state, &workload_id)?;
     let qmp_socket = state.qemu.qmp_socket_path(&workload_id).await;
     let stream = crate::qemu::export::boot_disk_stream(&workload_id, qmp_socket)
         .await
@@ -451,11 +424,10 @@ async fn export_boot_handler(
 async fn import_boot_handler(
     State(state): State<ServerState>,
     Path(workload_id): Path<String>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     body: axum::body::Body,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    authorize_export(&addr, &headers, &state, &workload_id)?;
+    authorize_export(&headers, &state, &workload_id)?;
     if state.qemu.qmp_socket_path(&workload_id).await.is_some() {
         return Err((StatusCode::CONFLICT, "vm is running".to_string()));
     }
@@ -505,11 +477,10 @@ async fn ingress_config_handler(
 
 async fn power_handler(
     State(state): State<ServerState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<PowerRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    authorize(&state, &addr, &headers, POWER_TICKET_SCOPE)?;
+    authorize(&state, &headers, POWER_TICKET_SCOPE)?;
 
     let verb = req.action.systemctl_verb();
     info!(agent_id = %state.agent_id, action = verb, "power action requested");
@@ -571,30 +542,6 @@ mod tests {
         let base = listener.local_addr().unwrap().to_string();
         tokio::spawn(serve(state(), listener));
         base
-    }
-
-    #[test]
-    fn private_and_loopback_sources_are_internal() {
-        let internal = [
-            "127.0.0.1:1",
-            "10.1.2.3:1",
-            "172.16.0.1:1",
-            "172.31.9.9:1",
-            "192.168.1.1:1",
-            "[::1]:1",
-        ];
-        for addr in internal {
-            assert!(is_internal_source(&addr.parse().unwrap()), "{addr}");
-        }
-        let external = [
-            "8.8.8.8:1",
-            "172.32.0.1:1",
-            "172.15.0.1:1",
-            "[2001:db8::1]:1",
-        ];
-        for addr in external {
-            assert!(!is_internal_source(&addr.parse().unwrap()), "{addr}");
-        }
     }
 
     #[test]

@@ -102,6 +102,8 @@ pub struct ClusterSecrets {
     pub openbao_secret_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_secret: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub internal_token: Option<String>,
 }
 
 impl ClusterSecrets {
@@ -131,6 +133,7 @@ impl ClusterSecrets {
             site_secret: std::env::var(SITE_SECRET_VAR)
                 .ok()
                 .filter(|value| !value.is_empty()),
+            internal_token: shared::internal_auth::configured_token(),
         })
     }
 }
@@ -254,13 +257,14 @@ mod tests {
 
     static ENVIRONMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    const MANAGED_VARIABLES: [&str; 8] = [
+    const MANAGED_VARIABLES: [&str; 9] = [
         "CREDENTIALS_DIRECTORY",
         "DATABASE_URL",
         "JWT_SECRET",
         "GARAGE_ADMIN_TOKEN",
         "OBJECT_STORAGE_ENCRYPTION_KEY",
         SITE_SECRET_VAR,
+        shared::internal_auth::INTERNAL_TOKEN_ENV,
         VIP_ADDRESS_VAR,
         VIP_PREFIX_VAR,
     ];
@@ -290,6 +294,7 @@ mod tests {
         std::env::set_var("GARAGE_ADMIN_TOKEN", "admin");
         std::env::set_var("OBJECT_STORAGE_ENCRYPTION_KEY", "key");
         std::env::remove_var(SITE_SECRET_VAR);
+        std::env::remove_var(shared::internal_auth::INTERNAL_TOKEN_ENV);
     }
 
     #[test]
@@ -330,6 +335,7 @@ mod tests {
         assert_eq!(secrets.patroni_superuser_password, "super");
         assert_eq!(secrets.openbao_secret_id, "secret");
         assert!(secrets.site_secret.is_none());
+        assert!(secrets.internal_token.is_none());
 
         std::env::set_var(SITE_SECRET_VAR, "site");
         assert_eq!(

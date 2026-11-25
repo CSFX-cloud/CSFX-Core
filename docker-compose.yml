@@ -78,6 +78,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-csfx_user}:${POSTGRES_PASSWORD:-csfx_password}@postgres:5432/${POSTGRES_DB:-csfx_core}
       ETCD_ENDPOINTS: http://etcd:2379
       RUST_LOG: ${RUST_LOG:-debug}
+      CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       RSA_KEY_SIZE: "2048"
       REGISTRY_SERVICE_URL: http://registry:8001
@@ -130,6 +131,7 @@ services:
       REGISTRY_PORT: "8001"
       LISTEN_ADDR: "0.0.0.0"
       RUST_LOG: ${RUST_LOG:-debug}
+      CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
       SCHEDULER_SERVICE_URL: http://scheduler:8002
       API_GATEWAY_URL: http://api-gateway:8000
     ports:
@@ -196,6 +198,7 @@ services:
       SCHEDULER_PORT: "8002"
       LISTEN_ADDR: "0.0.0.0"
       RUST_LOG: ${RUST_LOG:-debug}
+      CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
     ports:
       - "8002:8002"
     depends_on:

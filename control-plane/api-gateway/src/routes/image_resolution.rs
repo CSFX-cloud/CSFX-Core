@@ -1,6 +1,6 @@
 use axum::{
-    extract::{ConnectInfo, Path, State},
-    http::StatusCode,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     routing::post,
     Json, Router,
 };
@@ -9,11 +9,10 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use shared::images::registry_prefix;
-use std::net::SocketAddr;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::{routes::agent_stream::is_internal_source, AppState};
+use crate::AppState;
 
 const SITE_IMAGE_HOST: &str = "sites.csfx.invalid";
 const DEFAULT_TAG: &str = "latest";
@@ -112,13 +111,13 @@ async fn resolve(state: &AppState, group_id: Uuid, image: &str) -> String {
 }
 
 pub async fn resolve_image_handler(
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(group_id): Path<Uuid>,
     Json(request): Json<ResolveImageRequest>,
 ) -> Result<Json<ResolveImageResponse>, StatusCode> {
-    if !is_internal_source(&addr) {
-        warn!(source = %addr, "rejected image resolution from non-internal source");
+    if !shared::internal_auth::is_authorized(&headers) {
+        warn!("rejected image resolution without valid service token");
         return Err(StatusCode::FORBIDDEN);
     }
     let image = resolve(&state, group_id, &request.image).await;

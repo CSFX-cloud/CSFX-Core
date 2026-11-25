@@ -235,12 +235,15 @@ pub(crate) fn write_file(path: &str, contents: &str, mode: u32) -> Result<()> {
 }
 
 fn render_cp_env(bundle: &MasterBundle) -> String {
-    let site_secret = bundle
-        .site_secret
-        .as_ref()
-        .map_or_else(String::new, |secret| format!("CSFX_SITE_SECRET={secret}\n"));
+    let optional = [
+        ("CSFX_SITE_SECRET", &bundle.site_secret),
+        ("CSFX_INTERNAL_TOKEN", &bundle.internal_token),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| value.as_ref().map(|value| format!("{name}={value}\n")))
+    .collect::<String>();
     format!(
-        "DATABASE_URL=postgres://csfx:{}@localhost:5432/csfx\nJWT_SECRET={}\nETCD_ENDPOINTS=http://localhost:2379\nGARAGE_ADMIN_TOKEN={}\nOBJECT_STORAGE_ENCRYPTION_KEY={}\n{site_secret}",
+        "DATABASE_URL=postgres://csfx:{}@localhost:5432/csfx\nJWT_SECRET={}\nETCD_ENDPOINTS=http://localhost:2379\nGARAGE_ADMIN_TOKEN={}\nOBJECT_STORAGE_ENCRYPTION_KEY={}\n{optional}",
         bundle.db_password,
         bundle.jwt_secret,
         bundle.garage_admin_token,
@@ -291,6 +294,7 @@ mod tests {
             openbao_role_id: "role".into(),
             openbao_secret_id: "secret".into(),
             site_secret: Some("site".into()),
+            internal_token: Some("internal".into()),
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),
@@ -305,14 +309,17 @@ mod tests {
         assert!(env.contains("JWT_SECRET=jwt\n"));
         assert!(env.contains("ETCD_ENDPOINTS=http://localhost:2379\n"));
         assert!(env.contains("OBJECT_STORAGE_ENCRYPTION_KEY=enc\n"));
-        assert!(env.ends_with("CSFX_SITE_SECRET=site\n"));
+        assert!(env.ends_with("CSFX_SITE_SECRET=site\nCSFX_INTERNAL_TOKEN=internal\n"));
     }
 
     #[test]
     fn cp_env_omits_the_site_secret_when_the_cluster_has_none() {
         let mut older = bundle();
         older.site_secret = None;
-        assert!(!render_cp_env(&older).contains("CSFX_SITE_SECRET"));
+        older.internal_token = None;
+        let env = render_cp_env(&older);
+        assert!(!env.contains("CSFX_SITE_SECRET"));
+        assert!(!env.contains("CSFX_INTERNAL_TOKEN"));
     }
 
     #[test]
