@@ -16,6 +16,15 @@ const PROMOTE_MARKER: &str = "/etc/csfx/master-join-promote";
 const SETUP_DONE_FILE: &str = "/var/lib/csfx-data/csfx/.setup-complete";
 const CA_CERT_PATH: &str = "/var/lib/csfx-cp/ca.crt";
 const CA_KEY_PATH: &str = "/var/lib/csfx-cp/ca.key";
+const ETCD_PEER_CA_CERT_PATH: &str = "/etc/csfx/etcd-peer-ca.crt";
+const ETCD_PEER_CA_KEY_PATH: &str = "/etc/csfx/etcd-peer-ca.key";
+const ETCD_PEER_MATERIAL_PATHS: [&str; 5] = [
+    ETCD_PEER_CA_CERT_PATH,
+    ETCD_PEER_CA_KEY_PATH,
+    "/etc/csfx/etcd-peer.crt",
+    "/etc/csfx/etcd-peer.crt.sans",
+    "/etc/csfx/etcd-peer.key",
+];
 const CP_ENV_PATH: &str = "/etc/csfx/cp.env";
 const GARAGE_ENV_PATH: &str = "/etc/csfx/garage.env";
 pub(crate) const CLUSTER_ENV_PATH: &str = "/etc/csfx/cluster.env";
@@ -140,6 +149,7 @@ async fn apply_bundle(bundle: &MasterBundle) -> Result<()> {
     write_file(CA_CERT_PATH, &bundle.ca_cert_pem, 0o644)?;
     write_file(CA_KEY_PATH, &bundle.ca_key_pem, 0o600)?;
     adopt_directory_owner(&[CA_CERT_PATH, CA_KEY_PATH])?;
+    write_etcd_peer_ca(bundle)?;
     write_file(CP_ENV_PATH, &render_cp_env(bundle), 0o600)?;
     write_file(GARAGE_ENV_PATH, &render_garage_env(bundle), 0o600)?;
     write_file(ETCD_JOIN_ENV_PATH, &render_etcd_env(bundle), 0o600)?;
@@ -234,13 +244,36 @@ pub(crate) fn write_file(path: &str, contents: &str, mode: u32) -> Result<()> {
         .with_context(|| format!("Failed to set permissions on {path}"))
 }
 
+fn write_etcd_peer_ca(bundle: &MasterBundle) -> Result<()> {
+    let (Some(cert), Some(key)) = (&bundle.etcd_peer_ca_cert_pem, &bundle.etcd_peer_ca_key_pem)
+    else {
+        return remove_etcd_peer_material();
+    };
+    write_file(ETCD_PEER_CA_CERT_PATH, cert, 0o644)?;
+    write_file(ETCD_PEER_CA_KEY_PATH, key, 0o600)
+}
+
+fn remove_etcd_peer_material() -> Result<()> {
+    for path in ETCD_PEER_MATERIAL_PATHS {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err).with_context(|| format!("Failed to remove {path}")),
+        }
+    }
+    Ok(())
+}
+
 fn render_cp_env(bundle: &MasterBundle) -> String {
-    let site_secret = bundle
-        .site_secret
-        .as_ref()
-        .map_or_else(String::new, |secret| format!("CSFX_SITE_SECRET={secret}\n"));
+    let optional = [
+        ("CSFX_SITE_SECRET", &bundle.site_secret),
+        ("CSFX_INTERNAL_TOKEN", &bundle.internal_token),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| value.as_ref().map(|value| format!("{name}={value}\n")))
+    .collect::<String>();
     format!(
-        "DATABASE_URL=postgres://csfx:{}@localhost:5432/csfx\nJWT_SECRET={}\nETCD_ENDPOINTS=http://localhost:2379\nGARAGE_ADMIN_TOKEN={}\nOBJECT_STORAGE_ENCRYPTION_KEY={}\n{site_secret}",
+        "DATABASE_URL=postgres://csfx:{}@localhost:5432/csfx\nJWT_SECRET={}\nETCD_ENDPOINTS=http://localhost:2379\nGARAGE_ADMIN_TOKEN={}\nOBJECT_STORAGE_ENCRYPTION_KEY={}\n{optional}",
         bundle.db_password,
         bundle.jwt_secret,
         bundle.garage_admin_token,
@@ -291,6 +324,9 @@ mod tests {
             openbao_role_id: "role".into(),
             openbao_secret_id: "secret".into(),
             site_secret: Some("site".into()),
+            internal_token: Some("internal".into()),
+            etcd_peer_ca_cert_pem: None,
+            etcd_peer_ca_key_pem: None,
             etcd_name: "node-b".into(),
             etcd_initial_cluster: "node-a=http://10.100.0.1:2380,node-b=http://10.100.0.2:2380"
                 .into(),
@@ -305,14 +341,17 @@ mod tests {
         assert!(env.contains("JWT_SECRET=jwt\n"));
         assert!(env.contains("ETCD_ENDPOINTS=http://localhost:2379\n"));
         assert!(env.contains("OBJECT_STORAGE_ENCRYPTION_KEY=enc\n"));
-        assert!(env.ends_with("CSFX_SITE_SECRET=site\n"));
+        assert!(env.ends_with("CSFX_SITE_SECRET=site\nCSFX_INTERNAL_TOKEN=internal\n"));
     }
 
     #[test]
     fn cp_env_omits_the_site_secret_when_the_cluster_has_none() {
         let mut older = bundle();
         older.site_secret = None;
-        assert!(!render_cp_env(&older).contains("CSFX_SITE_SECRET"));
+        older.internal_token = None;
+        let env = render_cp_env(&older);
+        assert!(!env.contains("CSFX_SITE_SECRET"));
+        assert!(!env.contains("CSFX_INTERNAL_TOKEN"));
     }
 
     #[test]

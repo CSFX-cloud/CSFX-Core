@@ -53,7 +53,10 @@ async fn etcd_client() -> Result<Client, ApiError> {
 }
 
 pub fn peer_url(tunnel_ip: &str) -> String {
-    format!("http://{tunnel_ip}:2380")
+    format!(
+        "{}://{tunnel_ip}:2380",
+        crate::cluster_bundle::etcd_peer_scheme()
+    )
 }
 
 async fn load_agent(state: &AppState, agent_id: Uuid) -> Result<agents::Model, ApiError> {

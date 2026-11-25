@@ -62,6 +62,7 @@ fn request_headers(source: &HeaderMap, has_body: bool) -> HeaderMap {
     if let Some(id) = current_request_id() {
         headers.insert(REQUEST_ID_HEADER.clone(), id);
     }
+    headers.extend(shared::internal_auth::token_headers());
     headers
 }
 

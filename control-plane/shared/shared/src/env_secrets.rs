@@ -119,14 +119,17 @@ pub fn seal(value: &Value, context: &str) -> Result<Value, EnvSecretError> {
         .map_err(|_| EnvSecretError::Encrypt)?;
     let mut payload = nonce.to_vec();
     payload.extend_from_slice(&buffer);
-    Ok(Value::String(format!("{PREFIX}{}", hex_encode(&payload))))
+    Ok(Value::String(format!(
+        "{PREFIX}{}",
+        crate::hex::encode(&payload)
+    )))
 }
 
 pub fn open(value: &Value, context: &str) -> Result<Value, EnvSecretError> {
     let Some(encoded) = value.as_str().and_then(|text| text.strip_prefix(PREFIX)) else {
         return Ok(value.clone());
     };
-    let payload = hex_decode(encoded).ok_or(EnvSecretError::Decrypt)?;
+    let payload = crate::hex::decode(encoded).ok_or(EnvSecretError::Decrypt)?;
     if payload.len() < NONCE_LEN {
         return Err(EnvSecretError::Decrypt);
     }
@@ -213,10 +216,10 @@ fn key() -> Result<&'static LessSafeKey, EnvSecretError> {
 
 fn key_material() -> Result<Vec<u8>, EnvSecretError> {
     if let Ok(explicit) = std::env::var(KEY_VARIABLE) {
-        return hex_decode(&explicit).ok_or(EnvSecretError::Key);
+        return crate::hex::decode(&explicit).ok_or(EnvSecretError::Key);
     }
     let source = std::env::var(DERIVATION_SOURCE_VARIABLE).map_err(|_| EnvSecretError::Key)?;
-    derive_key(&hex_decode(&source).ok_or(EnvSecretError::Key)?)
+    derive_key(&crate::hex::decode(&source).ok_or(EnvSecretError::Key)?)
 }
 
 struct DerivedLength;
@@ -235,20 +238,6 @@ fn derive_key(source: &[u8]) -> Result<Vec<u8>, EnvSecretError> {
         .and_then(|okm| okm.fill(&mut derived))
         .map_err(|_| EnvSecretError::Key)?;
     Ok(derived)
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn hex_decode(input: &str) -> Option<Vec<u8>> {
-    if !input.bytes().all(|byte| byte.is_ascii_hexdigit()) || !input.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..input.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&input[index..index + 2], 16).ok())
-        .collect()
 }
 
 #[cfg(test)]

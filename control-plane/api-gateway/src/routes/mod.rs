@@ -85,6 +85,15 @@ fn cors_origins() -> Vec<HeaderValue> {
         .collect()
 }
 
+pub fn create_internal_router() -> Router<AppState> {
+    Router::new()
+        .merge(agent_stream::agent_stream_internal_routes())
+        .merge(image_resolution::image_resolution_internal_routes())
+        .layer(axum::middleware::from_fn(
+            shared::internal_auth::require_service_token,
+        ))
+}
+
 /// Creates the main application router and logs all registered routes.
 pub fn create_router(state: AppState) -> Router<AppState> {
     let rate_limit_per_second: u64 = std::env::var("RATE_LIMIT_PER_SECOND")
@@ -167,17 +176,14 @@ pub fn create_router(state: AppState) -> Router<AppState> {
         )])
         .allow_credentials(true);
 
-    let internal_api_router = Router::new()
-        .merge(registry::registry_routes())
-        .merge(ssh_keys::ssh_keys_internal_routes())
-        .merge(agent_stream::agent_stream_internal_routes())
-        .merge(image_resolution::image_resolution_internal_routes());
+    let internal_api_router = Router::new().merge(registry::registry_routes());
 
     let agent_unmetered_router = Router::new()
         .merge(agents::agents_unmetered_routes())
         .merge(agent_logs::agent_logs_routes())
         .merge(resource_group_agent::resource_groups_agent_routes())
-        .merge(agent_stream::agent_stream_routes());
+        .merge(agent_stream::agent_stream_routes())
+        .merge(ssh_keys::ssh_keys_agent_routes());
 
     let rate_limited_router = Router::new()
         .merge(agent_proxy::agent_proxy_routes())

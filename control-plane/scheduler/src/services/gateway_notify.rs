@@ -1,9 +1,8 @@
+use shared::internal_auth::SignedRequest;
 use std::sync::OnceLock;
 use std::time::Duration;
 use uuid::Uuid;
 
-const API_GATEWAY_URL_ENV: &str = "API_GATEWAY_URL";
-const DEFAULT_API_GATEWAY_URL: &str = "http://localhost:8000";
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn http_client() -> &'static reqwest::Client {
@@ -12,15 +11,15 @@ fn http_client() -> &'static reqwest::Client {
 }
 
 pub async fn notify_assignment(agent_id: Uuid) {
-    let base_url =
-        std::env::var(API_GATEWAY_URL_ENV).unwrap_or_else(|_| DEFAULT_API_GATEWAY_URL.to_string());
+    let base_url = shared::internal_auth::gateway_internal_url();
     let url = format!(
-        "{}/api/internal/agents/{}/notify-assignment",
+        "{}/internal/agents/{}/notify-assignment",
         base_url, agent_id
     );
 
     let result = http_client()
         .post(&url)
+        .signed()
         .send()
         .await
         .and_then(|response| response.error_for_status());

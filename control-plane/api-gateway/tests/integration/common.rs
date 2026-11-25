@@ -29,6 +29,7 @@ static REQUESTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new(
 
 pub struct Harness {
     pub app: Router,
+    pub internal_app: Router,
     pub db: DatabaseConnection,
     pub org_id: Uuid,
     pub admin_id: Uuid,
@@ -207,9 +208,11 @@ pub async fn harness() -> Harness {
         openbao: None,
         site_builder: None,
     };
+    let internal_app = routes::create_internal_router().with_state(state.clone());
     let app = routes::create_router(state.clone()).with_state(state);
     Harness {
         app,
+        internal_app,
         db,
         org_id,
         admin_id,
@@ -230,6 +233,36 @@ impl Harness {
             .await
     }
 
+    pub async fn send_internal(
+        &self,
+        method: Method,
+        uri: &str,
+        service_token: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let extra = service_token.map(|value| ("x-csfx-internal-token", value));
+        self.dispatch(
+            &self.internal_app,
+            "127.0.0.1:4000",
+            method,
+            uri,
+            None,
+            None,
+            extra,
+        )
+        .await
+    }
+
+    pub async fn send_as_agent(
+        &self,
+        method: Method,
+        uri: &str,
+        api_key: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let extra = api_key.map(|value| ("x-api-key", value));
+        self.dispatch(&self.app, "127.0.0.1:4000", method, uri, None, None, extra)
+            .await
+    }
+
     pub async fn send_from(
         &self,
         peer: &str,
@@ -238,6 +271,21 @@ impl Harness {
         token: Option<&str>,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
+        self.dispatch(&self.app, peer, method, uri, token, body, None)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch(
+        &self,
+        app: &Router,
+        peer: &str,
+        method: Method,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+        extra_header: Option<(&str, &str)>,
+    ) -> (StatusCode, Value) {
         let mut builder = Request::builder()
             .method(method)
             .uri(uri)
@@ -245,12 +293,15 @@ impl Harness {
         if let Some(token) = token {
             builder = builder.header("authorization", format!("Bearer {}", token));
         }
+        if let Some((name, value)) = extra_header {
+            builder = builder.header(name, value);
+        }
         let payload = body.map_or_else(Body::empty, |value| Body::from(value.to_string()));
         let mut request = builder.body(payload).unwrap();
         request
             .extensions_mut()
             .insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
-        let response = self.app.clone().oneshot(request).await.unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
         (

@@ -1,3 +1,4 @@
+use shared::internal_auth::SignedRequest;
 use std::collections::HashMap;
 
 use crate::models::workload::BucketBinding;
@@ -28,6 +29,7 @@ pub async fn resolve_env_vars(
 
         let bucket = match client
             .get(format!("{}/buckets/{}", base, bucket_id))
+            .signed()
             .send()
             .await
         {
@@ -66,6 +68,7 @@ pub async fn resolve_env_vars(
 
         let key = match client
             .post(format!("{}/buckets/{}/keys", base, bucket_id))
+            .signed()
             .json(&key_body)
             .send()
             .await

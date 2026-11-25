@@ -1,11 +1,10 @@
 use axum::{
-    extract::{ConnectInfo, Path, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::Json,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::{
@@ -144,22 +143,10 @@ pub struct ProxyTicketResponse {
 
 pub async fn issue_proxy_ticket(
     State(state): State<AppState>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(request): Json<ProxyTicketRequest>,
 ) -> Result<Json<ProxyTicketResponse>, ApiError> {
-    let ip = addr.ip();
-    let allowed = ip.is_loopback()
-        || match ip {
-            std::net::IpAddr::V4(v4) => {
-                let octets = v4.octets();
-                octets[0] == 10
-                    || (octets[0] == 172 && octets[1] >= 16 && octets[1] <= 31)
-                    || (octets[0] == 192 && octets[1] == 168)
-            }
-            std::net::IpAddr::V6(_) => false,
-        };
-
-    if !allowed {
+    if !shared::internal_auth::is_authorized(&headers) {
         return Err(api_error(
             StatusCode::FORBIDDEN,
             "internal endpoint not accessible from this network",

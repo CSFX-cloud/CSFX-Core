@@ -31,6 +31,24 @@ fn connect_openbao() -> Option<openbao::OpenBao> {
     }
 }
 
+async fn spawn_internal_listener(app: axum::Router) {
+    let addr = shared::internal_auth::gateway_internal_addr();
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            tracing::error!(error = %error, addr = %addr, "failed to bind internal listener");
+            std::process::exit(1);
+        }
+    };
+    tracing::info!(addr = %addr, "internal listener started");
+    tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, app).await {
+            tracing::error!(error = %error, "internal listener stopped");
+            std::process::exit(1);
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -47,6 +65,11 @@ async fn main() {
 
     let log_receiver = telemetry::init_tracing();
     tracing::info!("api-gateway starting");
+
+    if let Err(error) = shared::internal_auth::ensure_configured() {
+        tracing::error!(error = %error, "invalid gateway configuration");
+        std::process::exit(1);
+    }
 
     if let Err(error) = api_gateway::auth::jwt::init_jwt_secret() {
         tracing::error!(error = %error, "invalid gateway configuration");
@@ -109,7 +132,9 @@ async fn main() {
     let router = router.merge(
         SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_gateway::ApiDoc::openapi()),
     );
+    let internal_app = routes::create_internal_router().with_state(state.clone());
     let app = router.with_state(state);
+    spawn_internal_listener(internal_app).await;
 
     let port = std::env::var("GATEWAY_PORT")
         .ok()

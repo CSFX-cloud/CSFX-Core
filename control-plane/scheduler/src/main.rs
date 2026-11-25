@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("failed to install ring crypto provider");
 
     dotenvy::dotenv().ok();
+    shared::internal_auth::ensure_configured().map_err(anyhow::Error::msg)?;
 
     let log_receiver = logger::init_logger();
 
@@ -86,7 +87,9 @@ async fn main() -> anyhow::Result<()> {
 
     let state = server::AppState { db, scheduler };
 
-    let app = server::create_router(state.clone());
+    let app = server::create_router(state.clone()).layer(axum::middleware::from_fn(
+        shared::internal_auth::require_service_token,
+    ));
 
     let leader = LeaderLease::connect(LEADER_KEY).await?;
     spawn_replacement_reconcile(state.scheduler.clone(), leader.clone());

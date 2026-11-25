@@ -1,5 +1,6 @@
 use entity::entities::volumes;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use shared::internal_auth::SignedRequest;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -54,6 +55,7 @@ async fn create_volume(resource_group_id: Uuid, name: &str) -> Result<Uuid, Stri
 
     let response = http_client()
         .post(format!("{}/volumes", base_url))
+        .signed()
         .json(&serde_json::json!({
             "name": name,
             "size_gb": DEFAULT_VOLUME_SIZE_GB,

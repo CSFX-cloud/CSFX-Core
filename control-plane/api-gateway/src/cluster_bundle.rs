@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{net::Ipv4Addr, path::Path};
+use std::{net::Ipv4Addr, path::Path, sync::OnceLock};
 
 const CREDENTIAL_GARAGE_ENV: &str = "garage-env";
 const GARAGE_RPC_SECRET_KEY: &str = "GARAGE_RPC_SECRET";
@@ -8,6 +8,8 @@ const CREDENTIAL_PATRONI_REPLICATION: &str = "patroni-replication-password";
 const CREDENTIAL_OPENBAO_SEAL_KEY: &str = "openbao-seal-key";
 const CREDENTIAL_OPENBAO_ROLE_ID: &str = "openbao-role-id";
 const CREDENTIAL_OPENBAO_SECRET_ID: &str = "openbao-secret-id";
+const CREDENTIAL_ETCD_PEER_CA_CERT: &str = "etcd-peer-ca.crt";
+const CREDENTIAL_ETCD_PEER_CA_KEY: &str = "etcd-peer-ca.key";
 
 #[derive(Debug, thiserror::Error)]
 pub enum BundleError {
@@ -102,6 +104,12 @@ pub struct ClusterSecrets {
     pub openbao_secret_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_secret: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub internal_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etcd_peer_ca_cert_pem: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etcd_peer_ca_key_pem: Option<String>,
 }
 
 impl ClusterSecrets {
@@ -131,8 +139,38 @@ impl ClusterSecrets {
             site_secret: std::env::var(SITE_SECRET_VAR)
                 .ok()
                 .filter(|value| !value.is_empty()),
+            internal_token: shared::internal_auth::configured_token(),
+            etcd_peer_ca_cert_pem: optional_credential(credentials, CREDENTIAL_ETCD_PEER_CA_CERT),
+            etcd_peer_ca_key_pem: optional_credential(credentials, CREDENTIAL_ETCD_PEER_CA_KEY),
         })
     }
+}
+
+fn optional_credential(directory: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(directory.join(name))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn peer_scheme_for(credentials: Option<&Path>) -> &'static str {
+    let secured = credentials.is_some_and(|directory| {
+        optional_credential(directory, CREDENTIAL_ETCD_PEER_CA_CERT).is_some()
+            && optional_credential(directory, CREDENTIAL_ETCD_PEER_CA_KEY).is_some()
+    });
+    if secured {
+        "https"
+    } else {
+        "http"
+    }
+}
+
+pub fn etcd_peer_scheme() -> &'static str {
+    static SCHEME: OnceLock<&'static str> = OnceLock::new();
+    SCHEME.get_or_init(|| {
+        let directory = std::env::var_os("CREDENTIALS_DIRECTORY").map(std::path::PathBuf::from);
+        peer_scheme_for(directory.as_deref())
+    })
 }
 
 fn environment(name: &'static str) -> Result<String, BundleError> {
@@ -254,13 +292,14 @@ mod tests {
 
     static ENVIRONMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    const MANAGED_VARIABLES: [&str; 8] = [
+    const MANAGED_VARIABLES: [&str; 9] = [
         "CREDENTIALS_DIRECTORY",
         "DATABASE_URL",
         "JWT_SECRET",
         "GARAGE_ADMIN_TOKEN",
         "OBJECT_STORAGE_ENCRYPTION_KEY",
         SITE_SECRET_VAR,
+        shared::internal_auth::INTERNAL_TOKEN_ENV,
         VIP_ADDRESS_VAR,
         VIP_PREFIX_VAR,
     ];
@@ -290,6 +329,7 @@ mod tests {
         std::env::set_var("GARAGE_ADMIN_TOKEN", "admin");
         std::env::set_var("OBJECT_STORAGE_ENCRYPTION_KEY", "key");
         std::env::remove_var(SITE_SECRET_VAR);
+        std::env::remove_var(shared::internal_auth::INTERNAL_TOKEN_ENV);
     }
 
     #[test]
@@ -330,6 +370,21 @@ mod tests {
         assert_eq!(secrets.patroni_superuser_password, "super");
         assert_eq!(secrets.openbao_secret_id, "secret");
         assert!(secrets.site_secret.is_none());
+        assert!(secrets.internal_token.is_none());
+        assert!(secrets.etcd_peer_ca_cert_pem.is_none());
+        assert_eq!(peer_scheme_for(Some(&directory)), "http");
+        assert_eq!(peer_scheme_for(None), "http");
+
+        std::fs::write(directory.join(CREDENTIAL_ETCD_PEER_CA_CERT), "cert\n").unwrap();
+        std::fs::write(directory.join(CREDENTIAL_ETCD_PEER_CA_KEY), "\n").unwrap();
+        let secured = ClusterSecrets::load().unwrap();
+        assert_eq!(secured.etcd_peer_ca_cert_pem.as_deref(), Some("cert"));
+        assert!(secured.etcd_peer_ca_key_pem.is_none());
+        assert_eq!(peer_scheme_for(Some(&directory)), "http");
+        std::fs::write(directory.join(CREDENTIAL_ETCD_PEER_CA_KEY), "key\n").unwrap();
+        assert_eq!(peer_scheme_for(Some(&directory)), "https");
+        std::fs::remove_file(directory.join(CREDENTIAL_ETCD_PEER_CA_CERT)).unwrap();
+        std::fs::remove_file(directory.join(CREDENTIAL_ETCD_PEER_CA_KEY)).unwrap();
 
         std::env::set_var(SITE_SECRET_VAR, "site");
         assert_eq!(

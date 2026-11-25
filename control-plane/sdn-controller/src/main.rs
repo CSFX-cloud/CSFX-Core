@@ -9,6 +9,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("failed to install ring crypto provider");
 
     dotenvy::dotenv().ok();
+    shared::internal_auth::ensure_configured().map_err(anyhow::Error::msg)?;
 
     let log_receiver = logger::init_logger();
 
@@ -36,7 +37,9 @@ async fn main() -> anyhow::Result<()> {
 
     let ipam = services::ipam::IpamService::new(etcd);
     let state = server::AppState::new(db.clone(), ipam);
-    let app = server::create_router(state);
+    let app = server::create_router(state).layer(axum::middleware::from_fn(
+        shared::internal_auth::require_service_token,
+    ));
 
     shared::observability::spawn_pool_gauges("default", db);
     shared::observability::serve_metrics("127.0.0.1:9005").await;
