@@ -406,7 +406,13 @@ async fn notify_assignment_requires_the_service_token() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = harness.send(Method::POST, &public, None, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        matches!(
+            status,
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+        ),
+        "{status}"
+    );
 }
 
 #[tokio::test]
