@@ -390,17 +390,22 @@ async fn agent_logs_are_validated_normalized_and_stored() {
 async fn notify_assignment_requires_the_service_token() {
     unsafe { std::env::set_var("CSFX_INTERNAL_TOKEN", "test-service-token") };
     let harness = harness().await;
-    let uri = format!("/api/internal/agents/{}/notify-assignment", Uuid::new_v4());
+    let uri = format!("/internal/agents/{}/notify-assignment", Uuid::new_v4());
     for (token, expected) in [
         (None, StatusCode::FORBIDDEN),
         (Some("wrong"), StatusCode::FORBIDDEN),
         (Some("test-service-token"), StatusCode::NO_CONTENT),
     ] {
-        let (status, _) = harness
-            .send_internal("8.8.8.8:5000", Method::POST, &uri, token)
-            .await;
+        let (status, _) = harness.send_internal(Method::POST, &uri, token).await;
         assert_eq!(status, expected, "{token:?}");
     }
+    let public = format!("/api{uri}");
+    let (status, _) = harness
+        .send_internal(Method::POST, &public, Some("test-service-token"))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = harness.send(Method::POST, &public, None, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -422,16 +427,11 @@ async fn connected_agent_streams_receive_assignment_signals() {
         .insert("x-api-key", key.parse().unwrap());
     let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
 
-    let notify = format!("/api/internal/agents/{}/notify-assignment", agent.id);
+    let notify = format!("/internal/agents/{}/notify-assignment", agent.id);
     unsafe { std::env::set_var("CSFX_INTERNAL_TOKEN", "test-service-token") };
     for _ in 0..50 {
         harness
-            .send_internal(
-                "127.0.0.1:4000",
-                Method::POST,
-                &notify,
-                Some("test-service-token"),
-            )
+            .send_internal(Method::POST, &notify, Some("test-service-token"))
             .await;
         let next = tokio::time::timeout(std::time::Duration::from_millis(200), socket.next()).await;
         if let Ok(Some(Ok(message))) = next {

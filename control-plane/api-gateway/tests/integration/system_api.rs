@@ -167,9 +167,19 @@ async fn ssh_access_and_authorized_keys_follow_the_policy() {
         StatusCode::CREATED
     );
 
-    let keys_uri = format!("/api/agents/{}/authorized-keys", Uuid::new_v4());
-    let (_, closed) = harness.send(Method::GET, &keys_uri, None, None).await;
+    let (agent_id, api_key) = agent_with_key(&harness, worker()).await;
+    let keys_uri = format!("/api/agents/{agent_id}/authorized-keys");
+    let (status, _) = harness.send_as_agent(Method::GET, &keys_uri, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (_, closed) = harness
+        .send_as_agent(Method::GET, &keys_uri, Some(&api_key))
+        .await;
     assert_eq!(closed["keys"], json!([]));
+    let (_, other_agent_key) = agent_with_key(&harness, worker()).await;
+    let (status, _) = harness
+        .send_as_agent(Method::GET, &keys_uri, Some(&other_agent_key))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     let (status, access) = harness
         .admin(
@@ -190,12 +200,18 @@ async fn ssh_access_and_authorized_keys_follow_the_policy() {
         .await;
     assert_eq!(bad.0, StatusCode::BAD_REQUEST);
 
-    let (_, open) = harness.send(Method::GET, &keys_uri, None, None).await;
+    let (_, open) = harness
+        .send_as_agent(Method::GET, &keys_uri, Some(&api_key))
+        .await;
     let served = open["keys"].as_array().unwrap();
     assert!(served.iter().any(|served| served == &json!(key)));
     assert!(!served.iter().any(|served| served == &json!(expired)));
     let (_, other_user) = harness
-        .send(Method::GET, &format!("{keys_uri}?user=root"), None, None)
+        .send_as_agent(
+            Method::GET,
+            &format!("{keys_uri}?user=root"),
+            Some(&api_key),
+        )
         .await;
     assert_eq!(other_user["keys"], json!([]));
 
