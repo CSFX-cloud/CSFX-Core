@@ -7,7 +7,7 @@ const DEFAULT_OBJECT_STORAGE_URL: &str = "http://localhost:8006";
 
 fn http_client() -> &'static reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| shared::http::client(shared::http::DEFAULT_TIMEOUT))
+    CLIENT.get_or_init(|| shared::http::service_client(shared::http::DEFAULT_TIMEOUT))
 }
 
 fn base_url() -> String {

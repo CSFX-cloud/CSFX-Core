@@ -164,6 +164,7 @@ services:
       SITE_BUILDER_PORT: "8007"
       SITE_EDGE_PORT: "8008"
       RUST_LOG: ${RUST_LOG:-debug}
+      CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
       SCHEDULER_SERVICE_URL: http://scheduler:8002
       CSFX_SITE_CALLBACK_URL: ${CSFX_SITE_CALLBACK_URL:-http://site-builder:8007}
       CSFX_SITE_SECRET: ${CSFX_SITE_SECRET:-dev_site_secret_change_in_production}
@@ -225,6 +226,7 @@ services:
       VOLUME_MANAGER_PORT: "8003"
       LISTEN_ADDR: "0.0.0.0"
       RUST_LOG: ${RUST_LOG:-debug}
+      CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
     ports:
       - "8003:8003"
     depends_on:
@@ -285,6 +287,7 @@ services:
       GARAGE_S3_URL: http://garage:3900
       OBJECT_STORAGE_ENCRYPTION_KEY: ${OBJECT_STORAGE_ENCRYPTION_KEY:-9a29b5d4c92cbfd4abe14c2a645f39eff6b57b1fa13305d3a946a2221e630c29}
       RUST_LOG: ${RUST_LOG:-debug}
+      CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
     ports:
       - "8006:8006"
     depends_on:
@@ -313,6 +316,7 @@ services:
       SCHEDULER_SERVICE_URL: http://scheduler:8002
       VOLUME_MANAGER_URL: http://volume-manager:8003
       RUST_LOG: ${RUST_LOG:-debug}
+      CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
     ports:
       - "8004:8004"
     depends_on:
@@ -339,6 +343,7 @@ services:
       SDN_CONTROLLER_PORT: "8005"
       LISTEN_ADDR: "0.0.0.0"
       RUST_LOG: ${RUST_LOG:-debug}
+      CSFX_INTERNAL_TOKEN: ${CSFX_INTERNAL_TOKEN:-dev_internal_token_change_in_production}
     ports:
       - "8005:8005"
     depends_on:

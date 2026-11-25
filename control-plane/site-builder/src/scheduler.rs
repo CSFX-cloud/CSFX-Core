@@ -19,7 +19,10 @@ fn failure(error: impl std::fmt::Display) -> ServiceError {
 impl SchedulerClient {
     pub fn new(base: &str) -> Result<Self, reqwest::Error> {
         Ok(Self {
-            client: Client::builder().timeout(REQUEST_TIMEOUT).build()?,
+            client: Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .default_headers(shared::internal_auth::token_headers())
+                .build()?,
             base: base.trim_end_matches('/').to_string(),
         })
     }

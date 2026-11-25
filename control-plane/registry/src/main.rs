@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to parse CA certificate");
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
+        .default_headers(shared::internal_auth::token_headers())
         .add_root_certificate(gateway_ca)
         .build()
         .expect("Failed to build HTTP client");
@@ -88,7 +89,9 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
-    let app = server::create_router(state);
+    let app = server::create_router(state).layer(axum::middleware::from_fn(
+        shared::internal_auth::require_service_token,
+    ));
 
     shared::observability::spawn_pool_gauges("default", db_conn.clone());
     shared::observability::serve_metrics("127.0.0.1:9001").await;
