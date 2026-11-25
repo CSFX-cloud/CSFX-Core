@@ -166,6 +166,7 @@ async fn proxy_ticket_requires_the_service_token() {
     let app = common::router().await;
     let body = json!({"agent_id": Uuid::new_v4(), "workload_id": "workload-1"});
     let peer = "8.8.8.8:9000".parse().unwrap();
+    let valid = shared::internal_auth::signed_token().unwrap();
 
     for (headers, expected) in [
         (vec![], StatusCode::FORBIDDEN),
@@ -174,7 +175,7 @@ async fn proxy_ticket_requires_the_service_token() {
             StatusCode::FORBIDDEN,
         ),
         (
-            vec![("x-csfx-internal-token", "test-service-token")],
+            vec![("x-csfx-internal-token", valid.as_str())],
             StatusCode::OK,
         ),
     ] {

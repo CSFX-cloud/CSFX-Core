@@ -1,6 +1,7 @@
 use crate::error::ServiceError;
 use reqwest::Client;
 use serde_json::Value;
+use shared::internal_auth::SignedRequest;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -19,10 +20,7 @@ fn failure(error: impl std::fmt::Display) -> ServiceError {
 impl SchedulerClient {
     pub fn new(base: &str) -> Result<Self, reqwest::Error> {
         Ok(Self {
-            client: Client::builder()
-                .timeout(REQUEST_TIMEOUT)
-                .default_headers(shared::internal_auth::token_headers())
-                .build()?,
+            client: Client::builder().timeout(REQUEST_TIMEOUT).build()?,
             base: base.trim_end_matches('/').to_string(),
         })
     }
@@ -31,6 +29,7 @@ impl SchedulerClient {
         let response = self
             .client
             .post(format!("{}/workloads", self.base))
+            .signed()
             .json(request)
             .send()
             .await
@@ -52,6 +51,7 @@ impl SchedulerClient {
         let response = self
             .client
             .delete(format!("{}/workloads/{workload_id}", self.base))
+            .signed()
             .send()
             .await
             .map_err(failure)?;
@@ -65,6 +65,7 @@ impl SchedulerClient {
         let workloads: Vec<Value> = self
             .client
             .get(format!("{}/workloads", self.base))
+            .signed()
             .send()
             .await
             .map_err(failure)?

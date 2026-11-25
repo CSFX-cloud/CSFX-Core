@@ -390,18 +390,19 @@ async fn agent_logs_are_validated_normalized_and_stored() {
 async fn notify_assignment_requires_the_service_token() {
     unsafe { std::env::set_var("CSFX_INTERNAL_TOKEN", "test-service-token") };
     let harness = harness().await;
+    let valid = shared::internal_auth::signed_token().unwrap();
     let uri = format!("/internal/agents/{}/notify-assignment", Uuid::new_v4());
     for (token, expected) in [
         (None, StatusCode::FORBIDDEN),
         (Some("wrong"), StatusCode::FORBIDDEN),
-        (Some("test-service-token"), StatusCode::NO_CONTENT),
+        (Some(valid.as_str()), StatusCode::NO_CONTENT),
     ] {
         let (status, _) = harness.send_internal(Method::POST, &uri, token).await;
         assert_eq!(status, expected, "{token:?}");
     }
     let public = format!("/api{uri}");
     let (status, _) = harness
-        .send_internal(Method::POST, &public, Some("test-service-token"))
+        .send_internal(Method::POST, &public, Some(&valid))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = harness.send(Method::POST, &public, None, None).await;
@@ -430,8 +431,9 @@ async fn connected_agent_streams_receive_assignment_signals() {
     let notify = format!("/internal/agents/{}/notify-assignment", agent.id);
     unsafe { std::env::set_var("CSFX_INTERNAL_TOKEN", "test-service-token") };
     for _ in 0..50 {
+        let valid = shared::internal_auth::signed_token().unwrap();
         harness
-            .send_internal(Method::POST, &notify, Some("test-service-token"))
+            .send_internal(Method::POST, &notify, Some(&valid))
             .await;
         let next = tokio::time::timeout(std::time::Duration::from_millis(200), socket.next()).await;
         if let Ok(Some(Ok(message))) = next {

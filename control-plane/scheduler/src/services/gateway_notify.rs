@@ -1,3 +1,4 @@
+use shared::internal_auth::SignedRequest;
 use std::sync::OnceLock;
 use std::time::Duration;
 use uuid::Uuid;
@@ -16,7 +17,9 @@ pub async fn notify_assignment(agent_id: Uuid) {
         base_url, agent_id
     );
 
-    let result = shared::internal_auth::authenticate(http_client().post(&url))
+    let result = http_client()
+        .post(&url)
+        .signed()
         .send()
         .await
         .and_then(|response| response.error_for_status());

@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use reqwest::Client;
 use sea_orm::DatabaseConnection;
+use shared::internal_auth::SignedRequest;
 use uuid::Uuid;
 
 pub struct FailoverService {
@@ -20,7 +21,7 @@ impl FailoverService {
 
         Self {
             db,
-            http: shared::http::service_client(shared::http::DEFAULT_TIMEOUT),
+            http: shared::http::client(shared::http::DEFAULT_TIMEOUT),
             scheduler_url,
             volume_manager_url,
         }
@@ -91,6 +92,7 @@ impl FailoverService {
         let resp = self
             .http
             .post(&url)
+            .signed()
             .send()
             .await
             .with_context(|| format!("volume detach request failed agent_id={}", agent_id))?;
@@ -125,6 +127,7 @@ impl FailoverService {
         let resp = self
             .http
             .post(&url)
+            .signed()
             .json(&body)
             .send()
             .await

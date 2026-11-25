@@ -9,6 +9,7 @@ use csfx_agent_api::{
 };
 use entity::agent_metrics;
 use sea_orm::{ActiveModelTrait, Set};
+use shared::internal_auth::SignedRequest;
 use shared::ttl_cache::TtlCache;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -485,7 +486,14 @@ async fn forward_container_statuses(
 
     let url = format!("{}/internal/workloads/status", state.scheduler_url);
 
-    if let Err(e) = state.http_client.post(&url).json(&payload).send().await {
+    if let Err(e) = state
+        .http_client
+        .post(&url)
+        .signed()
+        .json(&payload)
+        .send()
+        .await
+    {
         crate::log_warn!(
             "agent_handler",
             &format!(

@@ -50,7 +50,6 @@ async fn main() -> anyhow::Result<()> {
         .expect("Failed to parse CA certificate");
     let http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
-        .default_headers(shared::internal_auth::token_headers())
         .add_root_certificate(gateway_ca)
         .build()
         .expect("Failed to build HTTP client");

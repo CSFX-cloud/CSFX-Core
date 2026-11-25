@@ -28,13 +28,6 @@ pub fn internal_client(timeout: Duration) -> Client {
         .expect("failed to build internal http client")
 }
 
-pub fn service_client(timeout: Duration) -> Client {
-    builder(timeout)
-        .default_headers(crate::internal_auth::token_headers())
-        .build()
-        .expect("failed to build service http client")
-}
-
 pub fn client(timeout: Duration) -> Client {
     builder(timeout)
         .build()

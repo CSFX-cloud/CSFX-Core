@@ -1,3 +1,4 @@
+use shared::internal_auth::SignedRequest;
 use std::sync::OnceLock;
 use std::time::Duration;
 use uuid::Uuid;
@@ -16,7 +17,9 @@ async fn request_resolution(resource_group_id: Uuid, image: &str) -> Result<Stri
         base_url, resource_group_id
     );
 
-    let response = shared::internal_auth::authenticate(http_client().post(&url))
+    let response = http_client()
+        .post(&url)
+        .signed()
         .json(&serde_json::json!({ "image": image }))
         .send()
         .await

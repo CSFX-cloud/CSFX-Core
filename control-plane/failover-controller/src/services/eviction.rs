@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use entity::entities::workloads;
 use reqwest::Client;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use shared::internal_auth::SignedRequest;
 use shared::qos::QosClass;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -30,7 +31,7 @@ impl EvictionService {
 
         Self {
             db,
-            http: shared::http::service_client(shared::http::DEFAULT_TIMEOUT),
+            http: shared::http::client(shared::http::DEFAULT_TIMEOUT),
             scheduler_url,
             last_eviction: Mutex::default(),
         }
@@ -98,6 +99,7 @@ impl EvictionService {
         let response = self
             .http
             .post(&url)
+            .signed()
             .json(&serde_json::json!({ "workload_ids": [workload_id] }))
             .send()
             .await
