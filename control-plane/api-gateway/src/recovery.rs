@@ -182,14 +182,3 @@ async fn reset_admin(email: Option<&str>) -> Result<(), RecoveryError> {
     println!("temporary_password={temp_password}");
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::dispatch;
-
-    #[tokio::test]
-    async fn unknown_flags_fail_instead_of_starting_the_server() {
-        assert_eq!(dispatch(&["--no-such-command".to_string()]).await, Some(4));
-        assert_eq!(dispatch(&[]).await, None);
-    }
-}

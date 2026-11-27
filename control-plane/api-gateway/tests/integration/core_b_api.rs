@@ -252,7 +252,7 @@ async fn recovery_commands_dispatch_and_reset_admins() {
             .collect::<Vec<_>>()
     };
     assert_eq!(recovery::dispatch(&[]).await, None);
-    assert_eq!(recovery::dispatch(&strings(&["--unknown"])).await, None);
+    assert_eq!(recovery::dispatch(&strings(&["--unknown"])).await, Some(4));
     assert_eq!(
         recovery::dispatch(&strings(&["--reset-admin"])).await,
         Some(0)
