@@ -144,6 +144,11 @@ pub fn ca_fingerprint() -> Option<String> {
     Some(hex.join(":"))
 }
 
+pub fn join_string(host: &str, token: &str, fingerprint: &str, role: &str) -> String {
+    let fingerprint = fingerprint.replace(':', "").to_ascii_lowercase();
+    format!("csfx-join.{host}#{token}#{fingerprint}#{role}")
+}
+
 fn validate(input: &SetupInput) -> Result<(), SetupError> {
     let organization_name = input.organization_name.trim();
     if organization_name.is_empty()
@@ -358,6 +363,21 @@ mod tests {
         assert!(!is_valid_join_string(
             "csfx-join.host;rm#csfx-bootstrap.ab#cd"
         ));
+    }
+
+    #[test]
+    fn issued_join_string_compacts_fingerprint_and_passes_validation() {
+        let join = join_string(
+            "localhost:8000",
+            "csfx-bootstrap.ab12",
+            "AB:CD:01",
+            "master",
+        );
+        assert_eq!(
+            join,
+            "csfx-join.localhost:8000#csfx-bootstrap.ab12#abcd01#master"
+        );
+        assert!(is_valid_join_string(&join));
     }
 
     #[test]

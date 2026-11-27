@@ -25,7 +25,7 @@ use crate::{
     tls, AppState,
 };
 
-pub const ROLE_MASTER: &str = "master";
+pub use shared::bootstrap_tokens::ROLE_MASTER;
 const JOIN_WINDOW_MINUTES: i64 = 30;
 const PATRONI_MEMBER_KEY_PREFIX: &str = "/service/csfx/members/";
 

@@ -18,31 +18,6 @@ pub struct ConsumedToken {
     pub max_uses: i32,
 }
 
-pub async fn create(
-    db: &DatabaseConnection,
-    token_hash: String,
-    description: Option<String>,
-    created_by: String,
-    expires_at: chrono::DateTime<chrono::Utc>,
-    max_uses: i32,
-    role: String,
-) -> Result<bootstrap_tokens::Model> {
-    let model = bootstrap_tokens::ActiveModel {
-        id: Set(Uuid::new_v4()),
-        token_hash: Set(token_hash),
-        description: Set(description),
-        created_by: Set(created_by),
-        created_at: Set(chrono::Utc::now().naive_utc()),
-        expires_at: Set(expires_at.naive_utc()),
-        max_uses: Set(max_uses),
-        use_count: Set(0),
-        revoked: Set(false),
-        revoked_at: Set(None),
-        role: Set(role),
-    };
-    Ok(model.insert(db).await?)
-}
-
 pub async fn get_by_hash(
     db: &DatabaseConnection,
     token_hash: &str,

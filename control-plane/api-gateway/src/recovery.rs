@@ -1,5 +1,6 @@
 use entity::user;
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseConnection, DbErr};
+use shared::bootstrap_tokens::{self, NewBootstrapToken, ROLE_MASTER};
 use shared::ssh_access::{self, SshAccess};
 use std::io::BufRead;
 use thiserror::Error;
@@ -7,8 +8,11 @@ use thiserror::Error;
 use crate::admins::admin_users;
 use crate::auth::crypto::{generate_salt, hash_password, verify_password, CryptoError};
 use crate::console_pin::{self, PinError};
+use crate::setup::{ca_fingerprint, join_string};
 
 const TEMP_PASSWORD_LENGTH: usize = 20;
+const LOCAL_GATEWAY_HOST: &str = "localhost:8000";
+const LOCAL_JOIN_TTL_HOURS: i64 = 1;
 const TEMP_PASSWORD_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
 
 #[derive(Debug, Error)]
@@ -29,6 +33,10 @@ enum RecoveryError {
     AlreadyProvisioned,
     #[error("missing input line")]
     MissingInput,
+    #[error("cluster CA unavailable")]
+    CaUnavailable,
+    #[error("unknown command {0}")]
+    UnknownCommand(String),
 }
 
 impl RecoveryError {
@@ -49,7 +57,11 @@ pub async fn dispatch(args: &[String]) -> Option<i32> {
         "--console-pin-change" => console_pin_change(),
         "--console-pin-init" => console_pin_init().await,
         "--ssh-disable" => ssh_disable().await,
+        "--local-join" => local_join().await,
         "--reset-admin" => reset_admin(args.get(1).map(String::as_str)).await,
+        unknown if unknown.starts_with("--") => {
+            Err(RecoveryError::UnknownCommand(unknown.to_string()))
+        }
         _ => return None,
     };
     Some(report(outcome))
@@ -94,6 +106,25 @@ async fn ssh_disable() -> Result<(), RecoveryError> {
     let db = connect().await?;
     ssh_access::save(&db, &SshAccess::default()).await?;
     println!("ssh_access=disabled");
+    Ok(())
+}
+
+async fn local_join() -> Result<(), RecoveryError> {
+    let fingerprint = ca_fingerprint().ok_or(RecoveryError::CaUnavailable)?;
+    let db = connect().await?;
+    let (token, _) = bootstrap_tokens::issue(
+        &db,
+        NewBootstrapToken {
+            description: Some("founding node agent".to_string()),
+            created_by: "local-join".to_string(),
+            ttl_hours: LOCAL_JOIN_TTL_HOURS,
+            max_uses: 1,
+            role: ROLE_MASTER.to_string(),
+        },
+    )
+    .await?;
+    let join = join_string(LOCAL_GATEWAY_HOST, &token, &fingerprint, ROLE_MASTER);
+    println!("join_string={join}");
     Ok(())
 }
 

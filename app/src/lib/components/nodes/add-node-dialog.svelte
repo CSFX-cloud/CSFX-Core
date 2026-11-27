@@ -45,7 +45,7 @@
 <ModalDialog bind:this={dialog} title="Add node" size="md">
     {#if result}
         <p class="cx-hint">
-            Set this value as CSFX_JOIN on the new {result.role} node, or enter it in the node console. It works once and expires at {new Date(result.expires_at).toLocaleString()}.
+            Open the web UI of the new {result.role} node and enter this value together with the setup code shown on its console, or set it as CSFX_JOIN. It works once and expires at {new Date(result.expires_at).toLocaleString()}.
         </p>
         <code class="cx-mono" style="word-break: break-all">{result.join_string}</code>
         <div class="md__foot">
