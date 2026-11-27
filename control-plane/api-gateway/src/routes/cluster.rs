@@ -16,7 +16,11 @@ use super::{
     cluster_vip::effective_vip,
     masters::{self, ROLE_MASTER},
 };
-use crate::{auth::rbac::CanManageSystem, setup::ca_fingerprint, AppState};
+use crate::{
+    auth::rbac::CanManageSystem,
+    setup::{ca_fingerprint, join_string},
+    AppState,
+};
 use shared::workload_status::LIVE_STATUSES;
 
 const DEFAULT_TTL_HOURS: i64 = 1;
@@ -82,10 +86,6 @@ async fn join_host(state: &AppState, headers: &HeaderMap) -> Result<String, ApiE
 fn is_loopback_host(host: &str) -> bool {
     let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
     name.eq_ignore_ascii_case("localhost") || name.starts_with("127.") || name == "[::1]"
-}
-
-fn compact_fingerprint(fingerprint: &str) -> String {
-    fingerprint.replace(':', "").to_ascii_lowercase()
 }
 
 async fn forward_to_registry(
@@ -156,10 +156,7 @@ pub async fn create_join_token(
     );
 
     Ok(Json(json!({
-        "join_string": format!(
-            "csfx-join.{host}#{value}#{}#{role}",
-            compact_fingerprint(&fingerprint)
-        ),
+        "join_string": join_string(&host, value, &fingerprint, &role),
         "role": token["role"],
         "expires_at": token["expires_at"],
     })))

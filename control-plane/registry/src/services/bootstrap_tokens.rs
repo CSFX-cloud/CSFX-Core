@@ -2,9 +2,8 @@ use chrono::{DateTime, Utc};
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use shared::agent_auth::hash_key;
+use shared::bootstrap_tokens::{self, NewBootstrapToken, TOKEN_PREFIX};
 use uuid::Uuid;
-
-const TOKEN_PREFIX: &str = "csfx-bootstrap.";
 
 pub const ROLE_MASTER: &str = "master";
 pub const ROLE_WORKER: &str = "worker";
@@ -66,17 +65,15 @@ impl BootstrapTokenManager {
         max_uses: i32,
         role: String,
     ) -> Result<BootstrapToken, String> {
-        let token = format!("{}{}", TOKEN_PREFIX, Uuid::new_v4().simple());
-        let expires_at = Utc::now() + chrono::Duration::hours(ttl_hours);
-
-        let model = crate::db::bootstrap_tokens::create(
+        let (token, model) = bootstrap_tokens::issue(
             &self.db,
-            hash_key(&token),
-            description.clone(),
-            created_by.clone(),
-            expires_at,
-            max_uses,
-            role.clone(),
+            NewBootstrapToken {
+                description,
+                created_by,
+                ttl_hours,
+                max_uses,
+                role: role.clone(),
+            },
         )
         .await
         .map_err(|e| format!("Failed to create bootstrap token: {}", e))?;
