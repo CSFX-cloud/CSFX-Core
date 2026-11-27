@@ -55,6 +55,7 @@ in
     csfx-setup = {
       enable = true;
       dataPart = "/dev/vdb";
+      gatewayBinary = "${binDir}/api-gateway";
     };
     csfx-cluster = {
       enable = true;
