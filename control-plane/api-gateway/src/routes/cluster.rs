@@ -21,12 +21,11 @@ use crate::{
     setup::{ca_fingerprint, join_string},
     AppState,
 };
-use shared::workload_status::LIVE_STATUSES;
+use shared::{bootstrap_tokens::ROLE_WORKER, workload_status::LIVE_STATUSES};
 
 const DEFAULT_TTL_HOURS: i64 = 1;
 const MAX_TTL_HOURS: i64 = 24 * 7;
 const DEFAULT_GATEWAY_PORT: &str = "8000";
-const ROLE_WORKER: &str = "worker";
 
 pub(super) type ApiError = (StatusCode, Json<Value>);
 

@@ -6,6 +6,8 @@ use uuid::Uuid;
 use crate::agent_auth::hash_key;
 
 pub const TOKEN_PREFIX: &str = "csfx-bootstrap.";
+pub const ROLE_MASTER: &str = "master";
+pub const ROLE_WORKER: &str = "worker";
 
 pub struct NewBootstrapToken {
     pub description: Option<String>,

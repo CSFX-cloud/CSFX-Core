@@ -1,6 +1,6 @@
 use entity::user;
 use sea_orm::{ActiveModelTrait, ActiveValue, DatabaseConnection, DbErr};
-use shared::bootstrap_tokens::{self, NewBootstrapToken};
+use shared::bootstrap_tokens::{self, NewBootstrapToken, ROLE_MASTER};
 use shared::ssh_access::{self, SshAccess};
 use std::io::BufRead;
 use thiserror::Error;
@@ -8,7 +8,6 @@ use thiserror::Error;
 use crate::admins::admin_users;
 use crate::auth::crypto::{generate_salt, hash_password, verify_password, CryptoError};
 use crate::console_pin::{self, PinError};
-use crate::routes::masters::ROLE_MASTER;
 use crate::setup::{ca_fingerprint, join_string};
 
 const TEMP_PASSWORD_LENGTH: usize = 20;
@@ -36,6 +35,8 @@ enum RecoveryError {
     MissingInput,
     #[error("cluster CA unavailable")]
     CaUnavailable,
+    #[error("unknown command {0}")]
+    UnknownCommand(String),
 }
 
 impl RecoveryError {
@@ -58,6 +59,9 @@ pub async fn dispatch(args: &[String]) -> Option<i32> {
         "--ssh-disable" => ssh_disable().await,
         "--local-join" => local_join().await,
         "--reset-admin" => reset_admin(args.get(1).map(String::as_str)).await,
+        unknown if unknown.starts_with("--") => {
+            Err(RecoveryError::UnknownCommand(unknown.to_string()))
+        }
         _ => return None,
     };
     Some(report(outcome))
@@ -177,4 +181,15 @@ async fn reset_admin(email: Option<&str>) -> Result<(), RecoveryError> {
     active.update(&db).await?;
     println!("temporary_password={temp_password}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dispatch;
+
+    #[tokio::test]
+    async fn unknown_flags_fail_instead_of_starting_the_server() {
+        assert_eq!(dispatch(&["--no-such-command".to_string()]).await, Some(4));
+        assert_eq!(dispatch(&[]).await, None);
+    }
 }

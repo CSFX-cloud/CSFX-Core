@@ -3,10 +3,8 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use shared::agent_auth::hash_key;
 use shared::bootstrap_tokens::{self, NewBootstrapToken, TOKEN_PREFIX};
+pub use shared::bootstrap_tokens::{ROLE_MASTER, ROLE_WORKER};
 use uuid::Uuid;
-
-pub const ROLE_MASTER: &str = "master";
-pub const ROLE_WORKER: &str = "worker";
 
 pub fn is_valid_role(role: &str) -> bool {
     role == ROLE_MASTER || role == ROLE_WORKER
